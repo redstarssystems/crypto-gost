@@ -12,7 +12,7 @@
 
 - **ГОСТ Р 34.12-2015** — блочный шифр «Кузнечик», ключ 256 бит.
 
-- **ГОСТ Р 34.13-2015** — режимы шифрования CBC, CFB, CTR (ГАММА), OFB;
+- **ГОСТ Р 34.13-2015** — режимы шифрования CBC, CFB, CTR, OFB;
   имитовставка (CMAC).
 
 - **ГОСТ Р 34.10-2012** — электронная подпись 256 и 512 бит (RFC 7091).
@@ -318,16 +318,47 @@ style="text-align: center;"><p><code>ECAlgorithms.implShamirsTrickWNaf</code>,<b
 
 # Установка
 
-Клонируйте репозиторий. Выполните сборку и установку в локальный .m2:
-`mvn package install`.
+Способы установи:
 
-Затем, добавьте зависимость в `pom.xml`:
+- **Способ 1.** Клонируйте репозиторий и выполните сборку и установку в
+  локальный .m2:  
+
+  `mvn install`.
+
+  При необходимости проверить подпись релизного тега можно так:
+
+    +
+
+    gpg --import KEYS
+    gpg -v v0.1.1
+
+- **Способ 2.** Скачайте артефакты
+  [отсюда](https://gitflic.ru/project/red-stars-systems/crypto-gost/release?sort=TIME&direction=DESC)
+  и установите:  
+
+      mvn install:install-file \
+        -Dfile=crypto-gost-0.1.1.jar \
+        -Dsources=crypto-gost-0.1.1-sources.jar \
+        -Djavadoc=crypto-gost-0.1.1-javadoc.jar \
+        -DgroupId=org.rssys \
+        -DartifactId=crypto-gost \
+        -Dversion=0.1.1 \
+        -Dpackaging=jar
+
+Затем, добавьте зависимость в `pom.xml` вашего проекта:
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost</artifactId>
-        <version>0.1.0</version>
+        <version>0.1.1</version>
     </dependency>
+
+Проверить подпись можно так:
+
+    gpg --import KEYS
+    gpg --verify crypto-gost-0.1.1.jar.asc crypto-gost-0.1.1.jar
+
+Публичный gpg-ключ в конце документа.
 
 # Высокоуровневый API
 
@@ -699,11 +730,12 @@ Kuznyechik/CTR/NoPadding — без аутентификации и контро
     byte[] decrypted = cipher.doFinal(ciphertext);
     key.destroy();
 
-- IV необходимо передать получателю вместе с `ciphertext`. NOTE: Режим
-  CTR без аутентификации не защищает от подмены данных. Если целостность
-  важна — используйте `AuthenticatedCipher` / `AuthenticatedStream` из
-  `org.rssys.gost.api` (ГОСТ Р 34.13-2015) или
-  `Kuznyechik/MGM/NoPadding` (Р 1323565.1.026-2019).
+- IV необходимо передать получателю вместе с `ciphertext`.
+
+Режим CTR без аутентификации не защищает от подмены данных. Если
+целостность важна — используйте `AuthenticatedCipher` /
+`AuthenticatedStream` из `org.rssys.gost.api` (ГОСТ Р 34.13-2015) или
+`Kuznyechik/MGM/NoPadding` (Р 1323565.1.026-2019).
 
 Kuznyechik/MGM/NoPadding — AEAD без AAD
 
@@ -770,7 +802,7 @@ Kuznyechik/MGM/NoPadding — AEAD с AAD
 
 AuthenticatedStream — предназначен для потокового шифрования
 сокета/файла с аутентификацией и контролем целостности данных
-(рекомендуется для большинства задач)
+(рекомендуется для большинства задач).
 
     import org.rssys.gost.api.AuthenticatedStream;
     import org.rssys.gost.cipher.SymmetricKey;
@@ -889,27 +921,49 @@ CipherOutputStream / CipherInputStream — CTR без аутентификаци
 Для потоков с аутентификацией целостности используйте
 `AuthenticatedStream` из `org.rssys.gost.api`.
 
-JCA MGM (`Kuznyechik/MGM/NoPadding`) не подходит для больших потоков —
-он буферизует весь plaintext в памяти до вызова `doFinal`.
+#### JCA MGM (потоковый режим)
+
+**JCA MGM (`Kuznyechik/MGM/NoPadding`) не подходит для больших потоков —
+он буферизует весь plaintext в памяти до вызова `doFinal`.**  
+
+Данные не возвращаются до проверки тега — это фундаментальное требование
+безопасности, а не ограничение реализации.
+
+Почему так сделан JCA MGM? Если бы мы возвращали plaintext до проверки
+тега, то:
+
+1.  Приложение получило бы потенциально поддельные данные до проверки
+    целостности.
+
+2.  Это называется "release of unauthenticated plaintext" — классическая
+    уязвимость AEAD-реализаций.
+
+3.  Атакующий мог бы манипулировать тем, что приложение обрабатывает,
+    даже если тег в итоге не пройдёт.
+
+RFC 9058 явно требует: данные не должны использоваться до успешной
+верификации тега.
+
+Используйте `AuthenticatedStream` для больших потоков.
 
 ## Хэш-функция Стрибог (ГОСТ Р 34.11-2012)
 
-Стрибог — криптографическая хэш-функция без ключа. Два варианта: 256 бит
-(32 байта) и 512 бит (64 байта).
+Стрибог — криптографическая хэш-функция в двух вариантах: 256 бит и 512
+бит.
 
-Библиотека предоставляет два независимых API:
+Библиотека предоставляет два независимы API по вызову хеш-функций:
 
 - `org.rssys.gost.api` — прямой API, не требует регистрации провайдера.
 
 - `org.rssys.gost.jca` — JCA/JCE-совместимый API.
 
-Результат big-endian (MSB first), совместим с OpenSSL. RFC 6986 приводит
-тест-векторы в ГОСТ-нотации (right-to-left) — байты будут в обратном
-порядке при прямом сравнении.
+Результат хеширования - big-endian (MSB first) массив байт, совместимый
+с OpenSSL. RFC 6986 приводит тест-векторы в ГОСТ-нотации (right-to-left)
+— байты будут в обратном порядке при прямом сравнении.
 
 ### org.rssys.gost.api
 
-Блочный режим — данные целиком в памяти
+Блочный режим хеширования данных. Хешируемые данные целиком в памяти.
 
     import org.rssys.gost.api.Digest;
 
@@ -921,8 +975,8 @@ JCA MGM (`Kuznyechik/MGM/NoPadding`) не подходит для больших
     // Стрибог-512 (ГОСТ Р 34.11-2012), вывод 64 байта
     byte[] hash512 = Digest.digest512(data);
 
-Инкрементальный режим — данные из файла или сокета без накопления в
-памяти
+Инкрементальный режим хеширования. Данные из файла или сокета
+обрабатываются в потоковом режиме, без накопления в памяти.
 
     import org.rssys.gost.api.Digest;
     import java.io.InputStream;
@@ -954,7 +1008,7 @@ JCA MGM (`Kuznyechik/MGM/NoPadding`) не подходит для больших
 
 ### JCA (org.rssys.gost.jca)
 
-Блочный режим
+Блочный режим хеширования данных. Хешируемые данные целиком в памяти.
 
     import java.security.MessageDigest;
 
@@ -969,7 +1023,8 @@ JCA MGM (`Kuznyechik/MGM/NoPadding`) не подходит для больших
 - Алиасы: `"Streebog-256"`, `"1.2.643.7.1.1.2.2"` для 256-бит;
   `"Streebog-512"`, `"1.2.643.7.1.1.2.3"` для 512-бит.
 
-Инкрементальный режим — данные из файла или сокета
+Инкрементальный режим хеширования. Данные из файла или сокета
+обрабатываются в потоковом режиме, без накопления в памяти.
 
     import java.security.MessageDigest;
     import java.io.InputStream;
@@ -986,15 +1041,16 @@ JCA MGM (`Kuznyechik/MGM/NoPadding`) не подходит для больших
     }
     byte[] hash256 = md256.digest();
 
-## HMAC-Стрибог (RFC 7836)
+## HMAC-Streebog (RFC 7836)
 
-HMAC — код аутентификации сообщений на основе хэш-функции. Требует
-симметричный ключ. Два варианта: HMAC-Стрибог-256 (32 байта) и
-HMAC-Стрибог-512 (64 байта).
+HMAC — код аутентификации сообщений на основе хэш-функции "Стрибог".  
+Данная функция требует симметричный ключ.  
+В библиотеке представлено два варианта функции: HMAC-Streebog-256 (32
+байта) и HMAC-Streebog-512 (64 байта).
 
 ### org.rssys.gost.api
 
-Блочный режим
+Блочный режим вычисления HMAC. Защищаемые данные целиком в памяти.
 
     import org.rssys.gost.api.Digest;
     import org.rssys.gost.api.CmacApi;
@@ -1003,16 +1059,17 @@ HMAC-Стрибог-512 (64 байта).
     SymmetricKey key = ...; // выработан ранее
     byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
 
-    // HMAC-Стрибог-256 (RFC 7836), вывод 32 байта
+    // HMAC-Streebog-256
     byte[] mac256 = Digest.hmac256(data, key);
 
-    // HMAC-Стрибог-512 (RFC 7836), вывод 64 байта
+    // HMAC-Streebog-256
     byte[] mac512 = Digest.hmac512(data, key);
 
     // Проверка целостности — constant-time сравнение (защита от timing-атак)
     boolean ok = CmacApi.verifyMac(expected, mac256);
 
-Инкрементальный режим — данные из файла или сокета
+Инкрементальный режим вычисления HMAC. Данные из файла или сокета
+обрабатываются в потоковом режиме, без накопления в памяти.
 
     import org.rssys.gost.api.Digest;
     import org.rssys.gost.api.CmacApi;
@@ -1023,7 +1080,7 @@ HMAC-Стрибог-512 (64 байта).
 
     SymmetricKey key = ...; // выработан ранее
 
-    // HMAC-Стрибог-256
+    // HMAC-Streebog-256
     Digest m256 = new Digest(Digest.Algorithm.HMAC_256, key);
     byte[] buf = new byte[8192];
     int n;
@@ -1034,7 +1091,7 @@ HMAC-Стрибог-512 (64 байта).
     }
     byte[] mac256 = m256.digest();
 
-    // HMAC-Стрибог-512
+    // HMAC-Streebog-512
     Digest m512 = new Digest(Digest.Algorithm.HMAC_512, key);
     try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
         while ((n = in.read(buf)) != -1) {
@@ -1053,7 +1110,7 @@ HMAC-Стрибог-512 (64 байта).
 
 ### JCA (org.rssys.gost.jca)
 
-Блочный режим
+Блочный режим вычисления HMAC. Защищаемые данные целиком в памяти.
 
     import javax.crypto.Mac;
     import org.rssys.gost.jca.key.GostSecretKey;
@@ -1061,12 +1118,12 @@ HMAC-Стрибог-512 (64 байта).
     GostSecretKey key = ...; // выработан ранее
     byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
 
-    // HMAC-Стрибог-256
+    // HMAC-Streebog-256
     Mac mac256 = Mac.getInstance("HmacGOST3411-2012-256", "RssysGostProvider"); // 
     mac256.init(key);
     byte[] result256 = mac256.doFinal(data);
 
-    // HMAC-Стрибог-512
+    // HMAC-Streebog-512
     Mac mac512 = Mac.getInstance("HmacGOST3411-2012-512", "RssysGostProvider");
     mac512.init(key);
     byte[] result512 = mac512.doFinal(data);
@@ -1076,7 +1133,8 @@ HMAC-Стрибог-512 (64 байта).
 - Алиасы: `"HMAC-Streebog-256"`, `"1.2.643.7.1.1.4.1"` для 256-бит;
   `"HMAC-Streebog-512"`, `"1.2.643.7.1.1.4.2"` для 512-бит.
 
-Инкрементальный режим — данные из файла или сокета
+Инкрементальный режим вычисления HMAC. Данные из файла или сокета
+обрабатываются в потоковом режиме, без накопления в памяти.
 
     import javax.crypto.Mac;
     import org.rssys.gost.jca.key.GostSecretKey;
@@ -1101,17 +1159,17 @@ HMAC-Стрибог-512 (64 байта).
 
 ## CMAC-Кузнечик (ГОСТ Р 34.13-2015)
 
-CMAC — имитовставка на основе блочного шифра Кузнечик. Требует
-симметричный ключ. Полный тег: 16 байт (128 бит = размер блока).
-Допускается усечение тега.
+CMAC — имитовставка на основе блочного шифра Кузнечик. Для вычисления
+необходим симметричный ключ.  
 
-CMAC строится на блочном шифре (Кузнечик, ГОСТ Р 34.12-2015). HMAC
-строится на хэш-функции (Стрибог, ГОСТ Р 34.11-2012). Это разные
-алгоритмы с разной областью применения.
+Полный тег: 16 байт (128 бит = размер блока). Допускается усечение тега.
+
+CMAC строится на блочном шифре (Кузнечик). HMAC строится на хэш-функции
+(Стрибог). **Это разные алгоритмы с разной областью применения.**
 
 ### org.rssys.gost.api
 
-Блочный режим
+Блочный режим вычисления CMAC. Защищаемые данные целиком в памяти.
 
     import org.rssys.gost.api.CmacApi;
     import org.rssys.gost.cipher.SymmetricKey;
@@ -1130,7 +1188,8 @@ CMAC строится на блочном шифре (Кузнечик, ГОСТ
 
     key.destroy();
 
-Инкрементальный режим — данные из файла или сокета
+Инкрементальный режим режим вычисления CMAC. Данные из файла или сокета
+обрабатываются в потоковом режиме, без накопления в памяти.
 
     import org.rssys.gost.api.CmacApi;
     import org.rssys.gost.cipher.SymmetricKey;
@@ -1160,7 +1219,7 @@ CMAC строится на блочном шифре (Кузнечик, ГОСТ
 
 ### JCA (org.rssys.gost.jca)
 
-Блочный режим
+Блочный режим вычисления CMAC. Данные целиком находятся в памяти.
 
     import javax.crypto.Mac;
     import org.rssys.gost.jca.key.GostSecretKey;
@@ -1174,7 +1233,8 @@ CMAC строится на блочном шифре (Кузнечик, ГОСТ
 
     key.destroy();
 
-Инкрементальный режим — данные из файла или сокета
+Инкрементальный режим вычисления CMAC. Данные из файла или сокета
+обрабатываются в потоковом режиме, без накопления в памяти.
 
     import javax.crypto.Mac;
     import org.rssys.gost.jca.key.GostSecretKey;
@@ -1214,24 +1274,24 @@ CMAC строится на блочном шифре (Кузнечик, ГОСТ
 </thead>
 <tbody>
 <tr>
-<td style="text-align: left;"><p>Контрольная сумма данных без
-ключа</p></td>
+<td style="text-align: left;"><p>Контрольная сумма данных (без
+ключа)</p></td>
 <td
 style="text-align: left;"><p><code>Digest.digest256 / digest512</code></p></td>
 <td style="text-align: left;"><p><code>api</code> / JCA
 <code>MessageDigest</code></p></td>
 </tr>
 <tr>
-<td style="text-align: left;"><p>Аутентификация данных, ключ на основе
-хэша</p></td>
+<td style="text-align: left;"><p>Аутентификация данных на основе
+хэш-функции Стрибог + симметричный ключ</p></td>
 <td style="text-align: left;"><p><code>Digest.hmac256 / hmac512</code>
 (RFC 7836)</p></td>
 <td style="text-align: left;"><p><code>api</code> / JCA
 <code>Mac</code></p></td>
 </tr>
 <tr>
-<td style="text-align: left;"><p>Аутентификация данных, ключ Кузнечика
-(ГОСТ Р 34.13-2015)</p></td>
+<td style="text-align: left;"><p>Аутентификация данных, на основе шифра
+Кузнечика + симметричный ключ</p></td>
 <td style="text-align: left;"><p><code>CmacApi.cmac</code></p></td>
 <td style="text-align: left;"><p><code>api</code> / JCA
 <code>Mac</code></p></td>
@@ -1249,8 +1309,9 @@ style="text-align: left;"><p><code>Digest.digest256 / digest512</code></p></td>
 
 Электронная подпись — алгоритм ГОСТ Р 34.10-2012 (RFC 7091).
 
-- Хэш выбирается автоматически по кривой: Стрибог-256 для 256-битных
-  кривых, Стрибог-512 для 512-битных.
+- в методах **sign/veify** хэш для переданных данных выбирается и
+  вычисляется автоматически по параметрам кривой: Streebog-256 для
+  256-битных кривых, Streebog-512 для 512-битных.
 
 - Нонс k генерируется детерминированно по RFC 6979 §3.2 (HMAC-Стрибог) —
   одно сообщение + один ключ всегда дают одну подпись.
@@ -1258,7 +1319,8 @@ style="text-align: left;"><p><code>Digest.digest256 / digest512</code></p></td>
 - Формат подписи: `r ∥ s` big-endian, без DER/ASN.1. Длина: 64 байта
   (256-бит кривые) или 128 байт (512-бит кривые).
 
-Библиотека предоставляет два независимых API:
+Библиотека предоставляет два независимых API для вычисления электронной
+подписи:
 
 - `org.rssys.gost.api` — прямой API, не требует регистрации провайдера.
 
@@ -1266,7 +1328,8 @@ style="text-align: left;"><p><code>Digest.digest256 / digest512</code></p></td>
 
 ### org.rssys.gost.api
 
-Подпись и верификация
+Подпись и проверка подписи для "сырых" данных. В данном режиме, хеш
+вычисляется автоматически, внутри методов sign/verify.
 
     import org.rssys.gost.api.KeyGenerator;
     import org.rssys.gost.api.KeyPair;
@@ -1279,10 +1342,10 @@ style="text-align: left;"><p><code>Digest.digest256 / digest512</code></p></td>
     KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
 
     try {
-        // Подпись: хеш Стрибог-256 вычисляется автоматически базируясь на параметрах кривой
+        // Подпись: хеш Стрибог-256 вычисляется автоматически для данных data, базируясь на параметрах кривой. То есть отдельно хэш вычислять не нужно.
         // Формат: r ∥ s big-endian, длина 64 байта
         byte[] signature = Signature.sign(data, pair.getPrivate());
-        // Верификация
+        // Проверка подписи. Хэш для data вычисляется внути автоматически.
         boolean valid = Signature.verify(data, signature, pair.getPublic());
         // valid => true
         // Подмена данных обнаруживается
@@ -1345,6 +1408,65 @@ style="text-align: left;"><p><code>Digest.digest256 / digest512</code></p></td>
     } finally {
         priv.destroy();
     }
+
+### Подпись готового хэша (signHash / verifyHash)
+
+Данные методы используются, когда хэш должен быть вычислен отдельно
+(возможно внешней системой: HSM, TSP, CMS), или когда повторное
+хэширование нежелательно (большой файл уже хэширован ранее).
+
+Хэш должен соответствовать кривой: Стрибог-256 (32 байта) для 256-битных
+кривых, Стрибог-512 (64 байта) для 512-битных. Передача хэша другого
+алгоритма (SHA-256, MD5 и т.п.) нарушает требования ГОСТ Р 34.10-2012.
+
+Нонс k генерируется детерминированно по RFC 6979 — идентично
+`Signature.sign`.
+
+#### org.rssys.gost.api
+
+Подпись готового хэша
+
+    import org.rssys.gost.api.Digest;
+    import org.rssys.gost.api.KeyGenerator;
+    import org.rssys.gost.api.KeyPair;
+    import org.rssys.gost.api.Signature;
+    import org.rssys.gost.signature.ECParameters;
+    byte[] data = "сообщение".getBytes(StandardCharsets.UTF_8);
+    KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
+    try {
+        // Хэш вычислен заранее
+        byte[] hash = Digest.digest256(data); // 32 байта для 256-битной кривой
+        // Подпись готового хэша
+        byte[] signature = Signature.signHash(hash, pair.getPrivate()); // 64 байта
+        // Проверка подписи для хэша
+        boolean valid = Signature.verifyHash(hash, signature, pair.getPublic());
+        // valid => true
+    } finally {
+        pair.getPrivate().destroy();
+    }
+
+Кросс-совместимость sign ↔ signHash
+
+    import org.rssys.gost.api.Digest;
+    import org.rssys.gost.api.Signature;
+    KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
+    try {
+        byte[] hash = Digest.digest256(data);
+        // sign и signHash дают одинаковый результат для тех же данных
+        byte[] sig1 = Signature.sign(data, pair.getPrivate());     // хэш внутри
+        byte[] sig2 = Signature.signHash(hash, pair.getPrivate()); // хэш снаружи
+        // sig1 и sig2 идентичны побайтово — детерминированность RFC 6979
+        Arrays.equals(sig1, sig2) // => true
+        // verify и verifyHash взаимозаменяемы
+        boolean ok1 = Signature.verify(data, sig2, pair.getPublic());      // 
+        boolean ok2 = Signature.verifyHash(hash, sig1, pair.getPublic()); // 
+        // ok1 == ok2 == true
+    } finally {
+        pair.getPrivate().destroy();
+    }
+
+- `verify(data, sig)` и `verifyHash(hash, sig)` принимают подписи,
+  созданные как через `sign`, так и через `signHash`.
 
 ### JCA (org.rssys.gost.jca)
 
