@@ -233,6 +233,7 @@ public final class ECDSASigner implements Destroyable {
           return ki;
         }
 
+        // Потенциально недостижимая ветка, но стандарт требует обработать этот случай.
         // Повторная итерация: K = HMAC(K, V || 0x00)
         hmac.init(k);
         hmac.update(v, 0, v.length);
