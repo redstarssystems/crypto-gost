@@ -327,10 +327,8 @@ style="text-align: center;"><p><code>ECAlgorithms.implShamirsTrickWNaf</code>,<b
 
   При необходимости проверить подпись релизного тега можно так:
 
-    +
-
-    gpg --import KEYS
-    gpg -v v0.1.1
+      gpg --import KEYS
+      gpg -v v0.1.1
 
 - **Способ 2.** Скачайте артефакты
   [отсюда](https://gitflic.ru/project/red-stars-systems/crypto-gost/release?sort=TIME&direction=DESC)

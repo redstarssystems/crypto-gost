@@ -195,8 +195,8 @@ IMPORTANT: Данная реализация *crypto-gost* претендует 
 `mvn install`.
 +
 При необходимости проверить подпись релизного тега можно так:
-[source,bash]
 +
+[source,bash]
 ----
 gpg --import KEYS
 gpg -v v0.1.1
