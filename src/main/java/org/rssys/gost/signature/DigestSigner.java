@@ -4,7 +4,6 @@ import org.rssys.gost.cipher.CipherParameters;
 import org.rssys.gost.digest.Digest;
 
 import java.math.BigInteger;
-import java.util.Arrays;
 
 /**
  * Обёртка для электронной подписи ГОСТ Р 34.10-2012, совмещающая хэширование
@@ -79,26 +78,11 @@ public final class DigestSigner implements Signer {
 
   private byte[] encode(BigInteger r, BigInteger s) {
     checkInitialized();
-    int rolen = (params.n.bitLength() + 7) / 8;
-    byte[] result = new byte[2 * rolen];
-    byte[] rBytes = r.toByteArray();
-    byte[] sBytes = s.toByteArray();
-    int rLen = Math.min(rBytes.length, rolen);
-    int sLen = Math.min(sBytes.length, rolen);
-    System.arraycopy(rBytes, Math.max(0, rBytes.length - rLen), result, rolen - rLen, rLen);
-    System.arraycopy(sBytes, Math.max(0, sBytes.length - sLen), result, 2 * rolen - sLen, sLen);
-    return result;
+    return SignatureCodec.encode(r, s, params);
   }
 
   private BigInteger[] decode(byte[] signature) {
     checkInitialized();
-    int rolen = (params.n.bitLength() + 7) / 8;
-    if (signature.length != 2 * rolen) {
-      throw new IllegalArgumentException(
-          "Invalid signature length: expected " + (2 * rolen) + " bytes, got " + signature.length);
-    }
-    byte[] rBytes = Arrays.copyOfRange(signature, 0, rolen);
-    byte[] sBytes = Arrays.copyOfRange(signature, rolen, 2 * rolen);
-    return new BigInteger[]{new BigInteger(1, rBytes), new BigInteger(1, sBytes)};
+    return SignatureCodec.decode(signature, params);
   }
 }
