@@ -7,7 +7,7 @@
 
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <packaging>jar</packaging>
 
     <name>crypto-gost</name>
@@ -16,6 +16,27 @@
         GOST R 34.12-2015 (Kuznyechik) block cipher and GOST R 34.13-2015 CBC, CFB, CTR, OFB modes
         with CMAC integrity protection. HMAC based on RFC 7836. Digital Signature GOST R 34.10-2012.
     </description>
+    <url>https://gitflic.ru/project/red-stars-systems/crypto-gost</url>
+
+    <licenses>
+        <license>
+            <name>Открытая лицензия на программное обеспечение "Рэд старс системс"</name>
+            <url>https://gitflic.ru/project/red-stars-systems/licenses/blob?file=open-license%2FLICENSE</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Михаил Ананьев</name>
+            <email>mike1452@yandex.ru</email>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://gitflic.ru/project/red-stars-systems/crypto-gost.git</connection>
+        <developerConnection>scm:git:git@gitflic.ru:red-stars-systems/crypto-gost.git</developerConnection>
+        <url>https://gitflic.ru/project/red-stars-systems/crypto-gost</url>
+    </scm>
 
     <properties>
         <maven.compiler.release>11</maven.compiler.release>
@@ -36,6 +57,40 @@
         <sourceDirectory>src/main/java</sourceDirectory>
         <testSourceDirectory>src/test/java</testSourceDirectory>
         <plugins>
+
+            <!-- Генерация sources.jar -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>3.3.0</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals><goal>jar-no-fork</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>default</id>
+                        <phase>none</phase>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Генерация javadoc.jar -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.6.0</version>
+                <configuration>
+                    <doclint>none</doclint>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals><goal>jar</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -60,4 +115,35 @@
             </plugin>
         </plugins>
     </build>
+
+<!--  mvn install -Psign -->
+    <profiles>
+        <profile>
+            <id>sign</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <configuration>
+                            <keyname>AFCF3C12F0E58F853F8E593AC7946233F39ED463</keyname>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                            <executable>gpg2</executable>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals><goal>sign</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
