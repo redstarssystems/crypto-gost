@@ -9,7 +9,9 @@ import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.signature.SignatureCodec;
 
+import java.math.BigInteger;
 import java.util.function.Supplier;
 
 /**
@@ -77,7 +79,11 @@ public final class Signature {
 
         signer.init(true, priv);
         signer.update(data, 0, data.length);
-        return signer.sign();
+        try {
+            return signer.sign();
+        } finally {
+            rawSigner.destroy(); // обнуляет временную копию dBytes внутри ECDSASigner
+        }
     }
 
 
@@ -106,6 +112,68 @@ public final class Signature {
     }
 
     /**
+     * Подписывает готовый хэш закрытым ключом ГОСТ Р 34.10-2012.
+     *
+     * <p>Используется когда хэш вычислен внешней системой (HSM, TSP, CMS)
+     * и повторное хэширование нежелательно или невозможно.
+     *
+     * <p>Хэш должен соответствовать кривой:
+     * <ul>
+     *   <li>256-битные кривые (hlen=32): Стрибог-256, хэш 32 байта</li>
+     *   <li>512-битные кривые (hlen=64): Стрибог-512, хэш 64 байта</li>
+     * </ul>
+     *
+     * <p>Нонс k генерируется детерминированно по RFC 6979 §3.2 с HMAC-Стрибог —
+     * идентично {@link #sign(byte[], PrivateKeyParameters)}.
+     *
+     * @param hash готовый хэш (длина должна быть равна hlen кривой)
+     * @param priv закрытый ключ
+     * @return подпись r ∥ s (64 или 128 байт)
+     * @throws IllegalArgumentException если длина хэша не соответствует кривой
+     * @throws IllegalStateException    если закрытый ключ уничтожен
+     */
+    public static byte[] signHash(byte[] hash, PrivateKeyParameters priv) {
+        ECParameters params = priv.getParams();
+        validateHashLength(hash, params);
+
+        Supplier<Digest> factory = digestFactory(params);
+        ECDSASigner rawSigner = new ECDSASigner(factory);
+        rawSigner.init(true, priv);
+
+        try {
+            BigInteger[] sig = rawSigner.generateSignature(hash);
+            return SignatureCodec.encode(sig[0], sig[1], params);
+        } finally {
+            rawSigner.destroy(); // обнуляет временную копию dBytes внутри ECDSASigner
+        }
+    }
+
+    /**
+     * Проверяет подпись готового хэша открытым ключом ГОСТ Р 34.10-2012.
+     *
+     * <p>Используется когда хэш вычислен внешней системой.
+     * Хэш должен соответствовать кривой — см. {@link #signHash}.
+     *
+     * @param hash      готовый хэш (длина должна быть равна hlen кривой)
+     * @param signature подпись r ∥ s (64 или 128 байт)
+     * @param pub       открытый ключ
+     * @return {@code true} если подпись верна
+     * @throws IllegalArgumentException если длина хэша не соответствует кривой
+     *         или длина подписи неверна
+     */
+    public static boolean verifyHash(byte[] hash, byte[] signature, PublicKeyParameters pub) {
+        ECParameters params = pub.getParams();
+        validateHashLength(hash, params);
+
+        Supplier<Digest> factory = digestFactory(params);
+        ECDSASigner rawSigner = new ECDSASigner(factory);
+        rawSigner.init(false, pub);
+
+        BigInteger[] sig = SignatureCodec.decode(signature, params);
+        return rawSigner.verifySignature(hash, sig[0], sig[1]);
+    }
+
+    /**
      * Получает открытый ключ из закрытого: Q = d·G.
      *
      * <p>Используется когда есть только закрытый ключ и нужно восстановить
@@ -126,6 +194,19 @@ public final class Signature {
     // -----------------------------------------------------------------------
     // Внутренние вспомогательные методы
     // -----------------------------------------------------------------------
+
+    /**
+     * Проверяет что длина хэша соответствует hlen кривой.
+     *
+     * @throws IllegalArgumentException если {@code hash} null или длина не совпадает с hlen
+     */
+    private static void validateHashLength(byte[] hash, ECParameters params) {
+        if (hash == null || hash.length != params.hlen) {
+            throw new IllegalArgumentException(
+                "Hash length must be " + params.hlen + " bytes for this curve, got "
+                + (hash == null ? "null" : hash.length));
+        }
+    }
 
     /**
      * Возвращает фабрику дайджестов по параметрам кривой:
