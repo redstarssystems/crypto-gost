@@ -234,7 +234,6 @@ gpg --import KEYS
 gpg --verify crypto-gost-0.1.1.jar.asc crypto-gost-0.1.1.jar
 ----
 
-Публичный gpg-ключ в конце документа.
 
 == Высокоуровневый API
 
