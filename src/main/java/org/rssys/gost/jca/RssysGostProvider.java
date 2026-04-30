@@ -39,7 +39,7 @@ import java.security.Provider;
  *   <li>{@code Kuznyechik/OFB/NoPadding}    — режим ОС по выходу, IV = 16 байт</li>
  *   <li>{@code Kuznyechik/CBC/PKCS5Padding}  — режим CBC с PKCS#7, IV = 16 байт</li>
  *   <li>{@code Kuznyechik/CBC/NoPadding}    — режим CBC без padding, IV = 16 байт</li>
- *   <li>{@code Kuznyechik/MGM/NoPadding}    — AEAD-режим MGM (RFC 9058), ICN = 15 байт,
+  *   <li>{@code Kuznyechik/MGM/NoPadding}    — AEAD-режим MGM (RFC 9058), ICN = 16 байт,
  *       совместим с OpenSSL {@code kuznyechik-mgm}</li>
  * </ul>
  *
@@ -169,6 +169,8 @@ public final class RssysGostProvider extends Provider {
         // (kuznyechik-mgm в нотации OpenSSL)
         put("Cipher.Kuznyechik-MGM",                            mgmSpi);
         put("Alg.Alias.Cipher.1.2.643.7.1.1.5.1",               "Kuznyechik-MGM");
+        // Алиас в стандартной JCA-нотации алгоритм/режим/padding
+        put("Alg.Alias.Cipher.Kuznyechik/MGM/NoPadding",        "Kuznyechik-MGM");
     }
 
     /**

@@ -56,6 +56,31 @@ class GostMgmTest {
     }
 
     @Test
+    @DisplayName("getInstance: алиас Kuznyechik/MGM/NoPadding для режима Kuznyechik-MGM")
+    void testGetInstanceAlias() throws Exception {
+        GostSecretKey key = new GostSecretKey("Kuznyechik", KeyGenerator.generateSymmetricKey());
+
+        // Генерируем ICN явно, чтобы сравнить результаты обоих способов получения шифра
+        byte[] icn = new byte[16];
+        new java.security.SecureRandom().nextBytes(icn);
+        icn[0] &= 0x7F; // MSB=0 per RFC 9058
+
+        // Шифрование через алиас Kuznyechik/MGM/NoPadding
+        Cipher aliasEnc = Cipher.getInstance("Kuznyechik/MGM/NoPadding", PROVIDER);
+        assertNotNull(aliasEnc);
+        aliasEnc.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(icn));
+        byte[] ciphertext = aliasEnc.doFinal(DATA);
+
+        // Расшифрование через основное имя Kuznyechik-MGM
+        Cipher canonicalDec = Cipher.getInstance(ALGORITHM, PROVIDER);
+        canonicalDec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
+        byte[] decrypted = canonicalDec.doFinal(ciphertext);
+
+        assertArrayEquals(DATA, decrypted,
+            "Алиас Kuznyechik/MGM/NoPadding должен давать тот же шифртекст что и Kuznyechik-MGM");
+    }
+
+    @Test
     @DisplayName("Roundtrip без AAD: encrypt → decrypt возвращает оригинал")
     void testRoundtripNoAad() throws Exception {
         SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
@@ -65,7 +90,7 @@ class GostMgmTest {
         Cipher enc = Cipher.getInstance(ALGORITHM, PROVIDER);
         enc.init(Cipher.ENCRYPT_MODE, key);
         byte[] ciphertext = enc.doFinal(DATA); // [CT][TAG(16)]
-        byte[] icn        = enc.getIV();       // 15 байт
+        byte[] icn        = enc.getIV();
 
         assertNotNull(icn, "ICN не должен быть null после шифрования");
         assertEquals(16, icn.length, "ICN должен быть 16 байт");
