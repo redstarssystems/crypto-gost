@@ -40,9 +40,7 @@ import java.util.Arrays;
  * PrivateKeyInfo ::= SEQUENCE {
  *   version    INTEGER (0),
  *   privateKeyAlgorithm AlgorithmIdentifier,  -- тот же что и выше
- *   privateKey OCTET STRING {                 -- обёртка
- *     OCTET STRING d                          -- закрытый ключ d, big-endian
- *   }
+ *   privateKey OCTET STRING     -- закрытый ключ d, big-endian
  * }
  * </pre>
  *
@@ -80,7 +78,7 @@ public final class GostDerCodec {
 
         // Нормализуем точку в аффинные координаты
         ECPoint q = pub.getQ().normalize();
-        int coordLen = (params.n.bitLength() + 7) / 8; // 32 или 64 байта
+        int coordLen = (params.p.bitLength() + 7) / 8; // 32 или 64 байта
 
         // Координаты в little-endian: reverseBytes(big-endian)
         byte[] xLE = reverseCopy(toFixedBytes(q.getX(), coordLen));
@@ -90,13 +88,12 @@ public final class GostDerCodec {
         byte[] pointBytes = new byte[coordLen * 2];
         System.arraycopy(xLE, 0, pointBytes, 0,         coordLen);
         System.arraycopy(yLE, 0, pointBytes, coordLen,  coordLen);
-        byte[] pointOctetStr = encodeOctetString(pointBytes);
 
         // AlgorithmIdentifier: SEQUENCE { signAlgOID, SEQUENCE { curveOID, digestOID } }
         byte[] pubKeyParams = encodeSequence(encodeOid(curveOid), encodeOid(digestOid));
         byte[] algId        = encodeSequence(encodeOid(signAlgOid), pubKeyParams);
 
-        // subjectPublicKey: BIT STRING, содержащий OCTET STRING
+        byte[] pointOctetStr = encodeOctetString(pointBytes);
         byte[] bitStr = encodeBitString(pointOctetStr);
 
         return encodeSequence(algId, bitStr);
@@ -132,7 +129,7 @@ public final class GostDerCodec {
         byte[] bitStrContent = parseBitString(outer[1], 0);
         byte[] pointOctetStr = parseOctetString(bitStrContent, 0);
 
-        int coordLen = (params.n.bitLength() + 7) / 8;
+        int coordLen = (params.p.bitLength() + 7) / 8;
         if (pointOctetStr.length != coordLen * 2) {
             throw new IllegalArgumentException(
                 "Invalid EC point encoding: expected " + (coordLen * 2)
@@ -148,7 +145,6 @@ public final class GostDerCodec {
         ECPoint q = ECPoint.affine(x, y, params);
         return new PublicKeyParameters(q, params);
     }
-
      /**
      * Кодирует закрытый ключ в DER PrivateKeyInfo (PKCS#8 / RFC 5958).
      * <p>
@@ -169,9 +165,8 @@ public final class GostDerCodec {
         int keyLen = (params.n.bitLength() + 7) / 8; // 32 или 64 байта
         byte[] dBytes = toFixedBytes(priv.getD(), keyLen);
 
-        // Закрытый ключ — вложенный OCTET STRING внутри внешнего OCTET STRING
-        byte[] innerOctetStr = encodeOctetString(dBytes);
-        byte[] privateKey    = encodeOctetString(innerOctetStr);
+        // Закрытый ключ
+        byte[] privateKey = encodeOctetString(dBytes); // Одна обёртка
 
         // AlgorithmIdentifier: тот же формат что и для открытого ключа
         byte[] pubKeyParams = encodeSequence(encodeOid(curveOid), encodeOid(digestOid));
@@ -210,9 +205,7 @@ public final class GostDerCodec {
         String curveOid       = parseOid(pubKeyParams[0], 0);
         ECParameters params   = GostCurves.byName(curveOid);
 
-        // privateKey: OCTET STRING { OCTET STRING d }
-        byte[] outerOctet = parseOctetString(outer[2], 0);
-        byte[] dBytes     = parseOctetString(outerOctet, 0);
+        byte[] dBytes = parseOctetString(outer[2], 0);
 
         BigInteger d = new BigInteger(1, dBytes);
         return new PrivateKeyParameters(d, params);
