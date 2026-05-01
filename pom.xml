@@ -7,7 +7,7 @@
 
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost</artifactId>
-    <version>0.1.1</version>
+    <version>0.1.2</version>
     <packaging>jar</packaging>
 
     <name>crypto-gost</name>
