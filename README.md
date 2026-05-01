@@ -328,19 +328,19 @@ style="text-align: center;"><p><code>ECAlgorithms.implShamirsTrickWNaf</code>,<b
   При необходимости проверить подпись релизного тега можно так:
 
       gpg --import KEYS
-      gpg -v v0.1.1
+      gpg -v v0.1.2
 
 - **Способ 2.** Скачайте артефакты
   [отсюда](https://gitflic.ru/project/red-stars-systems/crypto-gost/release?sort=TIME&direction=DESC)
   и установите:  
 
       mvn install:install-file \
-        -Dfile=crypto-gost-0.1.1.jar \
-        -Dsources=crypto-gost-0.1.1-sources.jar \
-        -Djavadoc=crypto-gost-0.1.1-javadoc.jar \
+        -Dfile=crypto-gost-0.1.2.jar \
+        -Dsources=crypto-gost-0.1.2-sources.jar \
+        -Djavadoc=crypto-gost-0.1.2-javadoc.jar \
         -DgroupId=org.rssys \
         -DartifactId=crypto-gost \
-        -Dversion=0.1.1 \
+        -Dversion=0.1.2 \
         -Dpackaging=jar
 
 Затем, добавьте зависимость в `pom.xml` вашего проекта:
@@ -348,15 +348,13 @@ style="text-align: center;"><p><code>ECAlgorithms.implShamirsTrickWNaf</code>,<b
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost</artifactId>
-        <version>0.1.1</version>
+        <version>0.1.2</version>
     </dependency>
 
 Проверить подпись можно так:
 
     gpg --import KEYS
-    gpg --verify crypto-gost-0.1.1.jar.asc crypto-gost-0.1.1.jar
-
-Публичный gpg-ключ в конце документа.
+    gpg --verify crypto-gost-0.1.2.jar.asc crypto-gost-0.1.2.jar
 
 # Высокоуровневый API
 
