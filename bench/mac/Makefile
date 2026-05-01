@@ -1,6 +1,7 @@
 ROOT      := $(realpath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 BENCH_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 RES_DIR   := $(BENCH_DIR)/results
+VERSION   := $(shell cd $(ROOT) && mvn help:evaluate -Dexpression=project.version -q -DforceStdout 2>/dev/null || echo "unknown")
 JAR       := $(BENCH_DIR)/target/benchmarks.jar
 JAVA      ?= java
 LC_ALL    ?= C
@@ -25,7 +26,7 @@ $(JAR):
 bench-gost: $(JAR)
 	mkdir -p $(RES_DIR)
 	@printf '\n\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	@printf '\033[1;36m  crypto-gost v0.1.0 — CMAC, HMAC-256, HMAC-512\033[0m\n'
+	@printf '\033[1;36m  crypto-gost v$(VERSION) — CMAC, HMAC-256, HMAC-512\033[0m\n'
 	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
 	cd $(BENCH_DIR) && LC_ALL=$(LC_ALL) $(JAVA) $(JAVA_OPTS) -jar $(JAR) \
 	    '.*Gost' \
@@ -147,6 +148,8 @@ plot-hmac512:
 # ---------------------------------------------------------------
 cross-validate: $(JAR)
 	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
+	@printf '\033[1;36m  crypto-gost v$(VERSION) — CMAC, HMAC-256, HMAC-512\033[0m\n'
+	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
 	@printf '\033[1;36m  Кросс-валидация: crypto-gost ↔ BC 1.83\033[0m\n'
 	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
 	mkdir -p $(RES_DIR)
@@ -158,6 +161,8 @@ cross-validate: $(JAR)
 # Кросс-валидация: crypto-gost ↔ OpenSSL 3.x (ГОСТ-провайдер)
 # ---------------------------------------------------------------
 cross-validate-openssl: $(JAR)
+	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
+	@printf '\033[1;36m  crypto-gost v$(VERSION) — CMAC, HMAC-256, HMAC-512\033[0m\n'
 	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
 	@printf '\033[1;36m  Кросс-валидация: crypto-gost ↔ OpenSSL\033[0m\n'
 	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'

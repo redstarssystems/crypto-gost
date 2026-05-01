@@ -11,7 +11,7 @@ JAVA_OPTS ?= --add-opens java.base/java.lang=ALL-UNNAMED \
              --add-opens java.base/jdk.internal.misc=ALL-UNNAMED
 
 # Версия читается из pom.xml — не прибита гвоздями
-VERSION   := $(shell cd $(BENCH_DIR) && mvn help:evaluate -Dexpression=project.version -q -DforceStdout 2>/dev/null || echo "unknown")
+VERSION   := $(shell cd $(ROOT) && mvn help:evaluate -Dexpression=project.version -q -DforceStdout 2>/dev/null || echo "unknown")
 
 # Парсит CSV JMH: извлекает score и error в ops/s
 # Формат TSV: score_ops  error_ops

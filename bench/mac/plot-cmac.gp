@@ -10,6 +10,6 @@ set datafile separator '\t'
 set style data linespoints
 
 plot 'results/data-cmac-gost.tsv' using 1:2:3 with yerrorlines \
-    title 'crypto-gost v0.1.0 CMAC' linewidth 2 pointtype 7 pointsize 1.5 lc rgb '#0066cc', \
+    title 'crypto-gost v0.1.2 CMAC' linewidth 2 pointtype 7 pointsize 1.5 lc rgb '#0066cc', \
     'results/data-cmac-bc.tsv' using 1:2:3 with yerrorlines \
     title 'BouncyCastle 1.83 CMAC' linewidth 2 pointtype 9 pointsize 1.5 lc rgb '#cc3300'
