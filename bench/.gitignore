@@ -1,5 +1,4 @@
 target/
-results/
 data/
 dependency-reduced-pom.xml
 *.log

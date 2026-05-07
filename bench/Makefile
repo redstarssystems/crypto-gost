@@ -1,4 +1,4 @@
-SUB_DIRS := keys kuznyechik mac signature
+SUB_DIRS := keys kuznyechik mac signature old-digest tls
 
 .PHONY: clean
 

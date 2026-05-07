@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.rssys</groupId>
+        <artifactId>crypto-gost</artifactId>
+        <version>${revision}</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>crypto-gost-core</artifactId>
+    <packaging>jar</packaging>
+
+    <name>crypto-gost-core</name>
+    <description>Криптографическое ядро алгоритмов ГОСТ: Стрибог, Кузнечик, ГОСТ Р 34.10-2012, JCA-провайдер</description>
+    <url>https://gitflic.ru/project/red-stars-systems/crypto-gost</url>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

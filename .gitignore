@@ -1,5 +1,5 @@
 # standard (default) exclusions
-/target
+target/
 /classes
 /checkouts
 *.jar
@@ -49,3 +49,4 @@ README.xml
 /CHANGELOG.xml
 .DS_Store
 .idea
+.flattened-pom.xml
