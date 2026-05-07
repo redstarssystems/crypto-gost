@@ -607,7 +607,9 @@ try (TlsSession session = TlsSession.createClient(config)) {
 .Дополнительная документация:
 - xref:doc/architecture.adoc[Архитектура модуля] — описание слоёв, ключевых классов, handshake flow, threading model, ограничений.
 
+== Поддержать проект
 
+Если проект оказался полезным, вы можете поддержать проект на link:https://boosty.to/mike_ananev[*Boosty*] -> *Donate*
 
 == Лицензия
 
