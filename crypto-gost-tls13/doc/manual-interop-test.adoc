@@ -1,5 +1,7 @@
 = Manual testing
 
+// asciidoc -b docbook manual-interop-test.adoc && pandoc -f docbook -t markdown_strict manual-interop-test.xml -o manual-interop-test.md
+
 == Echo-сервер
 
 [source,bash]

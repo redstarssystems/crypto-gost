@@ -7,8 +7,58 @@ toc::[]
 // pandoc -f docbook -t markdown_strict README.xml -o README.md
 
 
-Модуль `crypto-gost-tls13` реализует защищённый протокол TLS 1.3 с ГОСТ-профилем
-(RFC 9367).
+.Модуль `crypto-gost-tls13` содержит реализацию *TLS 1.3* (RFC 8446 + RFC 9367) с ГОСТ-криптографией:
+.. *Протоколы:*
+* *Handshake*: полный (client/server), сокращённый (`PSK`), взаимный (`mTLS`).
+* *ALPN (RFC 7301)* — согласование протокола прикладного уровня (HTTP/2, HTTP/1.1).
+* *SNI (RFC 6066)* — указание имени сервера для multi-tenant развёртываний.
+* *KeyUpdate (RFC 8446 §4.6.3)* — обновление ключей шифрования трафика.
+* *Cipher suites*: `TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`.
+* *ECDHE*: CryptoPro-A (256-bit), CryptoPro-B (512-bit)
+* *Per-record TLSTREE re-keying* — смена ключа шифрования на каждую TLS-запись.
+* *Фрагментация и сборка* рукопожатий и записей (RFC 8446 §5.1).
+* *Session resumption*: `PSK` через `NewSessionTicket` (`PskStore` in-memory, single-use).
+* *OCSP stapling*: сервер прикладывает OCSP-ответ к сертификату.
+* *Post-handshake messages*: `NewSessionTicket` (сохранение для `PSK`).
+.. *Криптография*:
+* *Key schedule*: `HKDF-Streebog` (RFC 5869) по схеме TLS 1.3 (RFC 8446 §7.1).
+* *Защита записей*: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446 §5.3.
+* Эфемерные ключи затираются после использования.
+.. *Сертификаты:*
+* Парсинг X.509v3 (GOST R 34.10-2012) — встроенный DER-парсер.
+* Валидация цепочки: подписи, DN (issuer → subject), `Basic Constraints`,
+`Key Usage`, `Extended Key Usage` (`serverAuth` / `clientAuth`), pathLen.
+* Проверка hostname: dNSName + iPAddress (RFC 6125).
+* Верификация OCSP-ответов (RFC 6960).
+.. *Транспорт:*
+* `TlsTransport` — интерфейс.
+* `InMemoryTlsTransport` — для тестов и однопроцессных сценариев (in-memory очередь).
+* `SocketTlsTransport` — blocking I/O через `java.net.Socket`.
+* `ChannelTlsTransport` — NIO `SocketChannel`-based transport (blocking mode, interruptible).
+.. *Пошаговый handshake:*
+* `TlsHandshakeEngine` — state machine для handshake (отвязан от I/O). Используется `TlsSession` как оркестратор; пригоден для интеграции с JSSE (`SSLEngine`).
+.. *ByteBuffer API:*
+* `TlsRecord.protect/unprotect` — ByteBuffer-перегрузки для zero-copy интеграции с NIO.
+.. *Загрузка ключей:*
+* `Pkcs12Loader` — чтение PFX (PKCS#12) с `PBKDF2-HMAC-SHA256 + AES-256-CBC`.
+.. *Завершение сессии:*
+* `close_notify` — корректное закрытие по протоколу.
+* Затирание ключевого материала при закрытии или ошибке.
+* Обработка alert: `fatal` — немедленное закрытие + затирание.
+.. *Безопасность реализации:*
+* Constant-time сравнения для verify_data и PSK binders (защита от timing attacks)
+* Затирание ключевого материала при close, fatal alert, exception в handshake
+* Защита от DoS: лимиты на длину цепочки сертификатов (10), post-handshake messages, размер записей.
+.. *Ограничения:*
+* Только resumption PSK (0-RTT и external PSK не поддерживаются).
+* Только `psk_dhe_ke` (pure PSK без ECDHE не поддерживается).
+* `HelloRetryRequest` (RFC 8446 §4.1.4) не поддерживается — используется только одна named group (GC256A по умолчанию).
+* Только ГОСТ (non-GOST cipher suites не поддерживаются).
+
++
+Все криптографические операции выполняются встроенными средствами библиотеки — без внешних зависимостей.
+
+
 
 Для работы TLS необходим транспортный уровень — реализация интерфейса `TlsTransport`:
 
@@ -605,11 +655,12 @@ try (TlsSession session = TlsSession.createClient(config)) {
 интеграция с JSSE (`SSLEngine`). `TlsSession` использует `TlsHandshakeEngine` внутри.
 
 .Дополнительная документация:
-- xref:doc/architecture.adoc[Архитектура модуля] — описание слоёв, ключевых классов, handshake flow, threading model, ограничений.
+- link:doc/architecture.md[crypto-gost-tls13/doc/architecture.md] — описание слоёв, ключевых классов, handshake flow, threading model, ограничений..
 
 == Поддержать проект
 
-Если проект оказался полезным, вы можете поддержать проект на link:https://boosty.to/mike_ananev[*Boosty*] -> *Donate*
+Если проект оказался полезным, вы можете поддержать проект на link:https://boosty.to/mike_ananev/donate[*Boosty*]
+
 
 == Лицензия
 

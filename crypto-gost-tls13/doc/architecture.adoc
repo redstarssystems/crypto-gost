@@ -1,5 +1,7 @@
 = Архитектура TLS 1.3 модуля
 
+//  asciidoc -b docbook architecture.adoc && pandoc -f docbook -t markdown_strict architecture.xml -o architecture.md
+
 == Структура пакетов
 
 Классы организованы в подпакеты `org.rssys.gost.tls13.*`:

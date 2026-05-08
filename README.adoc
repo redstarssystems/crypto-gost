@@ -15,74 +15,11 @@ WARNING: *Данная библиотека не является сертифи
 
 
 .Библиотека состоит из модулей:
-* `crypto-gost-core` - криптографическое ядро.
+* `crypto-gost-core` - криптографическое ядро алгоритмов ГОСТ: Стрибог, Кузнечик, ГОСТ Р 34.10-2012, JCA-провайдер.
 * `crypto-gost-tls13` - Реализация протокола *TLS 1.3* (RFC 8446) с поддержкой российских криптографических алгоритмов согласно *RFC 9367*.
 
 
-.Поддерживаемые алгоритмы ГОСТ в модуле `crypto-gost-core`:
-* *ГОСТ Р 34.11-2012* — хэш-функция «Стрибог» 256 и 512 бит (RFC 6986).
-* *ГОСТ Р 34.12-2015* — блочный шифр «Кузнечик», ключ 256 бит.
-* *ГОСТ Р 34.13-2015* — режимы шифрования CBC, CFB, CTR, OFB; имитовставка (CMAC).
-* *ГОСТ Р 34.10-2012* — электронная подпись 256 и 512 бит (RFC 7091).
-* *HMAC-Стрибог* — RFC 7836 (HMAC-Streebog-256 и HMAC-Streebog-512).
-* *MGM (Multilinear Galois Mode)* — AEAD-режим для Кузнечика, RFC 9058. Совместим с OpenSSL.
 
-NOTE: *Для модуля `crypto-gost-core` выполнена кросс-валидация на совместимость с `openssl (ГОСТ)` и `Bouncycastle`.*
-
-.Модуль `crypto-gost-tls13` содержит реализацию *TLS 1.3* (RFC 8446 + RFC 9367) с ГОСТ-криптографией:
-.. *Протоколы:*
-* *Handshake*: полный (client/server), сокращённый (`PSK`), взаимный (`mTLS`).
-* *ALPN (RFC 7301)* — согласование протокола прикладного уровня (HTTP/2, HTTP/1.1).
-* *SNI (RFC 6066)* — указание имени сервера для multi-tenant развёртываний.
-* *KeyUpdate (RFC 8446 §4.6.3)* — обновление ключей шифрования трафика.
-* *Cipher suites*: `TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`.
-* *ECDHE*: CryptoPro-A (256-bit), CryptoPro-B (512-bit)
-* *Per-record TLSTREE re-keying* — смена ключа шифрования на каждую TLS-запись.
-* *Фрагментация и сборка* рукопожатий и записей (RFC 8446 §5.1).
-* *Session resumption*: `PSK` через `NewSessionTicket` (`PskStore` in-memory, single-use).
-* *OCSP stapling*: сервер прикладывает OCSP-ответ к сертификату.
-* *Post-handshake messages*: `NewSessionTicket` (сохранение для `PSK`).
-.. *Криптография*:
-* *Key schedule*: `HKDF-Streebog` (RFC 5869) по схеме TLS 1.3 (RFC 8446 §7.1).
-* *Защита записей*: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446 §5.3.
-* Эфемерные ключи затираются после использования.
-.. *Сертификаты:*
-* Парсинг X.509v3 (GOST R 34.10-2012) — встроенный DER-парсер.
-* Валидация цепочки: подписи, DN (issuer → subject), `Basic Constraints`,
-`Key Usage`, `Extended Key Usage` (`serverAuth` / `clientAuth`), pathLen.
-* Проверка hostname: dNSName + iPAddress (RFC 6125).
-* Верификация OCSP-ответов (RFC 6960).
-.. *Транспорт:*
-* `TlsTransport` — интерфейс.
-* `InMemoryTlsTransport` — для тестов и однопроцессных сценариев (in-memory очередь).
-* `SocketTlsTransport` — blocking I/O через `java.net.Socket`.
-* `ChannelTlsTransport` — NIO `SocketChannel`-based transport (blocking mode, interruptible).
-.. *Пошаговый handshake:*
-* `TlsHandshakeEngine` — state machine для handshake (отвязан от I/O). Используется `TlsSession` как оркестратор; пригоден для интеграции с JSSE (`SSLEngine`).
-.. *ByteBuffer API:*
-* `TlsRecord.protect/unprotect` — ByteBuffer-перегрузки для zero-copy интеграции с NIO.
-.. *Загрузка ключей:*
-* `Pkcs12Loader` — чтение PFX (PKCS#12) с `PBKDF2-HMAC-SHA256 + AES-256-CBC`.
-.. *Завершение сессии:*
-* `close_notify` — корректное закрытие по протоколу.
-* Затирание ключевого материала при закрытии или ошибке.
-* Обработка alert: `fatal` — немедленное закрытие + затирание.
-.. *Безопасность реализации:*
-* Constant-time сравнения для verify_data и PSK binders (защита от timing attacks)
-* Затирание ключевого материала при close, fatal alert, exception в handshake
-* Защита от DoS: лимиты на длину цепочки сертификатов (10), post-handshake messages, размер записей.
-.. *Ограничения:*
-* Только resumption PSK (0-RTT и external PSK не поддерживаются).
-* Только `psk_dhe_ke` (pure PSK без ECDHE не поддерживается).
-* `HelloRetryRequest` (RFC 8446 §4.1.4) не поддерживается — используется только одна named group (GC256A по умолчанию).
-* Только ГОСТ (non-GOST cipher suites не поддерживаются).
-
-+
-Все криптографические операции выполняются встроенными средствами библиотеки — без внешних зависимостей.
-
-
-.Дополнительные алгоритмы (не ГОСТ):
-* *SCrypt* — функция выработки ключа на основе пароля (RFC 7914).
 
 === Цели и задачи
 
@@ -98,7 +35,7 @@ NOTE: *Для модуля `crypto-gost-core` выполнена кросс-ва
 
 == Поддержать проект
 
-Если проект оказался полезным, вы можете поддержать проект на link:https://boosty.to/mike_ananev[*Boosty*] -> *Donate*
+Если проект оказался полезным, вы можете поддержать проект на link:https://boosty.to/mike_ananev/donate[*Boosty*]
 
 
 == Установка
@@ -159,19 +96,17 @@ gpg --verify crypto-gost-core-0.2.0.jar.asc crypto-gost-core-0.2.0.jar
 
 == CRYPTO-GOST-CORE
 
-Подробная документация модуля `crypto-gost-core` вынесена в отдельный файл:
-link:crypto-gost-core/README.adoc[crypto-gost-core/README.adoc] или link:crypto-gost-core/README.md[crypto-gost-core/README.md] (обновляется автоматически на основе asciidoc-файла).
+Подробная документация модуля `crypto-gost-core` вынесена в отдельный файл: link:crypto-gost-core/README.md[crypto-gost-core/README.md].
 
 
 == CRYPTO-GOST-TLS13
 
-Подробная документация модуля `crypto-gost-tls13` вынесена в отдельный файл:
-link:crypto-gost-tls13/README.adoc[crypto-gost-tls13/README.adoc] или link:crypto-gost-tls13/README.md[crypto-gost-tls13/README.md] (обновляется автоматически на основе asciidoc-файла).
+Подробная документация модуля `crypto-gost-tls13` вынесена в отдельный файл: link:crypto-gost-tls13/README.md[crypto-gost-tls13/README.md].
 
 
 == Бенчмарки
 
-xref:bench/README.adoc[Методики бенчмарков и кросс-валидации]
+link:bench/README.md[Методики бенчмарков и кросс-валидации]
 
 
 == Раздел для разработчиков

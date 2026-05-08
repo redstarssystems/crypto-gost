@@ -50,3 +50,5 @@ README.xml
 .DS_Store
 .idea
 .flattened-pom.xml
+/crypto-gost-tls13/doc/architecture.xml
+/crypto-gost-tls13/doc/manual-interop-test.xml
