@@ -19,7 +19,7 @@ import java.util.concurrent.*;
  * <p>
  * Сервер отправляет CertificateRequest и проверяет клиентский сертификат через CA public key.
  * Клиент отправляет свой сертификат + CertificateVerify.
- * Демонстрирует TlsServerConfig.withCaPublicKey() и TlsClientConfig.withClientCertificate().
+ * TlsServerConfig.withCaPublicKey() и TlsClientConfig.withClientCertificateChain().
  */
 public final class MutualTls {
 
@@ -42,35 +42,32 @@ public final class MutualTls {
 
         // 4. Создаём пару транспортов
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+        try (InMemoryTlsTransport serverTp = pair.getServerTransport();
+             InMemoryTlsTransport clientTp = pair.getClientTransport();
+             TlsSession server = TlsSession.createServer(
+                     new TlsServerConfig(cs, Collections.singletonList(serverCert), serverPriv)
+                             .withCaPublicKey(ca.getPublicKey()), serverTp);
+             TlsSession client = TlsSession.createClient(
+                     new TlsClientConfig(cs)
+                             .withServerHostname("localhost")
+                             .withCaPublicKey(ca.getPublicKey())
+                              .withClientCertificateChain(clientCert)
+                             .withClientPrivateKey(clientPriv), clientTp)) {
 
-        // 5. Сервер — требует клиентский сертификат (caPublicKey)
-        TlsSession server = TlsSession.createServer(
-                new TlsServerConfig(pair.getServerTransport(), cs,
-                        Collections.singletonList(serverCert), serverPriv)
-                        .withCaPublicKey(ca.getPublicKey()));
-        // 6. Клиент — отправляет свой сертификат
-        TlsSession client = TlsSession.createClient(
-                new TlsClientConfig(pair.getClientTransport(), cs)
-                        .withServerHostname("localhost")
-                        .withCaPublicKey(ca.getPublicKey())
-                        .withClientCertificate(clientCert)
-                        .withClientPrivateKey(clientPriv));
+            ExecutorService exec = Executors.newSingleThreadExecutor();
+            try {
+                Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
+                client.handshakeAsClient();
+                sf.get(15, TimeUnit.SECONDS);
 
-        ExecutorService exec = Executors.newSingleThreadExecutor();
-        try {
-            Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
-            client.handshakeAsClient();
-            sf.get(15, TimeUnit.SECONDS);
-
-            client.write("mTLS handshake done".getBytes(StandardCharsets.UTF_8));
-            byte[] received = server.read();
-            System.out.println(new String(received, StandardCharsets.UTF_8));
-            System.out.println("SUCCESS");
-        } finally {
-            exec.shutdown();
-            try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-            try { server.close(); } catch (Exception ignored) {}
-            try { client.close(); } catch (Exception ignored) {}
+                client.write("mTLS handshake done".getBytes(StandardCharsets.UTF_8));
+                byte[] received = server.read();
+                System.out.println(new String(received, StandardCharsets.UTF_8));
+                System.out.println("SUCCESS");
+            } finally {
+                exec.shutdown();
+                try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+            }
         }
     }
 }

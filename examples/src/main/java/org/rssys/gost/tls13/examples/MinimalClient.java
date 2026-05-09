@@ -35,12 +35,14 @@ public final class MinimalClient {
 
         // 2. Создаём пару транспортов в памяти
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+        InMemoryTlsTransport serverTp = pair.getServerTransport();
+        InMemoryTlsTransport clientTp = pair.getClientTransport();
 
         // 3. Создаём сессии сервера и клиента
         TlsSession server = TlsSession.createServer(
-                pair.getServerTransport(), cs, serverCert, serverPriv);
+                serverTp, cs, serverCert, serverPriv);
         TlsSession client = TlsSession.createClient(
-                pair.getClientTransport(), cs, null, null);
+                clientTp, cs, null, null);
 
         ExecutorService exec = Executors.newSingleThreadExecutor();
         try {
@@ -65,6 +67,8 @@ public final class MinimalClient {
             try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
             try { server.close(); } catch (Exception ignored) {}
             try { client.close(); } catch (Exception ignored) {}
+            try { serverTp.close(); } catch (Exception ignored) {}
+            try { clientTp.close(); } catch (Exception ignored) {}
         }
     }
 }

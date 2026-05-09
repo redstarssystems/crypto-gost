@@ -12,6 +12,7 @@ import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.crypto.TlsTreeCache;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 
 /**
@@ -312,45 +313,78 @@ public final class TlsRecord {
      * Снимает защиту (дешифрует + проверяет аутентификацию) TLS-записи из
      * {@code record} и записывает открытые данные в {@code plaintext}.
      * <p>
-     * Читает полную TLS-запись (5-байтовый заголовок + ciphertext + tag) из
-     * {@code record}, расшифровывает и записывает открытые данные
-     * (без inner content type) в {@code plaintext}. Возвращает тип содержимого.
+     * Использует двухступенчатую логику: сначала читает заголовок (5 байт) без
+     * потребления, узнаёт точную длину записи, и только при достаточном количестве
+     * байт — consume и расшифровка. Это позволяет вернуть точный {@code hint}
+     * для {@link UnprotectResult.Status#NEED_MORE_INPUT}.
      * <p>
-     * После вызова position обоих буферов сдвинут. limit не изменяется.
-     * Caller выполняет flip на plaintext для чтения результата.
-     * <p>
-     * Поведение идентично {@link #unprotect(byte[])} — общая реализация
-     * через byte[] с последующей записью в dst.
+     * Состояние буферов после вызова:
+     * <ul>
+     *   <li>{@code OK} — position обоих буферов сдвинут на число записанных байт.
+     *       Caller выполняет flip на plaintext для чтения.</li>
+     *   <li>{@code NEED_MORE_INPUT} — position record НЕ изменился.
+     *       Caller добавляет данные и повторяет вызов.</li>
+     *   <li>{@code OUTPUT_TOO_SMALL} — position record восстановлен.
+     *       Caller увеличивает plaintext буфер и повторяет вызов.
+     *       Расшифровка будет выполнена заново.</li>
+     * </ul>
      *
-     * @param record    буфер с TLS-записью (position будет сдвинут)
-     * @param plaintext буфер для открытых данных (position будет сдвинут)
-     * @return тип содержимого (CT_HANDSHAKE, CT_APPLICATION_DATA, CT_ALERT)
+     * @param record    буфер с TLS-записью
+     * @param plaintext буфер для открытых данных
+     * @return результат дешифрования с указанием статуса
      * @throws AuthenticationException при ошибке аутентификации/подмене
      * @throws IllegalArgumentException при некорректном формате записи
      * @throws TlsException            при превышении максимального размера
      * @throws IllegalStateException   при переполнении порядкового номера
      */
-    public byte unprotect(ByteBuffer record, ByteBuffer plaintext)
+    public UnprotectResult unprotect(ByteBuffer record, ByteBuffer plaintext)
             throws AuthenticationException, TlsException {
         if (record == null || plaintext == null) {
             throw new IllegalArgumentException("Buffers must not be null");
         }
-        // Читаем всю TLS-запись из record в byte[]
+
         int recLen = record.remaining();
-        if (recLen < TlsConstants.RECORD_HEADER_SIZE + tagLen) {
-            throw new IllegalArgumentException("Record too short in buffer: " + recLen);
+        int initialPos = record.position();
+
+        // Stage 1: достаточно ли байт для заголовка?
+        if (recLen < TlsConstants.RECORD_HEADER_SIZE) {
+            return UnprotectResult.needMoreInput(TlsConstants.RECORD_HEADER_SIZE);
         }
-        byte[] recBytes = new byte[recLen];
-        record.get(recBytes);
-        TlsParsedRecord parsed = unprotect(recBytes);
-        // Записываем открытые данные в plaintext
-        if (plaintext.remaining() < parsed.getData().length) {
+
+        // Stage 2: peek заголовок — узнаём declared payload length (без consume)
+        int declaredLen = ((record.get(initialPos + 3) & 0xFF) << 8)
+                        | (record.get(initialPos + 4) & 0xFF);
+        int totalRecordLen = TlsConstants.RECORD_HEADER_SIZE + declaredLen;
+
+        // Грубая проверка: payload не может быть меньше tag
+        if (declaredLen < tagLen) {
             throw new IllegalArgumentException(
-                    "Plaintext buffer too small: need " + parsed.getData().length +
-                    ", have " + plaintext.remaining());
+                    "Record payload too small for tag: " + declaredLen);
         }
-        plaintext.put(parsed.getData());
-        return parsed.getContentType();
+
+        // Stage 3: хватает ли байт на всю запись?
+        if (recLen < totalRecordLen) {
+            return UnprotectResult.needMoreInput(totalRecordLen);
+        }
+
+        // Stage 4: consume + расшифровка (без seqNum++ — будет на успехе)
+        byte[] recBytes = new byte[totalRecordLen];
+        record.get(recBytes);
+        DecryptResult dr = doDecrypt(recBytes);
+        int plaintextLen = dr.dataLen;
+
+        // Stage 5: проверить dst до записи
+        if (plaintext.remaining() < plaintextLen) {
+            record.position(initialPos);
+            // Затираем расшифрованные данные: caller повторит unprotect
+            // с большим буфером, между retry данные не должны оставаться в памяти
+            Arrays.fill(this.plaintext, 0, plaintextLen, (byte) 0);
+            return UnprotectResult.outputTooSmall(plaintextLen);
+        }
+
+        plaintext.put(this.plaintext, 0, plaintextLen);
+        seqNum++;
+        return UnprotectResult.ok(dr.contentType);
     }
 
     /**

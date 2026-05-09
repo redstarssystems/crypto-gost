@@ -40,6 +40,23 @@ public final class TlsDerParser {
     // OID: id-pkix-ocsp-basic 1.3.6.1.5.5.7.48.1.1
     public static final byte[] OCSP_BASIC_OID_BYTES = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01};
 
+    // OID: SubjectKeyIdentifier 2.5.29.14
+    public static final byte[] SKI_OID_BYTES = {0x55, 0x1D, 0x0E};
+    // OID: AuthorityKeyIdentifier 2.5.29.35
+    public static final byte[] AKI_OID_BYTES = {0x55, 0x1D, 0x23};
+    // OID: AuthorityInfoAccess 1.3.6.1.5.5.7.1.1
+    public static final byte[] AIA_OID_BYTES = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x01};
+
+    // OID access method: id-ad-ocsp 1.3.6.1.5.5.7.48.1
+    public static final byte[] AD_OCSP_OID_BYTES = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01};
+    // OID access method: id-ad-caIssuers 1.3.6.1.5.5.7.48.2
+    public static final byte[] AD_CA_ISSUERS_OID_BYTES = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x02};
+
+    // OID: CRLDistributionPoints 2.5.29.31
+    public static final byte[] CDP_OID_BYTES = {0x55, 0x1D, 0x1F};
+    // OID: CertificatePolicies 2.5.29.32
+    public static final byte[] CP_OID_BYTES = {0x55, 0x1D, 0x20};
+
     private TlsDerParser() {
     }
 

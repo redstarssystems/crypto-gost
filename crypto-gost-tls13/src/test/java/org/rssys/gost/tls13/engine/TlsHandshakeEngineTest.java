@@ -73,10 +73,10 @@ class TlsHandshakeEngineTest {
     void testFullHandshake() throws Exception {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         // Клиент: start → ClientHello
         byte[] ch = client.start();
@@ -163,10 +163,10 @@ class TlsHandshakeEngineTest {
     void testMutualTlsHandshake() throws Exception {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(true),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, true);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, true, null);
 
         byte[] ch = client.start();
         assertNotNull(ch);
@@ -249,7 +249,7 @@ class TlsHandshakeEngineTest {
     void testWrongMessageType() throws TlsException {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         byte[] ch = client.start();
         assertNotNull(ch);
@@ -275,7 +275,7 @@ class TlsHandshakeEngineTest {
     void testReceiveBeforeStart() {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         byte[] garbage = new TlsHandshakeMessage(
                 TlsConstants.HT_SERVER_HELLO, new byte[]{0}).encode();
@@ -295,11 +295,11 @@ class TlsHandshakeEngineTest {
     void testServerWaitsForClientFinished() throws Exception {
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         byte[] ch = client.start();
         server.receive(ch);
@@ -324,10 +324,10 @@ class TlsHandshakeEngineTest {
     void testCertificateRejection() throws Exception {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         byte[] ch = client.start();
         server.receive(ch);
@@ -363,11 +363,11 @@ class TlsHandshakeEngineTest {
     void testServerNoMtlsWaitState() throws Exception {
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         byte[] ch = client.start();
         server.receive(ch);
@@ -393,11 +393,11 @@ class TlsHandshakeEngineTest {
     void testServerMtlsWaitState() throws Exception {
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, true);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, true, null);
 
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(true),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         byte[] ch = client.start();
         server.receive(ch);
@@ -420,11 +420,11 @@ class TlsHandshakeEngineTest {
     void testFullHandshakeWithAlpn() throws Exception {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         client.setClientAlpnProtocols(List.of("h2", "http/1.1"));
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         server.setServerAlpnProtocols(List.of("http/1.1"));
 
         byte[] ch = client.start();
@@ -476,11 +476,11 @@ class TlsHandshakeEngineTest {
     void testAlpnMismatchServerThrows() throws Exception {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         client.setClientAlpnProtocols(List.of("h2"));
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         server.setServerAlpnProtocols(List.of("http/1.1"));
 
         byte[] ch = client.start();
@@ -496,10 +496,10 @@ class TlsHandshakeEngineTest {
     void testFullHandshakeWithoutAlpn() throws Exception {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
 
         byte[] ch = client.start();
         assertNotNull(ch);
@@ -538,12 +538,12 @@ class TlsHandshakeEngineTest {
     void testClientRejectsServerAlpnNotOffered() throws Exception {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         client.setClientAlpnProtocols(List.of("h2"));
 
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         server.setServerAlpnProtocols(List.of("h2"));
 
         byte[] ch = client.start();
@@ -570,7 +570,7 @@ class TlsHandshakeEngineTest {
     void testPskHandshakeWithAlpn() throws Exception {
         TlsHandshakeEngine client = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         client.setClientAlpnProtocols(List.of("h2"));
         byte[] pskKey = new byte[32];
         byte[] pskId = new byte[8];
@@ -578,7 +578,7 @@ class TlsHandshakeEngineTest {
 
         TlsHandshakeEngine server = new TlsHandshakeEngine(
                 TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
-                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false);
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
         server.setServerAlpnProtocols(List.of("h2"));
         server.setServerPsk(pskKey);
 
@@ -610,5 +610,122 @@ class TlsHandshakeEngineTest {
         server.receive(cf);
         assertTrue(client.isDone());
         assertTrue(server.isDone());
+    }
+
+    // ===================================================================
+    // mTLS: правильные алерты при отсутствии клиентского сертификата
+    // ===================================================================
+    //
+    // Почему три теста:
+    //   1. Клиент прислал не-Certificate (например Finished скипнув Cert/CV)
+    //      → сервер должен кинуть CERTIFICATE_REQUIRED, а не UNEXPECTED_MESSAGE
+    //   2. Клиент прислал пустой Certificate (пустой certificate_list)
+    //      → сервер должен кинуть CERTIFICATE_REQUIRED
+    //   3. Сервер прислал пустой Certificate (нарушение протокола)
+    //      → клиент должен кинуть DECODE_ERROR, а не NPE
+
+    @Test
+    @DisplayName("mTLS: клиент не прислал Certificate (скипнул flight) → CERTIFICATE_REQUIRED")
+    void testMtlsClientSkipsCertificate() throws Exception {
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(true),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, true, null);
+
+        byte[] ch = client.start();
+        server.receive(ch);
+        assertEquals(TlsHandshakeEngine.State.SERVER_SEND_FLIGHT, server.getState());
+
+        // Сервер: poll весь flight (SH, EE, CR, Cert, CV, SF)
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNull(server.poll());
+        // Сервер ждёт клиентский Certificate
+        assertEquals(TlsHandshakeEngine.State.SERVER_WAIT_CLIENT_CERTIFICATE, server.getState());
+
+        // Клиент скипнул Certificate и прислал Finished — симулируем нарушение протокола
+        byte[] fakeFinished = new TlsHandshakeMessage(
+                TlsConstants.HT_FINISHED, new byte[]{0, 0, 0, 0}).encode();
+
+        // Раньше было UNEXPECTED_MESSAGE — неверно. decode_error в логах пугает.
+        TlsException ex = assertThrows(TlsException.class, () -> server.receive(fakeFinished));
+        assertEquals(TlsConstants.ALERT_CERTIFICATE_REQUIRED, ex.getAlertCode());
+        assertTrue(server.isError());
+    }
+
+    @Test
+    @DisplayName("mTLS: клиент прислал пустой Certificate → CERTIFICATE_REQUIRED")
+    void testMtlsClientEmptyCertificate() throws Exception {
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(true),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, true, null);
+
+        byte[] ch = client.start();
+        server.receive(ch);
+
+        // Сервер: poll весь flight
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNotNull(server.poll());
+        assertNull(server.poll());
+        assertEquals(TlsHandshakeEngine.State.SERVER_WAIT_CLIENT_CERTIFICATE, server.getState());
+
+        // Пустой Certificate: request_context=0, certificate_list len=0 (RFC 8446 §4.4.2 разрешает)
+        byte[] emptyCertBody = new byte[]{0x00, 0x00, 0x00, 0x00};
+        byte[] emptyCertFrame = new TlsHandshakeMessage(
+                TlsConstants.HT_CERTIFICATE, emptyCertBody).encode();
+
+        // Раньше было BAD_CERTIFICATE — неверно. У сервера нет сертификата, это не bad cert.
+        TlsException ex = assertThrows(TlsException.class, () -> server.receive(emptyCertFrame));
+        assertEquals(TlsConstants.ALERT_CERTIFICATE_REQUIRED, ex.getAlertCode());
+        assertTrue(server.isError());
+    }
+
+    @Test
+    @DisplayName("клиент: сервер прислал пустой Certificate → DECODE_ERROR")
+    void testServerEmptyCertificate() throws Exception {
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        byte[] ch = client.start();
+
+        // Сервер: обрабатываем CH, подменяем Certificate на пустой
+        server.receive(ch);
+        byte[] sh = server.poll();
+        byte[] ee = server.poll();
+        // Пустой Certificate — сервер нарушает протокол (RFC 8446 §4.4.2: сервер обязан прислать)
+        byte[] emptyCertBody = new byte[]{0x00, 0x00, 0x00, 0x00};
+        byte[] emptyCertFrame = new TlsHandshakeMessage(
+                TlsConstants.HT_CERTIFICATE, emptyCertBody).encode();
+        byte[] cv = server.poll();
+        byte[] sf = server.poll();
+        assertNotNull(sf);
+
+        // Доставляем клиенту SH → EE → пустой Certificate
+        client.receive(sh);
+        client.acknowledgeKeyChange();
+        client.receive(ee);
+        assertEquals(TlsHandshakeEngine.State.CLIENT_WAIT_CERTIFICATE_OR_CR, client.getState());
+
+        // Клиент проверяет: пустой Certificate от сервера = protocol violation = DECODE_ERROR
+        TlsException ex = assertThrows(TlsException.class, () -> client.receive(emptyCertFrame));
+        assertEquals(TlsConstants.ALERT_DECODE_ERROR, ex.getAlertCode());
+        assertTrue(client.isError());
     }
 }

@@ -107,6 +107,7 @@ public final class TlsConstants {
     public static final byte ALERT_MISSING_EXTENSION = 109;
     public static final byte ALERT_RECORD_OVERFLOW = 22;
     public static final byte ALERT_CERTIFICATE_EXPIRED = 45;
+    public static final byte ALERT_CERTIFICATE_REQUIRED = 116;
     public static final byte ALERT_INTERNAL_ERROR = 80;
 
     // идентификаторы TLS-расширений (RFC 8446 раздел 4.2)

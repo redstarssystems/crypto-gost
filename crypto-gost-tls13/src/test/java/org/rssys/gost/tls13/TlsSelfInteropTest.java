@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -113,14 +114,12 @@ class TlsSelfInteropTest {
                     SocketTlsTransport st = new SocketTlsTransport(s);
                     TlsServerConfig sc;
                     if (mTls) {
-                        // withCaPublicKey включает CertificateRequest →
-                        // сервер ждёт клиентский сертификат
-                        sc = new TlsServerConfig(st, cs, sCerts.cert, sCerts.priv)
+                        sc = new TlsServerConfig(cs, Collections.singletonList(sCerts.cert), sCerts.priv)
                                 .withCaPublicKey(sCerts.caPub);
                     } else {
-                        sc = new TlsServerConfig(st, cs, plain.cert, plain.priv);
+                        sc = new TlsServerConfig(cs, Collections.singletonList(plain.cert), plain.priv);
                     }
-                    TlsSession server = TlsSession.createServer(sc);
+                    TlsSession server = TlsSession.createServer(sc, st);
 
                     server.handshakeAsServer();
                     // 3 ключевых ассерта: handshake статус, cipher suite, данные
@@ -145,13 +144,13 @@ class TlsSelfInteropTest {
                     // ss.accept() на сервере разблокируется, сервер создаёт конфиг
                     try (Socket s = new Socket("127.0.0.1", port)) {
                         SocketTlsTransport ct = new SocketTlsTransport(s);
-                        TlsClientConfig cc = new TlsClientConfig(ct, cs);
+                        TlsClientConfig cc = new TlsClientConfig(cs);
                         if (mTls) {
-                            cc = cc.withClientCertificate(cCerts.cert)
+                            cc = cc.withClientCertificateChain(cCerts.cert)
                                    .withClientPrivateKey(cCerts.priv)
                                    .withCaPublicKey(cCerts.caPub);
                         }
-                        TlsSession client = TlsSession.createClient(cc);
+                        TlsSession client = TlsSession.createClient(cc, ct);
 
                         client.handshakeAsClient();
                         assertTrue(client.isHandshakeDone());

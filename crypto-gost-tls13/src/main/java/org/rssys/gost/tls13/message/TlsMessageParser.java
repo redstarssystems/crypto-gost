@@ -539,6 +539,55 @@ public final class TlsMessageParser {
     }
 
     /**
+     * Извлекает server_name из ClientHello (RFC 6066 §3, RFC 8446 §4.2.1).
+     * Легковесный метод — итерирует только расширения, не делает полный
+     * парсинг ClientHello. Используется для SNI certificate selection.
+     *
+     * @param chBody тело ClientHello (без handshake-заголовка)
+     * @return нормализованное DNS-имя или null при отсутствии/ошибке парсинга
+     */
+    public static String parseClientHelloSni(byte[] chBody) {
+        try {
+            String ctx = "ClientHello";
+            checkBounds(chBody, 0, 2, ctx);
+            if ((chBody[0] & 0xFF) != 0x03 || (chBody[1] & 0xFF) != 0x03) return null;
+            int pos = 2 + TlsConstants.RANDOM_LENGTH;
+            checkBounds(chBody, pos, 1, ctx);
+            int sessionIdLen = chBody[pos] & 0xFF;
+            checkBounds(chBody, pos, 1 + sessionIdLen, ctx);
+            pos += 1 + sessionIdLen;
+            checkBounds(chBody, pos, 2, ctx);
+            int csLen = ((chBody[pos] & 0xFF) << 8) | (chBody[pos + 1] & 0xFF);
+            checkBounds(chBody, pos + 2, csLen, ctx);
+            pos += 2 + csLen;
+            checkBounds(chBody, pos, 1, ctx);
+            int compLen = chBody[pos] & 0xFF;
+            checkBounds(chBody, pos + 1, compLen, ctx);
+            pos += 1 + compLen;
+            checkBounds(chBody, pos, 2, ctx);
+            int extLen = ((chBody[pos] & 0xFF) << 8) | (chBody[pos + 1] & 0xFF);
+            checkBounds(chBody, pos + 2, extLen, ctx);
+            int extStart = pos + 2;
+            int extEnd = extStart + extLen;
+            int p = extStart;
+            while (p < extEnd) {
+                checkBounds(chBody, p, 4, ctx);
+                int extType = ((chBody[p] & 0xFF) << 8) | (chBody[p + 1] & 0xFF);
+                int extDataLen = ((chBody[p + 2] & 0xFF) << 8) | (chBody[p + 3] & 0xFF);
+                checkBounds(chBody, p + 4, extDataLen, ctx);
+                p += 4;
+                if (extType == TlsConstants.EXT_SERVER_NAME) {
+                    return parseServerNameExtension(chBody, p, extDataLen);
+                }
+                p += extDataLen;
+            }
+            return null;
+        } catch (TlsException | IndexOutOfBoundsException e) {
+            return null;
+        }
+    }
+
+    /**
      * Парсит расширение server_name (RFC 6066 §3, RFC 8446 §4.2.1).
      * Извлекает первый (и единственный) host_name entry из ServerNameList.
      * <p>
@@ -626,10 +675,9 @@ public final class TlsMessageParser {
             }
             chain.add(cert);
         }
-        if (chain.isEmpty()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "No certificates in Certificate message");
-        }
+        // Почему нет проверки chain.isEmpty(): RFC 8446 §4.4.2 разрешает клиенту
+        // прислать пустой certificate_list. Решение об обязательности сертификата
+        // принимает engine (receiveClientCertificate), не общий парсер.
         if (chain.size() > TlsConstants.MAX_CERT_CHAIN_LENGTH) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate chain exceeds maximum length: " + chain.size());

@@ -60,30 +60,30 @@ public final class InteropTestServer {
             try (Socket socket = ss.accept()) {
                 System.out.println("Accepted: " + socket.getRemoteSocketAddress());
                 socket.setSoTimeout(15000);
-                SocketTlsTransport transport = new SocketTlsTransport(socket);
-                TlsServerConfig config = new TlsServerConfig(transport, suite, serverCert, priv);
-                TlsSession server = TlsSession.createServer(config);
-                server.handshakeAsServer();
+                TlsServerConfig config = new TlsServerConfig(suite,
+                        Collections.singletonList(serverCert), priv);
+                try (SocketTlsTransport transport = new SocketTlsTransport(socket);
+                     TlsSession server = TlsSession.createServer(config, transport)) {
+                    server.handshakeAsServer();
 
-                System.out.println("Handshake OK");
-                System.out.println("Negotiated: 0x" + Integer.toHexString(server.getCipherSuite().getId()));
-                System.out.println("Peer certs: "
-                        + (server.getPeerCertificates() != null ? server.getPeerCertificates().size() : 0));
-                System.out.println("SNI: " + server.getRequestedServerName());
+                    System.out.println("Handshake OK");
+                    System.out.println("Negotiated: 0x" + Integer.toHexString(server.getCipherSuite().getId()));
+                    System.out.println("Peer certs: "
+                            + (server.getPeerCertificates() != null ? server.getPeerCertificates().size() : 0));
+                    System.out.println("SNI: " + server.getRequestedServerName());
 
-                byte[] req = server.read();
-                System.out.println("Received " + req.length + " bytes from client");
+                    byte[] req = server.read();
+                    System.out.println("Received " + req.length + " bytes from client");
 
-                byte[] resp = ("HTTP/1.1 200 OK\r\n"
-                        + "Content-Type: text/plain\r\n"
-                        + "Content-Length: 10\r\n"
-                        + "Connection: close\r\n"
-                        + "\r\n"
-                        + "INTEROP_OK").getBytes("UTF-8");
-                server.write(resp);
-                System.out.println("Response sent: INTEROP_OK");
-
-                try { server.close(); } catch (Exception ignored) {}
+                    byte[] resp = ("HTTP/1.1 200 OK\r\n"
+                            + "Content-Type: text/plain\r\n"
+                            + "Content-Length: 10\r\n"
+                            + "Connection: close\r\n"
+                            + "\r\n"
+                            + "INTEROP_OK").getBytes("UTF-8");
+                    server.write(resp);
+                    System.out.println("Response sent: INTEROP_OK");
+                }
             }
         }
 

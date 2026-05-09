@@ -5,8 +5,10 @@ import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsSession;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.psk.InMemoryPskStore;
 import org.rssys.gost.tls13.psk.PskStore;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -34,19 +36,19 @@ public class PskResumptionBench {
 
         // setup(): один полный handshake для получения PSK-тикета
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
-        PskStore serverPskStore = new PskStore(100);
-        clientPskStore = new PskStore(100);
+        PskStore serverPskStore = new InMemoryPskStore(100);
+        clientPskStore = new InMemoryPskStore(100);
 
         TlsServerConfig serverConfig = new TlsServerConfig(
-                pair.getServerTransport(), cs, serverBundle.cert, serverBundle.priv);
+                cs, Collections.singletonList(serverBundle.cert), serverBundle.priv);
         // caPublicKey не ставим — иначе сервер запросит mTLS (CertificateRequest).
 
-        TlsClientConfig clientConfig = new TlsClientConfig(pair.getClientTransport(), cs)
+        TlsClientConfig clientConfig = new TlsClientConfig(cs)
                 .withCaPublicKey(serverBundle.cert.getPublicKey());
 
-        TlsSession server = TlsSession.createServer(serverConfig);
+        TlsSession server = TlsSession.createServer(serverConfig, pair.getServerTransport());
         server.setPskStore(serverPskStore);
-        TlsSession client = TlsSession.createClient(clientConfig);
+        TlsSession client = TlsSession.createClient(clientConfig, pair.getClientTransport());
         client.setPskStore(clientPskStore);
         CompletableFuture<Void> sf = CompletableFuture.runAsync(() -> {
             try { server.handshakeAsServer(); } catch (Exception e) { throw new RuntimeException(e); }
@@ -58,23 +60,25 @@ public class PskResumptionBench {
         server.close();
         try { client.read(); } catch (java.io.EOFException ignored) {}
         client.close();
+        pair.getServerTransport().close();
+        pair.getClientTransport().close();
     }
 
     @Benchmark
     public TlsSession resume() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
-        PskStore serverPskStore = new PskStore(100);
+        PskStore serverPskStore = new InMemoryPskStore(100);
 
         TlsServerConfig serverConfig = new TlsServerConfig(
-                pair.getServerTransport(), cs, serverBundle.cert, serverBundle.priv);
+                cs, Collections.singletonList(serverBundle.cert), serverBundle.priv);
         // caPublicKey не ставим — иначе сервер запросит mTLS.
 
-        TlsClientConfig clientConfig = new TlsClientConfig(pair.getClientTransport(), cs)
+        TlsClientConfig clientConfig = new TlsClientConfig(cs)
                 .withCaPublicKey(serverBundle.cert.getPublicKey());
 
-        TlsSession server = TlsSession.createServer(serverConfig);
+        TlsSession server = TlsSession.createServer(serverConfig, pair.getServerTransport());
         server.setPskStore(serverPskStore);
-        TlsSession client = TlsSession.createClient(clientConfig);
+        TlsSession client = TlsSession.createClient(clientConfig, pair.getClientTransport());
         client.setPskStore(clientPskStore);
         CompletableFuture<Void> sf = CompletableFuture.runAsync(() -> {
             try { server.handshakeAsServer(); } catch (Exception e) { throw new RuntimeException(e); }
@@ -83,6 +87,8 @@ public class PskResumptionBench {
         sf.join();
         client.close();
         server.close();
+        pair.getClientTransport().close();
+        pair.getServerTransport().close();
         return client;
     }
 }

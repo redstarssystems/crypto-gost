@@ -8,6 +8,7 @@ import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.record.TlsRecord;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
+import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -40,19 +41,21 @@ public class RecordProtectBench {
 
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
         TlsServerConfig sc = new TlsServerConfig(
-                pair.getServerTransport(), cs, bundle.cert, bundle.priv);
+                cs, Collections.singletonList(bundle.cert), bundle.priv);
         // caPublicKey не ставим — иначе mTLS.
-        TlsClientConfig cc = new TlsClientConfig(pair.getClientTransport(), cs)
+        TlsClientConfig cc = new TlsClientConfig(cs)
                 .withCaPublicKey(bundle.cert.getPublicKey());
 
-        TlsSession server = TlsSession.createServer(sc);
-        TlsSession client = TlsSession.createClient(cc);
+        TlsSession server = TlsSession.createServer(sc, pair.getServerTransport());
+        TlsSession client = TlsSession.createClient(cc, pair.getClientTransport());
         Thread st = new Thread(() -> { try { server.handshakeAsServer(); } catch (Exception e) { throw new RuntimeException(e); } });
         st.start();
         client.handshakeAsClient();
         st.join();
         client.close();
         server.close();
+        pair.getClientTransport().close();
+        pair.getServerTransport().close();
 
         // Создаём TlsRecord с теми же ключами, что используются после handshake
         // (RW — заглушка, так как writerRecord/readerRecord private в TlsSession)

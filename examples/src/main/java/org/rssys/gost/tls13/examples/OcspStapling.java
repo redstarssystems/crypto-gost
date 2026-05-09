@@ -20,9 +20,9 @@ import java.util.concurrent.*;
  * OCSP stapling — сервер прикладывает OCSP-ответ к сертификату.
  * <p>
  * Сервер загружает OCSP-ответ (в примере строится упрощённый)
- * и передаёт его в ServerConfig через withOcspResponse().
+ * и передаёт его в ServerConfig через withOcspStaplingResponse().
  * Клиент может запросить проверку через withRequireOcspStapling().
- * Демонстрирует TlsServerConfig.withOcspResponse().
+ * Демонстрирует TlsServerConfig.withOcspStaplingResponse().
  */
 public final class OcspStapling {
 
@@ -53,34 +53,30 @@ public final class OcspStapling {
 
         // 3. Создаём пару транспортов
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+        try (InMemoryTlsTransport serverTp = pair.getServerTransport();
+             InMemoryTlsTransport clientTp = pair.getClientTransport();
+             TlsSession server = TlsSession.createServer(
+                     new TlsServerConfig(cs, Collections.singletonList(serverCert), serverPriv)
+                              .withOcspStaplingResponse(ocspDer), serverTp);
+             TlsSession client = TlsSession.createClient(
+                     new TlsClientConfig(cs)
+                             .withServerHostname("localhost")
+                             .withCaPublicKey(ca.getPublicKey()), clientTp)) {
 
-        // 4. Сервер — прикладывает OCSP-ответ
-        TlsSession server = TlsSession.createServer(
-                new TlsServerConfig(pair.getServerTransport(), cs,
-                        Collections.singletonList(serverCert), serverPriv)
-                        .withOcspResponse(ocspDer));
+            ExecutorService exec = Executors.newSingleThreadExecutor();
+            try {
+                Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
+                client.handshakeAsClient();
+                sf.get(15, TimeUnit.SECONDS);
 
-        // 5. Клиент — проверяет сертификат через CA key + OCSP
-        TlsSession client = TlsSession.createClient(
-                new TlsClientConfig(pair.getClientTransport(), cs)
-                        .withServerHostname("localhost")
-                        .withCaPublicKey(ca.getPublicKey()));
-
-        ExecutorService exec = Executors.newSingleThreadExecutor();
-        try {
-            Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
-            client.handshakeAsClient();
-            sf.get(15, TimeUnit.SECONDS);
-
-            client.write("OCSP stapling verified".getBytes(StandardCharsets.UTF_8));
-            byte[] received = server.read();
-            System.out.println(new String(received, StandardCharsets.UTF_8));
-            System.out.println("SUCCESS");
-        } finally {
-            exec.shutdown();
-            try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-            try { server.close(); } catch (Exception ignored) {}
-            try { client.close(); } catch (Exception ignored) {}
+                client.write("OCSP stapling verified".getBytes(StandardCharsets.UTF_8));
+                byte[] received = server.read();
+                System.out.println(new String(received, StandardCharsets.UTF_8));
+                System.out.println("SUCCESS");
+            } finally {
+                exec.shutdown();
+                try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+            }
         }
     }
 

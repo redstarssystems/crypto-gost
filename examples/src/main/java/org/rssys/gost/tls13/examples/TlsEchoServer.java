@@ -95,7 +95,7 @@ public final class TlsEchoServer {
 
         List<TlsCertificate> chain = p12.getCertificateChain();
         PrivateKeyParameters privKey = p12.getPrivateKey();
-        TlsServerConfig config = new TlsServerConfig(null, suite, chain, privKey);
+        TlsServerConfig config = new TlsServerConfig(suite, chain, privKey);
 
         if (mtls && caPath != null) {
             try (FileInputStream fis = new FileInputStream(caPath)) {
@@ -109,24 +109,23 @@ public final class TlsEchoServer {
 
             try (Socket socket = ss.accept()) {
                 System.out.println("Accepted: " + socket.getRemoteSocketAddress());
-                SocketTlsTransport transport = new SocketTlsTransport(socket);
-                TlsServerConfig connConfig = new TlsServerConfig(transport, suite, chain, privKey);
+                TlsServerConfig connConfig = new TlsServerConfig(suite, chain, privKey);
                 if (mtls && caPath != null) {
                     connConfig.withCaPublicKey(config.getCaPublicKey());
                 }
-                TlsSession server = TlsSession.createServer(connConfig);
-                server.handshakeAsServer();
-                System.out.println("Handshake done: 0x" + Integer.toHexString(suite.getId())
-                        + ", peer=" + (server.getPeerCertificates() != null
-                        ? server.getPeerCertificates().size() + " certs" : "none"));
+                try (SocketTlsTransport transport = new SocketTlsTransport(socket);
+                     TlsSession server = TlsSession.createServer(connConfig, transport)) {
+                    server.handshakeAsServer();
+                    System.out.println("Handshake done: 0x" + Integer.toHexString(suite.getId())
+                            + ", peer=" + (server.getPeerCertificates() != null
+                            ? server.getPeerCertificates().size() + " certs" : "none"));
 
-                byte[] data = server.read();
-                System.out.println("Received " + data.length + " bytes");
-                server.write(data);
-                System.out.println("Echoed " + data.length + " bytes");
-
-                server.close();
-                System.out.println("Connection closed");
+                    byte[] data = server.read();
+                    System.out.println("Received " + data.length + " bytes");
+                    server.write(data);
+                    System.out.println("Echoed " + data.length + " bytes");
+                    System.out.println("Connection closed");
+                }
             }
         }
     }

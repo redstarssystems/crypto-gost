@@ -522,6 +522,104 @@ class TlsMessageParserTest {
     }
 
     // =======================================================================
+    // Тесты parseClientHelloSni (lightweight SNI extractor)
+    // =======================================================================
+    //
+    // parseClientHelloSni — легковесный аналог полного парсинга.
+    // Эти тесты проверяют эквивалентность с parseClientHello().serverName
+    // на всём диапазоне валидных/невалидных ClientHello.
+    // WHY: чтобы гарантировать, что SNI certificate selection (вызывающий
+    // parseClientHelloSni до engine.receive()) не расходится с полным
+    // парсингом внутри receiveClientHello().
+
+    @Test
+    @DisplayName("parseClientHelloSni: roundtrip эквивалентен полному парсингу")
+    void testParseClientHelloSniEquivalentToFullParse() throws Exception {
+        String hostname = "my-server.example.com";
+        byte[] body = buildClientHelloBody(0x0303, new byte[0],
+                csBytes(0xC103), new byte[]{0x00},
+                svExt(), saExt(), ksExt(TlsConstants.GRP_GC256A), sniExt(hostname));
+
+        String light = TlsMessageParser.parseClientHelloSni(body);
+        String full = TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A).serverName;
+
+        assertEquals(full, light, "parseClientHelloSni должен совпадать с полным парсером");
+    }
+
+    @Test
+    @DisplayName("parseClientHelloSni: без SNI → null")
+    void testParseClientHelloSniNoSni() throws Exception {
+        // ClientHello без server_name расширения — selector не должен вызваться
+        byte[] body = buildClientHelloBody(0x0303, new byte[0],
+                csBytes(0xC103), new byte[]{0x00},
+                svExt(), saExt(), ksExt(TlsConstants.GRP_GC256A));
+
+        assertNull(TlsMessageParser.parseClientHelloSni(body));
+    }
+
+    @Test
+    @DisplayName("parseClientHelloSni: неверный NameType ≠ host_name(0) → null")
+    void testParseClientHelloSniWrongNameType() throws Exception {
+        // NameType=1 (не host_name) — RFC 6066: такие записи игнорируются
+        ByteArrayOutputStream sn = new ByteArrayOutputStream();
+        TlsEncoding.encodeUint16(sn, 4);
+        sn.write(0x01); // name_type != host_name(0)
+        TlsEncoding.encodeUint16(sn, 0); // пустое имя
+        byte[] sniExt = encodeExt(TlsConstants.EXT_SERVER_NAME, sn.toByteArray());
+
+        byte[] body = buildClientHelloBody(0x0303, new byte[0],
+                csBytes(0xC103), new byte[]{0x00},
+                svExt(), saExt(), sniExt, ksExt(TlsConstants.GRP_GC256A));
+
+        assertNull(TlsMessageParser.parseClientHelloSni(body));
+    }
+
+    @Test
+    @DisplayName("parseClientHelloSni: пустой ServerNameList → null")
+    void testParseClientHelloSniEmptyList() throws Exception {
+        // ServerNameList общей длины 0 — malformed, должен игнорироваться
+        byte[] sniExt = encodeExt(TlsConstants.EXT_SERVER_NAME, new byte[]{0x00, 0x00});
+        byte[] body = buildClientHelloBody(0x0303, new byte[0],
+                csBytes(0xC103), new byte[]{0x00},
+                svExt(), saExt(), sniExt, ksExt(TlsConstants.GRP_GC256A));
+
+        assertNull(TlsMessageParser.parseClientHelloSni(body));
+    }
+
+    @Test
+    @DisplayName("parseClientHelloSni: malformed extensions (длина не сходится) → null")
+    void testParseClientHelloSniMalformedExtensions() throws Exception {
+        // Обрезаем тело — extensions list не сойдётся по длине
+        byte[] body = buildClientHelloBody(0x0303, new byte[0],
+                csBytes(0xC103), new byte[]{0x00},
+                svExt(), saExt(), ksExt(TlsConstants.GRP_GC256A));
+        byte[] truncated = new byte[body.length - 3]; // обрезаем часть extensions
+
+        System.arraycopy(body, 0, truncated, 0, truncated.length);
+        // После обрезания длина extensions в заголовке не совпадает — парсинг вернёт null
+        assertNull(TlsMessageParser.parseClientHelloSni(truncated));
+    }
+
+    @Test
+    @DisplayName("parseClientHelloSni: truncated тело → null (IndexOutOfBounds)")
+    void testParseClientHelloSniTruncatedBody() {
+        // Слишком короткий body — не может содержать корректных extensions
+        byte[] tooShort = new byte[]{0x03, 0x03, 0x01, 0x02, 0x03};
+        assertNull(TlsMessageParser.parseClientHelloSni(tooShort));
+    }
+
+    @Test
+    @DisplayName("parseClientHelloSni: FQDN с точкой нормализуется")
+    void testParseClientHelloSniTrailingDot() throws Exception {
+        // Точка на конце FQDN должна удаляться нормализацией
+        byte[] body = buildClientHelloBody(0x0303, new byte[0],
+                csBytes(0xC103), new byte[]{0x00},
+                svExt(), saExt(), ksExt(TlsConstants.GRP_GC256A), sniExt("example.com."));
+
+        assertEquals("example.com", TlsMessageParser.parseClientHelloSni(body));
+    }
+
+    // =======================================================================
     // Тесты error message context
     // =======================================================================
     //
@@ -676,5 +774,20 @@ class TlsMessageParserTest {
         TlsEncoding.encodeUint16(extData, listBytes.length);
         extData.write(listBytes, 0, listBytes.length);
         return encodeExt(TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION, extData.toByteArray());
+    }
+
+    /**
+     * Строит extension server_name с указанным hostname (RFC 6066 §3).
+     * Используется в тестах parseClientHelloSni для построения ClientHello
+     * с конкретным SNI.
+     */
+    private static byte[] sniExt(String hostname) throws Exception {
+        byte[] nameBytes = hostname.getBytes(StandardCharsets.US_ASCII);
+        ByteArrayOutputStream sniBody = new ByteArrayOutputStream();
+        TlsEncoding.encodeUint16(sniBody, 3 + nameBytes.length); // ServerNameList length
+        sniBody.write(0x00); // host_name
+        TlsEncoding.encodeUint16(sniBody, nameBytes.length);
+        sniBody.write(nameBytes);
+        return encodeExt(TlsConstants.EXT_SERVER_NAME, sniBody.toByteArray());
     }
 }

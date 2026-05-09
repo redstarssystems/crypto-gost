@@ -8,7 +8,7 @@ import java.util.Arrays;
  * Содержит тип содержимого и открытые данные после снятия MGM-защиты
  * и constant-time удаления padding'а (RFC 8446 §5.2).
  * <p>
- * Публичный — используется в {@link TlsRecord#unprotect(ByteBuffer, ByteBuffer)}
+ * Публичный — используется в {@link TlsRecord#unprotect(byte[])}
  * для передачи результата без дополнительной копии данных.
  */
 public final class TlsParsedRecord {

@@ -67,11 +67,11 @@ public final class TlsCertificateValidator {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate ExtendedKeyUsage missing serverAuth");
         }
-        if (requireOcspStapling && leaf.getOcspResponse() == null) {
+        if (requireOcspStapling && !leaf.hasOcspResponse()) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Server did not provide OCSP stapling response");
         }
-        if (leaf.getOcspResponse() != null && caPublicKey != null) {
+        if (leaf.hasOcspResponse() && caPublicKey != null) {
             PublicKeyParameters ocspKey = chain.size() > 1
                     ? chain.get(1).getPublicKey()
                     : caPublicKey;
@@ -94,7 +94,14 @@ public final class TlsCertificateValidator {
      * @throws TlsException при ошибке валидации
      */
     public static void checkClientCertificateChain(List<TlsCertificate> chain,
-                                              PublicKeyParameters caPublicKey) throws TlsException {
+                                               PublicKeyParameters caPublicKey) throws TlsException {
+        // Defense-in-depth: engine перехватывает пустой chain раньше (receiveClientCertificate),
+        // но если сюда дойдёт пустой список — IndexOutOfBounds недопустим.
+        // certificate_required семантически корректен: сервер требует сертификат клиента.
+        if (chain == null || chain.isEmpty()) {
+            throw new TlsException(TlsConstants.ALERT_CERTIFICATE_REQUIRED,
+                    "Empty client certificate chain");
+        }
         TlsCertificate leaf = chain.get(0);
 
         if (leaf.isExpired()) {

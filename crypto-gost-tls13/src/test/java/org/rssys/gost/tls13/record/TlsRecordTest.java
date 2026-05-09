@@ -683,7 +683,7 @@ class TlsRecordTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("ByteBuffer protect/unprotect: handshake roundtrip")
+    @DisplayName("ByteBuffer protect/unprotect: handshake roundtrip (UnprotectResult)")
     void testByteBufferProtectUnprotectHandshake() throws Exception {
         RecordPair pair = newPair();
         byte[] data = "привет от клиента".getBytes("UTF-8");
@@ -697,9 +697,11 @@ class TlsRecordTest {
 
         dst.flip();
         ByteBuffer plain = ByteBuffer.allocate(data.length + 64);
-        byte ct = pair.reader.unprotect(dst, plain);
+        UnprotectResult r = pair.reader.unprotect(dst, plain);
 
-        assertEquals(TlsConstants.CT_HANDSHAKE, ct);
+        assertSame(UnprotectResult.Status.OK, r.status);
+        assertEquals(TlsConstants.CT_HANDSHAKE, r.contentType);
+        assertEquals(0, r.hint);
         plain.flip();
         byte[] result = new byte[plain.remaining()];
         plain.get(result);
@@ -707,7 +709,7 @@ class TlsRecordTest {
     }
 
     @Test
-    @DisplayName("ByteBuffer protect/unprotect: пустые данные")
+    @DisplayName("ByteBuffer protect/unprotect: пустые данные (UnprotectResult)")
     void testByteBufferEmptyData() throws Exception {
         RecordPair pair = newPair();
         byte[] data = new byte[0];
@@ -719,14 +721,16 @@ class TlsRecordTest {
         dst.flip();
 
         ByteBuffer plain = ByteBuffer.allocate(64);
-        byte ct = pair.reader.unprotect(dst, plain);
-        assertEquals(TlsConstants.CT_ALERT, ct);
+        UnprotectResult r = pair.reader.unprotect(dst, plain);
+        assertSame(UnprotectResult.Status.OK, r.status);
+        assertEquals(TlsConstants.CT_ALERT, r.contentType);
+        assertEquals(0, r.hint);
         plain.flip();
         assertEquals(0, plain.remaining(), "Пустые данные — 0 байт после unprotect");
     }
 
     @Test
-    @DisplayName("ByteBuffer protect/unprotect: максимальный размер")
+    @DisplayName("ByteBuffer protect/unprotect: максимальный размер (UnprotectResult)")
     void testByteBufferMaxSize() throws Exception {
         RecordPair pair = newPair();
         byte[] data = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH - 1];
@@ -740,8 +744,10 @@ class TlsRecordTest {
         dst.flip();
 
         ByteBuffer plain = ByteBuffer.allocate(data.length + 64);
-        byte ct = pair.reader.unprotect(dst, plain);
-        assertEquals(TlsConstants.CT_APPLICATION_DATA, ct);
+        UnprotectResult r = pair.reader.unprotect(dst, plain);
+        assertSame(UnprotectResult.Status.OK, r.status);
+        assertEquals(TlsConstants.CT_APPLICATION_DATA, r.contentType);
+        assertEquals(0, r.hint);
         plain.flip();
         byte[] result = new byte[plain.remaining()];
         plain.get(result);
@@ -797,8 +803,8 @@ class TlsRecordTest {
     }
 
     @Test
-    @DisplayName("ByteBuffer unprotect: недостаточный plaintext кидает исключение")
-    void testByteBufferPlaintextTooSmall() throws Exception {
+    @DisplayName("ByteBuffer unprotect: OUTPUT_TOO_SMALL — hint + rollback")
+    void testByteBufferUnprotectOutputTooSmall() throws Exception {
         RecordPair pair = newPair();
         byte[] data = new byte[100];
         RNG.nextBytes(data);
@@ -808,9 +814,84 @@ class TlsRecordTest {
         pair.writer.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
         dst.flip();
 
+        int posBefore = dst.position();
         ByteBuffer smallPlain = ByteBuffer.allocate(1);
-        assertThrows(IllegalArgumentException.class,
-                () -> pair.reader.unprotect(dst, smallPlain));
+        UnprotectResult r = pair.reader.unprotect(dst, smallPlain);
+
+        assertSame(UnprotectResult.Status.OUTPUT_TOO_SMALL, r.status);
+        assertTrue(r.hint > 0, "hint должен указывать минимальный размер plaintext");
+        assertEquals(posBefore, dst.position(), "position record должен быть восстановлен");
+    }
+
+    @Test
+    @DisplayName("ByteBuffer unprotect: NEED_MORE_INPUT — недостаточно байт для заголовка")
+    void testByteBufferUnprotectUnderflowHeader() throws Exception {
+        RecordPair pair = newPair();
+
+        // Менее 5 байт — не хватает даже на заголовок
+        ByteBuffer tooShort = ByteBuffer.wrap(new byte[]{0x17, 0x03, 0x03});
+        int posBefore = tooShort.position();
+        ByteBuffer plain = ByteBuffer.allocate(64);
+
+        UnprotectResult r = pair.reader.unprotect(tooShort, plain);
+
+        assertSame(UnprotectResult.Status.NEED_MORE_INPUT, r.status);
+        assertEquals(TlsConstants.RECORD_HEADER_SIZE, r.hint, "hint = min header size");
+        assertEquals(posBefore, tooShort.position(), "position НЕ должен измениться");
+    }
+
+    @Test
+    @DisplayName("ByteBuffer unprotect: NEED_MORE_INPUT — заголовок есть, body неполный")
+    void testByteBufferUnprotectUnderflowBody() throws Exception {
+        RecordPair pair = newPair();
+
+        // Полный заголовок (declaredLen=20, т.е. ciphertext+tag=20) + всего 4 байта body
+        // totalRecordLen = 5 + 20 = 25, но в буфере только 9 → NEED_MORE_INPUT с hint=25
+        ByteBuffer partial = ByteBuffer.allocate(9);
+        partial.put(new byte[]{0x17, 0x03, 0x03, 0x00, 0x14}); // length=20
+        partial.put(new byte[]{1, 2, 3, 4});
+        partial.flip();
+
+        int posBefore = partial.position();
+        ByteBuffer plain = ByteBuffer.allocate(64);
+
+        UnprotectResult r = pair.reader.unprotect(partial, plain);
+
+        assertSame(UnprotectResult.Status.NEED_MORE_INPUT, r.status);
+        // totalRecordLen = 5 + 20 = 25
+        assertEquals(25, r.hint, "hint = exact total record length");
+        assertEquals(posBefore, partial.position(), "position НЕ должен измениться");
+    }
+
+    @Test
+    @DisplayName("ByteBuffer unprotect: OK — success after retry after OUTPUT_TOO_SMALL")
+    void testByteBufferUnprotectRetryAfterOutputTooSmall() throws Exception {
+        RecordPair pair = newPair();
+        byte[] data = new byte[50];
+        RNG.nextBytes(data);
+
+        ByteBuffer src = ByteBuffer.wrap(data);
+        ByteBuffer dst = ByteBuffer.allocate(256);
+        pair.writer.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
+        dst.flip();
+
+        int posBefore = dst.position();
+
+        // First call: OUTPUT_TOO_SMALL
+        ByteBuffer smallPlain = ByteBuffer.allocate(1);
+        UnprotectResult r1 = pair.reader.unprotect(dst, smallPlain);
+        assertSame(UnprotectResult.Status.OUTPUT_TOO_SMALL, r1.status);
+
+        // Retry with large enough buffer
+        assertEquals(posBefore, dst.position(), "position восстановлен после rollback");
+        ByteBuffer bigPlain = ByteBuffer.allocate(256);
+        UnprotectResult r2 = pair.reader.unprotect(dst, bigPlain);
+        assertSame(UnprotectResult.Status.OK, r2.status);
+
+        bigPlain.flip();
+        byte[] result = new byte[bigPlain.remaining()];
+        bigPlain.get(result);
+        assertArrayEquals(data, result);
     }
 
     @Test

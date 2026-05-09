@@ -43,32 +43,28 @@ public final class IpSan {
 
         // 2. Создаём пару транспортов
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+        try (InMemoryTlsTransport serverTp = pair.getServerTransport();
+             InMemoryTlsTransport clientTp = pair.getClientTransport();
+             TlsSession server = TlsSession.createServer(
+                     new TlsServerConfig(cs, Collections.singletonList(serverCert), serverPriv), serverTp);
+             TlsSession client = TlsSession.createClient(
+                     new TlsClientConfig(cs)
+                             .withServerHostname("127.0.0.1"), clientTp)) {
 
-        // 3. Сервер
-        TlsSession server = TlsSession.createServer(
-                new TlsServerConfig(pair.getServerTransport(), cs,
-                        Collections.singletonList(serverCert), serverPriv));
+            ExecutorService exec = Executors.newSingleThreadExecutor();
+            try {
+                Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
+                client.handshakeAsClient();
+                sf.get(15, TimeUnit.SECONDS);
 
-        // 4. Клиент — подключается по IP
-        TlsSession client = TlsSession.createClient(
-                new TlsClientConfig(pair.getClientTransport(), cs)
-                        .withServerHostname("127.0.0.1"));
-
-        ExecutorService exec = Executors.newSingleThreadExecutor();
-        try {
-            Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
-            client.handshakeAsClient();
-            sf.get(15, TimeUnit.SECONDS);
-
-            client.write("Connected via IP SAN".getBytes(StandardCharsets.UTF_8));
-            byte[] received = server.read();
-            System.out.println(new String(received, StandardCharsets.UTF_8));
-            System.out.println("SUCCESS");
-        } finally {
-            exec.shutdown();
-            try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-            try { server.close(); } catch (Exception ignored) {}
-            try { client.close(); } catch (Exception ignored) {}
+                client.write("Connected via IP SAN".getBytes(StandardCharsets.UTF_8));
+                byte[] received = server.read();
+                System.out.println(new String(received, StandardCharsets.UTF_8));
+                System.out.println("SUCCESS");
+            } finally {
+                exec.shutdown();
+                try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+            }
         }
     }
 }

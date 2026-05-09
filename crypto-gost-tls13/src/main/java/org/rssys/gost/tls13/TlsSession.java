@@ -7,6 +7,7 @@ import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 import org.rssys.gost.tls13.cert.TlsCertificateValidator;
+import org.rssys.gost.tls13.config.SniCertificateSelector;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.engine.HandshakeContext;
@@ -14,6 +15,7 @@ import org.rssys.gost.tls13.engine.TlsHandshakeEngine;
 import org.rssys.gost.tls13.engine.TlsHandshakeMessage;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
 import org.rssys.gost.tls13.message.TlsMessageParser;
+import org.rssys.gost.tls13.psk.PskEntry;
 import org.rssys.gost.tls13.psk.PskStore;
 import org.rssys.gost.tls13.psk.TlsPskHelper;
 import org.rssys.gost.tls13.TlsUtils;
@@ -23,6 +25,7 @@ import org.rssys.gost.tls13.record.TlsTrafficKeys;
 import java.io.EOFException;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 
@@ -74,6 +77,9 @@ public final class TlsSession implements AutoCloseable {
     // ALPN (RFC 7301)
     private List<String> alpnProtocols;
 
+    // SNI certificate selection (сервер, RFC 6066 §3)
+    private SniCertificateSelector sniSelector;
+
     // Engine остается жив после handshake для post-handshake сообщений
     // (KeyUpdate, NewSessionTicket). Application traffic secrets хранятся
     // в engine, не копируются в TlsSession — это устраняет дублирование
@@ -88,16 +94,24 @@ public final class TlsSession implements AutoCloseable {
     // ========================================================================
 
     /**
-     * Создаёт сессию для клиента через конфигурационный объект.
+     * Создаёт сессию для клиента через конфигурационный объект и транспорт.
+     * <p>
+     * Использование с try-with-resources — transport ДО session:
+     * {@code try (TlsTransport tp = ...; TlsSession s = createClient(config, tp)) }
+     * <p>
+     * Caller владеет жизненным циклом transport: {@code TlsSession.close()} не закрывает transport.
+     * Закрывать transport нужно явно после session.close() (try-with-resources с правильным порядком).
      */
-    public static TlsSession createClient(TlsClientConfig config) {
-        return new TlsSession(config.getTransport(), config.getCiphersuite(),
+    public static TlsSession createClient(TlsClientConfig config, TlsTransport transport) {
+        TlsSession session = new TlsSession(transport, config.getCiphersuite(),
                 config.getClientCertificateChain(), config.getClientPrivateKey(),
                 config.getCaPublicKey(), config.getServerHostname(),
                 config.isOcspRequired(), null);
+        session.alpnProtocols = config.getAlpnProtocols();
+        return session;
     }
 
-    /** Создаёт сессию для клиента. */
+    /** Создаёт сессию для клиента (прямые параметры, без конфига). */
     public static TlsSession createClient(TlsTransport transport,
                                           TlsCiphersuite ciphersuite,
                                           TlsCertificate ourCertificate,
@@ -111,27 +125,36 @@ public final class TlsSession implements AutoCloseable {
                                           TlsCertificate ourCertificate,
                                           PrivateKeyParameters ourPrivateKey,
                                           PublicKeyParameters caPublicKey) {
-        return createClient(new TlsClientConfig(transport, ciphersuite)
-                .withClientCertificate(ourCertificate)
+        return createClient(new TlsClientConfig(ciphersuite)
+                .withClientCertificateChain(ourCertificate)
                 .withClientPrivateKey(ourPrivateKey)
-                .withCaPublicKey(caPublicKey));
+                .withCaPublicKey(caPublicKey), transport);
     }
 
     /**
-     * Создаёт сессию для сервера через конфигурацию.
+     * Создаёт сессию для сервера через конфигурацию и транспорт.
+     * <p>
+     * Использование с try-with-resources — transport ДО session:
+     * {@code try (TlsTransport tp = ...; TlsSession s = createServer(config, tp)) }
+     * <p>
+     * Caller владеет жизненным циклом transport: {@code TlsSession.close()} не закрывает transport.
      */
-    public static TlsSession createServer(TlsServerConfig config) {
-        return new TlsSession(config.getTransport(), config.getCiphersuite(),
+    public static TlsSession createServer(TlsServerConfig config, TlsTransport transport) {
+        TlsSession session = new TlsSession(transport, config.getCiphersuite(),
                 config.getServerCertificateChain(), config.getServerPrivateKey(),
-                config.getCaPublicKey(), null, false, config.getOcspResponse());
+                config.getCaPublicKey(), null, false, config.getOcspStaplingResponse());
+        session.sniSelector = config.getSniSelector();
+        session.alpnProtocols = config.getAlpnProtocols();
+        return session;
     }
 
-    /** Создаёт сессию для сервера (один сертификат). */
+    /** Создаёт сессию для сервера (прямые параметры, без конфига). */
     public static TlsSession createServer(TlsTransport transport,
                                           TlsCiphersuite ciphersuite,
                                           TlsCertificate ourCertificate,
                                           PrivateKeyParameters ourPrivateKey) {
-        return createServer(new TlsServerConfig(transport, ciphersuite, ourCertificate, ourPrivateKey));
+        return createServer(new TlsServerConfig(ciphersuite,
+                Collections.singletonList(ourCertificate), ourPrivateKey), transport);
     }
 
     private TlsSession(TlsTransport transport,
@@ -202,7 +225,8 @@ public final class TlsSession implements AutoCloseable {
 
             this.engine = new TlsHandshakeEngine(role, ciphersuite, messageBuilder,
                     selectedEcParams, selectedNamedGroup, selectedSigScheme,
-                    hashLen, ocspResponse, requestClientAuth);
+                    hashLen, ocspResponse, requestClientAuth,
+                    sniSelector);
 
             // Передаём DNS-имя сервера для SNI (только клиент)
             if (role == TlsHandshakeEngine.Role.CLIENT && serverHostname != null) {
@@ -220,7 +244,7 @@ public final class TlsSession implements AutoCloseable {
 
             // Поиск PSK на стороне клиента
             if (pskStore != null && role == TlsHandshakeEngine.Role.CLIENT) {
-                PskStore.PskEntry entry = pskStore.getAnyEntry();
+                PskEntry entry = pskStore.getForResumption();
                 if (entry != null) {
                     byte[] psk = entry.getPsk();
                     if (psk != null) {
@@ -270,7 +294,7 @@ public final class TlsSession implements AutoCloseable {
                         byte[] pskIdentity = TlsMessageParser.parseClientHelloPskIdentity(
                                 TlsHandshakeMessage.decode(frame).getBody());
                         if (pskIdentity != null) {
-                            PskStore.PskEntry entry = pskStore.get(pskIdentity);
+                            PskEntry entry = pskStore.get(pskIdentity);
                         if (entry != null && !entry.isExpired(System.currentTimeMillis())) {
                             byte[] psk = entry.getPsk();
                             if (psk != null) {
@@ -658,7 +682,16 @@ public final class TlsSession implements AutoCloseable {
         byte[] rms = engine != null ? engine.getResumptionMasterSecret() : null;
         if (rms == null) return;
         byte[] psk = TlsPskHelper.derivePsk(rms, nst.ticketNonce, hashLen);
-        pskStore.add(nst.ticket, nst.ticketLifetime, nst.ticketAgeAdd, nst.ticketNonce, psk);
+        // RuntimeException от PskStore (например RedisException) не ломает handshake
+        try {
+            pskStore.onTicketReceived(new PskEntry(
+                    nst.ticket, nst.ticketLifetime, nst.ticketAgeAdd, nst.ticketNonce, psk,
+                    System.currentTimeMillis()));
+        } catch (RuntimeException e) {
+            // Silent catch by design: вызывающий код владеет PskStore, и если его реализация
+            // кидает RuntimeException — это не ошибка handshake. Resumption будет
+            // недоступен, что очевидно вызывающему коду. См. javadoc onTicketReceived().
+        }
     }
 
     /**
@@ -685,7 +718,16 @@ public final class TlsSession implements AutoCloseable {
         byte[] rms = engine != null ? engine.getResumptionMasterSecret() : null;
         if (pskStore != null && rms != null) {
             byte[] psk = TlsPskHelper.derivePsk(rms, ticketNonce, hashLen);
-            pskStore.add(ticket, 86400, ticketAgeAdd, ticketNonce, psk);
+            // RuntimeException от PskStore не ломает handshake
+            try {
+                pskStore.onTicketReceived(new PskEntry(
+                        ticket, 86400, ticketAgeAdd, ticketNonce, psk,
+                        System.currentTimeMillis()));
+            } catch (RuntimeException e) {
+                // Silent catch by design: вызывающий код владеет PskStore, и если его реализация
+                // кидает RuntimeException — это не ошибка handshake. Resumption будет
+                // недоступен, что очевидно вызывающему коду. См. javadoc onTicketReceived().
+            }
         }
     }
 
@@ -736,7 +778,7 @@ public final class TlsSession implements AutoCloseable {
                 TlsHandshakeEngine.Role.CLIENT,
                 cs, s.messageBuilder,
                 s.selectedEcParams, s.selectedNamedGroup, s.selectedSigScheme,
-                s.hashLen, null, false);
+                s.hashLen, null, false, null);
         s.engine.initForTesting(new byte[cs.getHashLen()], new byte[cs.getHashLen()]);
         s.handshakeDone = true;
         return s;
@@ -762,15 +804,17 @@ public final class TlsSession implements AutoCloseable {
                     session.selectedNamedGroup,
                     session.selectedSigScheme,
                     session.hashLen,
-                    null, false);
+                    null, false,
+                    null); // sniSelector — тестовый engine, selector не нужен
         }
         session.engine.initForTesting(serverSecret, clientSecret);
     }
 
     /**
-     * Закрывает сессию: отправляет close_notify, закрывает транспорт, зачищает ключи.
+     * Закрывает сессию: отправляет close_notify, зачищает ключи.
      * <p>
      * close_notify отправляется best-effort (RFC 8446 §6.1: отправить и забыть).
+     * Transport не закрывается — caller владеет его жизненным циклом.
      * После вызова экземпляр непригоден для использования.
      */
     @Override
@@ -786,7 +830,6 @@ public final class TlsSession implements AutoCloseable {
                     transport.sendRecord(TlsMessageBuilder.buildPlaintextRecord(TlsConstants.CT_ALERT, alertPayload));
                 }
             } catch (Exception ignored) { /* best-effort согласно RFC 8446 §6.1 */ }
-            transport.close();
             if (engine != null) {
                 engine.destroy();
                 engine = null;
@@ -1077,27 +1120,17 @@ public final class TlsSession implements AutoCloseable {
     }
 
     /**
-     * Определяет схему подписи по сертификату: перебирает известные ГОСТ-схемы
-     * (512-битные, 256-битные, CryptoPro A/B/C) и возвращает первую, которую
-     * поддерживает сертификат. Если ничего не найдено — SIG_GOST_TC26_A_256.
+     * Определяет схему подписи по named group сертификата.
+     *
+     * <p>Раньше перебирал 7 известных ГОСТ-схем через hasSignatureScheme().
+     * Теперь — прямая конверсия: getNamedGroup() → namedGroupToSignatureScheme(),
+     * что делает ровно то же самое без цикла.</p>
      *
      * @param cert сертификат для определения схемы подписи
      * @return идентификатор схемы подписи
      */
     private static int resolveSigScheme(TlsCertificate cert) {
-        int[] schemes = {
-                TlsConstants.SIG_GOST_TC26_512_A,
-                TlsConstants.SIG_GOST_TC26_512_B,
-                TlsConstants.SIG_GOST_TC26_512_C,
-                TlsConstants.SIG_GOST_TC26_A_256,
-                TlsConstants.SIG_GOST_CRYPTOPRO_A,
-                TlsConstants.SIG_GOST_CRYPTOPRO_B,
-                TlsConstants.SIG_GOST_CRYPTOPRO_C
-        };
-        for (int scheme : schemes) {
-            if (cert.hasSignatureScheme(scheme)) return scheme;
-        }
-        return TlsConstants.SIG_GOST_TC26_A_256;
+        return TlsCiphersuite.namedGroupToSignatureScheme(cert.getNamedGroup());
     }
 
     /**

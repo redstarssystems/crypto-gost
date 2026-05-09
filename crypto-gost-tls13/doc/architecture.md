@@ -238,15 +238,15 @@ secrets в `finishHandshake()`/`receiveClientFinished()` для KeyUpdate.
 
 Builder-конфигураторы. Набор `with*()` методов.
 
-TlsClientConfig: \* transport, ciphersuite \*
+TlsClientConfig: \* ciphersuite \*
 `withClientCertificate(TlsCertificate)` /
 `withClientCertificateChain(List)` / `withClientPrivateKey` \*
 `withCaPublicKey`, `withServerHostname`, `withRequireOcspStapling` \*
 `withAlpnProtocols(List)` — ALPN-протоколы (RFC 7301)
 
-TlsServerConfig: \* transport, ciphersuite, serverCertificateChain,
-serverPrivateKey \* `withOcspResponse`, `withCaPublicKey` (mTLS) \*
-`withAlpnProtocols(List)` — ALPN-протоколы (RFC 7301)
+TlsServerConfig: \* ciphersuite, serverCertificateChain,
+serverPrivateKey \* `withOcspStaplingResponse`, `withCaPublicKey` (mTLS)
+\* `withAlpnProtocols(List)` — ALPN-протоколы (RFC 7301)
 
 `SniCertificateSelector` — функциональный интерфейс: по hostname
 возвращает `TlsServerCredentials` (цепочка + ключ + OCSP). Необходим для
@@ -328,8 +328,8 @@ seqNum.
 
 - `TlsSession` **не thread-safe**. Одна сессия = один поток.
 
-- `PskStore` **thread-safe** (ConcurrentHashMap с атомарным compute()
-  для expire+remove). Может быть shared между сессиями.
+- `InMemoryPskStore` **thread-safe** (ConcurrentHashMap с атомарным
+  compute() для expire+remove). Может быть shared между сессиями.
 
 - `InMemoryTlsTransport.Pair` **не thread-safe** для single-ended,
   thread-safe для paired (LinkedBlockingQueue).
@@ -355,5 +355,5 @@ seqNum.
 
 - **CertificateRequest.certificate\_authorities** не отправляется
 
-- **PskStore.get()+remove() race** — документирован, single-use
+- **InMemoryPskStore.get()+remove() race** — документирован, single-use
   best-effort

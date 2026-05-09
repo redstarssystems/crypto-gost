@@ -55,33 +55,30 @@ public final class ThreeCertChain {
 
         // 4. Создаём пару транспортов
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+        try (InMemoryTlsTransport serverTp = pair.getServerTransport();
+             InMemoryTlsTransport clientTp = pair.getClientTransport();
+             TlsSession server = TlsSession.createServer(
+                     new TlsServerConfig(cs,
+                             Arrays.asList(serverCert, intermediate, root), serverPriv), serverTp);
+             TlsSession client = TlsSession.createClient(
+                     new TlsClientConfig(cs)
+                             .withServerHostname("localhost")
+                             .withCaPublicKey(root.getPublicKey()), clientTp)) {
 
-        // 5. Сервер — отправляет цепочку из 3 сертификатов
-        TlsSession server = TlsSession.createServer(
-                new TlsServerConfig(pair.getServerTransport(), cs,
-                        Arrays.asList(serverCert, intermediate, root), serverPriv));
+            ExecutorService exec = Executors.newSingleThreadExecutor();
+            try {
+                Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
+                client.handshakeAsClient();
+                sf.get(15, TimeUnit.SECONDS);
 
-        // 6. Клиент — проверяет цепочку через CA public key корня
-        TlsSession client = TlsSession.createClient(
-                new TlsClientConfig(pair.getClientTransport(), cs)
-                        .withServerHostname("localhost")
-                        .withCaPublicKey(root.getPublicKey()));
-
-        ExecutorService exec = Executors.newSingleThreadExecutor();
-        try {
-            Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
-            client.handshakeAsClient();
-            sf.get(15, TimeUnit.SECONDS);
-
-            client.write("3-cert chain verified".getBytes(StandardCharsets.UTF_8));
-            byte[] received = server.read();
-            System.out.println(new String(received, StandardCharsets.UTF_8));
-            System.out.println("SUCCESS");
-        } finally {
-            exec.shutdown();
-            try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-            try { server.close(); } catch (Exception ignored) {}
-            try { client.close(); } catch (Exception ignored) {}
+                client.write("3-cert chain verified".getBytes(StandardCharsets.UTF_8));
+                byte[] received = server.read();
+                System.out.println(new String(received, StandardCharsets.UTF_8));
+                System.out.println("SUCCESS");
+            } finally {
+                exec.shutdown();
+                try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+            }
         }
     }
 }

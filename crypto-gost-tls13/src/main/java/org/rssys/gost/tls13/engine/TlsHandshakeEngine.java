@@ -15,6 +15,8 @@ import org.rssys.gost.tls13.cert.TlsCertificateValidator;
 import org.rssys.gost.tls13.crypto.HkdfStreebog;
 import org.rssys.gost.tls13.crypto.TlsKeySchedule;
 import org.rssys.gost.tls13.message.TlsEncoding;
+import org.rssys.gost.tls13.config.SniCertificateSelector;
+import org.rssys.gost.tls13.config.TlsServerCredentials;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
 import org.rssys.gost.tls13.message.TlsMessageParser;
 import org.rssys.gost.tls13.psk.TlsPskHelper;
@@ -135,7 +137,7 @@ public final class TlsHandshakeEngine {
     private State pendingNextState; // для SERVER_SEND_FLIGHT → следующее состояние ожидания
     private final TlsCiphersuite ciphersuite;
     private final int hashLen;
-    private final TlsMessageBuilder messageBuilder;
+    private TlsMessageBuilder messageBuilder;
     private final ECParameters ecParams;
     private final int selectedNamedGroup;
     private final int selectedSigScheme;
@@ -188,6 +190,9 @@ public final class TlsHandshakeEngine {
     private List<String> serverAlpnProtocols;
     private String selectedAlpnProtocol;
 
+    // SNI certificate selection (RFC 6066 §3, RFC 8446 §4.4.2)
+    private final SniCertificateSelector sniSelector;
+
     // Post-handshake (KeyUpdate)
     // Флаги и ключи для двухфазного подтверждения KeyUpdate:
     // 1. engine выставляет pendingWriteUpdate → caller отправляет KU-фрейм через старый writerRecord
@@ -220,6 +225,7 @@ public final class TlsHandshakeEngine {
      * @param hashLen            длина хеша (32 для Streebog-256)
      * @param ocspResponse      OCSP-ответ для степплинга (сервер, null = без OCSP)
      * @param requestClientAuth запрашивать сертификат клиента (сервер, mTLS)
+     * @param sniSelector       селектор сертификата по SNI (сервер, может быть null)
      */
     public TlsHandshakeEngine(Role role, TlsCiphersuite ciphersuite,
                                TlsMessageBuilder messageBuilder,
@@ -228,7 +234,8 @@ public final class TlsHandshakeEngine {
                                int selectedSigScheme,
                                int hashLen,
                                byte[] ocspResponse,
-                               boolean requestClientAuth) {
+                               boolean requestClientAuth,
+                               SniCertificateSelector sniSelector) {
         this.role = role;
         this.ciphersuite = ciphersuite;
         this.messageBuilder = messageBuilder;
@@ -238,6 +245,7 @@ public final class TlsHandshakeEngine {
         this.hashLen = hashLen;
         this.ocspResponse = ocspResponse;
         this.requestClientAuth = requestClientAuth;
+        this.sniSelector = sniSelector;
 
         this.ctx = new HandshakeContext();
         this.state = (role == Role.CLIENT) ? State.CLIENT_START : State.SERVER_WAIT_CLIENT_HELLO;
@@ -672,11 +680,6 @@ public final class TlsHandshakeEngine {
         return clientAppTrafficSecret != null ? clientAppTrafficSecret.clone() : null;
     }
 
-    /**
-     * @return контекст handshake (транскрипт, key schedule)
-     */
-    public HandshakeContext getContext() { return ctx; }
-
     // ========================================================================
     // Реализация клиентского handshake
     // ========================================================================
@@ -905,6 +908,12 @@ public final class TlsHandshakeEngine {
         ctx.addToTranscript(frame);
 
         List<TlsCertificate> chain = TlsMessageParser.parseCertificate(certMsg.getBody());
+        if (chain.isEmpty()) {
+            // RFC 8446 §4.4.2: сервер обязан прислать непустой certificate_list.
+            // Пустой список — нарушение протокола, не certificate_required (этот алерт только для сервера).
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    "Server sent empty certificate list");
+        }
         receivedCertificates = chain;
         needsCertValidation = true;
         state = State.CLIENT_WAIT_CERTIFICATE_VERIFY;
@@ -1089,6 +1098,25 @@ public final class TlsHandshakeEngine {
             }
         }
 
+        // --- SNI certificate selection (RFC 6066 §3, RFC 8446 §4.4.2) ---
+        byte[] ocspForCert = this.ocspResponse;
+        if (!pskAccepted && sniSelector != null) {
+            String sni = TlsMessageParser.parseClientHelloSni(chBody);
+            if (sni != null) {
+                TlsServerCredentials creds = sniSelector.select(sni);
+                if (creds != null) {
+                    List<TlsCertificate> newChain = creds.getCertificateChain();
+                    int newScheme = TlsCiphersuite.namedGroupToSignatureScheme(
+                            TlsCiphersuite.paramsToNamedGroup(
+                                    newChain.get(0).getPublicKey().getParams()));
+                    this.messageBuilder = new TlsMessageBuilder(
+                            ciphersuite, selectedNamedGroup, newScheme,
+                            creds.getPrivateKey(), newChain, hashLen);
+                    ocspForCert = creds.getOcspResponse();
+                }
+            }
+        }
+
         // Определяем схему подписи по кривой сертификата (RFC 9367 §5.2)
         int[] acceptableSchemes;
         if (messageBuilder.getCertificateChain() != null
@@ -1206,8 +1234,8 @@ public final class TlsHandshakeEngine {
             }
 
             // Certificate
-            byte[] certBody = ocspResponse != null
-                    ? messageBuilder.buildCertificateBody(ocspResponse)
+            byte[] certBody = ocspForCert != null
+                    ? messageBuilder.buildCertificateBody(ocspForCert)
                     : messageBuilder.buildCertificateBody();
             byte[] certFrame = new TlsHandshakeMessage(
                     TlsConstants.HT_CERTIFICATE, certBody).encode();
@@ -1263,12 +1291,26 @@ public final class TlsHandshakeEngine {
     private void receiveClientCertificate(byte[] frame) throws TlsException {
         TlsHandshakeMessage certMsg = TlsHandshakeMessage.decode(frame);
         if (certMsg.getType() != TlsConstants.HT_CERTIFICATE) {
-            throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+            // Почему CERTIFICATE_REQUIRED, а не UNEXPECTED_MESSAGE: алерт decode_error
+            // пугает операторов (security incident), а certificate_required — это
+            // configuration issue (клиент не настроен на mTLS). Разница в triage — часы.
+            throw new TlsException(TlsConstants.ALERT_CERTIFICATE_REQUIRED,
                     "Expected client Certificate, got " + certMsg.getType());
         }
         ctx.addToTranscript(frame);
 
         List<TlsCertificate> chain = TlsMessageParser.parseCertificate(certMsg.getBody());
+        if (chain.isEmpty()) {
+            // RFC 8446 §4.4.2: клиент может прислать пустой certificate_list если нет сертификата.
+            // Решение о том, обязателен ли сертификат, принимается на уровне engine (requestClientAuth),
+            // а не в парсере — парсер общий для клиента и сервера.
+            if (requestClientAuth) {
+                throw new TlsException(TlsConstants.ALERT_CERTIFICATE_REQUIRED,
+                        "Client did not provide certificate");
+            }
+            // optional client auth not yet supported — treat as no-op
+            return;
+        }
         receivedCertificates = chain;
         needsCertValidation = true;
         state = State.SERVER_WAIT_CLIENT_CERTIFICATE_VERIFY;

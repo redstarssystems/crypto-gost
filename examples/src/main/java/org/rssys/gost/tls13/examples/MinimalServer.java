@@ -37,37 +37,35 @@ public final class MinimalServer {
 
         // 2. Создаём пару транспортов в памяти
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+        try (InMemoryTlsTransport serverTp = pair.getServerTransport();
+             InMemoryTlsTransport clientTp = pair.getClientTransport();
+             TlsSession server = TlsSession.createServer(
+                     new TlsServerConfig(cs, Collections.singletonList(serverCert), serverPriv), serverTp);
+             TlsSession client = TlsSession.createClient(
+                     new TlsClientConfig(cs), clientTp)) {
 
-        // 3. Создаём сессии сервера и клиента
-        TlsSession server = TlsSession.createServer(
-                new TlsServerConfig(pair.getServerTransport(), cs,
-                        Collections.singletonList(serverCert), serverPriv));
-        TlsSession client = TlsSession.createClient(
-                new TlsClientConfig(pair.getClientTransport(), cs));
+            ExecutorService exec = Executors.newSingleThreadExecutor();
+            try {
+                // 4. Клиентский handshake в отдельном потоке
+                Future<Void> cf = exec.submit(() -> {
+                    client.handshakeAsClient();
+                    client.write("Hello from client!".getBytes(StandardCharsets.UTF_8));
+                    return null;
+                });
 
-        ExecutorService exec = Executors.newSingleThreadExecutor();
-        try {
-            // 4. Клиентский handshake в отдельном потоке
-            Future<Void> cf = exec.submit(() -> {
-                client.handshakeAsClient();
-                client.write("Hello from client!".getBytes(StandardCharsets.UTF_8));
-                return null;
-            });
+                // 5. Серверный handshake в текущем потоке
+                server.handshakeAsServer();
+                cf.get(15, TimeUnit.SECONDS);
 
-            // 5. Серверный handshake в текущем потоке
-            server.handshakeAsServer();
-            cf.get(15, TimeUnit.SECONDS);
-
-            // 6. Читаем прикладные данные
-            byte[] received = server.read();
-            System.out.println(new String(received, StandardCharsets.UTF_8));
-            System.out.println("SUCCESS");
-        } finally {
-            // 7. Очистка
-            exec.shutdown();
-            try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-            try { server.close(); } catch (Exception ignored) {}
-            try { client.close(); } catch (Exception ignored) {}
+                // 6. Читаем прикладные данные
+                byte[] received = server.read();
+                System.out.println(new String(received, StandardCharsets.UTF_8));
+                System.out.println("SUCCESS");
+            } finally {
+                // 7. Очистка
+                exec.shutdown();
+                try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+            }
         }
     }
 }

@@ -6,6 +6,7 @@ import org.rssys.gost.tls13.TlsSession;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
+import java.util.Collections;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,17 +35,17 @@ public class FullHandshakeBench {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         TlsServerConfig serverConfig = new TlsServerConfig(
-                pair.getServerTransport(), cs, serverBundle.cert, serverBundle.priv);
+                cs, Collections.singletonList(serverBundle.cert), serverBundle.priv);
         // caPublicKey НЕ ставим на сервер — это включает mTLS (CertificateRequest).
         // Сервер не проверяет свою цепочку на своей стороне.
 
-        TlsClientConfig clientConfig = new TlsClientConfig(pair.getClientTransport(), cs)
+        TlsClientConfig clientConfig = new TlsClientConfig(cs)
                 .withCaPublicKey(serverBundle.cert.getPublicKey());
         // caPublicKey сервера = публичный ключ его самоподписанного сертификата.
         // Это корректно: self-signed → свой же ключ как CA.
 
-        TlsSession server = TlsSession.createServer(serverConfig);
-        TlsSession client = TlsSession.createClient(clientConfig);
+        TlsSession server = TlsSession.createServer(serverConfig, pair.getServerTransport());
+        TlsSession client = TlsSession.createClient(clientConfig, pair.getClientTransport());
 
         // Полный handshake (сервер + клиент параллельно, но в одном потоке
         // поочерёдно, как это делает InMemoryTlsTransport).
@@ -59,6 +60,8 @@ public class FullHandshakeBench {
         // Зачистка — важно для repeatable измерений: закрываем и даём GC.
         client.close();
         server.close();
+        pair.getClientTransport().close();
+        pair.getServerTransport().close();
         return client;
     }
 }

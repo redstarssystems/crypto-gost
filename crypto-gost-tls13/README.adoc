@@ -17,7 +17,7 @@ toc::[]
 * *ECDHE*: CryptoPro-A (256-bit), CryptoPro-B (512-bit)
 * *Per-record TLSTREE re-keying* — смена ключа шифрования на каждую TLS-запись.
 * *Фрагментация и сборка* рукопожатий и записей (RFC 8446 §5.1).
-* *Session resumption*: `PSK` через `NewSessionTicket` (`PskStore` in-memory, single-use).
+* *Session resumption*: `PSK` через `NewSessionTicket` (`InMemoryPskStore` in-memory, single-use).
 * *OCSP stapling*: сервер прикладывает OCSP-ответ к сертификату.
 * *Post-handshake messages*: `NewSessionTicket` (сохранение для `PSK`).
 .. *Криптография*:
@@ -153,10 +153,10 @@ SocketTlsTransport transport = new SocketTlsTransport(socket);
 
 // Сервер через TlsServerConfig
 TlsSession server = TlsSession.createServer(
-        new TlsServerConfig(transport,
+        new TlsServerConfig(
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
                 chain, priv)
-                .withOcspResponse(ocspDer));  // OCSP stapling (RFC 6960)
+                .withOcspStaplingResponse(ocspDer), transport);  // OCSP stapling (RFC 6960)
 
 try {
     server.handshakeAsServer();
@@ -178,8 +178,18 @@ NOTE: Сервер не валидирует свою цепочку — она 
 `TlsClientConfig` (см. «Клиент с полной валидацией»).
 
 Для multi-tenant серверов (разные сертификаты под разные SNI) используйте
-`SniCertificateSelector` — функциональный интерфейс, который по hostname
-возвращает `TlsServerCredentials` (цепочка + ключ + OCSP-ответ).
+`TlsServerConfig.withSniSelector()`:
+
+[source,java]
+----
+TlsSession server = TlsSession.createServer(
+    new TlsServerConfig(cs, defaultChain, defaultKey)
+        .withSniSelector(sni -> {
+            if ("foo.example.com".equals(sni))
+                return new TlsServerCredentials(fooChain, fooKey, null);
+            return null; // fallback на default-сертификат
+        }), transport);
+----
 
 
 === Клиентская сессия (анонимная)
@@ -198,8 +208,8 @@ Socket socket = new Socket("gost-server.example.com", 8443);
 SocketTlsTransport transport = new SocketTlsTransport(socket);
 
 TlsSession client = TlsSession.createClient(
-        new TlsClientConfig(transport,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
+        new TlsClientConfig(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
+        transport);
 
 try {
     client.handshakeAsClient();
@@ -231,11 +241,10 @@ TlsCertificate caCert = new TlsCertificate(caDer);
 PublicKeyParameters caKey = caCert.getPublicKey();
 
 TlsSession client = TlsSession.createClient(new TlsClientConfig(
-        transport,
         TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L)
         .withCaPublicKey(caKey)
         .withServerHostname("gost.example.com")
-        .withRequireOcspStapling(true));
+        .withRequireOcspStapling(true), transport);
 
 try {
     client.handshakeAsClient();
@@ -245,6 +254,18 @@ try {
     client.close();
 }
 ----
+
+.ALPN: клиент предлагает протоколы прикладного уровня:
+
+[source,java]
+----
+TlsSession client = TlsSession.createClient(
+    new TlsClientConfig(cs)
+        .withAlpnProtocols(List.of("h2", "http/1.1")), transport);
+----
+
+Сервер настраивается через `TlsServerConfig.withAlpnProtocols()`.
+После handshake согласованный протокол доступен через `session.getAlpnProtocol()`.
 
 
 === Взаимная аутентификация узлов (mTLS)
@@ -275,10 +296,10 @@ PrivateKeyParameters priv    = org.rssys.gost.jca.spec.GostDerCodec.decodePrivat
 List<TlsCertificate> chain  = List.of(new TlsCertificate(certDer));
 
 TlsSession server = TlsSession.createServer(
-        new TlsServerConfig(transport,
+        new TlsServerConfig(
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
                 chain, priv)
-        .withCaPublicKey(caKey));  // ← запрашивать сертификат клиента
+        .withCaPublicKey(caKey), transport);  // ← запрашивать сертификат клиента
 
 try {
     server.handshakeAsServer();
@@ -306,10 +327,9 @@ TlsCertificate clientCert   = new TlsCertificate(clientCertDer);
 PrivateKeyParameters clientPriv = org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(clientKeyDer);
 
 TlsSession client = TlsSession.createClient(
-        new TlsClientConfig(transport,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L)
+        new TlsClientConfig(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L)
         .withClientCertificate(clientCert)
-        .withClientPrivateKey(clientPriv));
+        .withClientPrivateKey(clientPriv), transport);
 
 try {
     client.handshakeAsClient();
@@ -334,8 +354,9 @@ NOTE: Для цепочки из нескольких сертификатов (
 
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.tls13.psk.PskStore;
+import org.rssys.gost.tls13.psk.InMemoryPskStore;
 
-PskStore serverStore = new PskStore(1000); // макс. 1000 PSK-тикетов (см. PskStore javadoc)
+InMemoryPskStore serverStore = new InMemoryPskStore(1000); // макс. 1000 PSK-тикетов (см. PskStore javadoc)
 
 // Сервер
 TlsSession server1 = TlsSession.createServer(/* TlsServerConfig */);
@@ -345,7 +366,7 @@ server1.write("ready".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 server1.close();
 
 // клиент
-PskStore clientStore = new PskStore(100);  // макс. 100 PSK-тикетов (см. PskStore javadoc)
+InMemoryPskStore clientStore = new InMemoryPskStore(100);  // макс. 100 PSK-тикетов (см. PskStore javadoc)
 
 TlsSession client1 = TlsSession.createClient(/* TlsClientConfig */);
 client1.setPskStore(clientStore);
@@ -504,7 +525,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 try (TlsSession server = TlsSession.createServer(
-        new TlsServerConfig(transport, cs, chain, priv))) {
+        new TlsServerConfig(cs, chain, priv), transport)) {
     server.handshakeAsServer();
     byte[] request = server.read();
     server.write("OK".getBytes(StandardCharsets.UTF_8));
@@ -524,7 +545,7 @@ try (TlsSession server = TlsSession.createServer(
 в одном потоке. Для параллельных соединений используйте отдельный
 `TlsSession` на каждое подключение.
 
-`PskStore` thread-safe: его можно разделять между сессиями (например,
+`InMemoryPskStore` thread-safe: его можно разделять между сессиями (например,
 для PSK resumption на сервере).
 
 `TlsTransport` — thread safety определяется реализацией. Встроенные
@@ -643,7 +664,7 @@ boolean sigValid = cert.verify(caPublicKey);
 
 [source,java]
 ----
-try (TlsSession session = TlsSession.createClient(config)) {
+try (TlsSession session = TlsSession.createClient(config, transport)) {
     session.handshakeAsClient();
     session.write(data);
     byte[] response = session.read();

@@ -3,7 +3,6 @@ package org.rssys.gost.tls13.config;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsTransport;
 import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
@@ -14,54 +13,37 @@ import java.util.List;
  * Конфигурация сервера TLS 1.3.
  *
  * <pre>{@code
- * TlsSession session = TlsSession.createServer(new TlsServerConfig(transport, cs, chain, priv)
- *     .withCaPublicKey(caKey)); // mTLS required mode
+ * TlsSession session = TlsSession.createServer(new TlsServerConfig(cs, chain, priv)
+ *     .withCaPublicKey(caKey), transport);
  * }</pre>
  */
 public final class TlsServerConfig {
-    private final TlsTransport transport;
     private final TlsCiphersuite ciphersuite;
     private final List<TlsCertificate> serverCertificateChain;
     private final PrivateKeyParameters serverPrivateKey;
     private byte[] ocspResponse;
     private PublicKeyParameters caPublicKey;
     private List<String> alpnProtocols;
+    private SniCertificateSelector sniSelector;
 
     /**
-     * @param transport               транспорт (не null)
      * @param ciphersuite             cipher suite (не null)
-     * @param serverCertificateChain  цепочка сертификатов сервера (leaf первый, root последний; не пуста)
-     * @param serverPrivateKey        закрытый ключ для CertificateVerify (должен соответствовать leaf)
+     * @param serverCertificateChain  цепочка сертификатов сервера (leaf первый; не пуста)
+     * @param serverPrivateKey        закрытый ключ для CertificateVerify
      */
-    public TlsServerConfig(TlsTransport transport, TlsCiphersuite ciphersuite,
+    public TlsServerConfig(TlsCiphersuite ciphersuite,
                            List<TlsCertificate> serverCertificateChain,
                            PrivateKeyParameters serverPrivateKey) {
-        if (transport == null) throw new IllegalArgumentException("transport must not be null");
         if (ciphersuite == null) throw new IllegalArgumentException("ciphersuite must not be null");
         if (serverCertificateChain == null || serverCertificateChain.isEmpty()) {
             throw new IllegalArgumentException("serverCertificateChain must not be null or empty");
         }
-        this.transport = transport;
         this.ciphersuite = ciphersuite;
         this.serverCertificateChain = serverCertificateChain;
         this.serverPrivateKey = serverPrivateKey;
     }
 
-    /**
-     * Создаёт конфигурацию с одним сертификатом (без цепочки).
-     *
-     * @param transport          транспорт (не null)
-     * @param ciphersuite        cipher suite (не null)
-     * @param serverCertificate  сертификат сервера
-     * @param serverPrivateKey   закрытый ключ для CertificateVerify
-     */
-    public TlsServerConfig(TlsTransport transport, TlsCiphersuite ciphersuite,
-                           TlsCertificate serverCertificate,
-                           PrivateKeyParameters serverPrivateKey) {
-        this(transport, ciphersuite, Collections.singletonList(serverCertificate), serverPrivateKey);
-    }
-
-    public TlsServerConfig withOcspResponse(byte[] ocspResponse) {
+    public TlsServerConfig withOcspStaplingResponse(byte[] ocspResponse) {
         this.ocspResponse = ocspResponse;
         return this;
     }
@@ -91,12 +73,26 @@ public final class TlsServerConfig {
         return this;
     }
 
+    /**
+     * @param selector функциональный интерфейс для выбора сертификата по SNI.
+     *                 Вызывается при получении ClientHello с server_name расширением.
+     *                 Если selector возвращает null — сервер использует учётные данные
+     *                 по умолчанию (fallback). Реализация MUST быть thread-safe,
+     *                 быстрой и неблокирующей, так как вызывается синхронно
+     *                 во время handshake из нескольких handshake-потоков.
+     * @return this
+     */
+    public TlsServerConfig withSniSelector(SniCertificateSelector selector) {
+        this.sniSelector = selector;
+        return this;
+    }
+
     // package-private аксессоры для фабрики TlsSession
-    public TlsTransport getTransport() { return transport; }
     public TlsCiphersuite getCiphersuite() { return ciphersuite; }
     public List<TlsCertificate> getServerCertificateChain() { return serverCertificateChain; }
     public PrivateKeyParameters getServerPrivateKey() { return serverPrivateKey; }
     public PublicKeyParameters getCaPublicKey() { return caPublicKey; }
-    public byte[] getOcspResponse() { return ocspResponse; }
+    public byte[] getOcspStaplingResponse() { return ocspResponse; }
     public List<String> getAlpnProtocols() { return alpnProtocols; }
+    public SniCertificateSelector getSniSelector() { return sniSelector; }
 }
