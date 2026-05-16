@@ -8,7 +8,7 @@
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost</artifactId>
         <version>${revision}</version>
-        <relativePath>../pom.xml</relativePath>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <groupId>org.rssys.bench</groupId>

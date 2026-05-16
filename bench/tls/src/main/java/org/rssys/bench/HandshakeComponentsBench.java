@@ -1,13 +1,14 @@
 package org.rssys.bench;
 
 import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.infra.Blackhole;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.Signature;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Digest;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import java.math.BigInteger;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.crypto.HkdfStreebog;
 import org.rssys.gost.tls13.crypto.TlsKeySchedule;
@@ -19,7 +20,7 @@ import java.util.concurrent.TimeUnit;
  * JMH-бенчмарк отдельных компонентов handshake.
  * <p>
  * Зачем: понять, какая именно операция доминирует в полном handshake.
- * Позволяет фокусировать оптимизации на узком месте (bottleneck).
+ * Позволяет фокусировать оптимизации на узком месте.
  * Каждый benchmark изолирован — без аллокаций TlsSession/транспорта.
  */
 @BenchmarkMode(Mode.Throughput)
@@ -28,22 +29,26 @@ import java.util.concurrent.TimeUnit;
 public class HandshakeComponentsBench {
 
     private ECParameters params;
-    private byte[] ecdhePoint;
     private byte[] hash32;
     private PrivateKeyParameters signKey;
     private PublicKeyParameters verifyKey;
+    private byte[] precomputedSig;
     private TlsKeySchedule ks;
     private byte[] sharedSecret;
     private TlsCiphersuite cs;
+    private PrivateKeyParameters ecdheClientPriv;
+    private PublicKeyParameters ecdheServerPub;
 
     @Setup(Level.Trial)
     public void setup() throws Exception {
         params = ECParameters.tc26a256();
         cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
 
-        // ECDHE keypair
-        org.rssys.gost.api.KeyPair ecdhe = KeyGenerator.generateKeyPair(params);
-        ecdhePoint = BenchHelper.encodePoint(ecdhe.getPublic());
+        // ECDHE keypairs для shared secret bench (client + server)
+        org.rssys.gost.api.KeyPair ecdheClient = KeyGenerator.generateKeyPair(params);
+        org.rssys.gost.api.KeyPair ecdheServer = KeyGenerator.generateKeyPair(params);
+        ecdheClientPriv = ecdheClient.getPrivate();
+        ecdheServerPub = ecdheServer.getPublic();
         sharedSecret = new byte[32];
         java.security.SecureRandom.getInstanceStrong().nextBytes(sharedSecret);
 
@@ -55,6 +60,8 @@ public class HandshakeComponentsBench {
         // Хеш для подписи
         hash32 = new byte[32];
         CryptoRandom.INSTANCE.nextBytes(hash32);
+        // Подпись для verify — вынесена из @Benchmark, чтобы мерить только verify
+        precomputedSig = Signature.signHash(hash32, signKey);
 
         // Key schedule (без PSK)
         ks = new TlsKeySchedule(cs);
@@ -63,59 +70,41 @@ public class HandshakeComponentsBench {
     }
 
     @Benchmark
-    public org.rssys.gost.api.KeyPair ecdheKeygen() {
-        return KeyGenerator.generateKeyPair(params);
+    public void ecdheKeygen(Blackhole bh) {
+        bh.consume(KeyGenerator.generateKeyPair(params));
     }
 
     @Benchmark
-    public byte[] ecdhePointEncoding() {
-        return BenchHelper.encodePoint(verifyKey);
+    public void ecdheShared(Blackhole bh) {
+        ECPoint shared = ecdheServerPub.getQ().multiply(
+                ecdheClientPriv.getD().multiply(BigInteger.ONE));
+        shared = shared.normalize();
+        bh.consume(shared.getX());
     }
 
     @Benchmark
-    public byte[] hash256() {
-        Digest d = new Streebog256();
-        d.update(hash32, 0, hash32.length);
-        byte[] out = new byte[32];
-        d.doFinal(out, 0);
-        return out;
+    public void sign(Blackhole bh) {
+        bh.consume(Signature.signHash(hash32, signKey));
     }
 
     @Benchmark
-    public byte[] sign() {
-        return Signature.signHash(hash32, signKey);
+    public void verify(Blackhole bh) {
+        bh.consume(Signature.verifyHash(hash32, precomputedSig, verifyKey));
     }
 
     @Benchmark
-    public boolean verify() {
-        byte[] sig = Signature.signHash(hash32, signKey);
-        return Signature.verifyHash(hash32, sig, verifyKey);
-    }
-
-    @Benchmark
-    public byte[] hkdfExtract() {
+    public void hkdfExtract(Blackhole bh) {
         byte[] zero = new byte[32];
-        return HkdfStreebog.extract(zero, sharedSecret, 32);
+        bh.consume(HkdfStreebog.extract(zero, sharedSecret, 32));
     }
 
     @Benchmark
-    public byte[] hkdfExpand() {
-        return HkdfStreebog.expandLabel(sharedSecret, "test label", new byte[0], 32, 32);
+    public void hkdfExpand(Blackhole bh) {
+        bh.consume(HkdfStreebog.expandLabel(sharedSecret, "test label", new byte[0], 32, 32));
     }
 
     @Benchmark
-    public TlsTrafficKeys deriveTrafficKeys() {
-        return ks.deriveTrafficKeys(sharedSecret);
-    }
-
-    @Benchmark
-    public byte[] certVerifyHash() throws Exception {
-        byte[] sigContent = new byte[64];
-        CryptoRandom.INSTANCE.nextBytes(sigContent);
-        Digest d = new Streebog256();
-        d.update(sigContent, 0, sigContent.length);
-        byte[] out = new byte[32];
-        d.doFinal(out, 0);
-        return out;
+    public void deriveTrafficKeys(Blackhole bh) {
+        bh.consume(ks.deriveTrafficKeys(sharedSecret));
     }
 }

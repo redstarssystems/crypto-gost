@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 
 /**
  * Транспорт TLS 1.3 поверх блокирующего сокета (TCP).
@@ -30,6 +32,8 @@ public final class SocketTlsTransport implements TlsTransport {
     private final InputStream in;
     private final OutputStream out;
     private volatile boolean closed;
+    private final byte[] headerBuf = new byte[TlsConstants.RECORD_HEADER_SIZE];
+    private final byte[] recordBuf = new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
 
     /**
      * @param socket установленное TCP-соединение
@@ -56,11 +60,11 @@ public final class SocketTlsTransport implements TlsTransport {
     }
 
     /**
-     * Принимает следующую TLS-запись из сокета (InputStream).
+     * Принимает следующую TLS-запись из сокета.
      * <p>
-     * Читает 5-байтовый заголовок (content_type + legacy_version + length),
-     * проверяет длину на превышение {@link TlsConstants#MAX_CIPHERTEXT_LENGTH}
-     * (защита от OOM, RFC 8446 §5.1), затем читает тело.
+     * Читает 5-байтовый заголовок, проверяет длину на превышение
+     * {@link TlsConstants#MAX_CIPHERTEXT_LENGTH}, затем читает тело.
+     * Возвращает новый массив (Arrays.copyOf из внутреннего буфера).
      *
      * @return полная TLS-запись с заголовком
      * @throws IOException если чтение из сокета не удалось
@@ -69,50 +73,66 @@ public final class SocketTlsTransport implements TlsTransport {
     public byte[] receiveRecord() throws IOException {
         if (closed) throw new IOException("Transport closed");
 
-        byte[] header = new byte[TlsConstants.RECORD_HEADER_SIZE];
-        readFully(header);
+        readFully(recordBuf, 0, TlsConstants.RECORD_HEADER_SIZE);
 
-        int length = ((header[3] & 0xFF) << 8) | (header[4] & 0xFF);
+        int length = ((recordBuf[3] & 0xFF) << 8) | (recordBuf[4] & 0xFF);
 
-        // Защита от OOM: reject oversized записей до аллокации (RFC 8446 §5.1).
-        // Максимальный ciphertext для любого валидного TLS 1.3 GOST record — 16640 байт.
-        // Это transport-level invariant, не TLS-семантика.
         if (length > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
             throw new IOException("Record too long: " + length
                     + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
-        byte[] body = new byte[length];
-        readFully(body);
+        readFully(recordBuf, TlsConstants.RECORD_HEADER_SIZE, length);
 
-        byte[] record = new byte[TlsConstants.RECORD_HEADER_SIZE + length];
-        System.arraycopy(header, 0, record, 0, TlsConstants.RECORD_HEADER_SIZE);
-        System.arraycopy(body, 0, record, TlsConstants.RECORD_HEADER_SIZE, length);
-        return record;
+        return Arrays.copyOf(recordBuf, TlsConstants.RECORD_HEADER_SIZE + length);
     }
 
     /**
-     * Читает ровно {@code buf.length} байт в буфер.
-     * В отличие от {@link java.io.DataInputStream#readFully(byte[])},
-     * этот метод использует явный цикл с проверкой {@code closed},
-     * что позволяет прервать чтение при закрытии транспорта.
+     * Принимает следующую TLS-запись напрямую в переданный {@link ByteBuffer}.
      * <p>
-     * Цикл обязателен: InputStream.read() может вернуть меньше байт,
-     * чем запрошено, при фрагментации TCP или медленном соединении.
+     * Zero-alloc: читает заголовок и тело в переиспользуемый внутренний буфер,
+     * затем копирует в {@code dst}. В отличие от {@link #receiveRecord()} не
+     * создаёт новый массив для результата — данные уже в {@code dst}.
+     * <p>
+     * После вызова позиция {@code dst} сдвинута на длину записи.
+     *
+     * @param dst буфер для TLS-записи
+     * @return длина записи в байтах
+     * @throws IOException если чтение из сокета не удалось или закрыт транспорт
      */
-    private void readFully(byte[] buf) throws IOException {
-        int offset = 0;
-        while (offset < buf.length) {
+    @Override
+    public int receiveRecord(ByteBuffer dst) throws IOException {
+        if (closed) throw new IOException("Transport closed");
+
+        readFully(recordBuf, 0, TlsConstants.RECORD_HEADER_SIZE);
+
+        int length = ((recordBuf[3] & 0xFF) << 8) | (recordBuf[4] & 0xFF);
+
+        if (length > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
+            throw new IOException("Record too long: " + length
+                    + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+        }
+
+        readFully(recordBuf, TlsConstants.RECORD_HEADER_SIZE, length);
+
+        int total = TlsConstants.RECORD_HEADER_SIZE + length;
+        dst.put(recordBuf, 0, total);
+        return total;
+    }
+
+    /**
+     * Читает ровно {@code len} байт в {@code buf} начиная со смещения {@code off}.
+     */
+    private void readFully(byte[] buf, int off, int len) throws IOException {
+        int end = off + len;
+        while (off < end) {
             if (closed) throw new IOException("Transport closed");
-            int read = in.read(buf, offset, buf.length - offset);
+            int read = in.read(buf, off, end - off);
             if (read == -1) throw new IOException("Connection closed by peer");
-            offset += read;
+            off += read;
         }
     }
 
-    /**
-     * Закрывает сокет. Идемпотентно.
-     */
     @Override
     public void close() {
         closed = true;

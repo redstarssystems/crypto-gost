@@ -2,19 +2,19 @@
 части операций электронной подписи:
 
 - [Результаты сравнения для 256
-  бит](https://gitflic.ru/project/red-stars-systems/crypto-gost/blob?file=doc/bench/results/signature/ecgost256-throughput.png)
+  бит](results/signature/ecgost256-throughput.png)
 
 - [Результаты сравнения для 512
-  бит](https://gitflic.ru/project/red-stars-systems/crypto-gost/blob?file=doc/bench/results/signature/ecgost512-throughput.png)
+  бит](results/signature/ecgost512-throughput.png)
 
 Результаты сравнения **crypto-gost-core** и **BouncyCastle 1.83** в
 части операций шифрования "Кузнечик":
 
 - [Результаты сравнения режима
-  CTR](https://gitflic.ru/project/red-stars-systems/crypto-gost/blob?file=doc/bench/results/kuznyechik/kuznyechik-ctr-throughput.png)
+  CTR](results/kuznyechik/kuznyechik-ctr-throughput.png)
 
 - [Результаты сравнения режима
-  CFB](https://gitflic.ru/project/red-stars-systems/crypto-gost/blob?file=doc/bench/results/kuznyechik/kuznyechik-cfb-throughput.png)
+  CFB](results/kuznyechik/kuznyechik-cfb-throughput.png)
 
 # Методики бенчмарков
 

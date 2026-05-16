@@ -7,3 +7,12 @@ dependency-reduced-pom.xml
 .classpath
 .project
 .settings/
+/results/tls/результаты-jmh-tls.xml
+/results/jsse/результаты-jmh-jsse.xml
+/jsse/results/
+/keys/results/
+/kuznyechik/results/
+/mac/results/
+/old-digest/results/
+/signature/results/
+/tls/results/

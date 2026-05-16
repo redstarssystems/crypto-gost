@@ -86,11 +86,14 @@ public final class InMemoryPskStore implements PskStore {
     @Override
     public PskEntry get(byte[] ticket) {
         ByteArrayKey key = new ByteArrayKey(ticket);
-        return store.compute(key, (k, entry) -> {
-            if (entry == null) return null;
-            if (entry.isExpired(System.currentTimeMillis())) return null;
-            return entry;
-        });
+        // Атомарное удаление — гарантирует single-use (RFC 8446 §8.1).
+        // ConcurrentHashMap.remove() блокирует сегмент, возвращает запись
+        // и гарантирует что никакой другой поток не получит тот же тикет.
+        // Если тикет expired — возвращаем null, запись уже удалена.
+        PskEntry entry = store.remove(key);
+        if (entry == null) return null;
+        if (entry.isExpired(System.currentTimeMillis())) return null;
+        return entry;
     }
 
     @Override
@@ -106,12 +109,16 @@ public final class InMemoryPskStore implements PskStore {
         // висеть в store до следующей периодической чистки в onTicketReceived.
         evictExpired();
         long now = System.currentTimeMillis();
+        PskEntry best = null;
+        long maxIssueTime = Long.MIN_VALUE;
         for (PskEntry entry : store.values()) {
-            if (!entry.isExpired(now)) {
-                return entry;
+            long issueTime = entry.getIssueTime();
+            if (!entry.isExpired(now) && issueTime > maxIssueTime) {
+                maxIssueTime = issueTime;
+                best = entry;
             }
         }
-        return null;
+        return best;
     }
 
     @Override

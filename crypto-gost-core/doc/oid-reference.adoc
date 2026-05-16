@@ -1,0 +1,116 @@
+= Справочник OID
+:toc: left
+:source-highlighter: coderay
+
+== Алгоритмы подписи (ГОСТ Р 34.10-2012)
+
+|===
+| OID | Описание | Использование
+
+| 1.2.643.7.1.1.1.1
+| id-tc26-gost3410-2012-256
+| KeyPair generation, 256-bit curve
+
+| 1.2.643.7.1.1.1.2
+| id-tc26-gost3410-2012-512
+| KeyPair generation, 512-bit curve
+
+| 1.2.643.7.1.1.3.2
+| id-tc26-signwithdigest-gost3410-12-256
+| Signature algorithm OID (256-bit)
+
+| 1.2.643.7.1.1.3.3
+| id-tc26-signwithdigest-gost3410-12-512
+| Signature algorithm OID (512-bit)
+|===
+
+== Хэши (Стрибог, ГОСТ Р 34.11-2012)
+
+|===
+| OID | Описание | Использование
+
+| 1.2.643.7.1.1.2.2
+| id-tc26-gost3411-12-256 (Streebog-256)
+| 256-bit hash
+
+| 1.2.643.7.1.1.2.3
+| id-tc26-gost3411-12-512 (Streebog-512)
+| 512-bit hash
+|===
+
+== Шифры (ГОСТ Р 34.12-2015)
+
+|===
+| OID | Описание | Использование
+
+| 1.2.643.7.1.1.5.1
+| id-tc26-gost-28147-2015-magma
+| Magma block cipher (64-bit block)
+
+| 1.2.643.7.1.1.5.2
+| id-tc26-cipher-gostr3412-2015-kuznyechik
+| Кузнечик block cipher (128-bit block)
+|===
+
+== Параметры кривых
+
+|===
+| OID | Описание | Использование
+
+| 1.2.643.7.1.2.1.1.1
+| id-tc26-gost-3410-12-256-paramSetA
+| 256-bit curve A (Tc26A)
+
+| 1.2.643.7.1.2.1.1.2
+| id-tc26-gost-3410-12-256-paramSetB
+| 256-bit curve B
+
+| 1.2.643.7.1.2.1.1.3
+| id-tc26-gost-3410-12-256-paramSetC
+| 256-bit curve C
+
+| 1.2.643.7.1.2.1.2.1
+| id-tc26-gost-3410-12-512-paramSetA
+| 512-bit curve A (Tc26A-512)
+
+| 1.2.643.7.1.2.1.2.2
+| id-tc26-gost-3410-12-512-paramSetB
+| 512-bit curve B
+|===
+
+== Cipher suites (TLS 1.3)
+
+|===
+| OID | Описание
+
+| 1.2.643.7.1.1.8.1
+| TLS 1.3 GOST 2012 (Кузнечик-MGM-Streebog)
+|===
+
+== Обработка сертификатов
+
+|===
+| OID | Описание | Использование
+
+| 1.2.643.100.1
+| INN (ИНН)
+| TlsCertificate subject/issuer DN
+
+| 1.2.643.100.3
+| OGRN (ОГРН)
+| TlsCertificate subject/issuer DN
+
+| 1.2.643.100.113.1
+| EKU: id-tc26-gov-eku (ГОС)
+| Extended Key Usage
+
+| 1.3.6.1.5.5.7.48.1
+| OCSP (id-ad-ocsp)
+| AIA extension, OCSP responder URI
+|===
+
+== Источники
+
+* RFC 7836 — алгоритмы
+* RFC 4357 — параметры кривых
+* TC26 draft-deremin-rfc4491-bis — современные OID

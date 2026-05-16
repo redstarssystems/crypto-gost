@@ -35,6 +35,28 @@ class TlsOcspVerifierFuzzTest {
     }
 
     /**
+     * Fuzz-тест для TlsOcspVerifier.verify() с CertID-проверкой (5-param overload).
+     * <p>
+     * Отличается от fuzzVerify тем, что передаёт fuzzed issuerCertDer и
+     * expectedIssuerDn — код CertID-секции (issuerNameHash/issuerKeyHash)
+     * теперь тоже покрыт случайными данными.
+     */
+    @FuzzTest
+    void fuzzVerifyWithCertId(FuzzedDataProvider data) {
+        byte[] ocspResponse = data.consumeBytes(data.consumeInt(0, 65536));
+        byte[] serialNumber = data.consumeBytes(data.consumeInt(0, 32));
+        byte[] issuerDn = data.consumeBytes(data.consumeInt(0, 256));
+        byte[] issuerCert = data.consumeBytes(data.consumeInt(0, 4096));
+        try {
+            TlsOcspVerifier.verify(ocspResponse, serialNumber, caKey, issuerDn, issuerCert);
+        } catch (TlsException e) {
+            // Ожидаемо: битый OCSP-ответ не проходит верификацию
+        } catch (RuntimeException e) {
+            // Ожидаемо: TlsDerParser кидает AIOOBE/NPE на битом DER
+        }
+    }
+
+    /**
      * Fuzz-тест для TlsOcspVerifier.verify().
      * <p>
      * ocspResponse и serialNumber — случайные байты из FuzzedDataProvider.

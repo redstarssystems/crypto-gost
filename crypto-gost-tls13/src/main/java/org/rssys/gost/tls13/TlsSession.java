@@ -22,8 +22,11 @@ import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.record.TlsParsedRecord;
 import org.rssys.gost.tls13.record.TlsRecord;
 import org.rssys.gost.tls13.record.TlsTrafficKeys;
+import org.rssys.gost.tls13.record.UnprotectResult;
 import java.io.EOFException;
 import java.io.IOException;
+import java.nio.BufferOverflowException;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -68,6 +71,14 @@ public final class TlsSession implements AutoCloseable {
     // Буфер сборки handshake чтобы избежать GC pressure.
     private final GrowableBuffer handshakeBuffer = new GrowableBuffer();
 
+    // Переиспользуемые ByteBuffer-буферы для zero-alloc чтения. TlsRecord
+    // скопирует данные в свой recordBuf (MGM принимает только byte[]), но
+    // transport не аллоцирует промежуточные массивы.
+    private final ByteBuffer sessionRecordBuf = ByteBuffer.allocate(
+            TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+    private final ByteBuffer sessionPlainBuf = ByteBuffer.allocate(
+            TlsConstants.MAX_PLAINTEXT_LENGTH);
+
     // PSK-хранилище (session resumption)
     private PskStore pskStore;
 
@@ -79,6 +90,7 @@ public final class TlsSession implements AutoCloseable {
 
     // SNI certificate selection (сервер, RFC 6066 §3)
     private SniCertificateSelector sniSelector;
+    private int ticketsToSend = 1;
 
     // Engine остается жив после handshake для post-handshake сообщений
     // (KeyUpdate, NewSessionTicket). Application traffic secrets хранятся
@@ -145,6 +157,7 @@ public final class TlsSession implements AutoCloseable {
                 config.getCaPublicKey(), null, false, config.getOcspStaplingResponse());
         session.sniSelector = config.getSniSelector();
         session.alpnProtocols = config.getAlpnProtocols();
+        session.ticketsToSend = config.getTicketsToSend();
         return session;
     }
 
@@ -262,49 +275,62 @@ public final class TlsSession implements AutoCloseable {
                 sendPlaintextRecord(TlsConstants.CT_HANDSHAKE, firstOutgoing);
             }
 
+            // engine сам ищет PSK в store при получении ClientHello (receiveClientHello)
+            if (role == TlsHandshakeEngine.Role.SERVER && pskStore != null) {
+                engine.setServerPskStore(pskStore);
+            }
+
             // Главный цикл: receive → assemble → engine.receive → poll → key changes → cert validation
             while (!engine.isDone() && !engine.isError()) {
-                byte[] record = transport.receiveRecord();
+                sessionRecordBuf.clear();
+                try {
+                    transport.receiveRecord(sessionRecordBuf);
+                } catch (BufferOverflowException e) {
+                    throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+                            "Record too long", e);
+                }
+                sessionRecordBuf.flip();
 
                 if (readerRecord != null) {
                     handshakeBuffer.ensureCapacity(handshakeBuffer.size + TlsConstants.MAX_PLAINTEXT_LENGTH);
-                    TlsRecord.RecordInfo info;
+                    ByteBuffer dest = ByteBuffer.wrap(handshakeBuffer.buf, handshakeBuffer.size,
+                            handshakeBuffer.buf.length - handshakeBuffer.size);
+                    int destPosBefore = dest.position();
+                    UnprotectResult r;
                     try {
-                        info = readerRecord.unprotectInto(record, handshakeBuffer.buf, handshakeBuffer.size);
+                        r = readerRecord.unprotect(sessionRecordBuf, dest);
                     } catch (AuthenticationException e) {
                         throw new TlsException(TlsConstants.ALERT_DECRYPT_ERROR,
                                 "Handshake record authentication failed", e);
                     }
-                    if (info.contentType != TlsConstants.CT_HANDSHAKE) {
-                        throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
-                                "Expected handshake, got " + info.contentType);
+                    if (r.contentType == TlsConstants.CT_ALERT) {
+                        int alertLen = dest.position() - destPosBefore;
+                        if (alertLen < 2) {
+                            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                                    "Malformed alert during handshake");
+                        }
+                        // Per RFC 8446 §6: level field ignored, all alerts are fatal in TLS 1.3
+                        byte description = dest.get(destPosBefore + 1);
+                        if (description == TlsConstants.CLOSE_NOTIFY) {
+                            throw new EOFException("Peer closed connection during handshake");
+                        }
+                        throw new TlsException(description,
+                                "Received fatal alert during handshake: code=" + (description & 0xFF));
                     }
-                    handshakeBuffer.size += info.length;
+                    if (r.contentType != TlsConstants.CT_HANDSHAKE) {
+                        throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                                "Expected handshake, got " + r.contentType);
+                    }
+                    handshakeBuffer.size += dest.position() - destPosBefore;
                 } else {
-                    byte[] handshakeData = TlsMessageParser.extractRecordData(record);
-                    handshakeBuffer.write(handshakeData);
+                    byte[] recordData = new byte[sessionRecordBuf.remaining()];
+                    sessionRecordBuf.get(recordData);
+                    handshakeBuffer.write(TlsMessageParser.extractRecordData(recordData));
                 }
 
                 // собрать фрагментированные данные в целые фреймы и обработать их
                 byte[] frame;
                 while ((frame = assembleHandshakeMessage()) != null) {
-                    // Поиск PSK на стороне сервера перед подачей ClientHello в engine
-                    if (role == TlsHandshakeEngine.Role.SERVER && pskStore != null
-                            && engine.getState() == TlsHandshakeEngine.State.SERVER_WAIT_CLIENT_HELLO) {
-                        byte[] pskIdentity = TlsMessageParser.parseClientHelloPskIdentity(
-                                TlsHandshakeMessage.decode(frame).getBody());
-                        if (pskIdentity != null) {
-                            PskEntry entry = pskStore.get(pskIdentity);
-                        if (entry != null && !entry.isExpired(System.currentTimeMillis())) {
-                            byte[] psk = entry.getPsk();
-                            if (psk != null) {
-                                pskKey = psk;
-                                engine.setServerPsk(pskKey);
-                            }
-                        }
-                        }
-                    }
-
                     engine.receive(frame);
 
                     // Сервер: запоминаем запрошенное имя хоста из SNI
@@ -389,9 +415,20 @@ public final class TlsSession implements AutoCloseable {
             handshakeDone = true;
 
             if (role == TlsHandshakeEngine.Role.SERVER) {
-                sendNewSessionTicket();
+                    for (int nst = 0; nst < ticketsToSend; nst++) {
+                        sendNewSessionTicket(nst);
+                    }
             }
         } catch (IOException e) {
+            // Если writerRecord ещё не инициализирован, но handshake-ключи уже
+            // установлены (например, failure в receiveFinished после writeKeys = handshakeClientKeys),
+            // создаём writerRecord для отправки зашифрованного alert (RFC 8446 §6).
+            if (writerRecord == null && engine != null && engine.getWriteKeys() != null) {
+                writerRecord = new TlsRecord(
+                        engine.getWriteKeys().getKey(),
+                        engine.getWriteKeys().getIv(),
+                        ciphersuite.getTagLen(), ciphersuite);
+            }
             sendAlert(alertDescription(e));
             if (engine != null) { engine.destroy(); engine = null; }
             destroyKeyMaterial();
@@ -515,73 +552,91 @@ public final class TlsSession implements AutoCloseable {
     public byte[] read() throws IOException {
         checkConnected();
         for (int i = 0; i < MAX_POST_HANDSHAKE; i++) {
-            byte[] record = transport.receiveRecord();
+            sessionRecordBuf.clear();
             try {
-                TlsParsedRecord parsed = readerRecord.unprotect(record);
-                byte ct = parsed.getContentType();
-                if (ct == TlsConstants.CT_ALERT) {
-                    byte desc = parseAlertDescription(parsed.getData());
-                    if (desc == TlsConstants.CLOSE_NOTIFY) {
-                        closeNotifyReceived();
-                        throw new EOFException("Peer closed connection (close_notify)");
-                    }
-                    fatalAlertReceived();
-                    throw new IOException("Peer sent fatal alert: " + (desc & 0xFF));
-                }
-                if (ct == TlsConstants.CT_HANDSHAKE) {
-                    handshakeBuffer.write(parsed.getData());
-                    byte[] msg = assembleHandshakeMessage();
-                    if (msg == null) {
-                        continue;
-                    }
-                    // Все post-handshake сообщения (KeyUpdate, NewSessionTicket)
-                    // маршрутизируются через engine — это единственная точка входа
-                    // для post-handshake, чтобы JSSE-модуль не дублировал логику.
-                    TlsHandshakeEngine.PostHandshakeResult result =
-                            engine.receivePostHandshake(msg);
-                    switch (result.type) {
-                        case KEY_UPDATE_HANDLED:
-                            // Сначала reader — новые ключи применяются немедленно
-                            if (engine.hasReadKeysChanged()) {
-                                TlsTrafficKeys newKeys = engine.getReadKeys();
-                                if (readerRecord != null) readerRecord.destroy();
-                                readerRecord = new TlsRecord(newKeys.getKey(),
-                                        newKeys.getIv(),
-                                        ciphersuite.getTagLen(), ciphersuite);
-                            }
-                            // Затем отложенный писатель: KU-ответ (если pending) —
-                            // отправляется ДО подтверждения, через старый writerRecord
-                            if (engine.hasPendingWriteUpdate()) {
-                                byte[] kuFrame;
-                                while ((kuFrame = engine.poll()) != null) {
-                                    sendEncryptedRecord(TlsConstants.CT_HANDSHAKE, kuFrame);
-                                }
-                                engine.confirmWriteUpdate();
-                            }
-                            // После подтверждения — обновляем writerRecord
-                            if (engine.hasWriteKeysChanged()) {
-                                TlsTrafficKeys newKeys = engine.getWriteKeys();
-                                if (writerRecord != null) writerRecord.destroy();
-                                writerRecord = new TlsRecord(newKeys.getKey(),
-                                        newKeys.getIv(),
-                                        ciphersuite.getTagLen(), ciphersuite);
-                            }
-                            engine.acknowledgeKeyChange();
-                            continue;
-                        case NEW_SESSION_TICKET:
-                            handleNewSessionTicket(result.nstBody);
-                            continue;
-                    }
-                }
-                if (ct != TlsConstants.CT_APPLICATION_DATA) {
-                    throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
-                            "Unexpected content type: " + ct);
-                }
-                return parsed.getData();
+                transport.receiveRecord(sessionRecordBuf);
+            } catch (BufferOverflowException e) {
+                throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+                        "Record too long", e);
+            }
+            sessionRecordBuf.flip();
+
+            sessionPlainBuf.clear();
+            UnprotectResult r;
+            try {
+                r = readerRecord.unprotect(sessionRecordBuf, sessionPlainBuf);
             } catch (AuthenticationException e) {
                 throw new TlsException(TlsConstants.ALERT_DECRYPT_ERROR,
                         "Record authentication failed", e);
             }
+            byte ct = r.contentType;
+            sessionPlainBuf.flip();
+
+            if (ct == TlsConstants.CT_ALERT) {
+                byte[] data = new byte[sessionPlainBuf.remaining()];
+                sessionPlainBuf.get(data);
+                byte desc = parseAlertDescription(data);
+                if (desc == TlsConstants.CLOSE_NOTIFY) {
+                    closeNotifyReceived();
+                    throw new EOFException("Peer closed connection (close_notify)");
+                }
+                fatalAlertReceived();
+                throw new IOException("Peer sent fatal alert: " + (desc & 0xFF));
+            }
+            if (ct == TlsConstants.CT_HANDSHAKE) {
+                byte[] data = new byte[sessionPlainBuf.remaining()];
+                sessionPlainBuf.get(data);
+                handshakeBuffer.write(data);
+                byte[] msg = assembleHandshakeMessage();
+                if (msg == null) {
+                    continue;
+                }
+                // Все post-handshake сообщения (KeyUpdate, NewSessionTicket)
+                // маршрутизируются через engine — это единственная точка входа
+                // для post-handshake, чтобы JSSE-модуль не дублировал логику.
+                TlsHandshakeEngine.PostHandshakeResult result =
+                        engine.receivePostHandshake(msg);
+                switch (result.type) {
+                    case KEY_UPDATE_HANDLED:
+                        // Сначала reader — новые ключи применяются немедленно
+                        if (engine.hasReadKeysChanged()) {
+                            TlsTrafficKeys newKeys = engine.getReadKeys();
+                            if (readerRecord != null) readerRecord.destroy();
+                            readerRecord = new TlsRecord(newKeys.getKey(),
+                                    newKeys.getIv(),
+                                    ciphersuite.getTagLen(), ciphersuite);
+                        }
+                        // Затем отложенный писатель: KU-ответ (если pending) —
+                        // отправляется ДО подтверждения, через старый writerRecord
+                        if (engine.hasPendingWriteUpdate()) {
+                            byte[] kuFrame;
+                            while ((kuFrame = engine.poll()) != null) {
+                                sendEncryptedRecord(TlsConstants.CT_HANDSHAKE, kuFrame);
+                            }
+                            engine.confirmWriteUpdate();
+                        }
+                        // После подтверждения — обновляем writerRecord
+                        if (engine.hasWriteKeysChanged()) {
+                            TlsTrafficKeys newKeys = engine.getWriteKeys();
+                            if (writerRecord != null) writerRecord.destroy();
+                            writerRecord = new TlsRecord(newKeys.getKey(),
+                                    newKeys.getIv(),
+                                    ciphersuite.getTagLen(), ciphersuite);
+                        }
+                        engine.acknowledgeKeyChange();
+                        continue;
+                    case NEW_SESSION_TICKET:
+                        handleNewSessionTicket(result.nstBody);
+                        continue;
+                }
+            }
+            if (ct != TlsConstants.CT_APPLICATION_DATA) {
+                throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                        "Unexpected content type: " + ct);
+            }
+            byte[] result = new byte[sessionPlainBuf.remaining()];
+            sessionPlainBuf.get(result);
+            return result;
         }
         throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
                 "Too many consecutive post-handshake messages");
@@ -703,13 +758,18 @@ public final class TlsSession implements AutoCloseable {
      *
      * @throws IOException при ошибке отправки
      */
-    private void sendNewSessionTicket() throws IOException {
+    private void sendNewSessionTicket(int nstIndex) throws IOException {
         byte[] ticket = new byte[32];
+        // Монотонный nonce: ticket_nonce = 8-байтовый big-endian индекс
+        // (RFC 8446 §4.6.1: MUST be unique across all tickets on this connection)
         byte[] ticketNonce = new byte[8];
+        ticketNonce[7] = (byte) (nstIndex & 0xFF);
+        ticketNonce[6] = (byte) ((nstIndex >>> 8) & 0xFF);
+        ticketNonce[5] = (byte) ((nstIndex >>> 16) & 0xFF);
+        ticketNonce[4] = (byte) ((nstIndex >>> 24) & 0xFF);
         int ageAddRaw = CryptoRandom.INSTANCE.nextInt();
         long ticketAgeAdd = ageAddRaw & 0xFFFFFFFFL;
         CryptoRandom.INSTANCE.nextBytes(ticket);
-        CryptoRandom.INSTANCE.nextBytes(ticketNonce);
         byte[] body = TlsMessageBuilder.buildNewSessionTicket(86400, ticketAgeAdd, ticketNonce, ticket);
         byte[] framed = new TlsHandshakeMessage(
                 TlsConstants.HT_NEW_SESSION_TICKET, body).encode();
@@ -841,6 +901,21 @@ public final class TlsSession implements AutoCloseable {
     /** @return true после успешного handshake */
     public boolean isHandshakeDone() {
         return handshakeDone;
+    }
+
+    /**
+     * @return {@code true} если handshake выполнен через PSK resumption (без ECDHE),
+     *         {@code false} если полный handshake. После {@link #close()} всегда
+     *         возвращает {@code false}.
+     * @throws IllegalStateException если handshake не завершён (вызов до
+     *         завершения handshake на этой сессии)
+     */
+    public boolean wasResumed() {
+        if (!handshakeDone) {
+            throw new IllegalStateException(
+                    "wasResumed() called before handshake completion on this session");
+        }
+        return engine != null && engine.isPskAccepted();
     }
 
     /**
@@ -1071,16 +1146,26 @@ public final class TlsSession implements AutoCloseable {
      *
      * @throws IOException при ошибке чтения или дешифрации
      */
-    void readNextHandshakeRecord() throws IOException {
-        byte[] record = transport.receiveRecord();
+        void readNextHandshakeRecord() throws IOException {
+        sessionRecordBuf.clear();
+        try {
+            transport.receiveRecord(sessionRecordBuf);
+        } catch (BufferOverflowException e) {
+            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+                    "Record too long", e);
+        }
+        sessionRecordBuf.flip();
         try {
             handshakeBuffer.ensureCapacity(handshakeBuffer.size + TlsConstants.MAX_PLAINTEXT_LENGTH);
-            TlsRecord.RecordInfo info = readerRecord.unprotectInto(record, handshakeBuffer.buf, handshakeBuffer.size);
-            if (info.contentType != TlsConstants.CT_HANDSHAKE) {
+            ByteBuffer dest = ByteBuffer.wrap(handshakeBuffer.buf, handshakeBuffer.size,
+                    handshakeBuffer.buf.length - handshakeBuffer.size);
+            int destPosBefore = dest.position();
+            UnprotectResult r = readerRecord.unprotect(sessionRecordBuf, dest);
+            if (r.contentType != TlsConstants.CT_HANDSHAKE) {
                 throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
-                        "Expected handshake, got " + info.contentType);
+                        "Expected handshake, got " + r.contentType);
             }
-            handshakeBuffer.size += info.length;
+            handshakeBuffer.size += dest.position() - destPosBefore;
         } catch (AuthenticationException e) {
             throw new TlsException(TlsConstants.ALERT_DECRYPT_ERROR,
                     "Handshake record authentication failed", e);

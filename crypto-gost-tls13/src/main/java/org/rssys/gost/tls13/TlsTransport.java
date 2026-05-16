@@ -1,6 +1,8 @@
 package org.rssys.gost.tls13;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+
 
 /**
  * Интерфейс транспортного уровня для TLS 1.3.
@@ -27,6 +29,26 @@ public interface TlsTransport extends AutoCloseable {
      * @throws IOException при ошибке ввода-вывода или таймауте
      */
     byte[] receiveRecord() throws IOException;
+
+    /**
+     * Принимает следующую TLS-запись напрямую в {@code dst}.
+     * <p>
+     * После вызова позиция {@code dst} сдвинута на число записанных байт.
+     * Вызывающий код выполняет {@code flip()} перед чтением.
+     * <p>
+     * Реализации {@link org.rssys.gost.tls13.transport.SocketTlsTransport}
+     * и {@link org.rssys.gost.tls13.transport.ChannelTlsTransport} переопределяют
+     * этот метод с zero-alloc чтением.
+     *
+     * @param dst буфер для TLS-записи (position сдвинется на длину записи)
+     * @return длина записи в байтах
+     * @throws IOException при ошибке ввода-вывода или таймауте
+     */
+    default int receiveRecord(ByteBuffer dst) throws IOException {
+        byte[] record = receiveRecord();
+        dst.put(record);
+        return record.length;
+    }
 
     /**
      * Закрывает транспорт.

@@ -1,5 +1,5 @@
 == Криптографическое ядро алгоритмов ГОСТ — crypto-gost-core
-:toc: macro
+:toc:
 :toclevels: 3
 :source-highlighter: rouge
 toc::[]

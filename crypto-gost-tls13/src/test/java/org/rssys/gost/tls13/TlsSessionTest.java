@@ -1134,6 +1134,140 @@ class TlsSessionTest {
     }
 
     // =======================================================================
+    // Delegated OCSP responder (checkServerCertificateChain)
+    // =======================================================================
+
+    @Test
+    @DisplayName("checkServerCertificateChain: delegated OCSP responder валиден → успех")
+    void testCheckServerCertificateChainDelegatedOcspGood() throws Exception {
+        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
+                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
+                root.subjectDn,
+                "240501120000Z", "290501120000Z",
+                new String[]{"gost.example.com"},
+                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                false, null);
+        // Delegated cert: подписан root, EKU=OCSPSigning, KU=digitalSignature
+        TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
+                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
+                root.subjectDn,
+                "240501120000Z", "290501120000Z", null,
+                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.9"},
+                false, null);
+        // OCSP подписан dc.priv, а не root.priv → первичный путь упадёт
+        leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
+                leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
+                root.cert.getPublicKey(), root.subjectDn,
+                "20300101120000Z", new byte[][]{dc.cert.getEncoded()}));
+
+        TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
+                .withCaPublicKey(root.cert.getPublicKey())
+                .withServerHostname("gost.example.com")
+                .withRequireOcspStapling(true), noopTransport());
+
+        session.checkServerCertificateChain(Arrays.asList(leaf.cert, root.cert));
+    }
+
+    @Test
+    @DisplayName("checkServerCertificateChain: delegated OCSP wrong EKU → ошибка")
+    void testCheckServerCertificateChainDelegatedOcspWrongEku() throws Exception {
+        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
+                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
+                root.subjectDn,
+                "240501120000Z", "290501120000Z",
+                new String[]{"gost.example.com"},
+                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                false, null);
+        // Delegated cert: подписан root, НО EKU=serverAuth вместо OCSPSigning
+        TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
+                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
+                root.subjectDn,
+                "240501120000Z", "290501120000Z", null,
+                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                false, null);
+        leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
+                leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
+                root.cert.getPublicKey(), root.subjectDn,
+                "20300101120000Z", new byte[][]{dc.cert.getEncoded()}));
+
+        TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
+                .withCaPublicKey(root.cert.getPublicKey())
+                .withServerHostname("gost.example.com")
+                .withRequireOcspStapling(true), noopTransport());
+
+        assertThrows(TlsException.class,
+                () -> session.checkServerCertificateChain(Arrays.asList(leaf.cert, root.cert)));
+    }
+
+    @Test
+    @DisplayName("checkServerCertificateChain: delegated OCSP wrong signer → ошибка")
+    void testCheckServerCertificateChainDelegatedOcspWrongSigner() throws Exception {
+        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
+                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
+                root.subjectDn,
+                "240501120000Z", "290501120000Z",
+                new String[]{"gost.example.com"},
+                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                false, null);
+        // Вторая CA — не issuer leaf
+        TlsTestHelper.CertBundle wrongRoot = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        // Delegated cert: подписан wrongRoot, а не root (настоящий issuer leaf)
+        TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
+                ECParameters.tc26a256(), wrongRoot.priv, wrongRoot.cert.getPublicKey(),
+                wrongRoot.subjectDn,
+                "240501120000Z", "290501120000Z", null,
+                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.9"},
+                false, null);
+        leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
+                leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
+                root.cert.getPublicKey(), root.subjectDn,
+                "20300101120000Z", new byte[][]{dc.cert.getEncoded()}));
+
+        TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
+                .withCaPublicKey(root.cert.getPublicKey())
+                .withServerHostname("gost.example.com")
+                .withRequireOcspStapling(true), noopTransport());
+
+        assertThrows(TlsException.class,
+                () -> session.checkServerCertificateChain(Arrays.asList(leaf.cert, root.cert)));
+    }
+
+    @Test
+    @DisplayName("checkServerCertificateChain: delegated OCSP просрочен → ошибка")
+    void testCheckServerCertificateChainDelegatedOcspExpired() throws Exception {
+        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
+                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
+                root.subjectDn,
+                "240501120000Z", "290501120000Z",
+                new String[]{"gost.example.com"},
+                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                false, null);
+        // Delegated cert: просрочен (notAfter в прошлом)
+        TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
+                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
+                root.subjectDn,
+                "230101120000Z", "240101120000Z", null,
+                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.9"},
+                false, null);
+        leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
+                leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
+                root.cert.getPublicKey(), root.subjectDn,
+                "20300101120000Z", new byte[][]{dc.cert.getEncoded()}));
+
+        TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
+                .withCaPublicKey(root.cert.getPublicKey())
+                .withServerHostname("gost.example.com")
+                .withRequireOcspStapling(true), noopTransport());
+
+        assertThrows(TlsException.class,
+                () -> session.checkServerCertificateChain(Arrays.asList(leaf.cert, root.cert)));
+    }
+
+    // =======================================================================
     // 3- и 4-сертификатные цепочки (checkServerCertificateChain)
     // =======================================================================
 
@@ -1647,6 +1781,46 @@ class TlsSessionTest {
         sf.get(15, TimeUnit.SECONDS);
 
         assertTrue(client.isHandshakeDone(), "Backward compat handshake должен пройти");
+        exec.shutdown();
+        server.close();
+        client.close();
+    }
+
+    @Test
+    @DisplayName("mTLS: клиент без сертификата → пустой certificate_list, сервер reject (need)")
+    void testMtlsClientWithoutCert() throws Exception {
+        TlsTestHelper.CertBundle root = createRoot();
+        TlsTestHelper.CertBundle serverLeaf = createServerLeaf(root);
+        var tp = InMemoryTlsTransport.newPair();
+
+        TlsSession server = TlsSession.createServer(new TlsServerConfig(getCsL(), Collections.singletonList(serverLeaf.cert), serverLeaf.priv)
+                .withCaPublicKey(root.cert.getPublicKey()), tp.getServerTransport());
+        TlsSession client = TlsSession.createClient(new TlsClientConfig(getCsL())
+                .withCaPublicKey(root.cert.getPublicKey())
+                .withServerHostname("gost.example.com"), tp.getClientTransport());
+
+        Phaser phaser = new Phaser(3);
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+        Future<Void> cf = exec.submit(() -> {
+            phaser.arriveAndAwaitAdvance();
+            client.handshakeAsClient();
+            return null;
+        });
+        Future<Void> sf = exec.submit(() -> {
+            phaser.arriveAndAwaitAdvance();
+            server.handshakeAsServer();
+            return null;
+        });
+        phaser.arriveAndAwaitAdvance();
+
+        // RFC 8446 §4.4.2: клиент без сертификата отправляет пустой certificate_list.
+        // Сервер с needClientAuth=true отвергает пустой сертификат.
+        cf.get(15, TimeUnit.SECONDS); // клиент завершил отправку пустого Certificate + Finished
+
+        ExecutionException sex = assertThrows(ExecutionException.class, () -> sf.get(5, TimeUnit.SECONDS));
+        assertInstanceOf(TlsException.class, sex.getCause());
+        assertEquals(TlsConstants.ALERT_CERTIFICATE_REQUIRED, ((TlsException) sex.getCause()).getAlertCode());
+
         exec.shutdown();
         server.close();
         client.close();

@@ -1,5 +1,5 @@
 == Реализация протокола TLS 1.3 с ГОСТ алгоритмами в соответствии с RFC 9367 — crypto-gost-tls13
-:toc: macro
+:toc:
 :toclevels: 3
 :source-highlighter: rouge
 toc::[]

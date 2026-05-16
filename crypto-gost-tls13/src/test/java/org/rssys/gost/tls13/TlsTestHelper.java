@@ -7,7 +7,9 @@ import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.GostOids;
 import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.tls13.cert.TlsDerParser;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -133,6 +135,15 @@ public class TlsTestHelper {
         }
         return derSequence(derOid("2.5.29.37"),
                 derOctetString(derSequence(ekuSeq.toByteArray())));
+    }
+
+    /** Строит AIA extension с OCSP URI (id-ad-ocsp). */
+    public static byte[] buildAiaOcspExtensionBytes(String ocspUri) {
+        byte[] uriBytes = ocspUri.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        byte[] accessDesc = derSequence(derOid("1.3.6.1.5.5.7.48.1"), derTlv(0x86, uriBytes));
+        byte[] aiaSeq = derSequence(accessDesc);
+        byte[] extValue = derOctetString(aiaSeq);
+        return derSequence(derOid("1.3.6.1.5.5.7.1.1"), extValue);
     }
 
     /** Строит SubjectAltName расширение для DNS и IP. */
@@ -268,6 +279,20 @@ public class TlsTestHelper {
                                           String[] sanDnsNames, String[] sanIps,
                                           byte[] kuFlags, String[] ekuOids,
                                           boolean isCA, Integer pathLen) throws Exception {
+        return createCertSignedBy(params, issuerPriv, issuerPub, parentSubjectDn,
+                notBefore, notAfter, sanDnsNames, sanIps,
+                kuFlags, ekuOids, isCA, pathLen, null);
+    }
+
+    public static CertBundle createCertSignedBy(ECParameters params,
+                                          PrivateKeyParameters issuerPriv,
+                                          PublicKeyParameters issuerPub,
+                                          byte[] parentSubjectDn,
+                                          String notBefore, String notAfter,
+                                          String[] sanDnsNames, String[] sanIps,
+                                          byte[] kuFlags, String[] ekuOids,
+                                          boolean isCA, Integer pathLen,
+                                          byte[] extraExtensions) throws Exception {
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
         PrivateKeyParameters leafPriv = kp.getPrivate();
         PublicKeyParameters leafPub = kp.getPublic();
@@ -283,6 +308,9 @@ public class TlsTestHelper {
         }
         if (ekuOids != null) {
             extBuf.write(buildEkuExtension(ekuOids));
+        }
+        if (extraExtensions != null) {
+            extBuf.write(extraExtensions);
         }
         byte[] additionalExt = extBuf.size() == 0 ? null : extBuf.toByteArray();
         byte[] tbs = buildTbs(leafPub, params, notBefore, notAfter, sanDnsNames, sanIps,
@@ -331,12 +359,12 @@ public class TlsTestHelper {
 
     public static byte[] buildAlgId(ECParameters params) {
         String signOid = (params.hlen == 32)
-                ? "1.2.643.7.1.1.1.1"
-                : "1.2.643.7.1.1.1.2";
+                ? GostOids.SIG_WITH_DIGEST_256
+                : GostOids.SIG_WITH_DIGEST_512;
         String curveOid = curveOidOf(params);
         String digestOid = (params.hlen == 32)
-                ? "1.2.643.7.1.1.2.2"
-                : "1.2.643.7.1.1.2.3";
+                ? GostOids.DIGEST_256
+                : GostOids.DIGEST_512;
         byte[] paramsSeq = derSequence(derOid(curveOid), derOid(digestOid));
         return derSequence(derOid(signOid), paramsSeq);
     }
@@ -412,12 +440,12 @@ public class TlsTestHelper {
     }
 
     private static String curveOidOf(ECParameters params) {
-        if (params == ECParameters.tc26a256()) return "1.2.643.7.1.2.1.2.1";
-        if (params == ECParameters.cryptoProA()) return "1.2.643.2.2.35.1";
-        if (params == ECParameters.cryptoProB()) return "1.2.643.2.2.35.2";
-        if (params == ECParameters.tc26a512()) return "1.2.643.7.1.2.1.1.1";
-        if (params == ECParameters.tc26b512()) return "1.2.643.7.1.2.1.1.2";
-        if (params == ECParameters.tc26c512()) return "1.2.643.7.1.2.1.1.3";
+        if (params == ECParameters.tc26a256()) return GostOids.CURVE_256A;
+        if (params == ECParameters.cryptoProA()) return GostOids.CURVE_CP_A;
+        if (params == ECParameters.cryptoProB()) return GostOids.CURVE_CP_B;
+        if (params == ECParameters.tc26a512()) return GostOids.CURVE_512A;
+        if (params == ECParameters.tc26b512()) return GostOids.CURVE_512B;
+        if (params == ECParameters.tc26c512()) return GostOids.CURVE_512C;
         throw new IllegalArgumentException("Unknown EC parameters");
     }
 
@@ -441,52 +469,92 @@ public class TlsTestHelper {
                                      PublicKeyParameters caPub,
                                      byte[] caSubjectDer,
                                      String nextUpdateGeneralizedTime) throws Exception {
+        byte[] tbs = buildOcspTbs(serialNumber, caPub, caSubjectDer, nextUpdateGeneralizedTime);
+        int hlen = caPub.getParams().hlen;
+        byte[] hash = doHash(tbs, hlen);
+        byte[] sig = org.rssys.gost.api.Signature.signHash(hash, caPriv);
+        byte[] sigAlg = buildAlgId(caPub.getParams());
+        byte[] basicOcsp = derSequence(tbs, sigAlg, derBitString(sig));
+        byte[] basicOctet = derOctetString(basicOcsp);
+        byte[] responseBytesContent = derSequence(derOid("1.3.6.1.5.5.7.48.1.1"), basicOctet);
+        byte[] responseBytes = derTlv(0xA0, responseBytesContent);
+        byte[] status = new byte[]{0x0A, 0x01, 0x00};
+        return derSequence(status, responseBytes);
+    }
+
+    /**
+     * Строит OCSPResponse с делегированными responder-сертификатами (RFC 6960 §4.2.2.1).
+     * <p>
+     * OCSP подписывается ключом signerPriv (обычно ключ делегированного сертификата).
+     * CertID строится по caPub/caSubjectDer для корректной привязки к проверяемому
+     * сертификату. Параметры signer и ca разделены, чтобы симулировать реальную
+     * delegated-схему, где подпись OCSP ставит delegated responder, а не CA.
+     *
+     * @param serialNumber            серийный номер проверяемого сертификата
+     * @param signerPriv              ключ, подписывающий OCSP-ответ
+     * @param signerPub               публичный ключ подписанта (для AlgorithmIdentifier)
+     * @param caPub                   публичный ключ CA (для CertID issuerKeyHash)
+     * @param caSubjectDer            DER subject DN CA (для CertID issuerNameHash)
+     * @param nextUpdateGeneralizedTime nextUpdate или null
+     * @param delegatedCertsDer       DER-encoded сертификаты для поля certs
+     * @return DER-encoded OCSPResponse
+     */
+    public static byte[] buildOcspResponseWithDelegatedCerts(byte[] serialNumber,
+                                                      PrivateKeyParameters signerPriv,
+                                                      PublicKeyParameters signerPub,
+                                                      PublicKeyParameters caPub,
+                                                      byte[] caSubjectDer,
+                                                      String nextUpdateGeneralizedTime,
+                                                      byte[][] delegatedCertsDer) throws Exception {
+        byte[] tbs = buildOcspTbs(serialNumber, caPub, caSubjectDer, nextUpdateGeneralizedTime);
+        int hlen = signerPub.getParams().hlen;
+        byte[] hash = doHash(tbs, hlen);
+        byte[] sig = org.rssys.gost.api.Signature.signHash(hash, signerPriv);
+        byte[] sigAlg = buildAlgId(signerPub.getParams());
+        byte[] certsSeq = derSequence(delegatedCertsDer);
+        byte[] certsTagged = derTlv(0xA0, certsSeq);
+        byte[] basicOcsp = derSequence(tbs, sigAlg, derBitString(sig), certsTagged);
+        byte[] basicOctet = derOctetString(basicOcsp);
+        byte[] responseBytesContent = derSequence(derOid("1.3.6.1.5.5.7.48.1.1"), basicOctet);
+        byte[] responseBytes = derTlv(0xA0, responseBytesContent);
+        byte[] status = new byte[]{0x0A, 0x01, 0x00};
+        return derSequence(status, responseBytes);
+    }
+
+    /** Строит tbsResponseData для OCSP-ответа (общий для всех перегрузок). */
+    private static byte[] buildOcspTbs(byte[] serialNumber,
+                                PublicKeyParameters caPub,
+                                byte[] caSubjectDer,
+                                String nextUpdateGeneralizedTime) throws Exception {
         byte[] issuerNameHash = doHash(caSubjectDer, 32);
-
-        // issuerKeyHash = Streebog-256(SPKI DER)
         byte[] caSpkiDer = org.rssys.gost.jca.spec.GostDerCodec.encodePublicKey(caPub);
-        byte[] issuerKeyHash = doHash(caSpkiDer, 32);
-
-        // CertID: SEQUENCE { hashAlgorithm, issuerNameHash, issuerKeyHash, serialNumber }
-        byte[] hashAlg = derSequence(derOid("1.2.643.7.1.1.2.2")); // Streebog-256
+        int[] spkiSeq = TlsDerParser.parseSequence(caSpkiDer, 0);
+        int spkiPos = spkiSeq[0];
+        int[] algTlv = TlsDerParser.readTlv(caSpkiDer, spkiPos);
+        spkiPos = algTlv[1];
+        int[] bsTlv = TlsDerParser.readTlv(caSpkiDer, spkiPos);
+        byte[] bitStringValue = java.util.Arrays.copyOfRange(caSpkiDer, bsTlv[0], bsTlv[1]);
+        byte[] issuerKeyHash = doHash(bitStringValue, 32);
+        byte[] hashAlg = derSequence(derOid(GostOids.DIGEST_256));
         byte[] certId = derSequence(hashAlg, derOctetString(issuerNameHash),
                 derOctetString(issuerKeyHash), derTlv(0x02, serialNumber));
-
-        // certStatus = good: [0]{NULL}
         byte[] goodStatus = derTlv(0xA0, derTlv(0x05, new byte[0]));
         byte[] thisUpdate = derUtcTime("250501120000Z");
-
-        // SingleResponse elements: CertID, certStatus, thisUpdate, [nextUpdate]
-        byte[][] srElements = new byte[][]{certId, goodStatus, thisUpdate};
         ByteArrayOutputStream srOut = new ByteArrayOutputStream();
-        for (byte[] el : srElements) srOut.write(el);
+        srOut.write(certId);
+        srOut.write(goodStatus);
+        srOut.write(thisUpdate);
         if (nextUpdateGeneralizedTime != null) {
             byte[] nu = derTlv(0xA0, derTlv(0x18,
                     nextUpdateGeneralizedTime.getBytes(StandardCharsets.US_ASCII)));
             srOut.write(nu);
         }
         byte[] singleResponse = derSequence(srOut.toByteArray());
-
-        // ResponseData: SEQUENCE { version[0], responderID, producedAt, responses }
-        byte[] version = derTlv(0xA0, new byte[]{0x02, 0x01, 0x00}); // [0]{INTEGER(0)}
-        byte[] responderId = derTlv(0xA0, new byte[]{0x30, 0x00}); // [0]{SEQUENCE{}} = byName (empty)
+        byte[] version = derTlv(0xA0, new byte[]{0x02, 0x01, 0x00});
+        byte[] responderId = derTlv(0xA0, new byte[]{0x30, 0x00});
         byte[] producedAt = derTlv(0x18, "20250501120000Z".getBytes(StandardCharsets.US_ASCII));
         byte[] responses = derSequence(singleResponse);
-        byte[] tbsResponseData = derSequence(version, responderId, producedAt, responses);
-
-        // Подписываем tbsResponseData
-        int hlen = caPub.getParams().hlen;
-        byte[] hash = doHash(tbsResponseData, hlen);
-        byte[] sig = org.rssys.gost.api.Signature.signHash(hash, caPriv);
-        byte[] sigAlg = buildAlgId(caPub.getParams());
-
-        // BasicOCSPResponse
-        byte[] basicOcsp = derSequence(tbsResponseData, sigAlg, derBitString(sig));
-        byte[] basicOctet = derOctetString(basicOcsp);
-        byte[] responseBytesContent = derSequence(derOid("1.3.6.1.5.5.7.48.1.1"), basicOctet);
-        byte[] responseBytes = derTlv(0xA0, responseBytesContent);
-        byte[] status = new byte[]{0x0A, 0x01, 0x00}; // ENUMERATED(0)
-        return derSequence(status, responseBytes);
+        return derSequence(version, responderId, producedAt, responses);
     }
 
     /**
@@ -494,7 +562,7 @@ public class TlsTestHelper {
      */
     public static byte[] buildDummyOcspResponse() throws Exception {
         byte[] tbs = new byte[]{0x30, 0x03, 0x02, 0x01, 0x00}; // SEQUENCE { INTEGER(0) }
-        byte[] sigAlg = derSequence(derOid("1.2.643.7.1.1.3.2"));
+        byte[] sigAlg = derSequence(derOid(GostOids.SIGN_ALG_256));
         byte[] sig = derBitString(new byte[64]);
         byte[] basicOcsp = derSequence(tbs, sigAlg, sig);
         byte[] basicOctet = derOctetString(basicOcsp);

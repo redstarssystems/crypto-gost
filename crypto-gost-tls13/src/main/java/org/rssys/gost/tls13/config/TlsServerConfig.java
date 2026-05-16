@@ -25,6 +25,7 @@ public final class TlsServerConfig {
     private PublicKeyParameters caPublicKey;
     private List<String> alpnProtocols;
     private SniCertificateSelector sniSelector;
+    private int ticketsToSend = 1;
 
     /**
      * @param ciphersuite             cipher suite (не null)
@@ -95,4 +96,21 @@ public final class TlsServerConfig {
     public byte[] getOcspStaplingResponse() { return ocspResponse; }
     public List<String> getAlpnProtocols() { return alpnProtocols; }
     public SniCertificateSelector getSniSelector() { return sniSelector; }
+    public int getTicketsToSend() { return ticketsToSend; }
+
+    /**
+     * Устанавливает количество NewSessionTicket, отправляемых клиенту
+     * после каждого успешного handshake (RFC 8446 §4.6.1).
+     * ticket_nonce монотонный (big-endian counter), гарантирует уникальность
+     * nonce в пределах соединения.
+     *
+     * @param n количество тикетов, ≥ 1
+     * @return this
+     * @throws IllegalArgumentException если n < 1
+     */
+    public TlsServerConfig withTicketsToSend(int n) {
+        if (n < 1) throw new IllegalArgumentException("ticketsToSend must be ≥ 1, got " + n);
+        this.ticketsToSend = n;
+        return this;
+    }
 }

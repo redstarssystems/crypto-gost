@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.SocketChannel;
+import java.util.Arrays;
 
 /**
  * Транспорт TLS 1.3 поверх {@link SocketChannel} (NIO).
@@ -26,6 +27,7 @@ public final class ChannelTlsTransport implements TlsTransport {
 
     private final SocketChannel channel;
     private final ByteBuffer headerBuf;
+    private final byte[] recordBuf = new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
     private volatile boolean closed;
 
     /**
@@ -40,9 +42,9 @@ public final class ChannelTlsTransport implements TlsTransport {
     }
 
     /**
-     * Отправляет TLS-запись. Цикл для channel.write() обязателен —
-     * SocketChannel.write() может записать меньше байт, чем в буфере,
-     * при малом SO_SNDBUF или под нагрузкой.
+     * Отправляет TLS-запись через канал.
+     * Цикл для {@link SocketChannel#write(ByteBuffer)} обязателен —
+     * канал может записать меньше байт, чем в буфере, при малом SO_SNDBUF.
      *
      * @param record TLS-запись для отправки
      * @throws IOException при ошибке записи в канал
@@ -58,13 +60,15 @@ public final class ChannelTlsTransport implements TlsTransport {
     }
 
     /**
-     * Принимает следующую TLS-запись.
-     * Читает 5-байтовый заголовок, проверяет длину на превышение
-     * {@link TlsConstants#MAX_CIPHERTEXT_LENGTH} (защита от OOM, RFC 8446 §5.1),
-     * затем читает тело. Reusable headerBuf для снижения GC pressure.
+     * Принимает следующую TLS-запись из канала.
+     * <p>
+     * Читает 5-байтовый заголовок в переиспользуемый {@code headerBuf},
+     * проверяет длину, затем читает тело в {@code recordBuf} (без аллокации
+     * через {@link ByteBuffer#wrap(byte[], int, int)}). Собирает итоговый
+     * массив из заголовка и тела.
      *
-     * @return полученная TLS-запись (с заголовком)
-     * @throws IOException при ошибке чтения из канала
+     * @return полная TLS-запись с заголовком
+     * @throws IOException если чтение из канала не удалось
      */
     @Override
     public byte[] receiveRecord() throws IOException {
@@ -80,23 +84,66 @@ public final class ChannelTlsTransport implements TlsTransport {
                     + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
-        ByteBuffer bodyBuf = ByteBuffer.allocate(length);
+        // Читаем тело напрямую в recordBuf через ByteBuffer.wrap (без аллокации)
+        ByteBuffer bodyBuf = ByteBuffer.wrap(recordBuf, 0, length);
         readFully(bodyBuf);
-        bodyBuf.flip();
 
-        byte[] record = new byte[TlsConstants.RECORD_HEADER_SIZE + length];
+        int total = TlsConstants.RECORD_HEADER_SIZE + length;
+        byte[] record = new byte[total];
         headerBuf.rewind();
         headerBuf.get(record, 0, TlsConstants.RECORD_HEADER_SIZE);
-        bodyBuf.get(record, TlsConstants.RECORD_HEADER_SIZE, length);
+        System.arraycopy(recordBuf, 0, record, TlsConstants.RECORD_HEADER_SIZE, length);
         return record;
     }
 
     /**
-     * Читает ровно buf.remaining() байт из канала в буфер.
-     * Цикл обязателен для SocketChannel — read() может вернуть меньше байт,
-     * чем запрошено. ClosedByInterruptException перехватывается для корректной
-     * установки флага closed и флага прерывания потока.
+     * Принимает следующую TLS-запись напрямую в переданный {@link ByteBuffer}.
+     * <p>
+     * Zero-alloc: заголовок читается в {@code headerBuf}, тело — через
+     * {@link SocketChannel#read(ByteBuffer)} напрямую в {@code dst}
+     * (native ByteBuffer support). Позиция {@code dst} после вызова сдвинута
+     * на длину записи, лимит восстановлен.
+     *
+     * @param dst буфер для TLS-записи
+     * @return длина записи в байтах
+     * @throws IOException если чтение из канала не удалось или dst мал
      */
+    @Override
+    public int receiveRecord(ByteBuffer dst) throws IOException {
+        if (closed) throw new IOException("Transport closed");
+
+        headerBuf.clear();
+        readFully(headerBuf);
+        headerBuf.flip();
+
+        int length = (headerBuf.get(3) & 0xFF) << 8 | (headerBuf.get(4) & 0xFF);
+        if (length > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
+            throw new IOException("Record too long: " + length
+                    + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+        }
+
+        int total = TlsConstants.RECORD_HEADER_SIZE + length;
+        if (dst.remaining() < total) {
+            throw new IOException("Destination buffer too small: need " + total
+                    + ", have " + dst.remaining());
+        }
+
+        // Копируем заголовок в dst
+        headerBuf.rewind();
+        dst.put(headerBuf);
+
+        // Читаем тело напрямую из канала в dst (native ByteBuffer support)
+        int bodyLimit = dst.position() + length;
+        int origLimit = dst.limit();
+        dst.limit(bodyLimit);
+        try {
+            readFully(dst);
+        } finally {
+            dst.limit(origLimit);
+        }
+        return total;
+    }
+
     private void readFully(ByteBuffer buf) throws IOException {
         while (buf.hasRemaining()) {
             if (closed) throw new IOException("Transport closed");
@@ -121,6 +168,9 @@ public final class ChannelTlsTransport implements TlsTransport {
         return channel;
     }
 
+    /**
+     * Закрывает канал. Идемпотентно.
+     */
     @Override
     public void close() {
         closed = true;

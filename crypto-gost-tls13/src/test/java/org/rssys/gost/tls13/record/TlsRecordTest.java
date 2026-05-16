@@ -10,6 +10,8 @@ import java.security.SecureRandom;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.rssys.gost.tls13.TlsTestHelper.hex;
+import static org.rssys.gost.tls13.TlsTestHelper.hexStr;
 
 /**
  * Тесты TlsRecord — уровень записей TLS 1.3 с MGM AEAD (RFC 8446 §5).
@@ -766,6 +768,84 @@ class TlsRecordTest {
                 () -> writer.protect(TlsConstants.CT_HANDSHAKE, src, dst));
     }
 
+    // -----------------------------------------------------------------------
+    // Regression: защита записи с известными key/IV (первичный прогон → эталон)
+    // -----------------------------------------------------------------------
+
+    // Regression fixture: protect(CT_HANDSHAKE, {0x08,0x00,0x00,0x02,0x00,0x00})
+    // key = SWK_HS (RFC 9367 A.1.2), iv = SIV_HS, seqNum=0, tagLen=16, cipher suite S
+    // Внутренний plaintext: 6 байт данных + 0x16 (CT_HANDSHAKE) = 7 байт innerLen
+    // Full record = header(5) || ciphertext(7) || tag(16) = 28 байт
+    private static final byte[] RECORD_FIXTURE_KEY = hex(
+            "E13764B54B9E1B47D43398D6D216DF24C289A396AB6C5B524BBB9C06F39FEF01");
+    private static final byte[] RECORD_FIXTURE_IV = hex(
+            "6969FFAAA4525281EEBBEB4CBD0B640E");
+    private static final byte[] RECORD_FIXTURE_PLAINTEXT = new byte[]{
+            0x08, 0x00, 0x00, 0x02, 0x00, 0x00};
+
+    // Первичный прогон → эталон. Заменить при изменении формата записи/криптоалгоритмов.
+    // Regression only — не KAT (RFC 9367 не содержит полные record vectors для protect).
+    // Вектор: protect(CT_HANDSHAKE, {0x08,0x00,0x00,0x02,0x00,0x00})
+    // Key=SWK_HS, IV=SIV_HS (RFC 9367 A.1.2), seqNum=0, tagLen=16, cipher suite S
+    // header(5) || ciphertext(7) || tag(16) = 28 байт
+    private static final byte[] RECORD_FIXTURE_EXPECTED = hex(
+            "1703030017940E5D2C753AE5FEBD20012CC9E3EB24A379841E02ABBE");
+
+    @Test
+    @DisplayName("protect: regression — ByteBuffer protect с известными key/IV")
+    void testByteBufferProtectRegression() {
+        TlsRecord rec = new TlsRecord(RECORD_FIXTURE_KEY, RECORD_FIXTURE_IV, 16,
+                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        ByteBuffer src = ByteBuffer.wrap(RECORD_FIXTURE_PLAINTEXT);
+        ByteBuffer dst = ByteBuffer.allocate(128);
+        int written = rec.protect(TlsConstants.CT_HANDSHAKE, src, dst);
+        dst.flip();
+        byte[] actual = new byte[written];
+        dst.get(actual);
+        assertArrayEquals(RECORD_FIXTURE_EXPECTED, actual,
+                () -> "Получено: " + hexStr(actual));
+    }
+
+    @Test
+    @DisplayName("protect: byte[] и ByteBuffer overloads дают одинаковый результат")
+    void testProtectOverloadsMatch() {
+        TlsRecord rec = new TlsRecord(RECORD_FIXTURE_KEY, RECORD_FIXTURE_IV, 16,
+                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        byte[] data = new byte[50];
+        RNG.nextBytes(data);
+
+        byte[] fromByteArray = rec.protect(TlsConstants.CT_APPLICATION_DATA, data);
+
+        TlsRecord rec2 = new TlsRecord(RECORD_FIXTURE_KEY, RECORD_FIXTURE_IV, 16,
+                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        ByteBuffer src = ByteBuffer.wrap(data);
+        ByteBuffer dst = ByteBuffer.allocate(128);
+        rec2.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
+        dst.flip();
+        byte[] fromByteBuffer = new byte[dst.remaining()];
+        dst.get(fromByteBuffer);
+
+        assertArrayEquals(fromByteArray, fromByteBuffer);
+    }
+
+    @Test
+    @DisplayName("ByteBuffer protect: src.position сдвинут, dst.position сдвинут")
+    void testByteBufferProtectPositions() {
+        TlsRecord rec = new TlsRecord(fixedKey(), fixedIv(), 16,
+                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        byte[] data = new byte[]{1, 2, 3, 4, 5};
+        ByteBuffer src = ByteBuffer.wrap(data);
+        ByteBuffer dst = ByteBuffer.allocate(128);
+        assertEquals(0, src.position());
+        assertEquals(0, dst.position());
+
+        int written = rec.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
+
+        assertEquals(data.length, src.position(), "src должен быть полностью прочитан");
+        assertEquals(written, dst.position(), "dst.position == written");
+        assertEquals(0, src.remaining(), "src должен быть пуст");
+    }
+
     @Test
     @DisplayName("ByteBuffer protect: null буферы кидают исключение")
     void testByteBufferNullBuffers() {
@@ -892,6 +972,34 @@ class TlsRecordTest {
         byte[] result = new byte[bigPlain.remaining()];
         bigPlain.get(result);
         assertArrayEquals(data, result);
+    }
+
+    @Test
+    @DisplayName("ByteBuffer unprotect: reuse — 3 последовательных, нет stale-data")
+    void testByteBufferUnprotectReuse() throws Exception {
+        // Три записи разного размера через один TlsRecord — проверка что recordBuf reuse
+        // не оставляет stale tail от предыдущей записи в данных следующей.
+        byte[] small = new byte[]{1, 2, 3};
+        byte[] large = new byte[200];
+        RNG.nextBytes(large);
+        byte[] medium = new byte[50];
+        RNG.nextBytes(medium);
+
+        RecordPair pair = newPair();
+        for (byte[] data : new byte[][]{large, medium, small}) {
+            ByteBuffer src = ByteBuffer.wrap(data);
+            ByteBuffer dst = ByteBuffer.allocate(256);
+            pair.writer.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
+            dst.flip();
+
+            ByteBuffer plain = ByteBuffer.allocate(256);
+            UnprotectResult r = pair.reader.unprotect(dst, plain);
+            assertSame(UnprotectResult.Status.OK, r.status);
+            plain.flip();
+            byte[] result = new byte[plain.remaining()];
+            plain.get(result);
+            assertArrayEquals(data, result);
+        }
     }
 
     @Test

@@ -217,4 +217,48 @@ class ChannelTlsTransportTest {
         t.close();
         pair[0].close();
     }
+
+    @Test
+    @DisplayName("receiveRecord(ByteBuffer) heap: данные совпадают")
+    void receiveRecordHeapBuffer() throws IOException {
+        SocketChannel[] pair = createPair();
+        ChannelTlsTransport a = new ChannelTlsTransport(pair[0]);
+        ChannelTlsTransport b = new ChannelTlsTransport(pair[1]);
+
+        byte[] sent = new byte[]{0x17, 0x03, 0x03, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05};
+        a.sendRecord(sent);
+
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocate(256);
+        int len = b.receiveRecord(buf);
+        buf.flip();
+        assertEquals(sent.length, len);
+        byte[] received = new byte[len];
+        buf.get(received);
+        assertArrayEquals(sent, received);
+
+        a.close();
+        b.close();
+    }
+
+    @Test
+    @DisplayName("receiveRecord(ByteBuffer) direct: данные совпадают")
+    void receiveRecordDirectBuffer() throws IOException {
+        SocketChannel[] pair = createPair();
+        ChannelTlsTransport a = new ChannelTlsTransport(pair[0]);
+        ChannelTlsTransport b = new ChannelTlsTransport(pair[1]);
+
+        byte[] sent = new byte[]{0x16, 0x03, 0x03, 0x00, 0x03, 0x0A, 0x0B, 0x0C};
+        a.sendRecord(sent);
+
+        java.nio.ByteBuffer buf = java.nio.ByteBuffer.allocateDirect(256);
+        int len = b.receiveRecord(buf);
+        buf.flip();
+        assertEquals(sent.length, len);
+        byte[] received = new byte[len];
+        buf.get(received);
+        assertArrayEquals(sent, received);
+
+        a.close();
+        b.close();
+    }
 }

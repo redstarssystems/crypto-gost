@@ -75,7 +75,48 @@ public final class TlsCertificateValidator {
             PublicKeyParameters ocspKey = chain.size() > 1
                     ? chain.get(1).getPublicKey()
                     : caPublicKey;
-            leaf.verifyOcspResponse(ocspKey);
+            TlsCertificate issuer = chain.size() > 1 ? chain.get(1) : null;
+            try {
+                leaf.verifyOcspResponse(ocspKey, issuer);
+            } catch (TlsException e) {
+                // Если подпись OCSP не совпала с issuer-ключом — пробуем
+                // делегированные responder-сертификаты из поля certs BasicOCSPResponse
+                List<byte[]> delegatedCerts = TlsOcspVerifier.extractDelegatedCerts(
+                        leaf.getOcspResponse());
+                if (!delegatedCerts.isEmpty()) {
+                    boolean verified = false;
+                    for (byte[] dcDer : delegatedCerts) {
+                        TlsCertificate dc = new TlsCertificate(dcDer);
+                        // 4 pre-checks для delegated responder (RFC 6960 §4.2.2.2):
+                        // дёшево → дорого: validity, EKU, KU, signature
+                        if (dc.isExpired()) continue;
+                        if (!dc.isOcspSigning()) continue;
+                        if (!dc.isKeyUsageValid()) continue;
+                        if (!dc.verify(issuer != null
+                                ? issuer.getPublicKey() : caPublicKey)) continue;
+                        PublicKeyParameters dcKey = dc.getPublicKey();
+                        try {
+                            leaf.verifyOcspResponse(dcKey, issuer);
+                            verified = true;
+                            break;
+                        } catch (TlsException ignored) {
+                            // Пробуем следующий cert
+                        }
+                    }
+                    if (!verified) throw e; // Ни один delegated cert не подошёл
+                } else {
+                    throw e; // Нет delegated certs — перевыбрасываем оригинальную ошибку
+                }
+            }
+        }
+
+        // OCSP для intermediate сертификатов (best-effort, RFC не требует fail-closed)
+        for (int i = 1; i < chain.size() - 1; i++) {
+            TlsCertificate ic = chain.get(i);
+            if (ic.hasOcspResponse()) {
+                TlsCertificate icIssuer = chain.get(i + 1);
+                ic.verifyOcspResponse(icIssuer.getPublicKey(), icIssuer);
+            }
         }
 
         if (caPublicKey != null) {

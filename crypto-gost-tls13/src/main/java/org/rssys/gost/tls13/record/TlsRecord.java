@@ -36,11 +36,20 @@ public final class TlsRecord {
     private final byte[] ciphertext = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH];
     private final byte[] plaintext = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH];
     private final byte[] currentKeyBuf = new byte[TlsConstants.KUZNYECHIK_KEY_SIZE];
+    // Буфер для входящей зашифрованной TLS-записи + заголовок.
+    // Переиспользуется между вызовами unprotect — не аллоцируем byte[] на каждый decrypt.
+    // Размер: HEADER(5) + MAX_CIPHERTEXT(16640) = 16645. Достаточно для любой записи RFC 8446.
+    // НЕ удаляется при возможном shared-buffer рефакторинге transport↔record,
+    // потому что MGM API (mgm.processBytes/mgm.finishDecryption) принимает
+    // только byte[], не ByteBuffer. ByteBuffer от transport копируется сюда
+    // один раз — цена ~5мкс/16KB на современном CPU.
+    private final byte[] recordBuf = new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
     private long seqNum;
     private final int tagLen;
 
     // Параметры TLSTREE
     private final long snmax;
+    private long rekeyThreshold = -1L;   // -1 = default (80% SNMAX)
     private final long c1;
     private final long c2;
     private final long c3;
@@ -92,6 +101,7 @@ public final class TlsRecord {
         TlsUtils.wipeArray(tagBuf);
         TlsUtils.wipeArray(aadBuf);
         TlsUtils.wipeArray(nonceBuf);
+        TlsUtils.wipeArray(recordBuf);
         seqNum = 0;
     }
 
@@ -134,7 +144,8 @@ public final class TlsRecord {
 
     /**
      * Защищает (шифрует + аутентифицирует) открытые данные с указанием смещения и длины.
-     * Позволяет избежать промежуточной копии при фрагментации больших данных.
+     * <p>
+     * Реализация — тонкий wrapper над {@link #protect(byte, ByteBuffer, ByteBuffer)}.
      *
      * @param contentType тип содержимого
      * @param data        открытые данные
@@ -142,7 +153,6 @@ public final class TlsRecord {
      * @param len         длина фрагмента
      * @return TLS-запись: заголовок(5) || ciphertext(N) || tag(tagLen)
      * @throws IllegalArgumentException при некорректных offset/len
-     * @throws IllegalStateException при переполнении порядкового номера
      */
     public byte[] protect(byte contentType, byte[] data, int offset, int len) {
         if (data == null) {
@@ -151,9 +161,113 @@ public final class TlsRecord {
         if (offset < 0 || len < 0 || offset + len > data.length) {
             throw new IllegalArgumentException("Invalid offset/length");
         }
-        // inner plaintext = fragment || content_type (1 byte), ≤ 2^14
         if (len + 1 > TlsConstants.MAX_PLAINTEXT_LENGTH) {
             throw new IllegalArgumentException("Data exceeds maximum fragment size");
+        }
+        ByteBuffer src = ByteBuffer.wrap(data, offset, len);
+        int totalSize = TlsConstants.RECORD_HEADER_SIZE + len + 1 + tagLen;
+        byte[] result = new byte[totalSize];
+        ByteBuffer dst = ByteBuffer.wrap(result);
+        protect(contentType, src, dst);
+        return result;
+    }
+
+    /**
+     * Снимает защиту (дешифрует + проверяет аутентификацию) TLS-записи.
+     *
+     * @param record TLS-запись: заголовок(5) || ciphertext(N) || tag(tagLen)
+     * @return распарсенный тип содержимого и открытые данные
+     * @throws AuthenticationException при ошибке аутентификации/подмене данных
+     * @throws IllegalArgumentException при некорректном формате записи
+     * @throws IllegalStateException при переполнении порядкового номера
+     * @throws TlsException при превышении максимального размера записи
+     */
+    public TlsParsedRecord unprotect(byte[] record) throws AuthenticationException, TlsException {
+        if (record == null) {
+            throw new IllegalArgumentException("Record must not be null");
+        }
+        DecryptResult r = doDecrypt(record, record.length);
+        TlsParsedRecord parsed = new TlsParsedRecord(r.contentType, plaintext, r.dataLen);
+        // plaintext не затираем между вызовами — будет перезаписан при следующем unprotect.
+        // Затирается в destroy() при завершении сессии.
+        seqNum++;
+        return parsed;
+    }
+
+    /**
+     * Дешифрует TLS-запись напрямую в предоставленный буфер, избегая
+     * промежуточной копии в {@link TlsParsedRecord}.
+     * <p>
+     * Отличается от {@link #unprotect(byte[])} тем, что не создаёт
+     * {@code TlsParsedRecord} и не аллоцирует новый {@code byte[]}
+     * через {@code Arrays.copyOf}. Данные записываются в {@code dest}
+     * начиная с {@code destOff}.
+     *
+     * @param record  TLS-запись: заголовок(5) || ciphertext || tag
+     * @param dest    буфер для открытых данных (без inner content type)
+     * @param destOff смещение в dest
+     * @return RecordInfo с типом содержимого и длиной данных
+     */
+    public RecordInfo unprotectInto(byte[] record, byte[] dest, int destOff)
+            throws AuthenticationException, TlsException {
+        if (record == null) {
+            throw new IllegalArgumentException("Record must not be null");
+        }
+        if (dest == null) {
+            throw new IllegalArgumentException("Destination buffer must not be null");
+        }
+        DecryptResult r = doDecrypt(record, record.length);
+        if (destOff < 0 || destOff + r.dataLen > dest.length) {
+            throw new IllegalArgumentException(
+                    "Destination buffer too small: need " + (destOff + r.dataLen) +
+                    ", have " + dest.length);
+        }
+        System.arraycopy(plaintext, 0, dest, destOff, r.dataLen);
+        seqNum++;
+        return new RecordInfo(r.contentType, r.dataLen);
+    }
+
+    // ========================================================================
+    // ByteBuffer-перегрузки для JSSE-модуля
+    // ========================================================================
+
+    /**
+     * Шифрует и аутентифицирует данные из {@code src} и записывает
+     * TLS-запись в {@code dst}.
+     * <p>
+     * Основной (primary) метод protect — zero-alloc на горячем пути:
+     * читает данные напрямую из src в переиспользуемый scratch-буфер
+     * {@link #innerPlaintext}, и пишет готовую запись напрямую в dst,
+     * избегая промежуточных {@code byte[]} аллокаций.
+     * <p>
+     * После вызова position обоих буферов сдвинут на число прочитанных/записанных
+     * байт. limit не изменяется — caller выполняет flip/compact на dst.
+     * <p>
+     * Поведение идентично {@link #protect(byte, byte[], int, int)} —
+     * byte[]-overload реализован как wrapper над этим методом.
+     *
+     * @param contentType тип содержимого (CT_HANDSHAKE, CT_APPLICATION_DATA, CT_ALERT)
+     * @param src         буфер с открытыми данными (position будет сдвинут на len)
+     * @param dst         буфер для TLS-записи (position будет сдвинут на totalSize)
+     * @return количество байт, записанных в dst
+     * @throws IllegalArgumentException если src == null || dst == null, или dst недостаточен, или данные превышают MAX_PLAINTEXT_LENGTH
+     * @throws IllegalStateException    при переполнении порядкового номера
+     */
+    public int protect(byte contentType, ByteBuffer src, ByteBuffer dst) {
+        if (src == null || dst == null) {
+            throw new IllegalArgumentException("Buffers must not be null");
+        }
+        int len = src.remaining();
+        if (len + 1 > TlsConstants.MAX_PLAINTEXT_LENGTH) {
+            throw new IllegalArgumentException(
+                    "Data exceeds maximum fragment size: " + len);
+        }
+        int innerLen = len + 1;
+        int totalSize = TlsConstants.RECORD_HEADER_SIZE + innerLen + tagLen;
+        if (dst.remaining() < totalSize) {
+            throw new IllegalArgumentException(
+                    "Destination buffer too small: need " + totalSize +
+                    ", have " + dst.remaining());
         }
         if (seqNum < 0) {
             throw new IllegalStateException("Sequence number overflow");
@@ -163,9 +277,8 @@ public final class TlsRecord {
         // Per-record TLSTREE в переиспользуемый буфер (RFC 9367 §4.1)
         boolean keyChanged = treeCache.deriveKeyInto(seqNum, currentKeyBuf, 0);
 
-        // Внутренний открытый текст в переиспользуемом буфере: fragment(N) || inner_type(1)
-        int innerLen = len + 1;
-        System.arraycopy(data, offset, innerPlaintext, 0, len);
+        // Внутренний открытый текст напрямую из src в scratch-буфер
+        src.get(innerPlaintext, 0, len);
         innerPlaintext[len] = contentType;
 
         // Nonce = sender_write_iv XOR seqNum (RFC 8446 §5.3, RFC 9367 §4.1)
@@ -192,121 +305,18 @@ public final class TlsRecord {
         mgm.processBytes(innerPlaintext, 0, innerLen, ciphertext, 0);
 
         mgm.finishEncryption(tagBuf, 0);
-        // currentKeyBuf не зануляем между вызовами — будет перезаписан при следующем deriveKeyInto
 
-        // Сборка записи: заголовок || ciphertext || tag
-        byte[] record = new byte[TlsConstants.RECORD_HEADER_SIZE + innerLen + tagLen];
-        record[0] = TlsConstants.CT_APPLICATION_DATA;
-        record[1] = TlsConstants.LEGACY_VERSION_MAJOR;
-        record[2] = TlsConstants.LEGACY_VERSION_MINOR;
-        record[3] = (byte) (payloadLen >>> 8);
-        record[4] = (byte) payloadLen;
-        System.arraycopy(ciphertext, 0, record, TlsConstants.RECORD_HEADER_SIZE, innerLen);
-        System.arraycopy(tagBuf, 0, record, TlsConstants.RECORD_HEADER_SIZE + innerLen, tagLen);
+        // Сборка записи напрямую в dst: заголовок || ciphertext || tag
+        dst.put(TlsConstants.CT_APPLICATION_DATA);
+        dst.put(TlsConstants.LEGACY_VERSION_MAJOR);
+        dst.put(TlsConstants.LEGACY_VERSION_MINOR);
+        dst.put((byte) (payloadLen >>> 8));
+        dst.put((byte) payloadLen);
+        dst.put(ciphertext, 0, innerLen);
+        dst.put(tagBuf, 0, tagLen);
 
         seqNum++;
-        return record;
-    }
-
-    /**
-     * Снимает защиту (дешифрует + проверяет аутентификацию) TLS-записи.
-     *
-     * @param record TLS-запись: заголовок(5) || ciphertext(N) || tag(tagLen)
-     * @return распарсенный тип содержимого и открытые данные
-     * @throws AuthenticationException при ошибке аутентификации/подмене данных
-     * @throws IllegalArgumentException при некорректном формате записи
-     * @throws IllegalStateException при переполнении порядкового номера
-     * @throws TlsException при превышении максимального размера записи
-     */
-    public TlsParsedRecord unprotect(byte[] record) throws AuthenticationException, TlsException {
-        DecryptResult r = doDecrypt(record);
-        TlsParsedRecord parsed = new TlsParsedRecord(r.contentType, plaintext, r.dataLen);
-        // plaintext не затираем между вызовами — будет перезаписан при следующем unprotect.
-        // Затирается в destroy() при завершении сессии.
-        seqNum++;
-        return parsed;
-    }
-
-    /**
-     * Дешифрует TLS-запись напрямую в предоставленный буфер, избегая
-     * промежуточной копии в {@link TlsParsedRecord}.
-     * <p>
-     * Отличается от {@link #unprotect(byte[])} тем, что не создаёт
-     * {@code TlsParsedRecord} и не аллоцирует новый {@code byte[]}
-     * через {@code Arrays.copyOf}. Данные записываются в {@code dest}
-     * начиная с {@code destOff}.
-     *
-     * @param record  TLS-запись: заголовок(5) || ciphertext || tag
-     * @param dest    буфер для открытых данных (без inner content type)
-     * @param destOff смещение в dest
-     * @return RecordInfo с типом содержимого и длиной данных
-     */
-    public RecordInfo unprotectInto(byte[] record, byte[] dest, int destOff)
-            throws AuthenticationException, TlsException {
-        if (dest == null) {
-            throw new IllegalArgumentException("Destination buffer must not be null");
-        }
-        DecryptResult r = doDecrypt(record);
-        if (destOff < 0 || destOff + r.dataLen > dest.length) {
-            throw new IllegalArgumentException(
-                    "Destination buffer too small: need " + (destOff + r.dataLen) +
-                    ", have " + dest.length);
-        }
-        System.arraycopy(plaintext, 0, dest, destOff, r.dataLen);
-        seqNum++;
-        return new RecordInfo(r.contentType, r.dataLen);
-    }
-
-    // ========================================================================
-    // ByteBuffer-перегрузки для JSSE-модуля
-    // ========================================================================
-
-    /**
-     * Шифрует и аутентифицирует данные из {@code src} и записывает
-     * TLS-запись в {@code dst}.
-     * <p>
-     * Читает до {@link TlsConstants#MAX_PLAINTEXT_LENGTH} - 1 байт из src,
-     * шифрует MGM и записывает:
-     * {@code [header(5) || ciphertext(N) || tag(tagLen)]}.
-     * <p>
-     * После вызова position обоих буферов сдвинут на число прочитанных/записанных
-     * байт. limit не изменяется — caller выполняет flip/compact на dst.
-     * <p>
-     * Поведение идентично {@link #protect(byte, byte[], int, int)} —
-     * общая реализация через {@link #protect(byte, byte[], int, int)} после
-     * копирования из src во временный массив.
-     *
-     * @param contentType тип содержимого (CT_HANDSHAKE, CT_APPLICATION_DATA, CT_ALERT)
-     * @param src         буфер с открытыми данными (position будет сдвинут)
-     * @param dst         буфер для TLS-записи (position будет сдвинут)
-     * @return количество байт, записанных в dst
-     * @throws IllegalArgumentException если src == null || dst == null, или dst недостаточен, или данные превышают MAX_PLAINTEXT_LENGTH
-     * @throws IllegalStateException    при переполнении порядкового номера
-     */
-    public int protect(byte contentType, ByteBuffer src, ByteBuffer dst) {
-        if (src == null || dst == null) {
-            throw new IllegalArgumentException("Buffers must not be null");
-        }
-        int len = src.remaining();
-        if (len + 1 > TlsConstants.MAX_PLAINTEXT_LENGTH) {
-            throw new IllegalArgumentException(
-                    "Data exceeds maximum fragment size: " + len);
-        }
-        int payloadLen = len + 1 + tagLen;
-        if (dst.remaining() < TlsConstants.RECORD_HEADER_SIZE + payloadLen) {
-            throw new IllegalArgumentException(
-                    "Destination buffer too small: need " +
-                    (TlsConstants.RECORD_HEADER_SIZE + payloadLen) +
-                    ", have " + dst.remaining());
-        }
-        // Копируем из src во временный массив, затем делегируем byte[]-реализацию.
-        // Альтернатива — прямой MGM поверх ByteBuffer — потребовала бы дублирования
-        // всей crypto-логики. Для JSSE-модуля одна доп.копия на record приемлема.
-        byte[] data = new byte[len];
-        src.get(data);
-        byte[] record = protect(contentType, data, 0, len);
-        dst.put(record);
-        return record.length;
+        return totalSize;
     }
 
     /**
@@ -367,10 +377,17 @@ public final class TlsRecord {
             return UnprotectResult.needMoreInput(totalRecordLen);
         }
 
+        // Stage 3a: проверка на превышение MAX_CIPHERTEXT_LENGTH ДО consume в recordBuf
+        // (doDecrypt тоже проверяет, но record.get в Stage 4 упадёт с BufferOverflowException
+        // если declaredLen > recordBuf.length — а recordBuf фиксированного размера)
+        if (declaredLen > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
+            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+                    "Record too long: " + declaredLen + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+        }
+
         // Stage 4: consume + расшифровка (без seqNum++ — будет на успехе)
-        byte[] recBytes = new byte[totalRecordLen];
-        record.get(recBytes);
-        DecryptResult dr = doDecrypt(recBytes);
+        record.get(recordBuf, 0, totalRecordLen);
+        DecryptResult dr = doDecrypt(recordBuf, totalRecordLen);
         int plaintextLen = dr.dataLen;
 
         // Stage 5: проверить dst до записи
@@ -379,6 +396,9 @@ public final class TlsRecord {
             // Затираем расшифрованные данные: caller повторит unprotect
             // с большим буфером, между retry данные не должны оставаться в памяти
             Arrays.fill(this.plaintext, 0, plaintextLen, (byte) 0);
+            // recordBuf содержит ciphertext+tag (публичные wire-байты, не ключевой материал).
+            // Затираем только для защиты следующего вызова от partial state.
+            Arrays.fill(recordBuf, 0, totalRecordLen, (byte) 0);
             return UnprotectResult.outputTooSmall(plaintextLen);
         }
 
@@ -423,10 +443,13 @@ public final class TlsRecord {
      * Если ключ не изменился (только ICN) — вызывает mgm.reinitICN() вместо
      * полного mgm.init() для производительности.
      *
+     * @param buf буфер с TLS-записью (заголовок || ciphertext || tag)
+     * @param len точная длина записи (buf.length >= len)
+     * @return результат дешифрования
      * @throws TlsException при превышении максимального размера записи
      */
-    private DecryptResult doDecrypt(byte[] record) throws AuthenticationException, TlsException {
-        if (record == null || record.length < TlsConstants.RECORD_HEADER_SIZE + tagLen) {
+    private DecryptResult doDecrypt(byte[] buf, int len) throws AuthenticationException, TlsException {
+        if (buf == null || len < TlsConstants.RECORD_HEADER_SIZE + tagLen) {
             throw new IllegalArgumentException("Record too short");
         }
         if (seqNum < 0) {
@@ -435,19 +458,19 @@ public final class TlsRecord {
         checkSnmax();
 
         // Парсинг заголовка
-        byte outerContentType = record[0];
-        int legacyVersion = ((record[1] & 0xFF) << 8) | (record[2] & 0xFF);
+        byte outerContentType = buf[0];
+        int legacyVersion = ((buf[1] & 0xFF) << 8) | (buf[2] & 0xFF);
         if (legacyVersion != TlsConstants.PROTOCOL_TLS_1_2) {
             throw new IllegalArgumentException("Invalid legacy version");
         }
-        int payloadLen = ((record[3] & 0xFF) << 8) | (record[4] & 0xFF);
+        int payloadLen = ((buf[3] & 0xFF) << 8) | (buf[4] & 0xFF);
 
         if (payloadLen > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
             throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
                     "Record too long: " + payloadLen + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
-        if (record.length != TlsConstants.RECORD_HEADER_SIZE + payloadLen) {
+        if (len != TlsConstants.RECORD_HEADER_SIZE + payloadLen) {
             throw new IllegalArgumentException("Record length mismatch");
         }
 
@@ -483,8 +506,8 @@ public final class TlsRecord {
         }
         mgm.updateAAD(aadBuf, 0, aadBuf.length);
 
-        mgm.processBytes(record, TlsConstants.RECORD_HEADER_SIZE, ciphertextLen, plaintext, 0);
-        mgm.finishDecryption(record, TlsConstants.RECORD_HEADER_SIZE + ciphertextLen);
+        mgm.processBytes(buf, TlsConstants.RECORD_HEADER_SIZE, ciphertextLen, plaintext, 0);
+        mgm.finishDecryption(buf, TlsConstants.RECORD_HEADER_SIZE + ciphertextLen);
 
         // Constant-time поиск последнего ненулевого байта (inner content type).
         // TLS 1.3 padding: 0x00 байты после inner_content_type.
@@ -554,6 +577,39 @@ public final class TlsRecord {
             throw new IllegalStateException(
                     "SNMAX exceeded: " + Long.toUnsignedString(seqNum));
         }
+    }
+
+    /**
+     * @return true если seqNum достиг 80% порога SNMAX — сигнал к KeyUpdate.
+     *         L-вариант (2^64-1) использует константу 0xCCCCCCCCCCCCCCCC,
+     *         S-вариант — snmax * 4 / 5 через unsigned арифметику.
+     */
+    public boolean isApproachingRekeyLimit() {
+        if (rekeyThreshold >= 0) {
+            return Long.compareUnsigned(seqNum, rekeyThreshold) >= 0;
+        }
+        if (snmax == -1L) {
+            // L-вариант (2^64-1): порог 80% unsigned
+            return Long.compareUnsigned(seqNum, 0xCCCCCCCCCCCCCCCCL) >= 0;
+        }
+        // S-вариант: snmax < 2^42, snmax * 4 безопасно в signed long
+        long threshold = Long.divideUnsigned(snmax * 4, 5);
+        return Long.compareUnsigned(seqNum, threshold) >= 0;
+    }
+
+    /**
+     * Устанавливает порог rekey.
+     * <p>
+     * Если порог >= 0, isApproachingRekeyLimit() срабатывает при достижении
+     * seqNum >= threshold. -1 = использовать дефолтный порог (80% SNMAX).
+     * <p>
+     * Метод публичный для использования в тестах. В продакшен-коде порог
+     * не меняется.
+     *
+     * @param threshold порог seqNum или -1 для дефолта
+     */
+    public void setRekeyThreshold(long threshold) {
+        this.rekeyThreshold = threshold;
     }
 
 }

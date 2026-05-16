@@ -7,15 +7,11 @@ import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 import java.util.Collections;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-/**
- * JMH-бенчмарк полного handshake (клиент + сервер в одном JVM).
- * <p>
- * Зачем: измерить throughput полного TLS 1.3 handshake с ГОСТ-криптографией.
- * Это интегрированный тест, покрывающий ECDHE, key schedule, CertificateVerify,
- * Finished, и установку сессии. Каждая итерация = один полный handshake.
- */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @State(Scope.Benchmark)
@@ -23,11 +19,18 @@ public class FullHandshakeBench {
 
     private TlsCiphersuite cs;
     private BenchHelper.Bundle serverBundle;
+    private ExecutorService exec;
 
     @Setup(Level.Trial)
     public void setup() throws Exception {
         cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         serverBundle = BenchHelper.createBundle();
+        exec = Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    @TearDown(Level.Trial)
+    public void tearDown() {
+        exec.shutdown();
     }
 
     @Benchmark
@@ -36,28 +39,20 @@ public class FullHandshakeBench {
 
         TlsServerConfig serverConfig = new TlsServerConfig(
                 cs, Collections.singletonList(serverBundle.cert), serverBundle.priv);
-        // caPublicKey НЕ ставим на сервер — это включает mTLS (CertificateRequest).
-        // Сервер не проверяет свою цепочку на своей стороне.
 
         TlsClientConfig clientConfig = new TlsClientConfig(cs)
-                .withCaPublicKey(serverBundle.cert.getPublicKey());
-        // caPublicKey сервера = публичный ключ его самоподписанного сертификата.
-        // Это корректно: self-signed → свой же ключ как CA.
+                .withCaPublicKey(serverBundle.caPublicKey);
 
         TlsSession server = TlsSession.createServer(serverConfig, pair.getServerTransport());
         TlsSession client = TlsSession.createClient(clientConfig, pair.getClientTransport());
 
-        // Полный handshake (сервер + клиент параллельно, но в одном потоке
-        // поочерёдно, как это делает InMemoryTlsTransport).
-        Thread serverThread = new Thread(() -> {
+        CompletableFuture<Void> serverFuture = CompletableFuture.runAsync(() -> {
             try { server.handshakeAsServer(); }
             catch (Exception e) { throw new RuntimeException(e); }
-        });
-        serverThread.start();
+        }, exec);
         client.handshakeAsClient();
-        serverThread.join();
+        serverFuture.join();
 
-        // Зачистка — важно для repeatable измерений: закрываем и даём GC.
         client.close();
         server.close();
         pair.getClientTransport().close();

@@ -392,6 +392,20 @@ public final class TlsMessageBuilder {
     }
 
     /**
+     * Строит тело пустого Certificate (RFC 8446 §4.4.2).
+     * Используется клиентом, когда сервер отправил CertificateRequest,
+     * но у клиента нет подходящего сертификата.
+     * <p>
+     * Формат: request_context (1 байт, 0x00) + certificate_list (3 байта, 0x000000).
+     *
+     * @return тело Certificate (без handshake-заголовка)
+     */
+    public byte[] buildEmptyCertificateBody() {
+        // request_context = 0x00, certificate_list_length = 0x000000
+        return new byte[]{0x00, 0x00, 0x00, 0x00};
+    }
+
+    /**
      * Собирает CertificateVerify (RFC 8446 §4.4.3, RFC 9367 §3.2).
      * <p>
      * Подписываемое содержимое (sigContent):

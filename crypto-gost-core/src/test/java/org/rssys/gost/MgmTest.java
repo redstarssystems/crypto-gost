@@ -180,6 +180,33 @@ class MgmTest {
         assertArrayEquals(sq1, sq2, "X^2 должен быть детерминированным");
     }
 
+
+    @Test
+    @DisplayName("gf128Mul: нейтральный элемент — X * 1 = X")
+    void testGf128MulByOne() {
+        byte[] x    = java.util.Arrays.copyOf(h("8899AABBCCDDEEFF0011223344556677"), 16);
+        byte[] one  = new byte[16];
+        one[15] = 1; // w^0 = 1 в big-endian
+        assertArrayEquals(x, Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), one),
+                "X * 1 должен равняться X");
+    }
+
+    @Test
+    @DisplayName("gf128Mul: дистрибутивность X*(Y^Z) == X*Y ^ X*Z")
+    void testGf128MulDistributive() {
+        byte[] x = java.util.Arrays.copyOf(h("8899AABBCCDDEEFF0011223344556677"), 16);
+        byte[] y = java.util.Arrays.copyOf(h("FFEEDDCCBBAA99887766554433221100"), 16);
+        byte[] z = java.util.Arrays.copyOf(h("0F0E0D0C0B0A09080706050403020100"), 16);
+        byte[] yz = new byte[16];
+        for (int i = 0; i < 16; i++) yz[i] = (byte)(y[i] ^ z[i]);
+        byte[] lhs = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), yz);
+        byte[] xy  = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), java.util.Arrays.copyOf(y, 16));
+        byte[] xz  = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), java.util.Arrays.copyOf(z, 16));
+        byte[] rhs = new byte[16];
+        for (int i = 0; i < 16; i++) rhs[i] = (byte)(xy[i] ^ xz[i]);
+        assertArrayEquals(lhs, rhs, "GF(2^128) должен быть дистрибутивен: X*(Y^Z) == X*Y ^ X*Z");
+    }
+
     // -----------------------------------------------------------------------
     // Roundtrip-тесты
     // -----------------------------------------------------------------------

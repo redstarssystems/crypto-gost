@@ -42,13 +42,18 @@
     <modules>
         <module>crypto-gost-core</module>
         <module>crypto-gost-tls13</module>
+        <module>crypto-gost-jsse</module>
+        <module>crypto-gost-netty</module>
+        <module>examples/tls</module>
+        <module>examples/jsse</module>
     </modules>
 
     <properties>
-        <revision>0.2.1</revision>
-        <maven.compiler.release>11</maven.compiler.release>
+        <revision>0.3.0-SNAPSHOT</revision>
+        <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.10.2</junit.version>
+        <netty.version>4.2.13.Final</netty.version>
     </properties>
 
     <dependencyManagement>
@@ -58,6 +63,11 @@
                 <artifactId>junit-jupiter</artifactId>
                 <version>${junit.version}</version>
                 <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-handler</artifactId>
+                <version>${netty.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

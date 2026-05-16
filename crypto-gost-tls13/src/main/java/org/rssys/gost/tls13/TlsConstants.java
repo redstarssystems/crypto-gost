@@ -36,6 +36,12 @@ public final class TlsConstants {
     public static final int TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L = 0xC103; // Loop ре-кейинг
     public static final int TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S = 0xC105; // Seal (TLSTREE, SNMAX=2^42-1)
 
+    // IANA-имена cipher suites (RFC 9367 §3.1.2)
+    public static final String IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L =
+            "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L";
+    public static final String IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S =
+            "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_S";
+
     // набор предлагаемых cipher suites (RFC 8446 §4.1.2): L предпочтительнее
     public static final List<Integer> OFFERED_CIPHER_SUITE_IDS = List.of(
             TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
@@ -53,6 +59,15 @@ public final class TlsConstants {
     public static final int SIG_GOST_TC26_512_B = 0x070E; // id_tc26_gost_3410_12_512_paramSetB
     public static final int SIG_GOST_TC26_512_C = 0x070F; // id_tc26_gost_3410_2012_512_paramSetC
 
+    // IANA-имена схем подписи (RFC 9367 §3.2)
+    public static final String IANA_SIG_GOST_TC26_A_256 = "gostr34102012_256a";
+    public static final String IANA_SIG_GOST_CRYPTOPRO_A  = "gostr34102012_256b";
+    public static final String IANA_SIG_GOST_CRYPTOPRO_B  = "gostr34102012_256c";
+    public static final String IANA_SIG_GOST_CRYPTOPRO_C  = "gostr34102012_256d";
+    public static final String IANA_SIG_GOST_TC26_512_A   = "gostr34102012_512a";
+    public static final String IANA_SIG_GOST_TC26_512_B   = "gostr34102012_512b";
+    public static final String IANA_SIG_GOST_TC26_512_C   = "gostr34102012_512c";
+
     // именованные группы/кривые ГОСТ (RFC 9367 §3.1)
     // 256-бит
     public static final int GRP_GC256A       = 0x0022; // id_tc26_gost_3410_2012_256_paramSetA
@@ -63,6 +78,15 @@ public final class TlsConstants {
     public static final int GRP_GC512A       = 0x0026; // id_tc26_gost_3410_12_512_paramSetA
     public static final int GRP_GC512B       = 0x0027; // id_tc26_gost_3410_12_512_paramSetB
     public static final int GRP_GC512C       = 0x0028; // id_tc26_gost_3410_2012_512_paramSetC
+
+    // IANA-имена именованных групп (RFC 9367 §3.1)
+    public static final String IANA_GC256A = "GC256A";
+    public static final String IANA_GC256B = "GC256B";
+    public static final String IANA_GC256C = "GC256C";
+    public static final String IANA_GC256D = "GC256D";
+    public static final String IANA_GC512A = "GC512A";
+    public static final String IANA_GC512B = "GC512B";
+    public static final String IANA_GC512C = "GC512C";
 
     // размеры хешей Streebog
     public static final int STREEBOG_256_HASH_LEN = 32;

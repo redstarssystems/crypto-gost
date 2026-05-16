@@ -12,11 +12,12 @@
         <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <artifactId>crypto-gost-examples</artifactId>
+    <artifactId>crypto-gost-jsse</artifactId>
     <packaging>jar</packaging>
 
-    <name>crypto-gost-examples</name>
-    <description>Примеры использования ГОСТ-криптографии</description>
+    <name>crypto-gost-jsse</name>
+    <description>JSSE-провайдер для ГОСТ: SSLContext, SSLEngine, KeyManager, TrustManager</description>
+    <url>https://gitflic.ru/project/red-stars-systems/crypto-gost</url>
 
     <dependencies>
         <dependency>
@@ -24,5 +25,18 @@
             <artifactId>crypto-gost-tls13</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-tls13</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
 </project>

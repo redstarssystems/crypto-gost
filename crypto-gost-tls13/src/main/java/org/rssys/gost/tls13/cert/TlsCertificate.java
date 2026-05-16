@@ -39,12 +39,14 @@ public final class TlsCertificate {
     private final boolean keyUsageValid;
     private final boolean ekuValid;
     private final boolean ekuClientAuth;
+    private final boolean ekuOcspSigning;
     private final boolean isCA;
     private final int pathLen;
     private final boolean keyCertSign;
     private final boolean hasUnknownCritical;
     private final boolean algConsistent;
     private byte[] ocspResponse;
+    private byte[] ocspNonce;
     private final int version;
     private final String subjectDnStr;
     private final String issuerDnStr;
@@ -65,6 +67,10 @@ public final class TlsCertificate {
     private final byte[] akiBytes;
     // URI из AuthorityInfoAccess (1.3.6.1.5.5.7.1.1) — OCSP и caIssuers
     private final String[] aiaUris;
+    // id-ad-ocsp URI (1.3.6.1.5.5.7.48.1) — отдельно для OCSP-запросов
+    private final String[] ocspUris;
+    // id-ad-caIssuers URI (1.3.6.1.5.5.7.48.2) — промежуточные сертификаты
+    private final String[] caIssuersUris;
     // URI из CRLDistributionPoints (2.5.29.31) — точки распространения CRL
     private final String[] cdpUris;
     // OID политик сертификата (2.5.29.32) — идентификаторы политик
@@ -175,6 +181,7 @@ public final class TlsCertificate {
         this.keyUsageValid = ext.keyUsageValid;
         this.ekuValid = ext.ekuValid;
         this.ekuClientAuth = ext.ekuClientAuth;
+        this.ekuOcspSigning = ext.ekuOcspSigning;
         this.isCA = ext.isCA;
         this.pathLen = ext.pathLen;
         this.keyCertSign = ext.keyCertSign;
@@ -182,6 +189,8 @@ public final class TlsCertificate {
         this.skiBytes = ext.skiBytes;
         this.akiBytes = ext.akiBytes;
         this.aiaUris = ext.aiaUris;
+        this.ocspUris = ext.ocspUris;
+        this.caIssuersUris = ext.caIssuersUris;
         this.cdpUris = ext.cdpUris;
         this.certPolicyOids = ext.certPolicyOids;
 
@@ -403,6 +412,12 @@ public final class TlsCertificate {
         return ekuClientAuth;
     }
 
+    /** @return true если сертификат разрешён для подписи OCSP-ответов */
+    public boolean isOcspSigning() {
+        // EKU не задан → без ограничений (RFC 5280 §4.2.1.12)
+        return ekuOcspSigning;
+    }
+
     /** @return true если сертификат является CA (BasicConstraints.cA=TRUE) */
     public boolean isCA() {
         return isCA;
@@ -477,6 +492,11 @@ public final class TlsCertificate {
         return result;
     }
 
+    /** @return полный DER-encoded сертификат (defensive copy) */
+    public byte[] getEncoded() {
+        return certData.clone();
+    }
+
     /** @return raw DER Issuer Distinguished Name */
     public byte[] getIssuerDnBytes() {
         byte[] result = new byte[issuerDnLen];
@@ -489,6 +509,17 @@ public final class TlsCertificate {
         byte[] result = new byte[subjectDnLen];
         System.arraycopy(certData, subjectDnOff, result, 0, subjectDnLen);
         return result;
+    }
+
+    public byte[] getOcspNonce() {
+        return ocspNonce == null ? null : ocspNonce.clone();
+    }
+
+    /**
+     * @param nonce значение nonce из OCSP-запроса (defensive copy)
+     */
+    public void setOcspNonce(byte[] nonce) {
+        this.ocspNonce = nonce == null ? null : nonce.clone();
     }
 
     /**
@@ -505,9 +536,29 @@ public final class TlsCertificate {
      * @throws TlsException при ошибке верификации OCSP
      */
     public void verifyOcspResponse(PublicKeyParameters caKey) throws TlsException {
+        verifyOcspResponse(caKey, null);
+    }
+
+    /**
+     * Верифицирует OCSP-ответ с дополнительной проверкой CertID (issuerNameHash/issuerKeyHash).
+     *
+     * @param caKey  открытый ключ CA
+     * @param issuer сертификат издателя (может быть null — тогда CertID не проверяется)
+     * @throws TlsException при ошибке верификации
+     */
+    public void verifyOcspResponse(PublicKeyParameters caKey, TlsCertificate issuer) throws TlsException {
         byte[] serialCopy = new byte[serialLen];
         System.arraycopy(certData, serialOff, serialCopy, 0, serialLen);
-        TlsOcspVerifier.verify(ocspResponse, serialCopy, caKey);
+        if (issuer != null) {
+            TlsOcspVerifier.verify(ocspResponse, serialCopy, caKey,
+                    getIssuerDnBytes(), issuer.getEncoded());
+        } else {
+            TlsOcspVerifier.verify(ocspResponse, serialCopy, caKey);
+        }
+        // Проверка nonce если он был установлен
+        if (ocspNonce != null) {
+            TlsOcspVerifier.verifyNonce(ocspResponse, ocspNonce, false);
+        }
     }
 
     // ========================================================================
@@ -803,6 +854,27 @@ public final class TlsCertificate {
     }
 
     /**
+     * URI для OCSP-запросов (id-ad-ocsp) из AuthorityInfoAccess.
+     * <p>В отличие от {@link #getAiaUris()}, возвращает только URI OCSP-responder'ов,
+     * без caIssuers. Если расширение AIA отсутствует или не содержит OCSP — null.</p>
+     *
+     * @return URI OCSP-responder'ов или null
+     */
+    public String[] getOcspUris() {
+        return ocspUris == null ? null : ocspUris.clone();
+    }
+
+    /**
+     * URI для caIssuers (id-ad-caIssuers) из AuthorityInfoAccess.
+     * <p>Только URI точек получения промежуточных сертификатов, без OCSP.</p>
+     *
+     * @return URI caIssuers или null
+     */
+    public String[] getCaIssuersUris() {
+        return caIssuersUris == null ? null : caIssuersUris.clone();
+    }
+
+    /**
      * CRLDistributionPoints (RFC 5280 §4.2.1.13): URI к CRL (certificate revocation lists).
      *
      * <p>Нужен caller'у для проверки статуса сертификата через CRL.
@@ -948,6 +1020,7 @@ public final class TlsCertificate {
         final boolean keyUsageValid;
         final boolean ekuValid;
         final boolean ekuClientAuth;
+        final boolean ekuOcspSigning;
         final boolean isCA;
         final int pathLen;
         final boolean keyCertSign;
@@ -955,17 +1028,21 @@ public final class TlsCertificate {
         final byte[] skiBytes;
         final byte[] akiBytes;
         final String[] aiaUris;
+        final String[] ocspUris;
+        final String[] caIssuersUris;
         final String[] cdpUris;
         final String[] certPolicyOids;
         ExtensionsResult(String[] sanDnsNames, byte[][] sanIpAddresses, boolean keyUsageValid, boolean ekuValid, boolean ekuClientAuth,
-                          boolean isCA, int pathLen, boolean keyCertSign, boolean hasUnknownCritical,
+                          boolean ekuOcspSigning, boolean isCA, int pathLen, boolean keyCertSign, boolean hasUnknownCritical,
                           byte[] skiBytes, byte[] akiBytes, String[] aiaUris,
+                          String[] ocspUris, String[] caIssuersUris,
                           String[] cdpUris, String[] certPolicyOids) {
             this.sanDnsNames = sanDnsNames;
             this.sanIpAddresses = sanIpAddresses;
             this.keyUsageValid = keyUsageValid;
             this.ekuValid = ekuValid;
             this.ekuClientAuth = ekuClientAuth;
+            this.ekuOcspSigning = ekuOcspSigning;
             this.isCA = isCA;
             this.pathLen = pathLen;
             this.keyCertSign = keyCertSign;
@@ -973,6 +1050,8 @@ public final class TlsCertificate {
             this.skiBytes = skiBytes;
             this.akiBytes = akiBytes;
             this.aiaUris = aiaUris;
+            this.ocspUris = ocspUris;
+            this.caIssuersUris = caIssuersUris;
             this.cdpUris = cdpUris;
             this.certPolicyOids = certPolicyOids;
         }
@@ -996,7 +1075,7 @@ public final class TlsCertificate {
             pos = readTlv(der, pos)[1];
         }
         // serialNumber (INTEGER)
-        if (pos >= end) return new ExtensionsResult(null, null, true, true, true, false, -1, false, false, null, null, null, null, null);
+        if (pos >= end) return new ExtensionsResult(null, null, true, true, true, false, false, -1, false, false, null, null, null, null, null, null, null);
         pos = readTlv(der, pos)[1];
         // Сканируем до 5-й SEQUENCE (SPKI)
         int seqCount = 0;
@@ -1012,7 +1091,7 @@ public final class TlsCertificate {
             }
             pos = tlv[1];
         }
-        if (seqCount < 5) return new ExtensionsResult(null, null, true, true, true, false, -1, false, false, null, null, null, null, null);
+        if (seqCount < 5) return new ExtensionsResult(null, null, true, true, true, false, false, -1, false, false, null, null, null, null, null, null, null);
 
         // issuerUniqueID [1], subjectUniqueID [2], затем extensions [3]
         while (pos < end) {
@@ -1026,7 +1105,7 @@ public final class TlsCertificate {
             }
             break;
         }
-        return new ExtensionsResult(null, null, true, true, true, false, -1, false, false, null, null, null, null, null);
+        return new ExtensionsResult(null, null, true, true, true, false, false, -1, false, false, null, null, null, null, null, null, null);
     }
 
     /**
@@ -1044,7 +1123,7 @@ public final class TlsCertificate {
         int end = extTlv[1];
 
         if (pos >= end || (der[pos] & 0xFF) != 0x30) {
-            return new ExtensionsResult(null, null, true, true, true, false, -1, false, false, null, null, null, null, null);
+            return new ExtensionsResult(null, null, true, true, true, false, false, -1, false, false, null, null, null, null, null, null, null);
         }
         int[] seqTlv = readTlv(der, pos);
         pos = seqTlv[0];
@@ -1058,6 +1137,8 @@ public final class TlsCertificate {
         boolean ekuPresent = false;
         boolean ekuServerAuth = false;
         boolean ekuClientAuth = false;
+        boolean ekuOcspSigning = false;
+
         boolean isCA = false;
         int pathLen = -1;
         boolean hasUnknownCritical = false;
@@ -1065,6 +1146,8 @@ public final class TlsCertificate {
         byte[] skiBytesLocal = null;
         byte[] akiBytesLocal = null;
         ArrayList<String> aiaList = new ArrayList<>();
+        ArrayList<String> ocspList = new ArrayList<>();
+        ArrayList<String> caIssuersList = new ArrayList<>();
         // CRLDistributionPoints и CertificatePolicies
         ArrayList<String> cdpList = new ArrayList<>();
         ArrayList<String> certPolicyList = new ArrayList<>();
@@ -1123,6 +1206,11 @@ public final class TlsCertificate {
                     int[] octTlv = readTlv(der, afterOid);
                     ekuServerAuth = hasEku(der, octTlv[0], octTlv[1], SERVER_AUTH_OID);
                     ekuClientAuth = hasEku(der, octTlv[0], octTlv[1], CLIENT_AUTH_OID);
+                    // EKU id-kp-OCSPSigning (1.3.6.1.5.5.7.3.9)
+                    if (hasEku(der, octTlv[0], octTlv[1], OCSP_SIGNING_OID)
+                            || hasEku(der, octTlv[0], octTlv[1], ANY_EKU_OID)) {
+                        ekuOcspSigning = true;
+                    }
                 }
             } else if (matchesOid(der, oidStart, oidLen, BC_OID_BYTES)) {
                 // BasicConstraints: SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLen INTEGER OPTIONAL }
@@ -1188,7 +1276,7 @@ public final class TlsCertificate {
                 // Извлекаем все URI (uniformResourceIdentifier [6]) — и OCSP, и caIssuers.
                 if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
                     int[] octTlv = readTlv(der, afterOid);
-                    parseAiaDescriptions(der, octTlv[0], octTlv[1], aiaList);
+                    parseAiaDescriptions(der, octTlv[0], octTlv[1], aiaList, ocspList, caIssuersList);
                 }
             } else if (matchesOid(der, oidStart, oidLen, CDP_OID_BYTES)) {
                 // CRLDistributionPoints (RFC 5280 §4.2.1.13) — точки распространения CRL.
@@ -1220,9 +1308,11 @@ public final class TlsCertificate {
         boolean ekuValid = !ekuPresent || ekuServerAuth;
         boolean ekuClientAuthValid = !ekuPresent || ekuClientAuth;
         return new ExtensionsResult(sanResult, ipResult, kuValid, ekuValid, ekuClientAuthValid,
-                isCA, pathLen, keyCertSignOk, hasUnknownCritical,
+                !ekuPresent || ekuOcspSigning, isCA, pathLen, keyCertSignOk, hasUnknownCritical,
                 skiBytesLocal, akiBytesLocal,
                 aiaList.isEmpty() ? null : aiaList.toArray(new String[0]),
+                ocspList.isEmpty() ? null : ocspList.toArray(new String[0]),
+                caIssuersList.isEmpty() ? null : caIssuersList.toArray(new String[0]),
                 cdpList.isEmpty() ? null : cdpList.toArray(new String[0]),
                 certPolicyList.isEmpty() ? null : certPolicyList.toArray(new String[0]));
     }
@@ -1270,6 +1360,13 @@ public final class TlsCertificate {
 
     private static final byte[] SERVER_AUTH_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01};
     private static final byte[] CLIENT_AUTH_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02};
+    private static final byte[] OCSP_SIGNING_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09};
+    private static final byte[] ANY_EKU_OID = {0x55, 0x1D, 0x25, 0x00};
+    private static final byte[] DIGITAL_SIGNATURE_OID = {(byte) 0x80, 0x00};
+
+    // id-ad-ocsp = 1.3.6.1.5.5.7.48.1, id-ad-caIssuers = 1.3.6.1.5.5.7.48.2
+    private static final byte[] OCSP_AIA_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01};
+    private static final byte[] CA_ISSUERS_AIA_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x02};
 
     /**
      * Проверяет наличие указанного OID в ExtendedKeyUsage SEQUENCE.
@@ -1305,14 +1402,20 @@ public final class TlsCertificate {
     // ========================================================================
 
     /**
-     * Парсит AuthorityInfoAccess: извлекает URI (uniformResourceIdentifier [6]).
-     *
-     * <p>Поддерживает как id-ad-ocsp (OCSP responder), так и id-ad-caIssuers
-     * (скачивание CA). Разделение не требуется — caller получит все URI
-     * и сам выберет нужный по контексту.</p>
+     * Парсит AccessDescription SEQUENCE из AuthorityInfoAccess.
+     * <p>
+     * AccessDescription ::= SEQUENCE {
+     *   accessMethod   OBJECT IDENTIFIER,
+     *   accessLocation GeneralName }
+     * <p>
+     * Извлекает URI (uniformResourceIdentifier [6]) и раскладывает по трём спискам:
+     * uriList — все URI (для backward-compat), ocspList — id-ad-ocsp,
+     * caIssuersList — id-ad-caIssuers.
      */
     private static void parseAiaDescriptions(byte[] der, int aiaOuter, int aiaEnd,
-                                              ArrayList<String> uriList) {
+                                              ArrayList<String> uriList,
+                                              ArrayList<String> ocspList,
+                                              ArrayList<String> caIssuersList) {
         if (aiaOuter >= aiaEnd || (der[aiaOuter] & 0xFF) != TAG_SEQUENCE) return;
         int[] aiaSeqTlv = readTlv(der, aiaOuter);
         int pos = aiaSeqTlv[0];
@@ -1330,6 +1433,8 @@ public final class TlsCertificate {
                 continue;
             }
             int[] methodOidTlv = readTlv(der, adPos);
+            // rawOidTlv — для сравнения OID с OCSP_AIA_OID и CA_ISSUERS_AIA_OID
+            int[] rawOidTlv = readTlv(der, adPos);
             int locPos = methodOidTlv[1];
             if (locPos < adEnd) {
                 int locTag = der[locPos] & 0xFF;
@@ -1338,6 +1443,11 @@ public final class TlsCertificate {
                     String uri = new String(der, uriTlv[0], uriTlv[1] - uriTlv[0],
                             java.nio.charset.StandardCharsets.US_ASCII);
                     uriList.add(uri);
+                    if (matchesOid(der, rawOidTlv[0], rawOidTlv[1] - rawOidTlv[0], OCSP_AIA_OID)) {
+                        ocspList.add(uri);
+                    } else if (matchesOid(der, rawOidTlv[0], rawOidTlv[1] - rawOidTlv[0], CA_ISSUERS_AIA_OID)) {
+                        caIssuersList.add(uri);
+                    }
                 }
             }
             pos = adSeqTlv[1];

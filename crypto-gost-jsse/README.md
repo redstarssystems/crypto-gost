@@ -1,0 +1,1060 @@
+# JSSE-провайдер для криптографических алгоритмов ГОСТ — crypto-gost-jsse
+
+Модуль `crypto-gost-jsse` реализует JSSE (Java Secure Socket Extension)
+провайдера для ГОСТ-криптографии на основе модуля `crypto-gost-tls13`:
+
+1.  **Классы JSSE:**
+
+    - **`RssysGostJsseProvider`** — регистрация провайдера через
+      `Security.addProvider()`.
+
+    - **`GostSSLContextSpi`** — `SSLContext` для `TLSv1.3` /
+      `GOST-TLSv1.3`.
+
+    - **`GostSSLEngine`** — full `SSLEngine`: handshake, wrap/unwrap,
+      ALPN (RFC 7301), SNI (RFC 6066), mTLS, OCSP stapling.
+
+    - **`GostX509KeyManager`** — `X509ExtendedKeyManager` для
+      ГОСТ-ключей; SNI-селектор.
+
+    - **`GostX509TrustManager`** — `X509ExtendedTrustManager` для
+      ГОСТ-сертификатов; валидация цепочки, OCSP (stapling + client-side
+      fetch), hostname verification.
+
+    - **`GostSSLSocketFactory` / `GostSSLServerSocketFactory`** — socket
+      factories.
+
+    - **`GostSSLSocket` / `GostSSLServerSocket`** — socket-реализации.
+
+    - **`GostSSLSession` / `GostSSLSessionContext`** — управление
+      сессиями, PSK resumption.
+
+2.  **Возможности:**
+
+    - **Handshake**: полный (client/server), сокращённый (`PSK`),
+      взаимный (`mTLS`).
+
+    - **ALPN** — согласование протокола прикладного уровня (HTTP/2,
+      HTTP/1.1).
+
+    - **SNI** — выбор сертификата по имени сервера (multi-tenant).
+
+    - **OCSP**: stapling (сервер прикладывает OCSP-ответ), client-side
+      fetch (через `JdkHttpOcspFetcher`), кэширование.
+
+    - **Session resumption**: PSK через `NewSessionTicket`.
+
+    - **Cipher suites**: `TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`.
+
+    - **Защита записей**: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446
+      §5.3, per-record TLSTREE re-keying.
+
+3.  **Безопасность реализации:**
+
+    - Constant-time сравнения для verify\_data и PSK binders.
+
+    - Затирание ключевого материала при close, fatal alert, exception.
+
+    - Защита от DoS: лимиты на размер записей, цепочку сертификатов,
+      post-handshake сообщения.
+
+    - Lock discipline: отдельные `ReentrantLock` для inbound/outbound
+      (SSLEngine-контракт), отдельные блокировки для read/write на
+      socket.
+
+4.  **Ограничения:**
+
+    - Только TLS 1.3 (TLS 1.2 и ниже не поддерживаются).
+
+    - Только ГОСТ-наборы (non-GOST cipher suites не поддерживаются).
+
+    - `HelloRetryRequest` (RFC 8446 §4.1.4) не поддерживается —
+      используется только одна named group (GC256A по умолчанию).
+
+    Все криптографические операции выполняются встроенными средствами
+    библиотеки — без внешних зависимостей.
+
+## Запуск примеров
+
+Все примеры находятся в модуле `examples/jsse` и запускаются через
+Makefile из его корня:
+
+    # Все 4 сервера последовательно (Netty, Jetty, Undertow, Tomcat)
+    make -C examples/jsse all
+
+    # По одному
+    make -C examples/jsse netty
+    make -C examples/jsse jetty
+    make -C examples/jsse undertow
+    make -C examples/jsse tomcat
+
+    # Spring Boot — интерактивно
+    make -C examples/jsse springboot
+
+    # Spring Boot — CI-тест (@SpringBootTest + GostSSLSocket)
+    make -C examples/jsse test
+
+Каждый сервер поднимается на случайном порту, выполняет TLS 1.3
+handshake с ГОСТ-наборами, выводит `SUCCESS` и останавливается.
+Исключение — `make springboot` (бесконечный цикл, останов через Ctrl+C).
+
+HTTP-серверы (Jetty, Undertow, Tomcat) проверяют только TLS handshake.
+`GostSSLEngine` не совместим с JDK HttpClient (SSLFlowDelegate) — полный
+HTTP-обмен доступен через ручной запуск и
+`curl -k --tlsv1.3 --https...`.
+
+## Запуск интеграционных тестов
+
+Интеграционные тесты проверяют конкурентность shared state
+(`GostSSLSessionContext`, `GostX509KeyManager`), mTLS через Jetty, PSK
+resumption, reconnect под нагрузкой и таймауты в сетевых условиях.
+
+Все тесты помечены `@Tag("integration")` — запуск одной командой:
+
+    # Все интеграционные тесты JSSE (19 тестов, 7 файлов)
+    make -C examples/jsse test-int-all
+
+    # Или напрямую через Maven:
+    mvn test -pl crypto-gost-jsse,examples/jsse -am -Dgroups="integration"
+
+    # Отдельные группы:
+    make -C examples/jsse test-integration   # 16 тестов examples/jsse
+    make -C examples/jsse test-keymanager    # 3 теста GostX509KeyManager
+    make -C examples/jsse test-concurrent    # 100 параллельных handshake'ов
+
+## Быстрый старт
+
+Минимальная конфигурация сервера и клиента:
+
+    import org.rssys.gost.jsse.RssysGostJsseProvider;
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
+
+    import javax.net.ssl.SSLContext;
+    import javax.net.ssl.SSLServerSocket;
+    import javax.net.ssl.SSLServerSocketFactory;
+    import javax.net.ssl.SSLSocket;
+    import javax.net.ssl.SSLSocketFactory;
+    import java.security.Security;
+
+    // Шаг 1: регистрация провайдера (один раз при старте приложения)
+    Security.addProvider(new RssysGostJsseProvider());
+
+    // Шаг 2: загрузка сертификата и ключа
+    // (см. «Загрузка сертификата» — PKCS12 или DER)
+
+    // Шаг 3: создание SSLContext
+    SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+    ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
+
+    // Шаг 4: сервер
+    SSLServerSocketFactory ssf = ctx.getServerSocketFactory();
+    SSLServerSocket serverSocket =
+        (SSLServerSocket) ssf.createServerSocket(8443);
+    SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
+    clientSocket.startHandshake();
+    // read/write через clientSocket.getInputStream()/getOutputStream()
+
+    // Шаг 5: клиент
+    SSLSocketFactory sf = ctx.getSocketFactory();
+    SSLSocket socket = (SSLSocket) sf.createSocket("host", 8443);
+    socket.startHandshake();
+    // read/write через socket.getInputStream()/getOutputStream()
+
+## API
+
+Модуль предоставляет три уровня API для интеграции:
+
+**Socket API** — `GostSSLSocket / GostSSLServerSocket` — наивысший
+уровень. Стандартный Java I/O через `InputStream`/`OutputStream`.
+Handshake запускается автоматически при первом read/write или явно через
+`startHandshake()`. Подходит для большинства приложений.
+
+**Engine API** — `GostSSLEngine` — низкоуровневый API для неблокирующего
+I/O (NIO, Netty). Ручное управление handshake через wrap/unwrap, буферы
+`ByteBuffer`. Требует больше кода, но даёт полный контроль.
+
+**Context API** — `GostSSLContextSpi` — создание engine- и
+socket-фабрик. Точка входа для интеграции с серверами приложений.
+
+`GostSSLEngine` разрешает параллельные вызовы `wrap()` и `unwrap()` из
+разных потоков (два отдельных `ReentrantLock` для inbound/outbound).
+Запрещено вызывать `wrap()` из двух потоков одновременно.
+`GostX509TrustManager` thread-safe.
+
+## Конфигурация сервера
+
+Сервер использует `GostX509KeyManager` для хранения сертификата и
+закрытого ключа.
+
+### Загрузка сертификата и ключа
+
+Через PKCS12 (рекомендуется для production — ключ и цепочка в одном
+файле):
+
+    import org.rssys.gost.tls13.cert.Pkcs12Loader;
+    import org.rssys.gost.signature.PrivateKeyParameters;
+    import org.rssys.gost.tls13.cert.TlsCertificate;
+    import org.rssys.gost.jsse.bridge.CertificateBridge;
+    import java.nio.file.Files;
+    import java.nio.file.Paths;
+    import java.util.List;
+
+    Pkcs12Loader.Result p12 = Pkcs12Loader.load(
+            Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray());
+    PrivateKeyParameters privateKey = p12.getPrivateKey();
+    List<TlsCertificate> tlsChain  = p12.getCertificateChain();
+    java.security.cert.X509Certificate[] jcaChain =
+            CertificateBridge.toJca(tlsChain);
+
+GOST PBE не поддерживается — только PBES2 (PBKDF2-HMAC-SHA256 +
+AES-256-CBC).
+
+Через DER-файлы:
+
+    import org.rssys.gost.tls13.cert.TlsCertificate;
+    import org.rssys.gost.jsse.bridge.CertificateBridge;
+    import org.rssys.gost.signature.PrivateKeyParameters;
+    import org.rssys.gost.jca.spec.GostDerCodec;
+    import java.nio.file.Files;
+    import java.nio.file.Paths;
+
+    byte[] certDer = Files.readAllBytes(Paths.get("server.der"));
+    byte[] keyDer  = Files.readAllBytes(Paths.get("server.key"));
+    byte[] caDer   = Files.readAllBytes(Paths.get("intermediate.der"));
+
+    TlsCertificate serverCert = new TlsCertificate(certDer);
+    TlsCertificate caCert     = new TlsCertificate(caDer);
+    PrivateKeyParameters priv = GostDerCodec.decodePrivateKey(keyDer);
+
+    java.security.cert.X509Certificate[] chain = {
+        CertificateBridge.toJca(serverCert),
+        CertificateBridge.toJca(caCert)
+    };
+
+### GostX509KeyManager
+
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
+    import org.rssys.gost.signature.PrivateKeyParameters;
+
+    GostX509KeyManager km = new GostX509KeyManager();
+    km.addKeyEntry("default", jcaChain, privateKey);
+    // Для SNI (multi-tenant): несколько записей с разными hostname
+    km.addKeyEntry("api", apiChain, apiPrivateKey);
+
+Для SNI-выбора сертификата сервер автоматически вызывает
+`GostX509KeyManager.asSniSelector()`, который выбирает запись по
+`SubjectAltName/dNSName` сертификата.
+
+### GostX509TrustManager
+
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.signature.PublicKeyParameters;
+    import org.rssys.gost.tls13.cert.TlsCertificate;
+    import java.nio.file.Files;
+    import java.nio.file.Paths;
+
+    // Вариант А: проверка цепочки + срок действия (без OCSP)
+    byte[] caDer = Files.readAllBytes(Paths.get("ca.der"));
+    PublicKeyParameters caKey = new TlsCertificate(caDer).getPublicKey();
+    GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
+
+    // Вариант Б: + OCSP stapling / client-side fetch
+    import org.rssys.gost.jsse.ocsp.OcspPolicy;
+    import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
+
+    GostX509TrustManager tm = new GostX509TrustManager(
+            caKey,
+            OcspPolicy.STAPLING_OR_FETCH,
+            new JdkHttpOcspFetcher());
+
+    // Для разработки/тестов — trust-all (без проверки CA):
+    GostX509TrustManager tmAll = new GostX509TrustManager(null, false);
+
+Trust-all (`caKey = null`) отключает проверку сертификата пира.
+Используйте только для разработки. В production всегда задавайте
+CA-ключ.
+
+### Создание серверного SSLContext
+
+    import javax.net.ssl.KeyManager;
+    import javax.net.ssl.TrustManager;
+    import javax.net.ssl.SSLContext;
+    import java.security.Security;
+    import org.rssys.gost.jsse.RssysGostJsseProvider;
+
+    Security.addProvider(new RssysGostJsseProvider());
+
+    SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+    ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
+
+    // Серверный SSLEngine
+    javax.net.ssl.SSLEngine serverEngine = ctx.createSSLEngine();
+    serverEngine.setUseClientMode(false);
+
+    // Или через socket factory:
+    javax.net.ssl.SSLServerSocketFactory ssf = ctx.getServerSocketFactory();
+
+## Конфигурация клиента
+
+    import javax.net.ssl.SSLContext;
+    import javax.net.ssl.TrustManager;
+    import java.security.Security;
+    import org.rssys.gost.jsse.RssysGostJsseProvider;
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+
+    Security.addProvider(new RssysGostJsseProvider());
+
+    // TrustManager с проверкой сертификата сервера
+    GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
+
+    GostX509KeyManager km = new GostX509KeyManager(); // пустой — без клиентского сертификата
+
+    SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+    ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
+
+    // Клиентский SSLEngine для NIO/integration
+    javax.net.ssl.SSLEngine clientEngine = ctx.createSSLEngine("host", 8443);
+    clientEngine.setUseClientMode(true);
+
+    // Или через socket factory:
+    javax.net.ssl.SSLSocketFactory sf = ctx.getSocketFactory();
+
+Для взаимной аутентификации (mTLS) клиент должен предоставить свой
+сертификат:
+
+    GostX509KeyManager clientKm = new GostX509KeyManager();
+    clientKm.addKeyEntry("client", clientChain, clientPrivateKey);
+
+    SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+    ctx.init(new KeyManager[]{clientKm}, new TrustManager[]{tm}, null);
+
+Для endpoint identification (проверка hostname) установите
+`SSLParameters.setEndpointIdentificationAlgorithm("HTTPS")`.
+`GostX509TrustManager` проверит dNSName/iPAddress сертификата по RFC
+6125.
+
+## GostSSLEngine (низкоуровневый API)
+
+`GostSSLEngine` предназначен для неблокирующих интеграций (NIO, Netty,
+кастомные selector-циклы). Управление handshake — через wrap/unwrap с
+`ByteBuffer`.
+
+    import org.rssys.gost.jsse.engine.GostSSLEngine;
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.tls13.TlsConstants;
+
+    import javax.net.ssl.SSLEngineResult;
+    import java.nio.ByteBuffer;
+
+    GostSSLEngine clientEngine = new GostSSLEngine(
+            km, tm, "host", 8443, true /* clientMode */);
+
+    clientEngine.beginHandshake();
+    ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+    ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
+
+    SSLEngineResult result = clientEngine.wrap(ByteBuffer.allocate(0), netBuf);
+    netBuf.flip();
+    // отправить netBuf пиру
+    // принять данные от пира → unwrap
+    result = clientEngine.unwrap(netBuf, appBuf);
+
+Цикл handshake — смотрите `doClientHandshake()` / `doServerHandshake()`
+в `GostSSLEngineLoopbackTest.java` (исходники тестов).
+
+## Интеграция с серверами приложений
+
+### Общие принципы
+
+Во всех примерах ниже используется готовый `SSLContext`, созданный по
+одному из двух шаблонов:
+
+Вариант 1 — GostX509KeyManager напрямую (DER-файлы или Pkcs12Loader):
+
+    import org.rssys.gost.jsse.RssysGostJsseProvider;
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.jsse.bridge.CertificateBridge;
+    import org.rssys.gost.signature.PrivateKeyParameters;
+    import org.rssys.gost.signature.PublicKeyParameters;
+    import org.rssys.gost.tls13.cert.Pkcs12Loader;
+    import org.rssys.gost.tls13.cert.TlsCertificate;
+
+    import javax.net.ssl.KeyManager;
+    import javax.net.ssl.SSLContext;
+    import javax.net.ssl.TrustManager;
+    import java.nio.file.Files;
+    import java.nio.file.Paths;
+    import java.security.Security;
+    import java.util.List;
+
+    // Шаг 1: регистрация провайдера
+    Security.addProvider(new RssysGostJsseProvider());
+
+    // Шаг 2: загрузка сертификата и ключа через PKCS12
+    Pkcs12Loader.Result p12 = Pkcs12Loader.load(
+            Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray());
+    PrivateKeyParameters privateKey = p12.getPrivateKey();
+    List<TlsCertificate> tlsChain  = p12.getCertificateChain();
+    java.security.cert.X509Certificate[] jcaChain =
+            CertificateBridge.toJca(tlsChain);
+
+    // Шаг 3: KeyManager
+    GostX509KeyManager km = new GostX509KeyManager();
+    km.addKeyEntry("server", jcaChain, privateKey);
+
+    // Шаг 4: TrustManager — загрузка CA
+    byte[] caDer = Files.readAllBytes(Paths.get("ca.der"));
+    PublicKeyParameters caKey = new TlsCertificate(caDer).getPublicKey();
+    GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
+
+    // Шаг 5: SSLContext
+    SSLContext sslContext = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+    sslContext.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
+
+Вариант 2 — KeyManagerFactory из PKCS12 KeyStore (JCA-совместимый):
+
+    import org.rssys.gost.jsse.RssysGostJsseProvider;
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.jca.RssysGostProvider;
+
+    import javax.net.ssl.KeyManagerFactory;
+    import javax.net.ssl.SSLContext;
+    import javax.net.ssl.TrustManager;
+    import java.security.KeyStore;
+    import java.security.Security;
+
+    Security.addProvider(new RssysGostJsseProvider());
+    Security.addProvider(new RssysGostProvider()); // для загрузки PKCS12 KeyStore
+
+    KeyStore ks = KeyStore.getInstance("PKCS12", "RssysGostProvider");
+    ks.load(Files.newInputStream(Paths.get("server.p12")), "password".toCharArray());
+
+    KeyManagerFactory kmf = KeyManagerFactory.getInstance("GostX509", "RssysGostJsse");
+    kmf.init(ks, "password".toCharArray());
+
+    SSLContext sslContext = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+    sslContext.init(kmf.getKeyManagers(), new TrustManager[]{tm}, null);
+
+`Security.addProvider()` достаточно вызвать один раз при старте
+приложения.
+
+Все последующие примеры ссылаются на переменную `sslContext`, полученную
+одним из этих способов.
+
+Зависимости Maven для всех примеров раздела:
+
+    <!-- Обязательно для всех примеров -->
+    <dependency>
+        <groupId>org.rssys</groupId>
+        <artifactId>crypto-gost-jsse</artifactId>
+        <version>${project.version}</version>
+    </dependency>
+    <dependency>
+        <groupId>org.rssys</groupId>
+        <artifactId>crypto-gost-tls13</artifactId>
+        <version>${project.version}</version>
+    </dependency>
+
+### Netty 4.2
+
+Модуль `crypto-gost-netty` предоставляет `GostSslContextBuilder` —
+готовый адаптер для Netty pipeline. Внутри builder сам регистрирует
+`RssysGostJsseProvider` и создаёт `SSLContext` — вызывать
+`Security.addProvider()` вручную не нужно.
+
+Дополнительная зависимость:
+
+    <dependency>
+        <groupId>org.rssys</groupId>
+        <artifactId>crypto-gost-netty</artifactId>
+        <version>${project.version}</version>
+    </dependency>
+    <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-handler</artifactId>
+        <version>4.2.13.Final</version>
+    </dependency>
+
+Сервер:
+
+    import org.rssys.gost.netty.GostSslContext;
+    import org.rssys.gost.netty.GostSslContextBuilder;
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.jsse.bridge.CertificateBridge;
+
+    import io.netty.bootstrap.ServerBootstrap;
+    import io.netty.channel.ChannelFuture;
+    import io.netty.channel.ChannelInitializer;
+    import io.netty.channel.EventLoopGroup;
+    import io.netty.channel.nio.NioEventLoopGroup;
+    import io.netty.channel.socket.SocketChannel;
+    import io.netty.channel.socket.nio.NioServerSocketChannel;
+
+    // KeyManager (см. «Общие принципы» — загрузка сертификата)
+    GostX509KeyManager km = new GostX509KeyManager();
+    km.addKeyEntry("default", jcaChain, privateKey);
+
+    // TrustManager (см. «Общие принципы»)
+    GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
+
+    // GostSslContext через builder
+    GostSslContext sslCtx = GostSslContextBuilder.forServer(km)
+            .trustManager(tm)
+            .applicationProtocols("h2", "http/1.1")    // ALPN для HTTP/2
+            .build();
+
+    // ServerBootstrap
+    EventLoopGroup boss   = new NioEventLoopGroup(1);
+    EventLoopGroup worker = new NioEventLoopGroup();
+    try {
+        ServerBootstrap b = new ServerBootstrap();
+        b.group(boss, worker)
+         .channel(NioServerSocketChannel.class)
+         .childHandler(new ChannelInitializer<SocketChannel>() {
+             @Override
+             protected void initChannel(SocketChannel ch) {
+                 ch.pipeline().addLast(sslCtx.newHandler(ch.alloc()));
+                 ch.pipeline().addLast(new MyServerHandler());
+             }
+         });
+        ChannelFuture f = b.bind(8443).sync();
+        f.channel().closeFuture().sync();
+    } finally {
+        worker.shutdownGracefully();
+        boss.shutdownGracefully();
+    }
+
+Клиент (mTLS):
+
+    import org.rssys.gost.netty.GostSslContext;
+    import org.rssys.gost.netty.GostSslContextBuilder;
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
+
+    import io.netty.bootstrap.Bootstrap;
+    import io.netty.channel.ChannelInitializer;
+    import io.netty.channel.EventLoopGroup;
+    import io.netty.channel.nio.NioEventLoopGroup;
+    import io.netty.channel.socket.SocketChannel;
+    import io.netty.channel.socket.nio.NioSocketChannel;
+
+    // Клиентский KeyManager для mTLS (опционально — только если нужен mTLS)
+    GostX509KeyManager clientKm = new GostX509KeyManager();
+    clientKm.addKeyEntry("client", clientChain, clientPrivateKey);
+
+    GostSslContext clientCtx = GostSslContextBuilder.forClient()
+            .trustManager(tm)
+            .keyManager(clientKm)                          // для mTLS
+            .applicationProtocols("h2", "http/1.1")
+            .build();
+
+    EventLoopGroup group = new NioEventLoopGroup();
+    try {
+        Bootstrap b = new Bootstrap();
+        b.group(group)
+         .channel(NioSocketChannel.class)
+         .handler(new ChannelInitializer<SocketChannel>() {
+             @Override
+             protected void initChannel(SocketChannel ch) {
+                 ch.pipeline().addLast(
+                         clientCtx.newHandler(ch.alloc(), "host", 8443));
+                 ch.pipeline().addLast(new MyClientHandler());
+             }
+         });
+        ChannelFuture f = b.connect("host", 8443).sync();
+        f.channel().closeFuture().sync();
+    } finally {
+        group.shutdownGracefully();
+    }
+
+mTLS: `.clientAuth(ClientAuth.REQUIRE)` — обязательный,
+`.clientAuth(ClientAuth.OPTIONAL)` — опциональный.
+
+GostSslContextBuilder.build() сам вызывает `Security.addProvider()`. Не
+регистрируйте провайдер вручную при использовании Netty-модуля.
+
+### Jetty 12
+
+Дополнительная зависимость:
+
+    <dependency>
+        <groupId>org.eclipse.jetty</groupId>
+        <artifactId>jetty-server</artifactId>
+        <version>12.0.19</version>
+    </dependency>
+
+ALPN для HTTP/2 требует модуль `jetty-alpn-java-server` на classpath.
+Для одного `http/1.1` зависимость не нужна — ALPN не участвует в
+согласовании.
+
+    import org.eclipse.jetty.server.HttpConfiguration;
+    import org.eclipse.jetty.server.HttpConnectionFactory;
+    import org.eclipse.jetty.server.Request;
+    import org.eclipse.jetty.server.Response;
+    import org.eclipse.jetty.server.Server;
+    import org.eclipse.jetty.server.ServerConnector;
+    import org.eclipse.jetty.server.SslConnectionFactory;
+    import org.eclipse.jetty.server.Handler;
+    import org.eclipse.jetty.util.Callback;
+    import org.eclipse.jetty.util.ssl.SslContextFactory;
+
+    import java.nio.charset.StandardCharsets;
+
+    // SslContextFactory принимает готовый SSLContext
+    SslContextFactory.Server scf = new SslContextFactory.Server();
+    scf.setSslContext(sslContext);
+    scf.setIncludeProtocols("TLSv1.3");
+
+    HttpConfiguration httpsConfig = new HttpConfiguration();
+    httpsConfig.addCustomizer(new SecureRequestCustomizer());
+
+    Server server = new Server();
+    ServerConnector connector = new ServerConnector(server,
+            new SslConnectionFactory(scf, "http/1.1"),
+            new HttpConnectionFactory(httpsConfig));
+    connector.setPort(8443);
+    server.addConnector(connector);
+
+    // Handler.Abstract — Jetty 12 core handler API (блокирующий обработчик)
+    server.setHandler(new Handler.Abstract() {
+        @Override
+        public boolean handle(Request request, Response response, Callback callback) {
+            try {
+                String body = org.eclipse.jetty.io.Content.Source.asString(
+                        request, StandardCharsets.UTF_8).trim();
+                if ("PING".equals(body)) {
+                    response.setStatus(200);
+                    org.eclipse.jetty.io.Content.Sink.write(
+                            response, true, "PONG\n", callback);
+                } else {
+                    callback.succeeded();
+                }
+                return true;
+            } catch (Exception e) {
+                callback.failed(e);
+                return true;
+            }
+        }
+    });
+    server.start();
+
+mTLS: `setNeedClientAuth(true)` — обязательный,
+`setWantClientAuth(true)` — опциональный.
+
+ALPN в Jetty 12 требует модуль `jetty-alpn-java-server` на classpath.
+Без него согласование HTTP/2 не будет работать.
+
+### Undertow 2
+
+Дополнительная зависимость:
+
+    <dependency>
+        <groupId>io.undertow</groupId>
+        <artifactId>undertow-core</artifactId>
+        <version>2.3.18.Final</version>
+    </dependency>
+
+    import io.undertow.Undertow;
+    import io.undertow.UndertowOptions;
+
+    Undertow server = Undertow.builder()
+            .addHttpsListener(8443, "0.0.0.0", sslContext)
+            .setServerOption(UndertowOptions.ENABLE_HTTP2, true)
+            .setHandler(exchange -> {
+                exchange.getResponseSender().send("Hello GOST TLS!");
+            })
+            .build();
+    server.start();
+
+Для mTLS через OptionMap:
+
+    import org.xnio.OptionMap;
+    import org.xnio.Options;
+    import org.xnio.SslClientAuthMode;
+
+    Undertow server = Undertow.builder()
+            .addHttpsListener(8443, "0.0.0.0", sslContext,
+                    OptionMap.create(Options.SSL_CLIENT_AUTH_MODE, SslClientAuthMode.REQUIRED))
+            .setHandler(exchange -> { ... })
+            .build();
+
+mTLS: `SslClientAuthMode.REQUIRED` — обязательный,
+`SslClientAuthMode.REQUESTED` — опциональный.
+
+Undertow — самый лаконичный вариант: `SSLContext` передаётся напрямую в
+`addHttpsListener`, без дополнительных фабрик и обёрток.
+
+### Tomcat 11 (Jakarta EE 10)
+
+Tomcat 11 не предоставляет публичного API для прямой передачи
+`javax.net.ssl.SSLContext` в коннектор. Единственный поддерживаемый
+способ — кастомный `SSLImplementation`.
+
+Дополнительная зависимость:
+
+    <dependency>
+        <groupId>org.apache.tomcat.embed</groupId>
+        <artifactId>tomcat-embed-core</artifactId>
+        <version>11.0.7</version>
+    </dependency>
+
+    import org.rssys.gost.jsse.GostJsseConstants;
+    import org.rssys.gost.jsse.examples.JsseCertHelper;
+
+    import org.apache.catalina.connector.Connector;
+    import org.apache.catalina.startup.Tomcat;
+    import org.apache.coyote.AbstractProtocol;
+    import org.apache.tomcat.util.net.SSLHostConfig;
+    import org.apache.tomcat.util.net.SSLHostConfigCertificate;
+    import org.apache.tomcat.util.net.SSLHostConfigCertificate.Type;
+    import org.apache.tomcat.util.net.SSLImplementation;
+    import org.apache.tomcat.util.net.SSLSupport;
+    import org.apache.tomcat.util.net.SSLUtil;
+
+    import javax.net.ssl.KeyManager;
+    import javax.net.ssl.SSLSession;
+    import javax.net.ssl.SSLSessionContext;
+    import javax.net.ssl.TrustManager;
+    import javax.net.ssl.X509KeyManager;
+    import javax.net.ssl.X509TrustManager;
+    import java.util.List;
+    import java.util.Map;
+
+    JsseCertHelper helper = new JsseCertHelper();
+
+    Connector connector = new Connector("HTTP/1.1");
+    connector.setPort(8443);
+    connector.setSecure(true);
+    connector.setScheme("https");
+    connector.setProperty("SSLEnabled", "true");
+    connector.setProperty("sslImplementationName",
+            GostSSLImplementation.class.getName());
+
+    SSLHostConfig sslHostConfig = new SSLHostConfig();
+    sslHostConfig.setHostName("_default_");
+    sslHostConfig.setSslProtocol("TLSv1.3");
+
+    SSLHostConfigCertificate cert = new SSLHostConfigCertificate(
+            sslHostConfig, Type.UNDEFINED);
+    sslHostConfig.addCertificate(cert);
+    connector.addSslHostConfig(sslHostConfig);
+
+    Tomcat tomcat = new Tomcat();
+    tomcat.setPort(8080);
+    tomcat.getService().addConnector(connector);
+    tomcat.start();
+
+    // ---- Вложенные классы: GostSSLImplementation и GostSSLUtil ----
+
+    public static final class GostSSLImplementation extends SSLImplementation {
+        @Override
+        public SSLSupport getSSLSupport(SSLSession session,
+                                        Map<String, List<String>> additional) {
+            return null;
+        }
+
+        @Override
+        public SSLUtil getSSLUtil(SSLHostConfigCertificate certificate) {
+            return new GostSSLUtil();
+        }
+    }
+
+    public static final class GostSSLUtil implements SSLUtil {
+        // Единый helper — getKeyManagers() и createSSLContext() должны
+        // использовать один и тот же сертификат, иначе TLS-хендшейк упадёт
+        private static final JsseCertHelper HELPER;
+
+        static {
+            try { HELPER = new JsseCertHelper(); }
+            catch (Exception e) { throw new RuntimeException(e); }
+        }
+
+        @Override
+        public SSLContext createSSLContext(
+                List<String> negotiableProtocols) throws Exception {
+            X509KeyManager km = HELPER.createKeyManager();
+            X509TrustManager tm = HELPER.createTrustManager();
+            return SSLUtil.createSSLContext(
+                    HELPER.getSslContext(), km, tm);
+        }
+
+        @Override
+        public KeyManager[] getKeyManagers() throws Exception {
+            return new KeyManager[]{HELPER.createKeyManager()};
+        }
+
+        @Override
+        public TrustManager[] getTrustManagers() throws Exception {
+            return new TrustManager[]{HELPER.createTrustManager()};
+        }
+
+        @Override
+        public void configureSessionContext(
+                SSLSessionContext sslSessionContext) {}
+
+        @Override
+        public String[] getEnabledProtocols() {
+            return GostJsseConstants.SUPPORTED_PROTOCOLS.clone();
+        }
+
+        @Override
+        public String[] getEnabledCiphers() {
+            return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+        }
+    }
+
+mTLS: `SSLHostConfig.setCertificateVerification("required")` —
+обязательный, `setCertificateVerification("optional")` — опциональный.
+
+Tomcat 11 использует Jakarta EE 10 (`jakarta.*`). Все зависимости
+проекта должны быть Jakarta-совместимыми. `javax.*` в Tomcat 11 не
+работает.
+
+`sslImplementationName` передаётся через `connector.setProperty()`.
+Tomcat автоматически создаёт экземпляр `SSLImplementation` по имени
+класса при старте коннектора.
+
+### Spring Boot 3.4
+
+Spring Boot 3.4 конфигурирует embedded Tomcat. Кастомный SSLContext
+передаётся через `WebServerFactoryCustomizer` + `SSLImplementation`
+(аналогично standalone Tomcat 11, но с Spring Boot управляемой
+конфигурацией).
+
+Дополнительная зависимость:
+
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+        <version>3.4.5</version>
+    </dependency>
+
+    import org.rssys.gost.jsse.GostJsseConstants;
+    import org.rssys.gost.jsse.RssysGostJsseProvider;
+    import org.rssys.gost.jsse.examples.JsseCertHelper;
+
+    import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
+    import org.springframework.boot.web.server.WebServerFactoryCustomizer;
+    import org.springframework.context.annotation.Bean;
+    import org.springframework.context.annotation.Configuration;
+
+    import org.apache.catalina.connector.Connector;
+    import org.apache.tomcat.util.net.SSLHostConfig;
+    import org.apache.tomcat.util.net.SSLHostConfigCertificate;
+    import org.apache.tomcat.util.net.SSLHostConfigCertificate.Type;
+    import org.apache.tomcat.util.net.SSLImplementation;
+    import org.apache.tomcat.util.net.SSLSupport;
+    import org.apache.tomcat.util.net.SSLUtil;
+
+    import javax.net.ssl.*;
+    import java.security.Security;
+    import java.util.List;
+    import java.util.Map;
+
+    @Configuration
+    public class GostSslConfig {
+
+        static { Security.addProvider(new RssysGostJsseProvider()); }
+
+        @Bean
+        public WebServerFactoryCustomizer<TomcatServletWebServerFactory>
+                gostSslCustomizer() {
+            return factory -> {
+                factory.addConnectorCustomizers(connector -> {
+                    connector.setSecure(true);
+                    connector.setScheme("https");
+                    connector.setProperty("SSLEnabled", "true");
+                    // Tomcat 11: sslImplementationName через setProperty
+                    connector.setProperty("sslImplementationName",
+                            GostSSLImplementation.class.getName());
+
+                    SSLHostConfig hc = new SSLHostConfig();
+                    hc.setHostName("_default_");
+                    hc.setSslProtocol("TLSv1.3");
+
+                    SSLHostConfigCertificate cert =
+                            new SSLHostConfigCertificate(hc, Type.UNDEFINED);
+                    hc.addCertificate(cert);
+                    connector.addSslHostConfig(hc);
+                });
+                factory.setPort(8443);
+            };
+        }
+
+        // ---- GostSSLImplementation и GostSSLUtil — идентичны
+        //      показанным в разделе «Tomcat 11» выше ----
+    }
+
+application.properties:
+
+    server.port=8443
+
+Вложенные классы `GostSSLImplementation` и `GostSSLUtil` — идентичны
+показанным в разделе Tomcat 11 выше. Единственное отличие:
+`GostSslConfig` регистрирует провайдер в `static {}`, а не в методе,
+потому что Spring Boot конфигурирует встроенный сервер до полной
+инициализации контекста.
+
+mTLS: внутри `ConnectorCustomizer` добавьте
+`sslHostConfig.setCertificateVerification("required")`.
+
+#### mTLS
+
+Взаимная аутентификация (mTLS) включается на стороне сервера флагом
+`setNeedClientAuth(true)`. TrustManager проверяет клиентский сертификат
+тем же `GostX509TrustManager`, но с CA клиентских сертификатов (может
+отличаться от CA серверных).
+
+Пример для Jetty 12 (для других серверов — см. таблицу ниже):
+
+    import org.rssys.gost.jsse.RssysGostJsseProvider;
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
+    import org.rssys.gost.signature.PublicKeyParameters;
+    import org.rssys.gost.tls13.cert.TlsCertificate;
+
+    import javax.net.ssl.SSLContext;
+    import javax.net.ssl.KeyManager;
+    import javax.net.ssl.TrustManager;
+    import java.nio.file.Files;
+    import java.nio.file.Paths;
+    import java.security.Security;
+
+    Security.addProvider(new RssysGostJsseProvider());
+
+    // CA для проверки клиентских сертификатов
+    byte[] clientCaDer = Files.readAllBytes(Paths.get("client-ca.der"));
+    PublicKeyParameters clientCaKey = new TlsCertificate(clientCaDer).getPublicKey();
+    GostX509TrustManager tm = new GostX509TrustManager(clientCaKey, false);
+
+    // Серверный KeyManager — свой сертификат
+    GostX509KeyManager km = new GostX509KeyManager();
+    km.addKeyEntry("default", serverChain, serverPrivateKey);
+
+    SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+    ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
+
+    // Передать ctx в Jetty (или другой сервер) + включить needClientAuth
+
+<table>
+<caption>Способы включения mTLS для разных серверов
+приложений:</caption>
+<colgroup>
+<col style="width: 40%" />
+<col style="width: 60%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Сервер</th>
+<th style="text-align: left;">Метод</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><p><strong>Netty</strong></p></td>
+<td
+style="text-align: left;"><p><code>GostSslContextBuilder.forServer(km).clientAuth(ClientAuth.REQUIRE)</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><strong>Jetty</strong></p></td>
+<td
+style="text-align: left;"><p><code>SslContextFactory.Server.setNeedClientAuth(true) / setWantClientAuth(true)</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><strong>Undertow</strong></p></td>
+<td
+style="text-align: left;"><p><code>OptionMap.create(org.xnio.Options.SSL_CLIENT_AUTH_MODE, org.xnio.SslClientAuthMode.REQUIRED)</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><strong>Tomcat</strong></p></td>
+<td
+style="text-align: left;"><p><code>SSLHostConfig.setCertificateVerification("required")</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><strong>Spring Boot</strong></p></td>
+<td style="text-align: left;"><p>В <code>ConnectorCustomizer</code>:
+<code>sslHostConfig.setCertificateVerification("required")</code></p></td>
+</tr>
+</tbody>
+</table>
+
+## Потокобезопасность (Thread safety)
+
+`GostSSLEngine` разрешает параллельные `wrap()` и `unwrap()` из разных
+потоков (два `ReentrantLock` для inbound/outbound). Запрещено вызывать
+`wrap()` из двух потоков одновременно.
+
+`GostSSLSocket` — thread-safe после завершения handshake: чтение и
+запись могут выполняться из разных потоков (отдельные блокировки
+read/write).
+
+`GostX509TrustManager` thread-safe — OCSP-кэш использует
+`ConcurrentHashMap`.
+
+`GostX509KeyManager` thread-safe — хранилище entry’ей использует
+`CopyOnWriteArrayList` (read-heavy, lock-free reads, редкие writes).
+
+`GostSSLSessionContext` thread-safe — PSK-хранилище использует
+`InMemoryPskStore` (thread-safe), карта сессий — `synchronizedMap` с
+LRU-эвiction.
+
+## Загрузка сертификата
+
+Для production рекомендуется PKCS12 (см. раздел «Загрузка сертификата и
+ключа»).
+
+Методы `CertificateBridge.toJca()` / `CertificateBridge.toTls()`
+конвертируют между `TlsCertificate` (ядро tls13) и
+`java.security.cert.X509Certificate` (JCA/JSSE). Импорт:
+
+    import org.rssys.gost.jsse.bridge.CertificateBridge;
+
+## Безопасность реализации
+
+- `GostX509TrustManager` — fail-closed: при отсутствии OCSP-ответа (если
+  политика `STAPLING_REQUIRED`) сертификат считается невалидным.
+
+- Constant-time сравнения для verify\_data и PSK binders.
+
+- Пустой `getAcceptedIssuers()` — не раскрываем список доверенных CA
+  клиенту (защита от fingerprinting).
+
+- Затирание ключевого материала при close, fatal alert, exception.
+
+- OCSP-кэш с TTL (1 час по умолчанию).
+
+- Защита от downgrade: только TLSv1.3, только ГОСТ-наборы.
+
+## Ограничения
+
+- Только TLS 1.3 (TLS 1.2 и ниже не поддерживаются).
+
+- Только ГОСТ-наборы (`TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`).
+
+- `HelloRetryRequest` не поддерживается — только одна named group
+  (GC256A).
+
+- PSK-тикеты одноразовые (RFC 8446 §8.1).
+
+- GOST PBE для PKCS12 не поддерживается — только PBES2
+  (PBKDF2-HMAC-SHA256 + AES-256-CBC).
+
+- KeyManagerFactory — только алгоритм `GostX509` (не `PKIX`, не
+  `NewSunX509`).
+
+## Поддержать проект
+
+Если проект оказался полезным, вы можете поддержать проект на
+[**Boosty**](https://boosty.to/mike_ananev/donate)
+
+## Лицензия
+
+Автор: Михаил Ананьев.  
+
+Данный проект распространяется под *Открытой лицензией на программное
+обеспечение "Рэд старс системс"*, версия 1.0.  
+Текст лицензии находится в файле LICENSE или по
+[ссылке](https://gitflic.ru/project/red-stars-systems/licenses/blob?file=open-license%2FLICENSE).

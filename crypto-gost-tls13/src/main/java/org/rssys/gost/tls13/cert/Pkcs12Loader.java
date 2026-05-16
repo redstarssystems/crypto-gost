@@ -126,12 +126,10 @@ public final class Pkcs12Loader {
      * @param jdkKey JDK-ключ из KeyStore
      * @return адаптированный ключ
      */
-    private static PrivateKeyParameters adaptPrivateKey(PrivateKey jdkKey) {
-        // Если это наш GostECPrivateKey — извлекаем напрямую
+    public static PrivateKeyParameters adaptPrivateKey(PrivateKey jdkKey) {
         if (jdkKey instanceof GostECPrivateKey) {
             return ((GostECPrivateKey) jdkKey).toPrivateKeyParameters();
         }
-        // Иначе парсим PKCS#8 DER
         return GostDerCodec.decodePrivateKey(jdkKey.getEncoded());
     }
 }

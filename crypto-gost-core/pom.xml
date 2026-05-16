@@ -15,6 +15,11 @@
     <artifactId>crypto-gost-core</artifactId>
     <packaging>jar</packaging>
 
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+    </properties>
+
     <name>crypto-gost-core</name>
     <description>Криптографическое ядро алгоритмов ГОСТ: Стрибог, Кузнечик, ГОСТ Р 34.10-2012, JCA-провайдер</description>
     <url>https://gitflic.ru/project/red-stars-systems/crypto-gost</url>

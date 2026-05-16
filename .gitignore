@@ -34,6 +34,7 @@ logs
 .java-version
 .lein-*
 .lsp/.cache
+/AGENTS.md
 .lsp/sqlite.db
 .nrepl-history
 .nrepl-port
@@ -52,3 +53,4 @@ README.xml
 .flattened-pom.xml
 /crypto-gost-tls13/doc/architecture.xml
 /crypto-gost-tls13/doc/manual-interop-test.xml
+

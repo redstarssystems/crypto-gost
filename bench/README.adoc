@@ -7,14 +7,14 @@ toc::[]
 
 .Результаты сравнения *crypto-gost-core* и *BouncyCastle 1.83* в части операций электронной подписи:
 
-* link:https://gitflic.ru/project/red-stars-systems/crypto-gost/blob?file=doc/bench/results/signature/ecgost256-throughput.png[Результаты сравнения для 256 бит]
-* link:https://gitflic.ru/project/red-stars-systems/crypto-gost/blob?file=doc/bench/results/signature/ecgost512-throughput.png[Результаты сравнения для 512 бит]
+* link:results/signature/ecgost256-throughput.png[Результаты сравнения для 256 бит]
+* link:results/signature/ecgost512-throughput.png[Результаты сравнения для 512 бит]
 
 
 
 .Результаты сравнения *crypto-gost-core* и *BouncyCastle 1.83* в части операций шифрования "Кузнечик":
-* link:https://gitflic.ru/project/red-stars-systems/crypto-gost/blob?file=doc/bench/results/kuznyechik/kuznyechik-ctr-throughput.png[Результаты сравнения режима CTR]
-* link:https://gitflic.ru/project/red-stars-systems/crypto-gost/blob?file=doc/bench/results/kuznyechik/kuznyechik-cfb-throughput.png[Результаты сравнения режима CFB]
+* link:results/kuznyechik/kuznyechik-ctr-throughput.png[Результаты сравнения режима CTR]
+* link:results/kuznyechik/kuznyechik-cfb-throughput.png[Результаты сравнения режима CFB]
 
 === Методики бенчмарков
 

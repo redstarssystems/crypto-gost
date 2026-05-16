@@ -19,10 +19,13 @@ import org.rssys.gost.tls13.config.SniCertificateSelector;
 import org.rssys.gost.tls13.config.TlsServerCredentials;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
 import org.rssys.gost.tls13.message.TlsMessageParser;
+import org.rssys.gost.tls13.psk.PskEntry;
+import org.rssys.gost.tls13.psk.PskStore;
 import org.rssys.gost.tls13.psk.TlsPskHelper;
 import org.rssys.gost.tls13.record.TlsTrafficKeys;
 
 import java.io.IOException;
+import java.util.Arrays;
 import org.rssys.gost.signature.ECPoint;
 import java.math.BigInteger;
 import java.util.ArrayDeque;
@@ -141,8 +144,10 @@ public final class TlsHandshakeEngine {
     private final ECParameters ecParams;
     private final int selectedNamedGroup;
     private final int selectedSigScheme;
-    private final byte[] ocspResponse;
+    private byte[] ocspResponse;
     private final boolean requestClientAuth;
+    /** true = wantClientAuth (пустой сертификат не фатален, только когда requestClientAuth=true) */
+    private final boolean optionalClientAuth;
 
     private final ArrayDeque<byte[]> outgoingQueue = new ArrayDeque<>();
     private HandshakeContext ctx;
@@ -173,10 +178,16 @@ public final class TlsHandshakeEngine {
 
     // Клиентские PSK-параметры (передаются через start)
     private byte[] pskKey;
+
     private byte[] pskIdentity;
-    private long obfuscatedTicketAge;
+
     private boolean pskAccepted;
+
     private boolean pskOffered;
+
+    private long obfuscatedTicketAge;
+
+    private PskStore serverPskStore;
 
     // mTLS — сервер запросил клиентский сертификат, и клиент его отправит
     private boolean clientAuthRequested;
@@ -189,6 +200,7 @@ public final class TlsHandshakeEngine {
     private List<String> clientAlpnProtocols;
     private List<String> serverAlpnProtocols;
     private String selectedAlpnProtocol;
+    private java.util.function.Function<java.util.List<String>, String> alpnSelector;
 
     // SNI certificate selection (RFC 6066 §3, RFC 8446 §4.4.2)
     private final SniCertificateSelector sniSelector;
@@ -216,16 +228,16 @@ public final class TlsHandshakeEngine {
     // ========================================================================
 
     /**
-     * @param role              CLIENT или SERVER
-     * @param ciphersuite       cipher suite (может измениться после ServerHello)
-     * @param messageBuilder    сборщик handshake-сообщений
-     * @param ecParams          параметры эллиптической кривой
+     * @param role               CLIENT или SERVER
+     * @param ciphersuite        cipher suite (может измениться после ServerHello)
+     * @param messageBuilder     сборщик handshake-сообщений
+     * @param ecParams           параметры эллиптической кривой
      * @param selectedNamedGroup идентификатор именованной группы
      * @param selectedSigScheme  выбранная схема подписи
      * @param hashLen            длина хеша (32 для Streebog-256)
-     * @param ocspResponse      OCSP-ответ для степплинга (сервер, null = без OCSP)
-     * @param requestClientAuth запрашивать сертификат клиента (сервер, mTLS)
-     * @param sniSelector       селектор сертификата по SNI (сервер, может быть null)
+     * @param ocspResponse       OCSP-ответ для степплинга (сервер, null = без OCSP)
+     * @param requestClientAuth  запрашивать сертификат клиента (сервер, mTLS)
+     * @param sniSelector        селектор сертификата по SNI (сервер, может быть null)
      */
     public TlsHandshakeEngine(Role role, TlsCiphersuite ciphersuite,
                                TlsMessageBuilder messageBuilder,
@@ -236,6 +248,35 @@ public final class TlsHandshakeEngine {
                                byte[] ocspResponse,
                                boolean requestClientAuth,
                                SniCertificateSelector sniSelector) {
+        this(role, ciphersuite, messageBuilder, ecParams,
+             selectedNamedGroup, selectedSigScheme, hashLen,
+             ocspResponse, requestClientAuth, sniSelector, false);
+    }
+
+    /**
+     * @param role               CLIENT или SERVER
+     * @param ciphersuite        cipher suite (может измениться после ServerHello)
+     * @param messageBuilder     сборщик handshake-сообщений
+     * @param ecParams           параметры эллиптической кривой
+     * @param selectedNamedGroup идентификатор именованной группы
+     * @param selectedSigScheme  выбранная схема подписи
+     * @param hashLen            длина хеша (32 для Streebog-256)
+     * @param ocspResponse       OCSP-ответ для степплинга (сервер, null = без OCSP)
+     * @param requestClientAuth  запрашивать сертификат клиента (сервер, mTLS)
+     * @param sniSelector        селектор сертификата по SNI (сервер, может быть null)
+     * @param optionalClientAuth true = пустой сертификат не фатален (wantClientAuth).
+     *                           Читается только при requestClientAuth=true.
+     */
+    public TlsHandshakeEngine(Role role, TlsCiphersuite ciphersuite,
+                               TlsMessageBuilder messageBuilder,
+                               ECParameters ecParams,
+                               int selectedNamedGroup,
+                               int selectedSigScheme,
+                               int hashLen,
+                               byte[] ocspResponse,
+                               boolean requestClientAuth,
+                               SniCertificateSelector sniSelector,
+                               boolean optionalClientAuth) {
         this.role = role;
         this.ciphersuite = ciphersuite;
         this.messageBuilder = messageBuilder;
@@ -245,11 +286,22 @@ public final class TlsHandshakeEngine {
         this.hashLen = hashLen;
         this.ocspResponse = ocspResponse;
         this.requestClientAuth = requestClientAuth;
+        this.optionalClientAuth = optionalClientAuth;
         this.sniSelector = sniSelector;
 
         this.ctx = new HandshakeContext();
         this.state = (role == Role.CLIENT) ? State.CLIENT_START : State.SERVER_WAIT_CLIENT_HELLO;
         this.negotiatedCiphersuite = ciphersuite;
+    }
+
+    /**
+     * Устанавливает OCSP-ответ для степплинга (сервер).
+     * Может быть вызван после создания engine, до вызова start().
+     *
+     * @param response OCSP-ответ DER, или null
+     */
+    public void setOcspResponse(byte[] response) {
+        this.ocspResponse = response;
     }
 
     // ========================================================================
@@ -366,7 +418,7 @@ public final class TlsHandshakeEngine {
     public String getErrorMessage() { return errorMessage; }
 
     // ========================================================================
-    // Управление ключами
+    // Методы получения статуса и ключей
     // ========================================================================
 
     /**
@@ -607,9 +659,11 @@ public final class TlsHandshakeEngine {
     }
 
     /**
-     * @return Resumption Master Secret (для PSK), или null если handshake не завершён
+     * @return Resumption Master Secret (defensive copy), или null если handshake не завершён
      */
-    public byte[] getResumptionMasterSecret() { return resumptionMasterSecret; }
+    public byte[] getResumptionMasterSecret() {
+        return resumptionMasterSecret == null ? null : resumptionMasterSecret.clone();
+    }
 
     /**
      * Для модульных тестов — инициализирует engine без полного handshake.
@@ -990,21 +1044,33 @@ public final class TlsHandshakeEngine {
 
         // Строим клиентский Certificate + CertificateVerify (если mTLS)
         if (clientAuthRequested) {
-            byte[] certBody = messageBuilder.buildCertificateBody();
-            byte[] certFrame = new TlsHandshakeMessage(
-                    TlsConstants.HT_CERTIFICATE, certBody).encode();
-            ctx.addToTranscript(certFrame);
+            if (messageBuilder.getCertificateChain() == null
+                    || messageBuilder.getCertificateChain().isEmpty()) {
+                // RFC 8446 §4.4.2: если сервер запросил сертификат, но у клиента
+                // его нет, клиент ОБЯЗАН отправить пустой certificate_list
+                // (без CertificateVerify), затем Finished.
+                byte[] emptyBody = messageBuilder.buildEmptyCertificateBody();
+                byte[] emptyFrame = new TlsHandshakeMessage(
+                        TlsConstants.HT_CERTIFICATE, emptyBody).encode();
+                ctx.addToTranscript(emptyFrame);
+                outgoingQueue.addLast(emptyFrame);
+            } else {
+                byte[] certBody = messageBuilder.buildCertificateBody();
+                byte[] certFrame = new TlsHandshakeMessage(
+                        TlsConstants.HT_CERTIFICATE, certBody).encode();
+                ctx.addToTranscript(certFrame);
 
-            byte[] cvTranscript = ctx.transcriptHash(hashLen);
-            byte[] cvBody = messageBuilder.buildCertificateVerify(cvTranscript,
-                    TlsConstants.CLIENT_CERTIFICATE_VERIFY_CTX);
-            TlsUtils.wipeArray(cvTranscript);
-            byte[] cvFrame = new TlsHandshakeMessage(
-                    TlsConstants.HT_CERTIFICATE_VERIFY, cvBody).encode();
-            ctx.addToTranscript(cvFrame);
+                byte[] cvTranscript = ctx.transcriptHash(hashLen);
+                byte[] cvBody = messageBuilder.buildCertificateVerify(cvTranscript,
+                        TlsConstants.CLIENT_CERTIFICATE_VERIFY_CTX);
+                TlsUtils.wipeArray(cvTranscript);
+                byte[] cvFrame = new TlsHandshakeMessage(
+                        TlsConstants.HT_CERTIFICATE_VERIFY, cvBody).encode();
+                ctx.addToTranscript(cvFrame);
 
-            outgoingQueue.addLast(certFrame);
-            outgoingQueue.addLast(cvFrame);
+                outgoingQueue.addLast(certFrame);
+                outgoingQueue.addLast(cvFrame);
+            }
         }
 
         // Клиентский Finished ставим в очередь
@@ -1089,6 +1155,13 @@ public final class TlsHandshakeEngine {
         // PSK
         pskAccepted = false;
         byte[] pskIdentityRaw = TlsMessageParser.parseClientHelloPskIdentity(chBody);
+        // NEW: auto-PSK lookup from server store if no explicit pskKey
+        if (pskIdentityRaw != null && pskKey == null && serverPskStore != null) {
+            PskEntry entry = serverPskStore.get(pskIdentityRaw);
+            if (entry != null && !entry.isExpired(System.currentTimeMillis())) {
+                pskKey = entry.getPsk();
+            }
+        }
         if (pskIdentityRaw != null && pskKey != null) {
             if (TlsPskHelper.verifyBinder(chBody, pskKey, hashLen)) {
                 pskAccepted = true;
@@ -1137,7 +1210,7 @@ public final class TlsHandshakeEngine {
         }
         this.requestedServerName = parsedCH.serverName;
 
-        // Определяем ECParams по фактической группе клиента (B1 multi-curve)
+        // Определяем ECParams по фактической группе клиента
         int actualGroup = parsedCH.actualGroup;
         ECParameters actualEcParams;
         if (actualGroup == selectedNamedGroup) {
@@ -1177,7 +1250,7 @@ public final class TlsHandshakeEngine {
             TlsUtils.wipeArray(sharedSecret);
         }
 
-        // ServerHello (B1: key_share с той же группой, что у клиента)
+        // ServerHello: key_share с той же группой, что у клиента
         byte[] shBody = messageBuilder.buildServerHello(ecdhePoint, pskAccepted, actualGroup);
         byte[] shFrame = new TlsHandshakeMessage(
                 TlsConstants.HT_SERVER_HELLO, shBody).encode();
@@ -1200,12 +1273,26 @@ public final class TlsHandshakeEngine {
         writeKeys = handshakeServerKeys;
         writeKeysChanged = true;
 
-        // ALPN (RFC 7301 §3.2): если у сервера есть список протоколов — выбираем первый общий
-        // с клиентом. Если пересечения нет — MUST send ALERT_NO_APPLICATION_PROTOCOL.
-        // Если клиент не прислал ALPN — сервер не включает расширение в EE (обратная совместимость).
-        if (serverAlpnProtocols != null) {
-            List<String> clientAlpn = TlsMessageParser.parseClientHelloAlpn(chBody);
-            if (clientAlpn != null && !clientAlpn.isEmpty()) {
+        // ALPN (RFC 7301 §3.2): selector или auto-select.
+        // Если задан alpnSelector — JSSE решает; null от selector = no ALPN.
+        // Иначе auto-select по serverAlpnProtocols (как в фазе 3).
+        List<String> clientAlpn = TlsMessageParser.parseClientHelloAlpn(chBody);
+        if (clientAlpn != null && !clientAlpn.isEmpty()) {
+            if (alpnSelector != null) {
+                String selected = alpnSelector.apply(clientAlpn);
+                // WHY: JDK-конвенция — JdkAlpnSslEngine возвращает "" при
+                // отсутствии согласованного протокола (не null). Пустая строка
+                // означает "ALPN не согласован" — продолжаем без него.
+                if (selected != null && !selected.isEmpty()) {
+                    if (!clientAlpn.contains(selected)) {
+                        throw new TlsException(TlsConstants.ALERT_NO_APPLICATION_PROTOCOL,
+                                "Selector returned protocol not in client list");
+                    }
+                    this.selectedAlpnProtocol = selected;
+                }
+                // null / "" от selector = ALPN не использовать, EE без extension
+                // null от selector = ALPN не использовать, EE без extension
+            } else if (serverAlpnProtocols != null) {
                 String selected = TlsMessageParser.selectAlpn(serverAlpnProtocols, clientAlpn);
                 if (selected == null) {
                     throw new TlsException(TlsConstants.ALERT_NO_APPLICATION_PROTOCOL,
@@ -1213,7 +1300,6 @@ public final class TlsHandshakeEngine {
                 }
                 this.selectedAlpnProtocol = selected;
             }
-            // Если клиент не прислал ALPN — сервер не включает ALPN в EE
         }
 
         // EncryptedExtensions — с опциональным ALPN (RFC 7301 §3.2)
@@ -1302,13 +1388,15 @@ public final class TlsHandshakeEngine {
         List<TlsCertificate> chain = TlsMessageParser.parseCertificate(certMsg.getBody());
         if (chain.isEmpty()) {
             // RFC 8446 §4.4.2: клиент может прислать пустой certificate_list если нет сертификата.
-            // Решение о том, обязателен ли сертификат, принимается на уровне engine (requestClientAuth),
-            // а не в парсере — парсер общий для клиента и сервера.
-            if (requestClientAuth) {
+            // Решение о том, обязателен ли сертификат, принимается на уровне engine (requestClientAuth)
+            // с учётом optionalClientAuth (wantClientAuth).
+            if (requestClientAuth && !optionalClientAuth) {
                 throw new TlsException(TlsConstants.ALERT_CERTIFICATE_REQUIRED,
                         "Client did not provide certificate");
             }
-            // optional client auth not yet supported — treat as no-op
+            // wantClientAuth или requestClientAuth=false: пустой сертификат — штатно,
+            // ожидаем Finished от клиента (без CertificateVerify).
+            state = State.SERVER_WAIT_CLIENT_FINISHED;
             return;
         }
         receivedCertificates = chain;
@@ -1418,6 +1506,20 @@ public final class TlsHandshakeEngine {
         return selectedAlpnProtocol;
     }
 
+    /**
+     * Устанавливает server-side ALPN-селектор.
+     * <p>
+     * Если задан, вызывается после парсинга ClientHello для выбора ALPN.
+     * Избранный протокол проверяется на вхождение в список клиента.
+     * null от selector = ALPN не использовать (EE без extension).
+     * <p>
+     * Используется {@code javax.net.ssl.SSLParameters.setHandshakeApplicationProtocolSelector}
+     * из JSSE.
+     */
+    public void setAlpnSelector(java.util.function.Function<java.util.List<String>, String> selector) {
+        this.alpnSelector = selector;
+    }
+
     // ========================================================================
     // PSK (публичный API, вызывается перед start())
     // ========================================================================
@@ -1448,9 +1550,15 @@ public final class TlsHandshakeEngine {
     }
 
     /**
-     * @return true если PSK был принят (после ServerHello у клиента,
-     *         или в процессе receiveClientHello у сервера)
+     * Устанавливает PskStore для автоматического PSK-lookup на сервере.
+     * При получении ClientHello engine сам извлекает PSK identity, ищет в store
+     * и устанавливает pskKey — без необходимости внешнего парсинга ClientHello.
      */
+    public void setServerPskStore(PskStore store) {
+        this.serverPskStore = store;
+    }
+
+    /** @return true если PSK был принят */
     public boolean isPskAccepted() { return pskAccepted; }
 
     /**
@@ -1491,6 +1599,10 @@ public final class TlsHandshakeEngine {
             pendingWriterSecret = null;
         }
         if (ctx != null) ctx.destroy();
+        if (resumptionMasterSecret != null) {
+            TlsUtils.wipeArray(resumptionMasterSecret);
+            resumptionMasterSecret = null;
+        }
         TlsUtils.wipeArray(pskKey); pskKey = null;
         pskIdentity = null;
         obfuscatedTicketAge = 0;
