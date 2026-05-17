@@ -1,6 +1,6 @@
 package org.rssys.gost.jsse.examples.netty;
 
-import org.rssys.gost.jsse.examples.JsseCertHelper;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.netty.GostSslContext;
@@ -41,7 +41,7 @@ public final class NettyEchoServer {
     private NettyEchoServer() {}
 
     public static void main(String[] args) throws Exception {
-        JsseCertHelper helper = new JsseCertHelper();
+        ExamplesCertHelper helper = new ExamplesCertHelper();
         GostX509KeyManager km = helper.createKeyManager();
         GostX509TrustManager tm = helper.createTrustManager();
 

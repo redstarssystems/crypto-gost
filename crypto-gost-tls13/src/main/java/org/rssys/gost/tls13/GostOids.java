@@ -56,6 +56,10 @@ public final class GostOids {
     public static final String EXT_EKU = "2.5.29.37";
     /** id-pe-authorityInfoAccess (RFC 5280 §4.2.2.1) */
     public static final String EXT_AIA = "1.3.6.1.5.5.7.1.1";
+    /** id-kp-serverAuth (RFC 5280 §4.2.1.12) */
+    public static final String EXT_SERVER_AUTH = "1.3.6.1.5.5.7.3.1";
+    /** id-kp-clientAuth (RFC 5280 §4.2.1.12) */
+    public static final String EXT_CLIENT_AUTH = "1.3.6.1.5.5.7.3.2";
 
     // ========================================================================
     // Атрибуты Distinguished Name (RFC 4519)

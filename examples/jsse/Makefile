@@ -5,7 +5,7 @@ SKIP = -DskipTests -Dmaven.javadoc.skip=true
 FILTER = 2>&1 | grep -v 'warn\|WARN'
 
 .PHONY: netty jetty undertow tomcat springboot test all compile compile-sb clean \
-        test-integration test-concurrent test-keymanager test-int-all
+        test-integration test-concurrent test-stress test-undertow-stress test-keymanager test-int-all
 
 compile:
 	$(MVN) compile $(Q) -am
@@ -47,11 +47,18 @@ test-integration:
 test-concurrent:
 	$(MVN) test $(Q) -am -Dtest="ConcurrentHandshakeTest" -Dsurefire.failIfNoSpecifiedTests=false
 
+test-stress:
+	$(MVN) test $(Q) -am -Dtest="JsseStressTest#stressTest" -Dsurefire.failIfNoSpecifiedTests=false $(ARGS)
+
+test-undertow-stress:
+	$(MVN) test $(Q) -am -Dtest="UndertowStressTest#stressTest" -Dsurefire.failIfNoSpecifiedTests=false $(ARGS)
+
 test-keymanager:
 	cd ../../ && $(MVN) test $(Q) -pl crypto-gost-jsse -am -Dtest="GostX509KeyManagerConcurrencyTest" -Dsurefire.failIfNoSpecifiedTests=false
 
 test-int-all:
-	cd ../../ && $(MVN) test $(Q) -pl crypto-gost-jsse,examples/jsse -am -Dgroups="integration"
+	cd ../../ && $(MVN) test $(Q) -pl crypto-gost-jsse,examples/jsse -am \
+		-Dgroups="integration" -DexcludedGroups=""
 
 clean:
 	$(MVN) clean $(Q)

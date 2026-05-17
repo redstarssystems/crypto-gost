@@ -66,7 +66,7 @@
   При необходимости проверить подпись релизного тега можно так:
 
       gpg --import KEYS
-      gpg -v v0.3.0
+      gpg -v v0.3.1
 
 - **Способ 2.** Скачайте артефакты
   [отсюда](https://gitflic.ru/project/red-stars-systems/crypto-gost/release?sort=TIME&direction=DESC)
@@ -74,12 +74,12 @@
   установки:  
 
       mvn install:install-file \
-        -Dfile=crypto-gost-core-0.3.0.jar \
-        -Dsources=crypto-gost-core-0.3.0-sources.jar \
-        -Djavadoc=crypto-gost-core-0.3.0-javadoc.jar \
+        -Dfile=crypto-gost-core-0.3.1.jar \
+        -Dsources=crypto-gost-core-0.3.1-sources.jar \
+        -Djavadoc=crypto-gost-core-0.3.1-javadoc.jar \
         -DgroupId=org.rssys \
         -DartifactId=crypto-gost-core \
-        -Dversion=0.3.0 \
+        -Dversion=0.3.1 \
         -Dpackaging=jar
 
 Затем, добавьте зависимость в `pom.xml` вашего проекта нужные модули:
@@ -87,19 +87,25 @@
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-core</artifactId>
-        <version>0.3.0</version>
+        <version>0.3.1</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-tls13</artifactId>
-        <version>0.3.0</version>
+        <version>0.3.1</version>
+    </dependency>
+
+    <dependency>
+        <groupId>org.rssys</groupId>
+        <artifactId>crypto-gost-jsse</artifactId>
+        <version>0.3.1</version>
     </dependency>
 
 Проверить подпись можно так:
 
     gpg --import KEYS
-    gpg --verify crypto-gost-core-0.3.0.jar.asc crypto-gost-core-0.3.0.jar
+    gpg --verify crypto-gost-core-0.3.1.jar.asc crypto-gost-core-0.3.1.jar
 
 # Документация
 
@@ -124,7 +130,7 @@
 - `mvn install` — установка дистрибутива библиотеки в локальный .m2.
 
 В папке *bench* созданы примеры кросс-верификации **crypto-gost**,
-**BouncyCastle 1.83** и **OpenSSL**.
+**BouncyCastle 1.83** и **OpenSSL**, а также много других бенчмарков.
 
 # Проблематика
 

@@ -1,4 +1,5 @@
 package org.rssys.gost.jsse.engine;
+
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
@@ -77,11 +78,11 @@ class GostSSLEngineLoopbackTest {
     }
 
     // ========================================================================
-    // Loopback basic — GostSSLEngine ↔ GostSSLEngine
+    // Базовая проверка handshake и обмена данными между двумя GostSSLEngine
     // ========================================================================
 
     @Test
-    @DisplayName("Loopback: GostSSLEngine client ↔ server, handshake + app data")
+    @DisplayName("Loopback: GostSSLEngine клиент ↔ сервер, рукопожатие + данные")
     void testLoopbackBasic() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
@@ -268,11 +269,11 @@ class GostSSLEngineLoopbackTest {
     }
 
     // ========================================================================
-    // Interop: GostSSLEngine client ↔ TlsSession server
+    // Interop: GostSSLEngine ↔ TlsSession (совместимость рукопожатия)
     // ========================================================================
 
     @Test
-    @DisplayName("Interop: GostSSLEngine client → TlsSession server")
+    @DisplayName("Interop: GostSSLEngine клиент → TlsSession сервер")
     void testInteropClient() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
@@ -305,11 +306,11 @@ class GostSSLEngineLoopbackTest {
     }
 
     // ========================================================================
-    // Interop: TlsSession client ↔ GostSSLEngine server
+    // Interop: TlsSession клиент → GostSSLEngine сервер
     // ========================================================================
 
     @Test
-    @DisplayName("Interop: TlsSession client → GostSSLEngine server")
+    @DisplayName("Interop: TlsSession клиент → GostSSLEngine сервер")
     void testInteropServer() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
@@ -344,7 +345,7 @@ class GostSSLEngineLoopbackTest {
     }
 
     // ========================================================================
-    // HF1: ALPN round-trip через SSLParameters
+    // ALPN round-trip через SSLParameters
     // ========================================================================
 
     @Test
@@ -360,11 +361,11 @@ class GostSSLEngineLoopbackTest {
         SSLParameters returned = engine.getSSLParameters();
         assertArrayEquals(new String[]{"h2", "http/1.1"},
                 returned.getApplicationProtocols(),
-                "applicationProtocols should round-trip through getSSLParameters");
+                "applicationProtocols должны сохраняться при round-trip через getSSLParameters");
     }
 
     // ========================================================================
-    // HF2: getHandshakeApplicationProtocol доступен после handshake
+    // getHandshakeApplicationProtocol доступен после handshake
     // ========================================================================
 
     @Test
@@ -416,9 +417,9 @@ class GostSSLEngineLoopbackTest {
 
         // WHY: если ALPN не сработал — getApplicationProtocol вернёт null
         assertEquals("h2", clientEngine.getApplicationProtocol(),
-                "Client ALPN should be h2");
+                "ALPN клиента должен быть h2");
         assertEquals("h2", serverEngine.getHandshakeApplicationProtocol(),
-                "Server getHandshakeApplicationProtocol should be h2");
+                "ALPN сервера (getHandshakeApplicationProtocol) должен быть h2");
     }
 
     // ========================================================================
@@ -470,8 +471,8 @@ class GostSSLEngineLoopbackTest {
 
         if (clientThread.isAlive()) { clientThread.interrupt(); fail("Тайм-аут рукопожатия клиента"); }
         if (serverThread.isAlive()) { serverThread.interrupt(); fail("Тайм-аут рукопожатия сервера"); }
-        if (clientError.get() != null) throw new RuntimeException("Client error", clientError.get());
-        if (serverError.get() != null) throw new RuntimeException("Server error", serverError.get());
+        if (clientError.get() != null) throw new RuntimeException("Клиент завершился с ошибкой", clientError.get());
+        if (serverError.get() != null) throw new RuntimeException("Сервер завершился с ошибкой", serverError.get());
     }
 
     /**
@@ -526,7 +527,7 @@ class GostSSLEngineLoopbackTest {
                     break;
             }
         }
-        throw new RuntimeException("Client handshake did not complete after 80 iterations, status="
+        throw new RuntimeException("Рукопожатие клиента не завершилось за 80 итераций, status="
                 + engine.getHandshakeStatus());
     }
 
@@ -578,7 +579,7 @@ class GostSSLEngineLoopbackTest {
                     break;
             }
         }
-        throw new RuntimeException("Server handshake did not complete after 80 iterations, status="
+        throw new RuntimeException("Рукопожатие сервера не завершилось за 80 итераций, status="
                 + engine.getHandshakeStatus());
     }
 

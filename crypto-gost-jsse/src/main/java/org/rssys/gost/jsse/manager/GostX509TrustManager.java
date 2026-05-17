@@ -1,12 +1,9 @@
 package org.rssys.gost.jsse.manager;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.ocsp.OcspPolicy;
-import org.rssys.gost.jsse.ocsp.OcspFetcher;
-import org.rssys.gost.jsse.ocsp.OcspFetchResult;
 
 import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.ocsp.OcspFetchResult;
 import org.rssys.gost.jsse.ocsp.OcspFetcher;
+import org.rssys.gost.jsse.ocsp.OcspFetchResult;
+import org.rssys.gost.jsse.ocsp.OcspPolicy;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.tls13.cert.TlsCertificate;
@@ -321,7 +318,7 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         }
     }
 
-    /** TEST ONLY: подменить logger для capture. Возвращает предыдущий для restore. */
+    /** Тестовый хелпер: подменить logger для перехвата сообщений. Возвращает предыдущий для restore в tearDown. */
     static System.Logger setLoggerForTest(System.Logger testLogger) {
         System.Logger prev = LOG;
         LOG = testLogger;

@@ -100,7 +100,7 @@ public final class GostSSLContextSpi extends SSLContextSpi {
     // Создаёт серверный GostSSLEngine с serverSessionContext.
     // Используется GostSSLServerSocket и будет полезен для Netty-адаптера в фазе 5.
     GostSSLEngine createServerEngine(String host, int port) {
-        return new GostSSLEngine(keyManager, trustManager, host, port, false, serverSessionContext);
+        return GostSSLEngine.createForServer(keyManager, trustManager, host, port, serverSessionContext);
     }
 
     @Override

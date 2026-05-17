@@ -40,110 +40,63 @@ toc::[]
 +
 Все криптографические операции выполняются встроенными средствами библиотеки — без внешних зависимостей.
 
-=== Запуск примеров
-
-Все примеры находятся в модуле `examples/jsse` и запускаются через
-Makefile из его корня:
-
-[source,sh]
-----
-# Все 4 сервера последовательно (Netty, Jetty, Undertow, Tomcat)
-make -C examples/jsse all
-
-# По одному
-make -C examples/jsse netty
-make -C examples/jsse jetty
-make -C examples/jsse undertow
-make -C examples/jsse tomcat
-
-# Spring Boot — интерактивно
-make -C examples/jsse springboot
-
-# Spring Boot — CI-тест (@SpringBootTest + GostSSLSocket)
-make -C examples/jsse test
-----
-
-Каждый сервер поднимается на случайном порту, выполняет TLS 1.3
-handshake с ГОСТ-наборами, выводит `SUCCESS` и останавливается.
-Исключение — `make springboot` (бесконечный цикл, останов через Ctrl+C).
-
-NOTE: HTTP-серверы (Jetty, Undertow, Tomcat) проверяют только TLS
-handshake. `GostSSLEngine` не совместим с JDK HttpClient
-(SSLFlowDelegate) — полный HTTP-обмен доступен через ручной запуск
-и `curl -k --tlsv1.3 --https...`.
-
-
-=== Запуск интеграционных тестов
-
-Интеграционные тесты проверяют конкурентность shared state
-(`GostSSLSessionContext`, `GostX509KeyManager`), mTLS через Jetty,
-PSK resumption, reconnect под нагрузкой и таймауты в сетевых условиях.
-
-Все тесты помечены `@Tag("integration")` — запуск одной командой:
-
-[source,sh]
-----
-# Все интеграционные тесты JSSE (19 тестов, 7 файлов)
-make -C examples/jsse test-int-all
-
-# Или напрямую через Maven:
-mvn test -pl crypto-gost-jsse,examples/jsse -am -Dgroups="integration"
-
-# Отдельные группы:
-make -C examples/jsse test-integration   # 16 тестов examples/jsse
-make -C examples/jsse test-keymanager    # 3 теста GostX509KeyManager
-make -C examples/jsse test-concurrent    # 100 параллельных handshake'ов
-----
-
-
 === Быстрый старт
 
-Минимальная конфигурация сервера и клиента:
+Сервер из PKCS12:
 
 [source,java]
 ----
-import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-
+import org.rssys.gost.jsse.GostSsl;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLServerSocketFactory;
 import javax.net.ssl.SSLSocket;
-import javax.net.ssl.SSLSocketFactory;
-import java.security.Security;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
-// Шаг 1: регистрация провайдера (один раз при старте приложения)
-Security.addProvider(new RssysGostJsseProvider());
+byte[] p12Bytes = Files.readAllBytes(Paths.get("server.p12"));
+byte[] caDer    = Files.readAllBytes(Paths.get("ca.der"));
 
-// Шаг 2: загрузка сертификата и ключа
-// (см. «Загрузка сертификата» — PKCS12 или DER)
-
-// Шаг 3: создание SSLContext
-SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
-ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
-
-// Шаг 4: сервер
-SSLServerSocketFactory ssf = ctx.getServerSocketFactory();
-SSLServerSocket serverSocket =
-    (SSLServerSocket) ssf.createServerSocket(8443);
-SSLSocket clientSocket = (SSLSocket) serverSocket.accept();
-clientSocket.startHandshake();
-// read/write через clientSocket.getInputStream()/getOutputStream()
-
-// Шаг 5: клиент
-SSLSocketFactory sf = ctx.getSocketFactory();
-SSLSocket socket = (SSLSocket) sf.createSocket("host", 8443);
-socket.startHandshake();
-// read/write через socket.getInputStream()/getOutputStream()
+SSLContext  srv = GostSsl.serverContext(p12Bytes, "password".toCharArray(), caDer);
+SSLServerSocket ss = GostSsl.serverSocket(8443, srv);
+SSLSocket client = (SSLSocket) ss.accept();
+client.startHandshake();
+// read/write через client.getInputStream()/getOutputStream()
 ----
+
+Клиент с проверкой сервера:
+
+[source,java]
+----
+SSLContext cli = GostSsl.clientContext(caDer);
+SSLSocket   s  = GostSsl.socket("localhost", 8443, cli);
+// read/write через s.getInputStream()/getOutputStream()
+----
+
+mTLS (клиент с сертификатом):
+
+[source,java]
+----
+SSLContext cli = GostSsl.clientContext(p12Client, "pass".toCharArray(), caDer);
+----
+
+Разработка (без проверки сертификата сервера):
+
+[source,java]
+----
+import org.rssys.gost.jsse.GostSslDev;
+import javax.net.ssl.SSLContext;
+
+SSLContext dev = GostSslDev.trustAllClientContextInsecure();
+----
+
+Полный API — в секции ниже.
 
 
 === API
 
-Модуль предоставляет три уровня API для интеграции:
+Модуль `crypto-gost-jsse` предоставляет три уровня API для интеграции:
 
-*Socket API* — `GostSSLSocket / GostSSLServerSocket` — наивысший уровень.
+*Socket API* — `GostSSLSocket / GostSSLServerSocket` — верхний уровень.
 Стандартный Java I/O через `InputStream`/`OutputStream`. Handshake запускается
 автоматически при первом read/write или явно через `startHandshake()`.
 Подходит для большинства приложений.
@@ -161,7 +114,50 @@ NOTE: `GostSSLEngine` разрешает параллельные вызовы `
 `GostX509TrustManager` thread-safe.
 
 
+=== GostSsl — упрощённый API
+
+Статический фасад `GostSsl` — один вызов, готовый `SSLContext`.
+Никаких KeyManagerFactory, TrustManagerFactory, JKS.
+
+==== Форматы входных данных
+
+PKCS12 (production):: `GostSsl.serverContext(p12Bytes, password, caDer)`
+PEM (openssl-совместимый):: `GostSsl.serverContext(certPem, keyPem, caPem)`
+DER X.509 / PKCS#8:: `GostSsl.clientContext(certDer, keyDer, caDer)`
+
+==== Loopback-проверка TLS
+
+[source,java]
+----
+// mTLS: обе стороны с сертификатами
+GostSsl.verify(serverCertPem, serverKeyPem, clientCertPem, clientKeyPem, caPem);
+// Односторонний: сервер с сертификатом, клиент только проверяет сервер
+GostSsl.verifyServer(serverCertPem, serverKeyPem, caPem);
+----
+
+==== Builder для OCSP и session cache
+
+[source,java]
+----
+SSLContext srv = GostSsl.builder()
+    .certificate(p12Data, password)
+    .trustCa(caDer)
+    .ocsp(true)
+    .sessionCacheSize(5000)
+    .buildServerContext();
+----
+
+==== Ограничения
+
+* PKCS12 с нестандартным GOST PBE не поддерживается.
+* `GostX509TrustManager` принимает один CA-ключ (используется последний).
+* `selfSignedContext` не реализован — используйте PKCS12 с тестовым сертификатом.
+
+
 === Конфигурация сервера
+
+Если вам не нужен тонкий контроль — используйте `GostSsl`.
+Ниже описан полный API для ручной настройки.
 
 Сервер использует `GostX509KeyManager` для хранения сертификата и закрытого ключа.
 
@@ -343,8 +339,8 @@ import org.rssys.gost.tls13.TlsConstants;
 import javax.net.ssl.SSLEngineResult;
 import java.nio.ByteBuffer;
 
-GostSSLEngine clientEngine = new GostSSLEngine(
-        km, tm, "host", 8443, true /* clientMode */);
+GostSSLEngine clientEngine = GostSSLEngine.createForClient(
+        km, tm, "host", 8443, null /* без PSK-контекста */);
 
 clientEngine.beginHandshake();
 ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
@@ -732,7 +728,7 @@ Tomcat 11 не предоставляет публичного API для пря
 [source,java]
 ----
 import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.examples.JsseCertHelper;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.startup.Tomcat;
@@ -753,7 +749,7 @@ import javax.net.ssl.X509TrustManager;
 import java.util.List;
 import java.util.Map;
 
-JsseCertHelper helper = new JsseCertHelper();
+ExamplesCertHelper helper = new ExamplesCertHelper();
 
 Connector connector = new Connector("HTTP/1.1");
 connector.setPort(8443);
@@ -795,10 +791,10 @@ public static final class GostSSLImplementation extends SSLImplementation {
 public static final class GostSSLUtil implements SSLUtil {
     // Единый helper — getKeyManagers() и createSSLContext() должны
     // использовать один и тот же сертификат, иначе TLS-хендшейк упадёт
-    private static final JsseCertHelper HELPER;
+    private static final ExamplesCertHelper HELPER;
 
     static {
-        try { HELPER = new JsseCertHelper(); }
+        try { HELPER = new ExamplesCertHelper(); }
         catch (Exception e) { throw new RuntimeException(e); }
     }
 
@@ -870,7 +866,7 @@ Spring Boot 3.4 конфигурирует embedded Tomcat. Кастомный S
 ----
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.examples.JsseCertHelper;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
@@ -1052,6 +1048,136 @@ import org.rssys.gost.jsse.bridge.CertificateBridge;
 * PSK-тикеты одноразовые (RFC 8446 §8.1).
 * GOST PBE для PKCS12 не поддерживается — только PBES2 (PBKDF2-HMAC-SHA256 + AES-256-CBC).
 * KeyManagerFactory — только алгоритм `GostX509` (не `PKIX`, не `NewSunX509`).
+
+
+=== Примеры интеграции с серверами приложений
+
+Все примеры интеграции с популярными серверами находятся в модуле `examples/jsse` и запускаются через
+Makefile из его корня:
+
+[source,sh]
+----
+# Все 4 сервера последовательно (Netty, Jetty, Undertow, Tomcat)
+make -C examples/jsse all
+
+# По одному
+make -C examples/jsse netty
+make -C examples/jsse jetty
+make -C examples/jsse undertow
+make -C examples/jsse tomcat
+
+# Spring Boot — интерактивно
+make -C examples/jsse springboot
+
+# Spring Boot — CI-тест (@SpringBootTest + GostSSLSocket)
+make -C examples/jsse test
+----
+
+Каждый сервер поднимается на случайном порту, выполняет TLS 1.3
+handshake с ГОСТ-наборами, выводит `SUCCESS` и останавливается.
+Исключение — `make springboot` (бесконечный цикл, останов через Ctrl+C).
+
+NOTE: HTTP-серверы (Jetty, Undertow, Tomcat) проверяют только TLS
+handshake. `GostSSLEngine` не совместим с JDK HttpClient
+(SSLFlowDelegate) — полный HTTP-обмен доступен через ручной запуск
+и `curl -k --tlsv1.3 --https...`.
+
+
+=== Запуск интеграционных тестов
+
+Интеграционные тесты проверяют конкурентность shared state
+(`GostSSLSessionContext`, `GostX509KeyManager`), mTLS через Jetty,
+PSK resumption, reconnect под нагрузкой и таймауты в сетевых условиях.
+
+Все тесты помечены `@Tag("integration")` — запуск одной командой:
+
+[source,sh]
+----
+# Все интеграционные тесты JSSE (19 тестов, 7 файлов)
+make -C examples/jsse test-int-all
+
+# Или напрямую через Maven:
+mvn test -pl crypto-gost-jsse,examples/jsse -am -Dgroups="integration"
+
+# Отдельные группы:
+make -C examples/jsse test-integration   # 16 тестов examples/jsse
+make -C examples/jsse test-keymanager    # 3 теста GostX509KeyManager
+make -C examples/jsse test-concurrent    # 100 параллельных handshake'ов
+----
+
+=== Запуск стресс-теста
+
+Стресс-тест предназначен для выявления: утечек памяти, зависаний, корректности имплементации TLS 1.3 протокола, устойчивость к аварийным обрывам, выявлени максимума одновременных сессий.
+
+Описание методики стресс-теста приведено link:doc/stress-test.md[в документе].
+
+[source,sh]
+----
+# Полный прогон (5 минут)
+make -C examples/jsse test-stress
+
+# Быстрый прогон (1 минута)
+make -C examples/jsse test-stress ARGS=-Dstress.duration=1
+
+# Через Maven напрямую
+mvn test -pl examples/jsse -am \
+  -Dtest="JsseStressTest#stressTest" \
+  -Dstress.duration=5 \
+  -Dstress.cacheSize=5000
+----
+
+Дополнительный стресс-тест через реальный HTTP-сервер Undertow:
+
+[source,sh]
+----
+# Undertow: HTTP-профили, Connection: keep-alive (5 минут)
+make -C examples/jsse test-undertow-stress
+
+# Быстрый прогон (1 минута)
+mvn test -pl examples/jsse -am -Dtest="UndertowStressTest#stressTest" \
+  -Dstress.duration=1 -Dsurefire.failIfNoSpecifiedTests=false
+
+# Через Maven напрямую
+mvn test -pl examples/jsse -am \
+  -Dtest="UndertowStressTest#stressTest" \
+  -Dstress.duration=5 -Dsurefire.failIfNoSpecifiedTests=false
+----
+
+WARNING: Jetty 12 с `GostSSLSocket` при keep-alive соединениях под нагрузкой
+не сбрасывает TLS-буфер после `response.write()` — зашифрованные данные
+не доставляются клиенту. Одиночные запросы (`Connection: close`) работают
+корректно. Для production-использования  рекомендуется Undertow
+или Netty. Баг воспроизводится в Jetty 12.0.19, корень проблемы —
+в `SslConnection.flush()`.
+
+
+=== Запуск фаззинг-тестов
+
+Фаззинг-тесты используют Jazzer (libFuzzer + JUnit) для поиска багов
+в уровне записей и JSSE-обёртки. Каждый `@FuzzTest` содержит seed-файлы
+(corpus) и при обычном запуске Maven прогоняет только их:
+
+[source,sh]
+----
+# Seed-only (быстрый прогон, ~1-2 сек):
+mvn test -pl crypto-gost-tls13 -Dtest=TlsRecordUnprotectFuzzTest
+mvn test -pl crypto-gost-jsse -Dtest=GostSSLEngineUnwrapFuzzTest
+----
+
+Для полноценного coverage-guided фаззинга (может выполняться часами)
+добавьте `-DJAZZER_FUZZ=1`:
+
+[source,sh]
+----
+# Coverage-guided фаззинг (рекомендуется 1+ час):
+mvn test -pl crypto-gost-tls13 -Dtest=TlsRecordUnprotectFuzzTest -DJAZZER_FUZZ=1
+mvn test -pl crypto-gost-jsse -Dtest=GostSSLEngineUnwrapFuzzTest -DJAZZER_FUZZ=1
+----
+
+WARNING: В режиме `JAZZER_FUZZ=1` фаззер генерирует десятки тысяч
+вариантов входных данных. На слабом оборудовании это может занять
+длительное время. Прервать можно через Ctrl+C — seed-файлы сохраняются
+и будут использованы при следующем запуске.
 
 
 === Поддержать проект

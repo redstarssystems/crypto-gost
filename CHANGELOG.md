@@ -1,3 +1,109 @@
+# \[0.3.1\] - 17-05-2026
+
+## Модуль crypto-gost-tls13
+
+- Устранено дублирование OID-констант:
+
+  - добавлены EXT\_SERVER\_AUTH и EXT\_CLIENT\_AUTH в GostOids,
+
+  - приватные OID-массивы в TlsCertificate заменены на публичные
+    константы TlsDerParser, хардкоженые OID-строки в TlsTestHelper,
+    ExampleUtils, TlsSessionTest, TlsCertificateTest заменены на ссылки
+    на GostOids.
+
+  - В ExamplesCertHelper строка "RssysGostJsse" заменена на
+    GostJsseConstants.PROVIDER\_NAME.
+
+## Модуль crypto-gost-jsse
+
+### Изменено
+
+- GostTestCerts, GostTestContext перемещены из src/main в src/test;
+  публикуются через test-jar.
+
+- pom.xml — добавлена сборка test-jar (по образцу crypto-gost-tls13).
+
+- JsseCertHelper перемещён в src/test. Добавлен ExamplesCertHelper в
+  src/main — генерирует сертификаты через production API, фиксированные
+  DN.
+
+- Demo-классы (JettyEchoServer, NettyEchoServer, UndertowEchoServer,
+  TomcatEchoServer, GostSslConfig) обновлены на ExamplesCertHelper.
+
+- pom.xml — добавлена зависимость crypto-gost-jsse:test-jar (test
+  scope).
+
+- GostSSLEngine: замена перегрузок конструктора на factory-методы.  
+  Убрана 6-аргументная перегрузка конструктора, где параметр
+  sessionContext имел разную семантику для клиента и сервера.  
+  Вместо неё — два явных factory-метода createForClient() и
+  createForServer().  
+  7-аргументный конструктор стал package-private: он нужен только для
+  SSLContext.createSSLEngine(), где режим неизвестен до вызова
+  setUseClientMode().
+
+### Исправлено
+
+- В GostSSLSessionContext кэш сессий был обёрнут в
+  Collections.synchronizedMap, который использует synchronized-блоки.
+  Это вызывало pinning виртуальных потоков, что сводило на нет
+  преимущества vthreads. Заменили на ReentrantLock — LRU-семантика
+  (LinkedHashMap с removeEldestEntry) сохранена, pinning устранён.
+
+- GostSSLEngine: буфер для расшифрованных записей вынесен в поле
+  экземпляра — устранена аллокация 16 КБ на каждый unwrap().
+
+- GostSSLEngine: оптимизация горячего пути и защита от повторной
+  обработки данных:
+
+  - unwrap(): массив для отслеживания позиций dst-буферов вынесен в поле
+    экземпляра с ленивым resize — устранена аллокация на каждый вызов.
+
+  - handleEngineKeyChanges() обёрнут в try-catch(RuntimeException) с
+    гарантированным handshakeInputBuf.reset() — предотвращена повторная
+    обработка уже обработанных handshake-данных при неожиданном
+    исключении.
+
+  - Убрано лишнее клонирование ключей при смене трафиковых ключей:
+    getKey()/getIv() уже возвращают защитные копии, внешний .clone()
+    удалён.
+
+### Добавлено
+
+- GostSsl — статический фасад для создания SSLContext одним вызовом.
+  Поддерживает три формата входных данных: PKCS12, PEM-строки,
+  DER-байты. Методы verify() и verifyServer() для loopback-проверки
+  совместимости ключей. GostSslBuilder для сложных случаев с OCSP
+  stapling и session cache. GostSslException как единая точка обработки
+  ошибок.
+
+- JsseStressTest — длительный стресс-тест JSSE-провайдера под смешанной
+  нагрузкой: 30 коротких сессий, 20 средних keep-alive, 5 длинных
+  throughput-сессий и 10 chaos-обрывов параллельно в виртуальных
+  потоках. Проверяет отсутствие утечек памяти, зависаний и корректность
+  TLS при длительной работе. Запуск:
+  `make -C examples/jsse test-stress`.
+
+- UndertowStressTest — стресс-тест JSSE-провайдера через реальный
+  HTTP-сервер Undertow с теми же четырьмя профилями нагрузки. Profile 3
+  показал 0 ошибок на 17k HTTP-запросов (16KB, keep-alive) за 5 минут,
+  283 MB transferred.
+
+- Добавлены фаззинг-тесты на базе Jazzer:
+
+  - TlsRecordUnprotectFuzzTest (crypto-gost-tls13) — три entry point
+    TlsRecord.unprotect (ByteBuffer, byte\[\], zero-alloc) и stateful
+    сессия из N последовательных записей для проверки seqNum и TLSTREE
+    между вызовами. 15 seed-файлов.
+
+  - GostSSLEngineUnwrapFuzzTest (crypto-gost-jsse) — pre-handshake путь
+    GostSSLEngine.unwrap в состояниях INITIAL и HANDSHAKE. 7
+    seed-файлов.
+
+### Документация
+
+- `crypto-gost-jsse/README.adoc` — обновлены примеры кода.
+
 # \[0.3.0\] - 16-05-2026
 
 ## Общее

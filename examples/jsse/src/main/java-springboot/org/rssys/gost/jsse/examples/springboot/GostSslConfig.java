@@ -2,7 +2,7 @@ package org.rssys.gost.jsse.examples.springboot;
 
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.examples.JsseCertHelper;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 
 import org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
@@ -84,10 +84,10 @@ public class GostSslConfig {
         // Все методы GostSSLUtil должны использовать ОДИН helper —
         // иначе getKeyManagers() и createSSLContext() получат РАЗНЫЕ
         // сертификаты, и TLS-хендшейк упадёт.
-        private static final JsseCertHelper HELPER;
+        private static final ExamplesCertHelper HELPER;
         static {
             try {
-                HELPER = new JsseCertHelper();
+                HELPER = new ExamplesCertHelper();
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }

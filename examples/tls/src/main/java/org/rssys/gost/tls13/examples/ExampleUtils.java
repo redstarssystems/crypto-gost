@@ -8,6 +8,7 @@ import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.GostOids;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
 import java.io.ByteArrayOutputStream;
@@ -82,7 +83,7 @@ public final class ExampleUtils {
 
     // ---- DN ----
     static byte[] buildDN(String cn) {
-        byte[] attr = derSequence(derOid("2.5.4.3"),
+        byte[] attr = derSequence(derOid(GostOids.ATTR_CN),
                 derTlv(TAG_UTF8_STRING, cn.getBytes(StandardCharsets.UTF_8)));
         return derSequence(derTlv(TAG_SET, attr));
     }
@@ -104,23 +105,23 @@ public final class ExampleUtils {
     }
 
     static byte[] buildAlgId(ECParameters params) {
-        String signOid = params.hlen == 32 ? "1.2.643.7.1.1.1.1" : "1.2.643.7.1.1.1.2";
+        String signOid = params.hlen == 32 ? GostOids.SIG_WITH_DIGEST_256 : GostOids.SIG_WITH_DIGEST_512;
         String curveOid = curveOidOf(params);
-        String digestOid = params.hlen == 32 ? "1.2.643.7.1.1.2.2" : "1.2.643.7.1.1.2.3";
+        String digestOid = params.hlen == 32 ? GostOids.DIGEST_256 : GostOids.DIGEST_512;
         return derSequence(derOid(signOid), derSequence(derOid(curveOid), derOid(digestOid)));
     }
 
     static String curveOidOf(ECParameters params) {
         if (params == ECParameters.tc26a256()) return "1.2.643.7.1.1.2.1";
-        if (params == ECParameters.cryptoProA()) return "1.2.643.2.2.35.1";
+        if (params == ECParameters.cryptoProA()) return GostOids.CURVE_CP_A;
         if (params == ECParameters.tc26a512()) return "1.2.643.7.1.1.2.2";
         return "1.2.643.7.1.1.2.1";
     }
 
     // ---- Сертификаты ----
     static byte[] buildAlgIdSHA256() {
-        return derSequence(derOid("1.2.643.7.1.1.1.1"),
-                derSequence(derOid("1.2.643.7.1.1.2.1"), derOid("1.2.643.7.1.1.2.2")));
+        return derSequence(derOid(GostOids.SIG_WITH_DIGEST_256),
+                derSequence(derOid("1.2.643.7.1.1.2.1"), derOid(GostOids.DIGEST_256)));
     }
 
     static byte[] buildTbs(PublicKeyParameters pub, ECParameters params,
@@ -187,7 +188,7 @@ public final class ExampleUtils {
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] subjectDn = buildDN("Example Client " + (++certCounter));
         byte[] kuExt = buildKeyUsageExt(new byte[]{(byte) 0x80});
-        byte[] ekuExt = buildEkuExt("1.3.6.1.5.5.7.3.2"); // clientAuth
+        byte[] ekuExt = buildEkuExt(GostOids.EXT_CLIENT_AUTH);
         byte[] combined = derSequence(kuExt, ekuExt);
         return createCert(caPriv, caPub, kp.getPublic(), params,
                 ca.getSubjectDnBytes(), subjectDn, combined);
@@ -199,19 +200,19 @@ public final class ExampleUtils {
         if (isCA) bc.write(derTlv(0x01, new byte[]{(byte) 0xFF})); // BOOLEAN TRUE
         if (pathLen != null) bc.write(derTlv(0x02, new byte[]{pathLen.byteValue()}));
         byte[] extValue = derOctetString(derSequence(bc.toByteArray()));
-        return derSequence(derOid("2.5.29.19"), isCA ? derTlv(0x01, new byte[]{(byte) 0xFF}) : new byte[0], extValue);
+        return derSequence(derOid(GostOids.EXT_BC), isCA ? derTlv(0x01, new byte[]{(byte) 0xFF}) : new byte[0], extValue);
     }
 
     static byte[] buildKeyUsageExt(byte[] kuBits) {
         byte[] extValue = derOctetString(derBitString(kuBits));
-        return derSequence(derOid("2.5.29.15"), derTlv(0x01, new byte[]{(byte) 0xFF}), extValue);
+        return derSequence(derOid(GostOids.EXT_KU), derTlv(0x01, new byte[]{(byte) 0xFF}), extValue);
     }
 
     static byte[] buildEkuExt(String... oids) throws IOException {
         ByteArrayOutputStream seq = new ByteArrayOutputStream();
         for (String oid : oids) seq.write(derOid(oid));
         byte[] extValue = derOctetString(derSequence(seq.toByteArray()));
-        return derSequence(derOid("2.5.29.37"), extValue);
+        return derSequence(derOid(GostOids.EXT_EKU), extValue);
     }
 
     static byte[] buildSanExt(String[] dnsNames, String[] ipAddresses) throws IOException {
@@ -227,7 +228,7 @@ public final class ExampleUtils {
             }
         }
         byte[] extValue = derOctetString(derSequence(gn.toByteArray()));
-        return derSequence(derOid("2.5.29.17"), extValue);
+        return derSequence(derOid(GostOids.EXT_SAN), extValue);
     }
 
     static byte[] derOctetString(byte[] data) {
@@ -235,6 +236,6 @@ public final class ExampleUtils {
     }
 
     static byte[] buildOcspExt() throws IOException {
-        return derSequence(derOid("1.3.6.1.5.5.7.1.1"), derOid("1.3.6.1.5.5.7.48.1"));
+        return derSequence(derOid(GostOids.EXT_AIA), derOid(GostOids.OCSP_AD));
     }
 }

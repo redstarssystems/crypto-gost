@@ -13,13 +13,14 @@ import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Контекст сессии для ГОСТ TLS 1.3 по JSSE-контракту.
@@ -54,6 +55,7 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     }
 
     private final InMemoryPskStore pskStore;
+    private final ReentrantLock sessionsLock = new ReentrantLock();
     private final Map<ByteBuffer, GostSSLSession> sessions;
     private final Map<HostPort, byte[]> identityByHost;
     private final TlsCiphersuite ciphersuite;
@@ -67,12 +69,12 @@ public final class GostSSLSessionContext implements SSLSessionContext {
      */
     public GostSSLSessionContext(TlsCiphersuite ciphersuite, int hashLen) {
         this.pskStore = new InMemoryPskStore(DEFAULT_MAX_PSK);
-        this.sessions = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+        this.sessions = new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<ByteBuffer, GostSSLSession> eldest) {
                 return sessionCacheSize > 0 && size() > sessionCacheSize;
             }
-        });
+        };
         this.identityByHost = new ConcurrentHashMap<>();
         this.ciphersuite = ciphersuite;
         this.hashLen = hashLen;
@@ -85,13 +87,26 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     @Override
     public SSLSession getSession(byte[] sessionId) {
         if (sessionId == null) return null;
-        return sessions.get(ByteBuffer.wrap(sessionId));
+        sessionsLock.lock();
+        try {
+            return sessions.get(ByteBuffer.wrap(sessionId));
+        } finally {
+            sessionsLock.unlock();
+        }
     }
 
     @Override
     public Enumeration<byte[]> getIds() {
-        Iterator<ByteBuffer> it = sessions.keySet().iterator();
+        List<ByteBuffer> keys;
+        sessionsLock.lock();
+        try {
+            keys = List.copyOf(sessions.keySet());
+        } finally {
+            sessionsLock.unlock();
+        }
         return new Enumeration<>() {
+            private final Iterator<ByteBuffer> it = keys.iterator();
+
             @Override
             public boolean hasMoreElements() {
                 return it.hasNext();
@@ -148,15 +163,25 @@ public final class GostSSLSessionContext implements SSLSessionContext {
      * обратную ссылку session→context.
      */
     void putSession(GostSSLSession session) {
-        session.setSessionContext(this);
-        sessions.put(ByteBuffer.wrap(session.getId()), session);
+        sessionsLock.lock();
+        try {
+            session.setSessionContext(this);
+            sessions.put(ByteBuffer.wrap(session.getId()), session);
+        } finally {
+            sessionsLock.unlock();
+        }
     }
 
     /**
      * Удаляет сессию из кэша.
      */
     void removeSession(GostSSLSession session) {
-        sessions.remove(ByteBuffer.wrap(session.getId()));
+        sessionsLock.lock();
+        try {
+            sessions.remove(ByteBuffer.wrap(session.getId()));
+        } finally {
+            sessionsLock.unlock();
+        }
     }
 
     /** @return PskStore для прямого доступа (серверный lookup, тесты) */
@@ -201,7 +226,7 @@ public final class GostSSLSessionContext implements SSLSessionContext {
                 peerHost, peerPort, effectiveLifetime);
     }
 
-    /** TEST ONLY: подменить logger для capture. Возвращает предыдущий для restore. */
+    /** Тестовый хелпер: подменить logger для перехвата сообщений. Возвращает предыдущий для restore в tearDown. */
     static System.Logger setLoggerForTest(System.Logger testLogger) {
         System.Logger prev = LOG;
         LOG = testLogger;

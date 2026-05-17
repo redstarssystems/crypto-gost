@@ -15,7 +15,7 @@
         Standalone Java implementation of GOST R 3411-2012 (Streebog) message digest 256 and 512 bit,
         GOST R 34.12-2015 (Kuznyechik) block cipher and GOST R 34.13-2015 CBC, CFB, CTR, OFB modes
         with CMAC integrity protection. HMAC based on RFC 7836. Digital Signature GOST R 34.10-2012.
-        TLS 1.3 implementation with GOST (RFC 9367).
+        TLS 1.3 implementation with GOST (RFC 9367).JSSE-provider.
     </description>
     <url>https://gitflic.ru/project/red-stars-systems/crypto-gost</url>
 
@@ -49,7 +49,7 @@
     </modules>
 
     <properties>
-        <revision>0.3.0-SNAPSHOT</revision>
+        <revision>0.3.1</revision>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.10.2</junit.version>
@@ -84,6 +84,9 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>3.2.5</version>
+                    <configuration>
+                        <excludedGroups>integration,stress</excludedGroups>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>

@@ -1,4 +1,5 @@
 package org.rssys.gost.jsse.engine;
+
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
@@ -66,13 +67,11 @@ public final class GostSSLEngine extends SSLEngine {
     // Поля
     // ========================================================================
 
-    // Ядро TLS: движок handshake, строитель сообщений, шифрователь записей
     private TlsHandshakeEngine handshakeEngine;
     private TlsMessageBuilder messageBuilder;
     private TlsRecord readerRecord;
     private TlsRecord writerRecord;
 
-    // Параметры соединения: менеджеры ключей, режим, хост
     private final GostX509KeyManager keyManager;
     private final GostX509TrustManager trustManager;
     private boolean clientMode = true;
@@ -81,12 +80,10 @@ public final class GostSSLEngine extends SSLEngine {
     private final int peerPort;
     private TlsCiphersuite ciphersuite;
 
-    // Буферы сборки handshake-сообщений и очереди исходящих записей
     private final ByteArrayOutputStream handshakeInputBuf = new ByteArrayOutputStream();
     private final ArrayDeque<byte[]> outgoingQueue = new ArrayDeque<>();
     private final ByteArrayOutputStream incomingAppBuf = new ByteArrayOutputStream();
 
-    // Состояние handshake и флаги закрытия
     private EngineState engineState = EngineState.INITIAL;
     private boolean handshakeStarted;
     private boolean handshakeDone;
@@ -94,12 +91,14 @@ public final class GostSSLEngine extends SSLEngine {
     private boolean closeSent;
     private boolean closeReceived;
 
-    // Блокировки: отдельно для inbound и outbound (SSLEngine допускает параллельные wrap/unwrap)
+    // WHY: два отдельных lock для inbound/outbound — SSLEngine допускает параллельные
+    // wrap (outbound) и unwrap (inbound). Один lock заблокировал бы оба направления.
     private final ReentrantLock inboundLock = new ReentrantLock();
     private final ReentrantLock outboundLock = new ReentrantLock();
 
-    // Асинхронная задача валидации сертификата (NEED_TASK)
     private final AtomicBoolean taskInProgress = new AtomicBoolean(false);
+    // WHY: переиспользуемый буфер — каждый unwrap() аллоцирует 16 КБ на горячем пути
+    private final ByteBuffer plaintextBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH + 64);
     private Runnable pendingTask;
 
     // Сессия и OCSP
@@ -131,6 +130,9 @@ public final class GostSSLEngine extends SSLEngine {
     private int pendingWriteTagLen;
     private boolean pendingWriteKeysExist;
 
+    // Переиспользуемый массив для отслеживания позиций dst-буферов в unwrap (GC pressure: #8)
+    private int[] dstPosBefore = new int[1];
+
     // Локальная цепочка сертификатов для сервера — сохраняется в сессию
     private java.security.cert.X509Certificate[] localCertChain;
     // DNS-имя, запрошенное клиентом через SNI (для тестов и GostSSLContextSpi)
@@ -149,10 +151,10 @@ public final class GostSSLEngine extends SSLEngine {
     // Конструкторы
     // ========================================================================
 
-    public GostSSLEngine(GostX509KeyManager keyManager, GostX509TrustManager trustManager,
-                         String host, int port, boolean clientMode,
-                         GostSSLSessionContext clientSessionContext,
-                         GostSSLSessionContext serverSessionContext) {
+    GostSSLEngine(GostX509KeyManager keyManager, GostX509TrustManager trustManager,
+                  String host, int port, boolean clientMode,
+                  GostSSLSessionContext clientSessionContext,
+                  GostSSLSessionContext serverSessionContext) {
         super(host, port);
         this.keyManager = keyManager;
         this.trustManager = trustManager;
@@ -165,10 +167,25 @@ public final class GostSSLEngine extends SSLEngine {
         this.serverSessionContext = serverSessionContext;
     }
 
-    public GostSSLEngine(GostX509KeyManager keyManager, GostX509TrustManager trustManager,
-                         String host, int port, boolean clientMode,
-                         GostSSLSessionContext sessionContext) {
-        this(keyManager, trustManager, host, port, clientMode, sessionContext, null);
+    /**
+     * Создаёт клиентский GostSSLEngine с контекстом сессии.
+     */
+    public static GostSSLEngine createForClient(GostX509KeyManager keyManager, GostX509TrustManager trustManager,
+                                                 String host, int port, GostSSLSessionContext sessionContext) {
+        return new GostSSLEngine(keyManager, trustManager, host, port, true, sessionContext, null);
+    }
+
+    /**
+     * Создаёт серверный GostSSLEngine с контекстом сессии.
+     * <p>
+     * serverSessionContext передаётся в оба слота приватного конструктора:
+     * sessionContext используется для PSK lookup на сервере; serverSessionContext
+     * не используется, т.к. режим установлен явно (delayed-mode createSSLEngine
+     * не применяется).
+     */
+    public static GostSSLEngine createForServer(GostX509KeyManager keyManager, GostX509TrustManager trustManager,
+                                                 String host, int port, GostSSLSessionContext sessionContext) {
+        return new GostSSLEngine(keyManager, trustManager, host, port, false, sessionContext, sessionContext);
     }
 
     public GostSSLEngine(GostX509KeyManager keyManager, GostX509TrustManager trustManager,
@@ -195,6 +212,9 @@ public final class GostSSLEngine extends SSLEngine {
      * Для сервера: ожидает ClientHello от пира.
      */
     private void initHandshake() throws SSLException, TlsException {
+        // RFC 9367: cipher suites L и S используют 256-бит кривую и Streebog-256,
+        // различаются только в TLSTREE-константах (C1/C2/C3, SNMAX).
+        // 256-битные константы корректны для обеих suite.
         ECParameters ecParams = ECParameters.tc26a256();
         int namedGroup = TlsConstants.GRP_GC256A;
         int sigScheme = TlsConstants.SIG_GOST_TC26_A_256;
@@ -658,7 +678,11 @@ public final class GostSSLEngine extends SSLEngine {
                 // WHY: сохраняем позиции dst до вызова, чтобы вычислить
                 // bytesProduced — сколько байт было записано в dst.
                 // Без этого SslHandler не увидит расшифрованные app data.
-                int[] dstPosBefore = new int[length];
+                int[] dstPosBefore = this.dstPosBefore;
+                if (dstPosBefore.length < length) {
+                    dstPosBefore = new int[length];
+                    this.dstPosBefore = dstPosBefore;
+                }
                 for (int i = 0; i < length; i++) {
                     dstPosBefore[i] = (dsts != null && dsts[offset + i] != null)
                             ? dsts[offset + i].position() : -1;
@@ -733,7 +757,6 @@ public final class GostSSLEngine extends SSLEngine {
             throws IOException, TlsException {
         int srcPos = src.position();
 
-        // Читаем заголовок записи
         byte contentType = src.get(srcPos);
         int payloadLen = ((src.get(srcPos + 3) & 0xFF) << 8) | (src.get(srcPos + 4) & 0xFF);
         int totalLen = TlsConstants.RECORD_HEADER_SIZE + payloadLen;
@@ -742,11 +765,9 @@ public final class GostSSLEngine extends SSLEngine {
             return 0; // BUFFER_UNDERFLOW
         }
 
-        // Потребляем запись
         byte[] recordData = new byte[totalLen];
         src.get(recordData);
 
-        // Извлекаем тело записи (без заголовка)
         byte[] body = Arrays.copyOfRange(recordData, TlsConstants.RECORD_HEADER_SIZE, totalLen);
 
         if (contentType == TlsConstants.CT_ALERT) {
@@ -759,25 +780,18 @@ public final class GostSSLEngine extends SSLEngine {
                     "Expected handshake, got " + contentType);
         }
 
-        // Добавляем в буфер сборки handshake-сообщений
         handshakeInputBuf.write(body);
-
-        // Собираем полные handshake-фреймы и передаём в engine
         processHandshakeFrames();
 
         return totalLen;
     }
 
-    /**
-     * Обрабатывает зашифрованную TLS-запись.
-     */
     private int handleEncryptedRecord(ByteBuffer src, ByteBuffer[] dsts, int offset, int length)
             throws IOException, TlsException {
         int srcPos = src.position();
         int remaining = src.remaining();
 
-        // Дешифруем через readerRecord
-        ByteBuffer plaintextBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH + 64);
+        plaintextBuf.clear();
         UnprotectResult r;
         try {
             r = readerRecord.unprotect(src, plaintextBuf);
@@ -913,11 +927,14 @@ public final class GostSSLEngine extends SSLEngine {
                 throw e;
             }
 
-            // Смена ключей — обновляем readerRecord/writerRecord
-            handleEngineKeyChanges();
+            try {
+                handleEngineKeyChanges();
+            } catch (RuntimeException e) {
+                handshakeInputBuf.reset();
+                throw e;
+            }
 
-            // SNI: серверу нужно знать, какое имя запросил клиент — для
-            // последующей проверки в GostSSLContextSpi и для тестов
+            // WHY: SNI нужен GostSSLContextSpi для выбора сертификата и тестам для проверки
             if (!clientMode && handshakeEngine != null && requestedServerName == null) {
                 String sni = handshakeEngine.getRequestedServerName();
                 if (sni != null) {
@@ -925,7 +942,7 @@ public final class GostSSLEngine extends SSLEngine {
                 }
             }
 
-            // Certificate validation — async через NEED_TASK
+            // WHY: валидация сертификата асинхронна (NEED_TASK) — не блокируем handshake-поток
             if (handshakeEngine.needsCertificateValidation()) {
                 List<TlsCertificate> certs = handshakeEngine.getReceivedCertificates();
                 String keyType = resolveKeyType(certs);
@@ -934,13 +951,11 @@ public final class GostSSLEngine extends SSLEngine {
                 break;
             }
 
-            // Poll исходящие сообщения
             byte[] outgoing;
             while ((outgoing = handshakeEngine.poll()) != null) {
                 outgoingQueue.addLast(outgoing);
             }
 
-            // Проверяем завершение handshake
             if (handshakeEngine.isDone()) {
                 finishHandshake();
             }
@@ -951,7 +966,6 @@ public final class GostSSLEngine extends SSLEngine {
             }
         }
 
-        // Удаляем обработанные байты из буфера
         if (pos > 0) {
             byte[] remaining = Arrays.copyOfRange(buf, pos, buf.length);
             handshakeInputBuf.reset();
@@ -990,8 +1004,8 @@ public final class GostSSLEngine extends SSLEngine {
                 // Откладываем ТОЛЬКО на этапе HANDSHAKE — KeyUpdate в DATA
                 // применяется немедленно.
                 if (handshakeEngine.isDone() && engineState == EngineState.HANDSHAKE) {
-                    this.pendingWriteKey = newKeys.getKey().clone();
-                    this.pendingWriteIv = newKeys.getIv().clone();
+                    this.pendingWriteKey = newKeys.getKey();
+                    this.pendingWriteIv = newKeys.getIv();
                     this.pendingWriteTagLen = ciphersuite.getTagLen();
                     this.pendingWriteKeysExist = true;
                 } else {
@@ -1011,8 +1025,8 @@ public final class GostSSLEngine extends SSLEngine {
                     pendingWriteKey = null;
                     pendingWriteIv = null;
                 } else {
-                    this.pendingWriteKey = newKeys.getKey().clone();
-                    this.pendingWriteIv = newKeys.getIv().clone();
+                    this.pendingWriteKey = newKeys.getKey();
+                    this.pendingWriteIv = newKeys.getIv();
                     this.pendingWriteTagLen = ciphersuite.getTagLen();
                     this.pendingWriteKeysExist = true;
                 }
@@ -1594,9 +1608,6 @@ public final class GostSSLEngine extends SSLEngine {
     }
 
     /**
-     * Строит plaintext TLS-запись (без шифрования).
-     */
-    /**
      * Устанавливает OCSP-ответ для степплинга (сервер).
      * Приложение загружает OCSP-ответ заранее и передаёт в engine.
      * Ответ будет отправлен в CertificateEntry сервера.
@@ -1610,12 +1621,11 @@ public final class GostSSLEngine extends SSLEngine {
         }
     }
 
-    /** Для тестов: проверка установки OCSP staple */
     byte[] getOcspResponseForTest() {
         return ocspResponse;
     }
 
-    /** TEST ONLY: подменить logger для capture. Возвращает предыдущий для restore. */
+    /** Тестовый хелпер: подменить logger для перехвата сообщений. Возвращает предыдущий для restore в tearDown. */
     static System.Logger setLoggerForTest(System.Logger testLogger) {
         System.Logger prev = LOG;
         LOG = testLogger;

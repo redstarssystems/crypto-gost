@@ -140,10 +140,10 @@ public class TlsTestHelper {
     /** Строит AIA extension с OCSP URI (id-ad-ocsp). */
     public static byte[] buildAiaOcspExtensionBytes(String ocspUri) {
         byte[] uriBytes = ocspUri.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
-        byte[] accessDesc = derSequence(derOid("1.3.6.1.5.5.7.48.1"), derTlv(0x86, uriBytes));
+        byte[] accessDesc = derSequence(derOid(GostOids.OCSP_AD), derTlv(0x86, uriBytes));
         byte[] aiaSeq = derSequence(accessDesc);
         byte[] extValue = derOctetString(aiaSeq);
-        return derSequence(derOid("1.3.6.1.5.5.7.1.1"), extValue);
+        return derSequence(derOid(GostOids.EXT_AIA), extValue);
     }
 
     /** Строит SubjectAltName расширение для DNS и IP. */
@@ -476,7 +476,7 @@ public class TlsTestHelper {
         byte[] sigAlg = buildAlgId(caPub.getParams());
         byte[] basicOcsp = derSequence(tbs, sigAlg, derBitString(sig));
         byte[] basicOctet = derOctetString(basicOcsp);
-        byte[] responseBytesContent = derSequence(derOid("1.3.6.1.5.5.7.48.1.1"), basicOctet);
+        byte[] responseBytesContent = derSequence(derOid(GostOids.OCSP_BASIC), basicOctet);
         byte[] responseBytes = derTlv(0xA0, responseBytesContent);
         byte[] status = new byte[]{0x0A, 0x01, 0x00};
         return derSequence(status, responseBytes);
@@ -515,7 +515,7 @@ public class TlsTestHelper {
         byte[] certsTagged = derTlv(0xA0, certsSeq);
         byte[] basicOcsp = derSequence(tbs, sigAlg, derBitString(sig), certsTagged);
         byte[] basicOctet = derOctetString(basicOcsp);
-        byte[] responseBytesContent = derSequence(derOid("1.3.6.1.5.5.7.48.1.1"), basicOctet);
+        byte[] responseBytesContent = derSequence(derOid(GostOids.OCSP_BASIC), basicOctet);
         byte[] responseBytes = derTlv(0xA0, responseBytesContent);
         byte[] status = new byte[]{0x0A, 0x01, 0x00};
         return derSequence(status, responseBytes);
@@ -566,7 +566,7 @@ public class TlsTestHelper {
         byte[] sig = derBitString(new byte[64]);
         byte[] basicOcsp = derSequence(tbs, sigAlg, sig);
         byte[] basicOctet = derOctetString(basicOcsp);
-        byte[] responseBytesContent = derSequence(derOid("1.3.6.1.5.5.7.48.1.1"), basicOctet);
+        byte[] responseBytesContent = derSequence(derOid(GostOids.OCSP_BASIC), basicOctet);
         byte[] responseBytes = derTlv(0xA0, responseBytesContent);
         byte[] status = new byte[]{0x0A, 0x01, 0x00}; // ENUMERATED(0) — без [0]
         return derSequence(status, responseBytes);

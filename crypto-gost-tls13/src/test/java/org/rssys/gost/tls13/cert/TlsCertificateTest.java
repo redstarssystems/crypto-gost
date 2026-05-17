@@ -535,7 +535,7 @@ class TlsCertificateTest {
     void testEkuWithServerAuth() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
                 ECParameters.tc26a256(), "240501120000Z", "290501120000Z",
-                null, null, new String[]{"1.3.6.1.5.5.7.3.1"});
+                null, null, new String[]{GostOids.EXT_SERVER_AUTH});
         assertTrue(bundle.cert.isEkuValidForServer());
     }
 
@@ -560,7 +560,7 @@ class TlsCertificateTest {
     void testEkuWithServerAuthAndOther() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
                 ECParameters.tc26a256(), "240501120000Z", "290501120000Z",
-                null, null, new String[]{"1.3.6.1.5.5.7.3.3", "1.3.6.1.5.5.7.3.1"});
+                null, null, new String[]{"1.3.6.1.5.5.7.3.3", GostOids.EXT_SERVER_AUTH});
         assertTrue(bundle.cert.isEkuValidForServer());
     }
 
@@ -569,7 +569,7 @@ class TlsCertificateTest {
     void testEkuClientAuthValid() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
                 ECParameters.tc26a256(), "240501120000Z", "290501120000Z",
-                null, null, new String[]{"1.3.6.1.5.5.7.3.2"});
+                null, null, new String[]{GostOids.EXT_CLIENT_AUTH});
         assertTrue(bundle.cert.isEkuValidForClient());
     }
 
@@ -578,7 +578,7 @@ class TlsCertificateTest {
     void testEkuClientAuthMissing() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
                 ECParameters.tc26a256(), "240501120000Z", "290501120000Z",
-                null, null, new String[]{"1.3.6.1.5.5.7.3.1"});
+                null, null, new String[]{GostOids.EXT_SERVER_AUTH});
         assertFalse(bundle.cert.isEkuValidForClient());
     }
 
@@ -594,7 +594,7 @@ class TlsCertificateTest {
     void testEkuClientAuthWithServerAuth() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
                 ECParameters.tc26a256(), "240501120000Z", "290501120000Z",
-                null, null, new String[]{"1.3.6.1.5.5.7.3.1", "1.3.6.1.5.5.7.3.2"});
+                null, null, new String[]{GostOids.EXT_SERVER_AUTH, GostOids.EXT_CLIENT_AUTH});
         assertTrue(bundle.cert.isEkuValidForClient());
     }
 
@@ -607,7 +607,7 @@ class TlsCertificateTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         assertTrue(leaf.cert.verify(root.cert.getPublicKey()));
     }

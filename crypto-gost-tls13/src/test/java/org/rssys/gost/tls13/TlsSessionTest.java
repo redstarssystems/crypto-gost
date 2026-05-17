@@ -1043,7 +1043,7 @@ class TlsSessionTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
@@ -1063,7 +1063,7 @@ class TlsSessionTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         org.rssys.gost.api.KeyPair wrongKp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
@@ -1098,7 +1098,7 @@ class TlsSessionTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponse(
                 leaf.cert.getSerialNumber(), root.priv, root.cert.getPublicKey(),
@@ -1121,7 +1121,7 @@ class TlsSessionTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
@@ -1146,7 +1146,7 @@ class TlsSessionTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         // Delegated cert: подписан root, EKU=OCSPSigning, KU=digitalSignature
         TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
@@ -1178,14 +1178,14 @@ class TlsSessionTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         // Delegated cert: подписан root, НО EKU=serverAuth вместо OCSPSigning
         TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
                 "240501120000Z", "290501120000Z", null,
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
                 leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
@@ -1210,7 +1210,7 @@ class TlsSessionTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         // Вторая CA — не issuer leaf
         TlsTestHelper.CertBundle wrongRoot = TlsTestHelper.createRootCA(ECParameters.tc26a256());
@@ -1244,7 +1244,7 @@ class TlsSessionTest {
                 root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         // Delegated cert: просрочен (notAfter в прошлом)
         TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
@@ -1300,7 +1300,7 @@ class TlsSessionTest {
                 issuer.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
     }
 
@@ -1369,7 +1369,7 @@ class TlsSessionTest {
                 ca1.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
@@ -1499,7 +1499,7 @@ class TlsSessionTest {
                 ECParameters.tc26a256(), issuer.priv, issuer.cert.getPublicKey(),
                 issuer.subjectDn,
                 "240501120000Z", "290501120000Z", null,
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.2"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_CLIENT_AUTH},
                 false, null);
     }
 
@@ -1519,7 +1519,7 @@ class TlsSessionTest {
                 ECParameters.tc26a256(), issuer.priv, issuer.cert.getPublicKey(),
                 issuer.subjectDn,
                 "20010101120000Z", "20020101120000Z", null,
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.2"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_CLIENT_AUTH},
                 false, null);
     }
 
@@ -2982,7 +2982,7 @@ class TlsSessionTest {
                 ca1.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.1"},
+                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())

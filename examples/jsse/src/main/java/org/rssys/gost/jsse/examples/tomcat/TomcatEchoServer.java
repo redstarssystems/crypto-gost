@@ -2,7 +2,7 @@ package org.rssys.gost.jsse.examples.tomcat;
 
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.examples.EchoSocketClient;
-import org.rssys.gost.jsse.examples.JsseCertHelper;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.startup.Tomcat;
@@ -123,17 +123,17 @@ public final class TomcatEchoServer {
     public static final class GostSSLUtil implements SSLUtil {
         // Все методы должны использовать ОДИН helper — иначе getKeyManagers()
         // и createSSLContext() получат РАЗНЫЕ сертификаты, и TLS упадёт.
-        private static final JsseCertHelper HELPER;
+        private static final ExamplesCertHelper HELPER;
         static {
             try {
-                HELPER = new JsseCertHelper();
+                HELPER = new ExamplesCertHelper();
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
         }
 
         /** Для TomcatEchoServer.main() — клиент и сервер используют один CA. */
-        public static JsseCertHelper getHelper() {
+        public static ExamplesCertHelper getHelper() {
             return HELPER;
         }
 

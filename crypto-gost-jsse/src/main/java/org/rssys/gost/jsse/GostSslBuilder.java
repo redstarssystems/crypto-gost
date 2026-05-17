@@ -1,0 +1,114 @@
+package org.rssys.gost.jsse;
+
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.tls13.cert.TlsCertificate;
+
+import javax.net.ssl.SSLContext;
+import java.security.PrivateKey;
+import java.security.cert.X509Certificate;
+import java.util.List;
+
+/**
+ * Fluent builder для сложных случаев настройки {@link GostSsl}.
+ * <p>
+ * Покрывает OCSP stapling и session cache — то, что не входит
+ * в простые статические методы {@link GostSsl}.
+ */
+public class GostSslBuilder {
+
+    private byte[] certDer;
+    private byte[] keyDer;
+    private byte[] p12Data;
+    private char[] p12Password;
+    private byte[][] trustedCaDers;
+    private boolean ocspEnabled;
+    private int sessionCacheSize = -1;
+    private boolean trustAll;
+
+    GostSslBuilder() {}
+
+    /**
+     * Устанавливает сертификат и ключ из DER-байтов.
+     *
+     * @param certDer сертификат в DER (X.509)
+     * @param keyDer  закрытый ключ в DER (PKCS#8 PrivateKeyInfo)
+     */
+    public GostSslBuilder certificate(byte[] certDer, byte[] keyDer) {
+        this.certDer = certDer;
+        this.keyDer = keyDer;
+        return this;
+    }
+
+    /**
+     * Устанавливает сертификат и ключ из PKCS12.
+     *
+     * @param p12Data  байты PFX-контейнера
+     * @param password пароль
+     */
+    public GostSslBuilder certificate(byte[] p12Data, char[] password) {
+        this.p12Data = p12Data;
+        this.p12Password = password;
+        return this;
+    }
+
+    /**
+     * Добавляет доверенный CA-сертификат (DER X.509).
+     * <p>
+     * <b>Ограничение:</b> GostX509TrustManager принимает один CA-ключ.
+     * При повторном вызове используется только последний добавленный CA.
+     * Для цепочек сертификатов используйте PKCS12 (см. {@link #certificate(byte[], char[])}).
+     */
+    public GostSslBuilder trustCa(byte[] caDer) {
+        if (this.trustedCaDers == null) {
+            this.trustedCaDers = new byte[][]{caDer};
+        } else {
+            byte[][] copy = new byte[trustedCaDers.length + 1][];
+            System.arraycopy(trustedCaDers, 0, copy, 0, trustedCaDers.length);
+            copy[trustedCaDers.length] = caDer;
+            this.trustedCaDers = copy;
+        }
+        return this;
+    }
+
+    /**
+     * Включает OCSP stapling.
+     */
+    public GostSslBuilder ocsp(boolean enabled) {
+        this.ocspEnabled = enabled;
+        return this;
+    }
+
+    /**
+     * Устанавливает размер кэша сессий. 0 = без ограничения.
+     */
+    public GostSslBuilder sessionCacheSize(int size) {
+        this.sessionCacheSize = size;
+        return this;
+    }
+
+    /**
+     * Включает режим trust-all (только для разработки).
+     */
+    public GostSslBuilder trustAll() {
+        this.trustAll = true;
+        return this;
+    }
+
+    /**
+     * Строит серверный SSLContext.
+     */
+    public SSLContext buildServerContext() {
+        return GostSsl.buildContext(certDer, keyDer, p12Data, p12Password,
+                trustedCaDers, ocspEnabled, sessionCacheSize, trustAll, true);
+    }
+
+    /**
+     * Строит клиентский SSLContext.
+     */
+    public SSLContext buildClientContext() {
+        return GostSsl.buildContext(certDer, keyDer, p12Data, p12Password,
+                trustedCaDers, ocspEnabled, sessionCacheSize, trustAll, false);
+    }
+}

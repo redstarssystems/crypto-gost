@@ -1,7 +1,7 @@
 package org.rssys.gost.jsse.examples.undertow;
 
 import org.rssys.gost.jsse.examples.EchoSocketClient;
-import org.rssys.gost.jsse.examples.JsseCertHelper;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 
 import io.undertow.Undertow;
 import io.undertow.server.HttpHandler;
@@ -22,7 +22,7 @@ public final class UndertowEchoServer {
     private UndertowEchoServer() {}
 
     public static void main(String[] args) throws Exception {
-        JsseCertHelper helper = new JsseCertHelper();
+        ExamplesCertHelper helper = new ExamplesCertHelper();
 
         Undertow server = Undertow.builder()
                 .addHttpsListener(0, "0.0.0.0", helper.getSslContext())

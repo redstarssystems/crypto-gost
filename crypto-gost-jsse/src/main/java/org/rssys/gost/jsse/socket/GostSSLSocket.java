@@ -162,7 +162,9 @@ public final class GostSSLSocket extends SSLSocket {
         this.sessionContext = sessionContext;
         this.clientMode = clientMode;
 
-        this.engine = new GostSSLEngine(km, tm, host, port, clientMode, sessionContext);
+        this.engine = clientMode
+                ? GostSSLEngine.createForClient(km, tm, host, port, sessionContext)
+                : GostSSLEngine.createForServer(km, tm, host, port, sessionContext);
 
         // handshakeLock реентрабельный: когда read()/write() триггерят startHandshake()
         // до его завершения, вызывающий тред уже держит readLock/writeLock, затем

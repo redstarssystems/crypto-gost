@@ -155,12 +155,12 @@ class GostSSLEnginePostHandshakeTest {
 
         // WHY: первый handshake — полный, чтобы получить PSK через NST
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
-        GostSSLEngine server1 = new GostSSLEngine(
+        GostSSLEngine server1 = GostSSLEngine.createForServer(
                 serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, false, sessionContext);
-        GostSSLEngine client1 = new GostSSLEngine(
+                "localhost", 0, sessionContext);
+        GostSSLEngine client1 = GostSSLEngine.createForClient(
                 new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", PSK_BINDING_PORT, true, sessionContext);
+                "localhost", PSK_BINDING_PORT, sessionContext);
         doLoopback(client1, server1, pair1);
         assertTrue(client1.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
 
@@ -188,12 +188,12 @@ class GostSSLEnginePostHandshakeTest {
 
         // WHY: второй handshake с теми же контекстами — должен использовать PSK
         InMemoryTlsTransport.Pair pair2 = InMemoryTlsTransport.newPair();
-        GostSSLEngine server2 = new GostSSLEngine(
+        GostSSLEngine server2 = GostSSLEngine.createForServer(
                 serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, false, sessionContext);
-        GostSSLEngine client2 = new GostSSLEngine(
+                "localhost", 0, sessionContext);
+        GostSSLEngine client2 = GostSSLEngine.createForClient(
                 new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", PSK_BINDING_PORT, true, sessionContext);
+                "localhost", PSK_BINDING_PORT, sessionContext);
         doLoopback(client2, server2, pair2);
         assertTrue(client2.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
     }
@@ -209,12 +209,12 @@ class GostSSLEnginePostHandshakeTest {
                 toJcaChain(serverCert, rootCa), serverCert.priv);
 
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
-        GostSSLEngine server1 = new GostSSLEngine(
+        GostSSLEngine server1 = GostSSLEngine.createForServer(
                 serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, false, sessionContext);
-        GostSSLEngine client1 = new GostSSLEngine(
+                "localhost", 0, sessionContext);
+        GostSSLEngine client1 = GostSSLEngine.createForClient(
                 new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", PSK_BINDING_PORT, true, sessionContext);
+                "localhost", PSK_BINDING_PORT, sessionContext);
         doLoopback(client1, server1, pair1);
 
         // WHY: NST нужно доставить клиенту для проверки истечения TTL
@@ -244,12 +244,12 @@ class GostSSLEnginePostHandshakeTest {
 
         // WHY: ticket lifetime = 1s, прошло 1500ms → PSK истёк, нужен полный handshake
         InMemoryTlsTransport.Pair pair2 = InMemoryTlsTransport.newPair();
-        GostSSLEngine server2 = new GostSSLEngine(
+        GostSSLEngine server2 = GostSSLEngine.createForServer(
                 serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, false, sessionContext);
-        GostSSLEngine client2 = new GostSSLEngine(
+                "localhost", 0, sessionContext);
+        GostSSLEngine client2 = GostSSLEngine.createForClient(
                 new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", PSK_BINDING_PORT, true, sessionContext);
+                "localhost", PSK_BINDING_PORT, sessionContext);
         doLoopback(client2, server2, pair2);
         assertTrue(client2.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
     }

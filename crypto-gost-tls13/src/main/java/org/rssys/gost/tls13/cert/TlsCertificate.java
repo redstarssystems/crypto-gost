@@ -1365,8 +1365,8 @@ public final class TlsCertificate {
     private static final byte[] DIGITAL_SIGNATURE_OID = {(byte) 0x80, 0x00};
 
     // id-ad-ocsp = 1.3.6.1.5.5.7.48.1, id-ad-caIssuers = 1.3.6.1.5.5.7.48.2
-    private static final byte[] OCSP_AIA_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01};
-    private static final byte[] CA_ISSUERS_AIA_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x02};
+    private static final byte[] OCSP_AIA_OID = TlsDerParser.AD_OCSP_OID_BYTES;
+    private static final byte[] CA_ISSUERS_AIA_OID = TlsDerParser.AD_CA_ISSUERS_OID_BYTES;
 
     /**
      * Проверяет наличие указанного OID в ExtendedKeyUsage SEQUENCE.

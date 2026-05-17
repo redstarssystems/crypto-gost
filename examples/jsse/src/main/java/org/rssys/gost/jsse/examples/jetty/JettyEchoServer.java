@@ -1,7 +1,7 @@
 package org.rssys.gost.jsse.examples.jetty;
 
 import org.rssys.gost.jsse.examples.EchoSocketClient;
-import org.rssys.gost.jsse.examples.JsseCertHelper;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.server.Handler;
@@ -28,7 +28,7 @@ public final class JettyEchoServer {
     private JettyEchoServer() {}
 
     public static void main(String[] args) throws Exception {
-        JsseCertHelper helper = new JsseCertHelper();
+        ExamplesCertHelper helper = new ExamplesCertHelper();
 
         SslContextFactory.Server scf = new SslContextFactory.Server();
         scf.setSslContext(helper.getSslContext());
