@@ -1533,7 +1533,7 @@ public final class TlsHandshakeEngine {
      * @param obfuscatedTicketAge obfuscated_ticket_age
      */
     public void setPsk(byte[] psk, byte[] identity, long obfuscatedTicketAge) {
-        this.pskKey = psk;
+        this.pskKey = psk.clone();
         this.pskIdentity = identity;
         this.obfuscatedTicketAge = obfuscatedTicketAge;
         this.pskOffered = true;
@@ -1546,7 +1546,7 @@ public final class TlsHandshakeEngine {
      * @param psk PSK-ключ
      */
     public void setServerPsk(byte[] psk) {
-        this.pskKey = psk;
+        this.pskKey = psk.clone();
     }
 
     /**

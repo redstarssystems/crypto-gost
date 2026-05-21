@@ -5,6 +5,7 @@ import io.netty.handler.ssl.CipherSuiteFilter;
 import io.netty.handler.ssl.ClientAuth;
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.util.CryptoRandom;
 
 import javax.net.ssl.KeyManager;
@@ -69,6 +70,9 @@ public final class GostSslContextBuilder {
     private long sessionCacheSize;
     private boolean sessionTimeoutSet;
     private int sessionTimeout;
+
+    /** Внешний сессионный контекст для разделения PSK между клиентом и сервером. */
+    private GostSSLSessionContext externalSessionContext;
 
     private GostSslContextBuilder(boolean isClient) {
         this.isClient = isClient;
@@ -204,6 +208,24 @@ public final class GostSslContextBuilder {
         return this;
     }
 
+    /**
+     * Задаёт внешний сессионный контекст для разделения PSK между клиентом и сервером.
+     * <p>
+     * После вызова оба {@code GostSslContext} (клиентский и серверный) используют
+     * один и тот же {@code GostSSLSessionContext} — PSK-тикеты, сохранённые на
+     * сервере, видны клиенту при повторном подключении.
+     * <p>
+     * Потокобезопасность: метод предназначен для вызова в однопоточном контексте
+     * строителя, до начала handshake через создаваемый контекст.
+     *
+     * @param sessionContext внешний контекст сессий
+     * @return этот builder
+     */
+    public GostSslContextBuilder sessionContext(GostSSLSessionContext sessionContext) {
+        this.externalSessionContext = sessionContext;
+        return this;
+    }
+
     // ========================================================================
     // build
     // ========================================================================
@@ -238,6 +260,18 @@ public final class GostSslContextBuilder {
 
         if (sessionCacheSizeSet || sessionTimeoutSet) {
             configureSessionContext(sslContext);
+        }
+
+        // WHY: redirect оба контекста — сервер пишет NST в serverSessionContext
+        // при full handshake, клиент ищет PSK в clientSessionContext при reconnect.
+        // Cast безопасен: GostSSLContextSpi создаёт именно GostSSLSessionContext.
+        if (externalSessionContext != null) {
+            GostSSLSessionContext clientCtx =
+                    (GostSSLSessionContext) sslContext.getClientSessionContext();
+            GostSSLSessionContext serverCtx =
+                    (GostSSLSessionContext) sslContext.getServerSessionContext();
+            clientCtx.redirectToSharedState(externalSessionContext);
+            serverCtx.redirectToSharedState(externalSessionContext);
         }
 
         ApplicationProtocolConfig apnConfig = buildApnConfig();

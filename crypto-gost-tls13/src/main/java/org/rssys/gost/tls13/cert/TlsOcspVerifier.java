@@ -350,6 +350,13 @@ public final class TlsOcspVerifier {
         int cpPos = seqTlv[0]; // start of first Certificate content
         List<byte[]> result = new ArrayList<>();
         while (cpPos < seqEnd) {
+            // WHY: злоумышленник может упаковать сотни сертификатов в certs [0]
+            // BasicOCSPResponse для CPU-DoS (каждый — DER-парсинг + ECDSA verify).
+            // fail-closed: превышение лимита = decode error → handshake failure.
+            if (result.size() >= TlsConstants.MAX_DELEGATED_CERTS) {
+                throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                        "Too many delegated OCSP responder certificates: " + result.size());
+            }
             int[] certTlv = TlsDerParser.readTlv(basicResp, cpPos);
             byte[] certDer = Arrays.copyOfRange(basicResp, cpPos, certTlv[1]);
             result.add(certDer);
@@ -478,6 +485,97 @@ public final class TlsOcspVerifier {
         if (strict) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "OCSP: nonce extension not found (strict nonce)");
+        }
+    }
+
+    /**
+     * Извлекает {@code nextUpdate} из первого SingleResponse OCSP-ответа.
+     * <p>
+     * Используется кэшем OCSP для установки времени истечения с учётом
+     * {@code nextUpdate} из ответа, а не только фиксированного TTL.
+     * Парсинг без валидации подписи — только DER-навигация.
+     *
+     * @param ocspResponse DER-кодированный OCSP-ответ
+     * @return дата следующего обновления или {@code null} если поле отсутствует
+     *         или структура неразбираема
+     */
+    public static Date extractNextUpdate(byte[] ocspResponse) {
+        if (ocspResponse == null) return null;
+        try {
+            byte[] der = ocspResponse;
+            int[] ocspSeq = TlsDerParser.parseSequence(der, 0);
+            int pos = ocspSeq[0];
+            int end = ocspSeq[1];
+
+            // responseStatus ENUMERATED
+            if (pos >= end || (der[pos] & 0xFF) != 0x0A) return null;
+            pos = TlsDerParser.readTlv(der, pos)[1];
+
+            // [0] EXPLICIT responseBytes
+            if (pos >= end || (der[pos] & 0xFF) != 0xA0) return null;
+            int[] rbExplTlv = TlsDerParser.readTlv(der, pos);
+            pos = rbExplTlv[0];
+
+            // ResponseBytes SEQUENCE { OID, OCTET STRING }
+            int[] rbSeq = TlsDerParser.parseSequence(der, pos);
+            int rbPos = rbSeq[0];
+            int rbEnd = rbSeq[1];
+
+            // OID (skip)
+            if (rbPos >= rbEnd || (der[rbPos] & 0xFF) != 0x06) return null;
+            rbPos = TlsDerParser.readTlv(der, rbPos)[1];
+
+            // OCTET STRING → BasicOCSPResponse
+            if (rbPos >= rbEnd || (der[rbPos] & 0xFF) != 0x04) return null;
+            int[] octTlv = TlsDerParser.readTlv(der, rbPos);
+
+            // BasicOCSPResponse SEQUENCE
+            int[] basicSeq = TlsDerParser.parseSequence(der, octTlv[0]);
+            int[] tbsSeq = TlsDerParser.parseSequence(der, basicSeq[0]);
+            int tbsPos = tbsSeq[0];
+            int tbsEnd = tbsSeq[1];
+
+            // Пропускаем version [0] если есть
+            if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == 0xA0) {
+                tbsPos = TlsDerParser.readTlv(der, tbsPos)[1];
+            }
+            // Пропускаем responderID
+            if (tbsPos >= tbsEnd) return null;
+            if ((der[tbsPos] & 0xFF) == 0xA0 || (der[tbsPos] & 0xFF) == 0xA1) {
+                tbsPos = TlsDerParser.readTlv(der, tbsPos)[1];
+            } else {
+                return null;
+            }
+            // Пропускаем producedAt GeneralizedTime
+            if (tbsPos >= tbsEnd || (der[tbsPos] & 0xFF) != 0x18) return null;
+            tbsPos = TlsDerParser.readTlv(der, tbsPos)[1];
+
+            // responses SEQUENCE OF
+            int[] respSeq = TlsDerParser.parseSequence(der, tbsPos);
+
+            // SingleResponse[0]
+            int[] srSeq = TlsDerParser.parseSequence(der, respSeq[0]);
+            int[] certIdSeq = TlsDerParser.parseSequence(der, srSeq[0]);
+
+            // После CertID: опциональные singleUpdateExtensions, затем thisUpdate
+            int timePos = certIdSeq[1];
+            if (timePos < srSeq[1] && (der[timePos] & 0xFF) == 0xA0) {
+                timePos = TlsDerParser.readTlv(der, timePos)[1];
+            }
+            // thisUpdate должно быть
+            if (timePos >= srSeq[1]) return null;
+            timePos = TlsDerParser.readTlv(der, timePos)[1];
+
+            // [0] EXPLICIT nextUpdate — опционально
+            if (timePos < srSeq[1] && (der[timePos] & 0xFF) == 0xA0) {
+                int[] nuExplTlv = TlsDerParser.readTlv(der, timePos);
+                if (nuExplTlv[0] < nuExplTlv[1]) {
+                    return TlsDerParser.parseTime(der, nuExplTlv[0]);
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return null;  // любая ошибка парсинга — nextUpdate не извлечён
         }
     }
 }

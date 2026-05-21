@@ -8,6 +8,7 @@ import org.rssys.gost.signature.PublicKeyParameters;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.util.Arrays;
+import java.util.Map;
 
 /**
  * Минимальный DER-кодек для ключей ГОСТ Р 34.10-2012 без внешних зависимостей.
@@ -102,6 +103,11 @@ public final class GostDerCodec {
     /**
      * Декодирует открытый ключ из DER SubjectPublicKeyInfo (X.509).
      *
+     * <p>Если {@code signAlgOid} = {@link GostCurves#OID_SIGN_512}, а размер точки
+     * не соответствует OID кривой — применяет {@link #FALLBACK_256_TO_512}
+     * (workaround для нестандартных сертификатов Минцифры, где {@code curveOid}
+     * содержит 256-битный OID при 512-битном ключе).
+     *
      * @param encoded DER-байты
      * @return открытый ключ
      * @throws IllegalArgumentException при ошибке разбора или неизвестной кривой
@@ -118,6 +124,7 @@ public final class GostDerCodec {
         if (algId.length < 2) {
             throw new IllegalArgumentException("Invalid AlgorithmIdentifier: expected 2 elements");
         }
+        String algoOid     = parseOid(algId[0], 0);
         byte[][] pubKeyParams = parseSequenceContents(algId[1], 0);
         if (pubKeyParams.length < 1) {
             throw new IllegalArgumentException("Invalid GostR3410-PublicKeyParameters");
@@ -131,9 +138,22 @@ public final class GostDerCodec {
 
         int coordLen = (params.p.bitLength() + 7) / 8;
         if (pointOctetStr.length != coordLen * 2) {
-            throw new IllegalArgumentException(
-                "Invalid EC point encoding: expected " + (coordLen * 2)
-                + " bytes, got " + pointOctetStr.length);
+            // Несоответствие: OID кривой ожидает coordLen байт на координату,
+            // а реальная точка больше. Если сертификат подписан алгоритмом ГОСТ
+            // с 512-битным модулем — пытаемся подобрать 512-битный вариант кривой
+            // через FALLBACK_256_TO_512 (workaround для сертификатов Минцифры).
+            if (GostCurves.OID_SIGN_512.equals(algoOid)) {
+                String oid512 = to512bitCurveOid(curveOid);
+                if (oid512 != null) {
+                    params = GostCurves.byName(oid512);
+                    coordLen = (params.p.bitLength() + 7) / 8;
+                }
+            }
+            if (pointOctetStr.length != coordLen * 2) {
+                throw new IllegalArgumentException(
+                    "Invalid EC point encoding: expected " + (coordLen * 2)
+                    + " bytes, got " + pointOctetStr.length);
+            }
         }
 
         // Координаты в little-endian → конвертируем в big-endian для BigInteger
@@ -406,6 +426,24 @@ public final class GostDerCodec {
                 + ") at offset " + offset
                 + ", got 0x" + Integer.toHexString(data[offset] & 0xFF));
         }
+    }
+
+    /**
+     * Workaround для нестандартных сертификатов УЦ Минцифры, где
+     * {@code curveOid} содержит OID 256-битной кривой при 512-битном ключе
+     * (signAlgOid = {@link GostCurves#OID_SIGN_512}), а реальная точка —
+     * 128 байт (512-битная кривая).
+     *
+     * <p>Маппинг: {@code OID_TC26_A_256 → OID_TC26_A_512}.
+     * Аналогично поведению OpenSSL gostprov, который при несоответствии размера
+     * точки доверяет signAlgOid, а не curveOid.
+     */
+    private static final Map<String, String> FALLBACK_256_TO_512 = Map.of(
+            GostCurves.OID_TC26_A_256, GostCurves.OID_TC26_A_512
+    );
+
+    private static String to512bitCurveOid(String oid256) {
+        return FALLBACK_256_TO_512.get(oid256);
     }
 
     /**

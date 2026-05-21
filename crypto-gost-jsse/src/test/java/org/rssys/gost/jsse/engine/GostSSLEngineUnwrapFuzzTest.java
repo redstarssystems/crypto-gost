@@ -58,7 +58,7 @@ class GostSSLEngineUnwrapFuzzTest {
                 false, null);
 
         serverKm = new GostX509KeyManager();
-        java.security.cert.X509Certificate[] chain = toJcaChain(serverCert, rootCa);
+        java.security.cert.X509Certificate[] chain = CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert);
         serverKm.addKeyEntry("default", chain, serverCert.priv);
     }
 
@@ -114,15 +114,4 @@ class GostSSLEngineUnwrapFuzzTest {
                 "localhost", 0, false);
     }
 
-    private static java.security.cert.X509Certificate[] toJcaChain(
-            TlsTestHelper.CertBundle leaf,
-            TlsTestHelper.CertBundle... intermediates) throws Exception {
-        java.security.cert.X509Certificate[] result =
-                new java.security.cert.X509Certificate[1 + intermediates.length];
-        result[0] = CertificateBridge.toJca(leaf.cert);
-        for (int i = 0; i < intermediates.length; i++) {
-            result[1 + i] = CertificateBridge.toJca(intermediates[i].cert);
-        }
-        return result;
-    }
 }

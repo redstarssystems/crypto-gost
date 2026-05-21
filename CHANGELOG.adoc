@@ -1,5 +1,116 @@
 = История изменений
 
+== [0.3.2] - 21-05-2026
+
+Окончание функционального развития. Библиотека функционально закончена. Нового API или какого-то развития больше не ожидается. Основные ошибки были найдены и устранены. Далее только исправление ошибок, найденных в процессе реальной эксплуатации.
+
+=== Модуль crypto-gost-core
+
+==== Добавлено
+
+* В GostDerCodec.decodePublicKey добавлен workaround для нестандартных сертификатов Минцифры России (2025), где curveOid содержит OID 256-битной кривой при фактически 512-битном ключе. При несоответствии размера точки ожиданиям OID — проверяется signAlgOid; если он указывает на 512-битный алгоритм, применяется явная таблица маппинга на правильную 512-битную кривую. Аналогично поведению OpenSSL gostprov.
+
+==== Исправлено
+
+*Важно! До версии 0.3.2 подпись формировалась и проверялась в другом формате. Поэтому настоятельно рекомендую обновиться до 0.3.2 минимум!*
+
+* Исправлен формат подписи ГОСТ Р 34.10-2012 в SignatureCodec — компоненты переставлены с r∥s на s∥r (big-endian) в соответствии с X.509/RFC 4491. Предыдущий формат не был совместим с openssl-gost и реальными УЦ. TlsSignatureCodec (TLS 1.3, RFC 9367) не затронут.
+* Исправлены тесты кросс-валидации  bench/signature, которые явно переворачивали формат подписи.
+
+=== Модуль crypto-gost-netty
+
+==== Добавлено
+
+* *PSK resumption через Netty pipeline:* +
+** Добавлена возможность разделять сессионный контекст между клиентским и серверным GostSslContext для поддержки PSK resumption в Netty-окружении. +
+** GostSSLSessionContext получил метод redirectToSharedState(), который переключает внутренние хранилища тикетов на общий объект.
+** GostSslContextBuilder получил метод sessionContext(), который вызывает redirect после инициализации SSLContext. После этого PSK-тикет, сохранённый сервером при первом хендшейке, становится виден клиенту при переподключении через тот же GostSslContext.
+** Новый тест GostSslContextHandshakePskResumptionTest верифицирует интеграцию через EmbeddedChannel — full handshake, передачу NST, переподключение и передачу данных. Корректность самого PSK-протокола покрыта на уровне движка в GostSSLEnginePostHandshakeTest.
++
+Главный сценарий для *PSK resumption через Netty pipeline*— высоконагруженный сервис где один процесс держит и серверную, и клиентскую сторону TLS. Типичный пример: reverse proxy или API gateway на Netty, где один EventLoopGroup принимает входящие соединения и одновременно открывает исходящие к бэкендам. При частых переподключениях (мобильные клиенты, нестабильные сети, connection pooling) PSK resumption убирает криптографически дорогую часть хендшейка — выработку эфемерного ключа и верификацию сертификата — и заменяет её симметричной операцией на основе сохранённого PSK. На ГОСТ-алгоритмах это особенно заметно, потому что ГОСТ-подпись дороже RSA/ECDSA на типичном железе.
+
+=== Модуль crypto-gost-tls13
+
+==== Добавлено
+
+* *Поддержка multi-ca*:
+** TlsCertificateValidator: сигнатуры 3 методов изменены с PublicKeyParameters caPublicKey на List<PublicKeyParameters> caPublicKeys. Root-сертификат верифицируется по всем CA из списка (первый совпавший = доверенный).
+** OCSP delegated responder: при отсутствии issuer в цепочке fallback-ключ верифицируется по всем CA из списка (не только по первому).
+** TlsSession: хранение и проброс List<PublicKeyParameters> вместо одного ключа.
+** TlsClientConfig / TlsServerConfig: добавлены withCaPublicKeys(List) и getCaPublicKeys(); старые single-key методы — обёртки над новыми.
+
+* Добавлен TlsCrlVerifier — парсинг и верификация CRL (подпись, срок, revoked, reject partial/indirect CRL).
+* Фабричные методы TlsCertificate.fromDer(byte[]), fromPemOrDer(byte[]) и listFromPem(byte[]) для удобной загрузки сертификатов напрямую из DER/PEM без внешних утилит.
+*  Методы записи TlsCertificate.toDer(), toPem() и chainToPem(List). Симметричные аналоги fromDer()/fromPemOrDer()/listFromPem(). Полный roundtrip: читай и пиши DER/PEM через единый API без внешних утилит.
+* Интеграционный тест верификации реальной цепочки сертификатов Минцифры (512-бит ГОСТ Р 34.10-2012, ParamSet A) — subCa.verify(root.getPublicKey()) успешен.
+* GenerateCsr.java: Новый пример генерации PKCS#10 CSR для ГОСТ Р 34.10-2012 (256 и 512 бит, любой DN).
+
+==== Исправлено
+
+* TlsMessageParser.parseCertificate: проверка лимита цепочки сертификатов вынесена ВНУТРЬ цикла парсинга — DoS-защита от цепочки из множества мелких сертификатов (каждый TlsCertificate выполняет полный DER-парсинг).
+* TlsUtils.wipeArray: задокументировано known limitation JVM — JIT DCE и heap dump риски, невозможность гарантированной очистки на чистой Java.
+* TlsHandshakeEngine.setPsk(): ключевой материал клонируется при передаче (psk.clone())
+* Исправлен комментарий OCSP для intermediate: best-effort → fail-closed (код уже был fail-closed, документация вводила в заблуждение)
+* InMemoryPskStore: очистка просроченных PSK-тикетов перенесена до проверки лимита — expired тикеты не занимают место живых, вытеснение случайных записей происходит только при реальном переполнении.
+* HandshakeContext.destroy(): дайджесты транскрипта (hsDigest256, hsDigest512) теперь сбрасываются и обнуляются при уничтожении контекста (defence-in-depth).
+* Защита от CPU-DoS через OCSP delegated сертификаты. Добавлен лимит MAX_DELEGATED_CERTS = 10 в TlsOcspVerifier.extractDelegatedCerts().  При превышении возникает TlsException(ALERT_DECODE_ERROR) с fail-closed.
+* InMemoryPskStore: evictExpired() вызывалась на каждый add() (каждый handshake), сканируя все 1000 PSK-записей O(n) на горячем пути. Перенесен  вызов раз в ~1024 вставок — overhead снижен до O(n/1024).
+* PskStore + InMemoryPskStore: добавлен clear() для корректного сброса состояния между JMH-итерациями.
+* JsseHandshakeBench (bench/): добавлен @Setup(Level.Iteration) resetPskStore() — очищает PSK-хранилище между итерациями, чтобы накопление state не искажало замеры (не позволяет клиентскому коду влиять на JMH-бенчмарк).
+
+=== Модуль crypto-gost-jsse
+
+==== Добавлено
+
+В примерах jsse модуля добавлен консольный клиент *gost-curl*, который можно использовать на практике. Работает только с _ГОСТ TLS 1.3_ и не поддерживает западные алгоритмы, для которых уже есть стандартый `curl`. Детали:
+
+* *GostCurl* — консольный HTTP-клиент (curl-аналог):
+** Основан на OkHttp + GostSSLSocketFactory, HTTP/1.1 и HTTP/2.
+** Авто-детект PEM/DER для CA-сертификата.
+** Режимы --ca (проверка сервера) и --insecure (без проверки).
+** CLI: -X, -d, -H, -v, -o, -L, -k, --ca, --connect-timeout, --read-timeout.
+** Сборка: `make gost-curl` (Maven), `make gost-curl-jar` (fat JAR),
+`make gost-curl-native` (native binary через GraalVM 25+).
+** Тестовый сервер для проверки `gost-curl`: `make -C examples/jsse test-server`.
+
+* *Поддержка multi-ca*:
+** GostX509TrustManager: новый конструктор (List<PublicKeyParameters>, OcspPolicy, OcspFetcher). Старые single-key конструкторы сохранены как обёртки.
+** GostSsl.buildContext: все trustedCaDers[] распаковываются в List<PublicKeyParameters> (ранее использовался только [0], остальные CA игнорировались).
+** GostSslBuilder: javadoc trustCa() исправлен — ограничение на один CA снято.
+
+* *Добавлена CRL-проверка*: политика (CrlPolicy), HTTP-fetcher с SSRF-защитой (JdkHttpCrlFetcher), кэш с nextUpdate-инвалидацией (CrlCache).
+** Интеграция в GostX509TrustManager — CRL-проверка при отсутствии OCSP, цикл по CDP-зеркалам, fail-closed для REQUIRE-политики, CRL и для клиентских сертификатов.
+
+* Новый отчет crypto-gost-jsse/doc/stress-test2.md о стресс-тесте.
+
+==== Исправлено
+
+- Исправлен запуск stress-тестов: `surefire.excludedGroups` в корневом
+`pom.xml` исключал группу `stress`, из-за чего `JsseStressTest` не
+запускался.
+- Исправлен `make springboot`: в профиль `springboot` добавлен
+`spring-boot-maven-plugin` 3.4.5, без которого `spring-boot:run`
+не резолвился (`NoPluginFoundForPrefixException`).
+- Удалён неиспользуемый тестовый ресурс `test.p12` (пароль нигде не
+задавался, файл никем не загружался).
+
+- GostSSLEngine: защита от OOM-атаки через handshakeInputBuf (лимит 2.6 MB, ALERT_RECORD_OVERFLOW)
+- GostSSLEngine: closeInbound() без closeOutbound() больше не бросает SSLException (RFC 8446 §6.1, совместимость с Netty)
+- GostSSLEngine: setEnableSessionCreation(false) теперь соблюдается на сервере (ALERT_HANDSHAKE_FAILURE если нет PSK)
+
+- GostSSLEngine: детали внутренних ошибок хендшейка убраны из текста исключений — уходят в DEBUG-лог, наружу только generic alert ("Handshake error" / "Handshake failed").
+- GostSSLEngine: peerHost:peerPort понижены с INFO до DEBUG (152-ФЗ: hostname/IP могут быть персональными данными).
+- Дефолтный GostX509TrustManager без CA-ключа теперь выдаёт WARNING с инструкцией по исправлению (actionable diagnostic).
+-  устранена утечка ключей при прерванном handshake — destroyHandshakeEngine() теперь зануляет pendingWriteKey/pendingWriteIv через TlsUtils.wipeArray
+- Обеспечено затирание буферов расшифрованных данных — AppInputStream.read() теперь зануляет leftover через TlsUtils.wipeArray() перед освобождением и затирает readDst.array() после переноса остатка в leftover. AppInputStream.close() затирает оба буфера финально.
+- OCSP-кэш: TTL теперь учитывает nextUpdate из OCSP-ответа (min(nextUpdate + GRACE_MS, ocspCacheTtlMs)), а не только фиксированный 1 час. GRACE_MS = 1 час (как в CrlCache). Исключает хранение устаревшего статуса отзыва.
+- Исправлена гонка в GostSSLEngine.getDelegatedTask() при конкурентном вызове из нескольких потоков. pendingTask заменён на AtomicReference<Runnable> с атомарным getAndSet(null); taskInProgress не сбрасывается до завершения задачи — инвариант NEED_TASK сохранён. Это больше косметика, т.к. в реальности такая гонка может возникнуть только при нарушении JSSE-контракта вызывающей программой.
+
+==== Изменено
+
+- GostSsl.java: замена pemToDer(caPem) на TlsCertificate.fromPemOrDer().toDer(), toX509Chain() → CertificateBridge.toJca(), удалён приватный метод toX509Chain
+- 5 тестов (Loopback, InitialStateContract, PostHandshake, UnwrapFuzz, SocketTcp): toJcaChain переписан через CertificateBridge.toJca()
+
 == [0.3.1] - 17-05-2026
 
 === Модуль crypto-gost-tls13

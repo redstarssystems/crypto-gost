@@ -86,7 +86,7 @@ class JettyMtlsTest {
         Security.addProvider(new org.rssys.gost.jsse.RssysGostJsseProvider());
 
         GostX509KeyManager serverKm = new GostX509KeyManager();
-        serverKm.addKeyEntry("server", toJcaChain(serverCert), serverCert.priv);
+        serverKm.addKeyEntry("server", CertificateBridge.toJcaChain(serverCert.cert), serverCert.priv);
         GostX509TrustManager serverTm = new GostX509TrustManager(caPub, false);
         SSLContext serverCtx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
         serverCtx.init(new KeyManager[]{serverKm}, new TrustManager[]{serverTm}, null);
@@ -139,7 +139,7 @@ class JettyMtlsTest {
     @DisplayName("Клиент с сертификатом — HTTP 200 PONG")
     void mtlsWithClientCert() throws Exception {
         GostX509KeyManager clientKm = new GostX509KeyManager();
-        clientKm.addKeyEntry("client", toJcaChain(clientCert), clientCert.priv);
+        clientKm.addKeyEntry("client", CertificateBridge.toJcaChain(clientCert.cert), clientCert.priv);
         GostX509TrustManager clientTm = new GostX509TrustManager(caPub, false);
         SSLContext clientCtx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
         clientCtx.init(new KeyManager[]{clientKm}, new TrustManager[]{clientTm}, null);
@@ -158,19 +158,4 @@ class JettyMtlsTest {
                 EchoSocketClient.pingHttp("localhost", port, clientCtx));
     }
 
-    /**
-     * Конвертирует CertBundle в цепочку JCA X509Certificate для GostX509KeyManager.
-     * <p>
-     * {@code CertificateBridge.toJca()} через DER-дамп преобразует
-     * {@code TlsCertificate} в java.security.cert.X509Certificate — единственный
-     * способ, которым GostX509KeyManager принимает сертификаты.
-     */
-    private static X509Certificate[] toJcaChain(CertBundle leaf, CertBundle... intermediates) throws Exception {
-        X509Certificate[] result = new X509Certificate[1 + intermediates.length];
-        result[0] = CertificateBridge.toJca(leaf.cert);
-        for (int i = 0; i < intermediates.length; i++) {
-            result[1 + i] = CertificateBridge.toJca(intermediates[i].cert);
-        }
-        return result;
-    }
 }

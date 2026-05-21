@@ -8,6 +8,8 @@ import org.rssys.gost.jsse.socket.GostSSLServerSocketFactory;
 import org.rssys.gost.tls13.TlsCiphersuite;
 
 import javax.net.ssl.KeyManager;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import javax.net.ssl.SSLContextSpi;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
@@ -24,6 +26,8 @@ import java.security.SecureRandom;
  * Дефолтные SSLParameters содержат только ГОСТ-наборы.
  */
 public final class GostSSLContextSpi extends SSLContextSpi {
+
+    private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSSLContextSpi");
 
     private GostX509KeyManager keyManager;
     private GostX509TrustManager trustManager;
@@ -57,6 +61,9 @@ public final class GostSSLContextSpi extends SSLContextSpi {
             }
         }
         if (this.trustManager == null) {
+            LOG.log(Level.WARNING,
+                    "GostX509TrustManager created without CA key - certificate chain validation disabled. "
+                  + "For production use, pass caPublicKey to GostX509TrustManager.");
             this.trustManager = new GostX509TrustManager(null, false);
         }
 

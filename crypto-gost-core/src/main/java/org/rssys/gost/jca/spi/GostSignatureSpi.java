@@ -21,12 +21,12 @@ import java.security.spec.AlgorithmParameterSpec;
  * Предоставляет два конкретных подкласса:
  * <ul>
  *   <li>{@link Ecgost3410_256Spi} — для 256-битных кривых (hlen=32), хэш Стрибог-256,
- *       OID подписи {@code 1.2.643.7.1.1.3.2}, длина подписи 64 байта (r || s)</li>
+ *       OID подписи {@code 1.2.643.7.1.1.3.2}, длина подписи 64 байта (s || r)</li>
  *   <li>{@link Ecgost3410_512Spi} — для 512-битных кривых (hlen=64), хэш Стрибог-512,
- *       OID подписи {@code 1.2.643.7.1.1.3.3}, длина подписи 128 байт (r || s)</li>
+ *       OID подписи {@code 1.2.643.7.1.1.3.3}, длина подписи 128 байт (s || r)</li>
  * </ul>
  * <p>
- * Формат подписи по RFC 7091: конкатенация r || s в big-endian,
+ * Формат подписи (X.509, RFC 7091): конкатенация s || r в big-endian,
  * каждая компонента длиной {@code hlen} байт.
  * <p>
  * Нонс k вырабатывается детерминированно по RFC 6979 §3.2 с HMAC-Стрибог
@@ -119,7 +119,7 @@ public abstract class GostSignatureSpi extends SignatureSpi {
     /**
      * Вычисляет подпись накопленных данных.
      *
-     * @return подпись r || s (64 или 128 байт)
+     * @return подпись s || r (64 или 128 байт)
      * @throws SignatureException если шифр не инициализирован или ключ уничтожен
      */
     @Override
@@ -141,7 +141,7 @@ public abstract class GostSignatureSpi extends SignatureSpi {
     /**
      * Проверяет подпись накопленных данных.
      *
-     * @param sigBytes байты подписи r || s
+     * @param sigBytes байты подписи s || r
      * @return {@code true} если подпись верна
      * @throws SignatureException если шифр не инициализирован
      */

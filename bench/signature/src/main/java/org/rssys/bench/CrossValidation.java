@@ -125,8 +125,8 @@ public class CrossValidation {
     for (int i = 0; i < NUM_MESSAGES; i++) {
       byte[] gostSig = Signature.sign(messages[i], gostPriv);
 
-      BigInteger r = new BigInteger(1, java.util.Arrays.copyOfRange(gostSig, 0, spec.rolen()));
-      BigInteger s = new BigInteger(1, java.util.Arrays.copyOfRange(gostSig, spec.rolen(), 2 * spec.rolen()));
+      BigInteger s = new BigInteger(1, java.util.Arrays.copyOfRange(gostSig, 0, spec.rolen()));
+      BigInteger r = new BigInteger(1, java.util.Arrays.copyOfRange(gostSig, spec.rolen(), 2 * spec.rolen()));
 
       Digest bcDigest = newDigest(spec);
       byte[] hash = new byte[bcDigest.getDigestSize()];
@@ -172,7 +172,7 @@ public class CrossValidation {
    * Tamper-тест: испорченная подпись должна быть отклонена обеими библиотеками.
    * <p>
    * Доказывает что верификация реально проверяет подпись, а не возвращает {@code true} всегда.
-   * Портится копия подписи (XOR первого байта r-компоненты) — оригинал не изменяется.
+   * Портится копия подписи (XOR первого байта s-компоненты, формат подписи s∥r) — оригинал не изменяется.
    * <p>
    * Проверяет два направления:
    * <ul>
@@ -188,12 +188,12 @@ public class CrossValidation {
     // Direction 1: gost подписывает, портим, BC должен отклонить
     for (int i = 0; i < NUM_MESSAGES; i++) {
       byte[] gostSig = Signature.sign(messages[i], gostPriv);
-      // Портим копию — XOR первого байта r-компоненты
+      // Портим копию — XOR первого байта s-компоненты (формат подписи s∥r)
       byte[] tampered = gostSig.clone();
       tampered[0] ^= 0x01;
 
-      BigInteger r = new BigInteger(1, java.util.Arrays.copyOfRange(tampered, 0, spec.rolen()));
-      BigInteger s = new BigInteger(1, java.util.Arrays.copyOfRange(tampered, spec.rolen(), 2 * spec.rolen()));
+      BigInteger s = new BigInteger(1, java.util.Arrays.copyOfRange(tampered, 0, spec.rolen()));
+      BigInteger r = new BigInteger(1, java.util.Arrays.copyOfRange(tampered, spec.rolen(), 2 * spec.rolen()));
 
       Digest bcDigest = newDigest(spec);
       byte[] hash = new byte[bcDigest.getDigestSize()];
@@ -225,7 +225,7 @@ public class CrossValidation {
       BigInteger[] bcSig = bcSigner.generateSignature(hash);
 
       byte[] encoded = encodeSig(bcSig[0], bcSig[1], spec.rolen());
-      // Портим копию — XOR первого байта r-компоненты
+      // Портим копию — XOR первого байта s-компоненты (формат подписи s∥r)
       byte[] tampered = encoded.clone();
       tampered[0] ^= 0x01;
 
@@ -264,8 +264,8 @@ public class CrossValidation {
       throw new IllegalStateException(
           "r or s exceeds rolen: rLen=" + rLen + " sLen=" + sLen + " rolen=" + rolen);
     }
-    System.arraycopy(rBytes, rStart, result, rolen - rLen, rLen);
-    System.arraycopy(sBytes, sStart, result, 2 * rolen - sLen, sLen);
+    System.arraycopy(sBytes, sStart, result, rolen - sLen, sLen);
+    System.arraycopy(rBytes, rStart, result, 2 * rolen - rLen, rLen);
     return result;
   }
 }

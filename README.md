@@ -22,7 +22,8 @@
 
 **Целевая JDK при сборке модулей библиотеки: JDK 21**.
 
-Версии 0.2.1 и ниже собирались для JDK 11.
+NOTE: **Библиотека функционально закончена. Нового API или какого-то
+развития больше не ожидается. Только исправление ошибок.**
 
 ## Цели и задачи
 
@@ -66,7 +67,7 @@
   При необходимости проверить подпись релизного тега можно так:
 
       gpg --import KEYS
-      gpg -v v0.3.1
+      gpg -v v0.3.2
 
 - **Способ 2.** Скачайте артефакты
   [отсюда](https://gitflic.ru/project/red-stars-systems/crypto-gost/release?sort=TIME&direction=DESC)
@@ -74,12 +75,12 @@
   установки:  
 
       mvn install:install-file \
-        -Dfile=crypto-gost-core-0.3.1.jar \
-        -Dsources=crypto-gost-core-0.3.1-sources.jar \
-        -Djavadoc=crypto-gost-core-0.3.1-javadoc.jar \
+        -Dfile=crypto-gost-core-0.3.2.jar \
+        -Dsources=crypto-gost-core-0.3.2-sources.jar \
+        -Djavadoc=crypto-gost-core-0.3.2-javadoc.jar \
         -DgroupId=org.rssys \
         -DartifactId=crypto-gost-core \
-        -Dversion=0.3.1 \
+        -Dversion=0.3.2 \
         -Dpackaging=jar
 
 Затем, добавьте зависимость в `pom.xml` вашего проекта нужные модули:
@@ -87,25 +88,25 @@
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-core</artifactId>
-        <version>0.3.1</version>
+        <version>0.3.2</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-tls13</artifactId>
-        <version>0.3.1</version>
+        <version>0.3.2</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-jsse</artifactId>
-        <version>0.3.1</version>
+        <version>0.3.2</version>
     </dependency>
 
 Проверить подпись можно так:
 
     gpg --import KEYS
-    gpg --verify crypto-gost-core-0.3.1.jar.asc crypto-gost-core-0.3.1.jar
+    gpg --verify crypto-gost-core-0.3.2.jar.asc crypto-gost-core-0.3.2.jar
 
 # Документация
 

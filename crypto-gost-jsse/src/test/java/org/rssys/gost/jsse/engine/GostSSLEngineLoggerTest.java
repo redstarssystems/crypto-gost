@@ -46,7 +46,7 @@ class GostSSLEngineLoggerTest {
     }
 
     @Test
-    @DisplayName("Лог: handshake start INFO при beginHandshake")
+    @DisplayName("Лог: handshake start DEBUG при beginHandshake")
     void testHandshakeStartLogged() throws Exception {
         GostSSLEngine clientEngine = new GostSSLEngine(
                 new GostX509KeyManager(), new GostX509TrustManager(null, false),
@@ -54,8 +54,8 @@ class GostSSLEngineLoggerTest {
 
         clientEngine.beginHandshake();
 
-        assertTrue(testLogger.containsLevel(Logger.Level.INFO),
-                "Должен быть хотя бы один INFO лог");
+        assertTrue(testLogger.containsLevel(Logger.Level.DEBUG),
+                "Должен быть хотя бы один DEBUG лог");
         assertTrue(testLogger.containsMessage("Handshake started"),
                 "Должен содержать 'Handshake started' в любом сообщении");
     }

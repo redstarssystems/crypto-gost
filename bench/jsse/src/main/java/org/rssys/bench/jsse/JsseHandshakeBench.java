@@ -1,8 +1,10 @@
 package org.rssys.bench.jsse;
 
 import org.openjdk.jmh.annotations.*;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLSessionContext;
 import java.security.Security;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,6 +31,17 @@ public class JsseHandshakeBench {
     @TearDown(Level.Trial)
     public void tearDown() {
         exec.shutdown();
+    }
+
+    /** Сброс PSK-хранилищ между итерациями — предотвращает накопление state,
+     *  искажающее замеры через O(n) evictExpired на горячем пути handshake.
+     *  См. результатах-jmh-jsse2.adoc, регрессия InMemoryPskStore. */
+    @Setup(Level.Iteration)
+    public void resetPskStore() {
+        SSLSessionContext ctx = sslContext.getClientSessionContext();
+        if (ctx instanceof GostSSLSessionContext gctx) {
+            gctx.getPskStore().clear();
+        }
     }
 
     private byte[] doOneHandshake(boolean needClientAuth) throws Exception {

@@ -1944,6 +1944,7 @@ class TlsSessionTest {
             @Override public void remove(byte[] ticket) {}
             @Override public int size() { return 0; }
             @Override public void evictExpired() {}
+            @Override public void clear() {}
             @Override public void onTicketReceived(PskEntry entry) {
                 throw new RuntimeException("Backend unavailable");
             }
@@ -1991,6 +1992,7 @@ class TlsSessionTest {
             @Override public void remove(byte[] ticket) {}
             @Override public int size() { return 0; }
             @Override public void evictExpired() {}
+            @Override public void clear() {}
             @Override public void onTicketReceived(PskEntry entry) {
                 throw new RuntimeException("Backend unavailable");
             }

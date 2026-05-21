@@ -558,6 +558,28 @@ public class TlsTestHelper {
     }
 
     /**
+     * Строит CDP extension (CRLDistributionPoints, 2.5.29.31) для тестов.
+     *
+     * @param crlUris URI точек распространения CRL (один или несколько mirror'ов)
+     * @return DER-encoded Extension (SEQUENCE { OID, OCTET STRING })
+     */
+    public static byte[] buildCdpExtension(String... crlUris) throws Exception {
+        ByteArrayOutputStream dps = new ByteArrayOutputStream();
+        for (String crlUri : crlUris) {
+            byte[] uriBytes = crlUri.getBytes(StandardCharsets.US_ASCII);
+            byte[] gnUri = derTlv(0x86, uriBytes);                              // [6] URI
+            byte[] generalNames = derSequence(gnUri);                           // GeneralNames
+            byte[] fullName = derTlv(0xA0, generalNames);                       // [0] fullName
+            byte[] distPointContent = derTlv(0xA0, fullName);                   // [0] distributionPoint
+            byte[] distPointSeq = derSequence(distPointContent);                // DistributionPoint SEQUENCE
+            dps.write(distPointSeq);
+        }
+        byte[] distributionPoints = derSequence(dps.toByteArray());             // CRLDistributionPoints SEQUENCE OF
+        byte[] extValue = derOctetString(distributionPoints);
+        return derSequence(derOid("2.5.29.31"), extValue);
+    }
+
+    /**
      * Строит dummy-OCSPResponse (без подписи) для presence-тестов.
      */
     public static byte[] buildDummyOcspResponse() throws Exception {
@@ -570,5 +592,102 @@ public class TlsTestHelper {
         byte[] responseBytes = derTlv(0xA0, responseBytesContent);
         byte[] status = new byte[]{0x0A, 0x01, 0x00}; // ENUMERATED(0) — без [0]
         return derSequence(status, responseBytes);
+    }
+
+    // ========================================================================
+    // CRL построитель (для тестов TlsCrlVerifier)
+    // ========================================================================
+
+    /**
+     * Строит подписанный CRL (CertificateList, RFC 5280 §5.1) для тестов.
+     * <p>
+     * Предполагается direct CRL (issuer CRL == issuer сертификата).
+     * Версия: v2 (содержит extensions для issuingDistributionPoint если нужно).
+     *
+     * @param serialNumbers          серийные номера отозванных сертификатов
+     *                               (raw DER INTEGER value), может быть null/empty
+     * @param caPriv                 закрытый ключ CA для подписи CRL
+     * @param caPub                  открытый ключ CA (для AlgorithmIdentifier)
+     * @param issuerDnDer            DER issuer Name (из сертификата CA)
+     * @param nextUpdateGeneralizedTime nextUpdate (null = без nextUpdate)
+     * @param withIdpExtension       true = добавить issuingDistributionPoint extension
+     * @return DER-encoded CertificateList
+     */
+    public static byte[] buildCrl(byte[][] serialNumbers,
+                                  PrivateKeyParameters caPriv,
+                                  PublicKeyParameters caPub,
+                                  byte[] issuerDnDer,
+                                  String nextUpdateGeneralizedTime,
+                                  boolean withIdpExtension) throws Exception {
+        return buildCrlImpl(serialNumbers, caPriv, caPub, issuerDnDer,
+                nextUpdateGeneralizedTime, withIdpExtension, false);
+    }
+
+    /**
+     * Создаёт CRL с version в формате [0] EXPLICIT INTEGER (нестандартный —
+     * ошибочное кодирование как в TBSCertificate, RFC 5280 §4.1.2.1).
+     * Используется только в тестах для проверки fallback-ветки
+     * {@link org.rssys.gost.tls13.cert.TlsCrlVerifier}.
+     */
+    public static byte[] buildCrlLegacyVersion(byte[][] serialNumbers,
+                                                PrivateKeyParameters caPriv,
+                                                PublicKeyParameters caPub,
+                                                byte[] issuerDnDer,
+                                                String nextUpdateGeneralizedTime,
+                                                boolean withIdpExtension) throws Exception {
+        return buildCrlImpl(serialNumbers, caPriv, caPub, issuerDnDer,
+                nextUpdateGeneralizedTime, withIdpExtension, true);
+    }
+
+    private static byte[] buildCrlImpl(byte[][] serialNumbers,
+                                       PrivateKeyParameters caPriv,
+                                       PublicKeyParameters caPub,
+                                       byte[] issuerDnDer,
+                                       String nextUpdateGeneralizedTime,
+                                       boolean withIdpExtension,
+                                       boolean legacyVersion) throws Exception {
+        ByteArrayOutputStream tbsOut = new ByteArrayOutputStream();
+        if (legacyVersion) {
+            // version [0] EXPLICIT INTEGER (v2 = 1) — нестандартный формат
+            tbsOut.write(derTlv(0xA0, new byte[]{0x02, 0x01, 0x01}));
+        } else {
+            // version INTEGER (v2 = 1) — RFC 5280 §5.1.2.1
+            tbsOut.write(derTlv(0x02, new byte[]{0x01}));
+        }
+        // signature AlgorithmIdentifier
+        tbsOut.write(buildAlgId(caPub.getParams()));
+        // issuer Name
+        tbsOut.write(derSequence(issuerDnDer));
+        // thisUpdate
+        tbsOut.write(derUtcTime("250501120000Z"));
+        // nextUpdate (optional) — используем UTCTime для совместимости с parseTime
+        if (nextUpdateGeneralizedTime != null) {
+            tbsOut.write(derUtcTime(nextUpdateGeneralizedTime));
+        }
+        // revokedCertificates (optional)
+        if (serialNumbers != null && serialNumbers.length > 0) {
+            ByteArrayOutputStream rvOut = new ByteArrayOutputStream();
+            for (byte[] serial : serialNumbers) {
+                byte[] revokedEntry = derSequence(
+                        derTlv(0x02, serial),               // serialNumber INTEGER
+                        derUtcTime("250601120000Z"));       // revocationDate
+                rvOut.write(revokedEntry);
+            }
+            tbsOut.write(derSequence(rvOut.toByteArray()));
+        }
+        // crlExtensions [0] (optional)
+        if (withIdpExtension) {
+            byte[] idpOid = derOid("2.5.29.28");
+            byte[] idpExt = derSequence(idpOid, derTlv(0x04, new byte[]{0x30, 0x00}));
+            byte[] extSeq = derSequence(idpExt);
+            tbsOut.write(derTlv(0xA0, extSeq));
+        }
+
+        byte[] tbsCertList = derSequence(tbsOut.toByteArray());
+        int hlen = caPub.getParams().hlen;
+        byte[] hash = doHash(tbsCertList, hlen);
+        byte[] sig = Signature.signHash(hash, caPriv);
+        byte[] sigAlg = buildAlgId(caPub.getParams());
+        return derSequence(tbsCertList, sigAlg, derBitString(sig));
     }
 }

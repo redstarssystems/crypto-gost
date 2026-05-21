@@ -17,7 +17,7 @@ import java.nio.file.Paths;
  * <p>Режимы:
  * <pre>
  *   sign   &lt;curve&gt; &lt;privkey-hex&gt; &lt;msg-file&gt; &lt;sig-file&gt;
- *       Подписывает сообщение из msg-file, записывает подпись (r||s, big-endian) в sig-file.
+ *       Подписывает сообщение из msg-file, записывает подпись (s||r, big-endian, X.509-формат) в sig-file.
  *
  *   pubkey &lt;curve&gt; &lt;privkey-hex&gt; &lt;out-file&gt;
  *       Выводит публичный ключ в формате DER SubjectPublicKeyInfo в out-file.
@@ -59,7 +59,7 @@ public class SignatureTool {
     /**
      * Подписывает сообщение из {@code msgFile} закрытым ключом {@code privHex}
      * на кривой {@code curve} и записывает подпись в {@code sigFile}.
-     * Формат подписи: r || s, big-endian, каждая компонента rolen байт.
+     * Формат подписи: s || r, big-endian, каждая компонента rolen байт (X.509-формат).
      */
     static void doSign(String curve, String privHex, String msgFile, String sigFile)
             throws Exception {

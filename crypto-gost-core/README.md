@@ -978,7 +978,7 @@ style="text-align: left;"><p><code>Digest.digest256 / digest512</code></p></td>
 - Нонс k генерируется детерминированно по RFC 6979 §3.2 (HMAC-Стрибог) —
   одно сообщение + один ключ всегда дают одну подпись.
 
-- Формат подписи: `r ∥ s` big-endian, без DER/ASN.1. Длина: 64 байта
+- Формат подписи: `s ∥ r` big-endian, без DER/ASN.1. Длина: 64 байта
   (256-бит кривые) или 128 байт (512-бит кривые).
 
 Библиотека предоставляет два независимых API для вычисления электронной
@@ -1005,7 +1005,7 @@ style="text-align: left;"><p><code>Digest.digest256 / digest512</code></p></td>
 
     try {
         // Подпись: хеш Стрибог-256 вычисляется автоматически для данных data, базируясь на параметрах кривой. То есть отдельно хэш вычислять не нужно.
-        // Формат: r ∥ s big-endian, длина 64 байта
+        // Формат: s ∥ r big-endian, длина 64 байта
         byte[] signature = Signature.sign(data, pair.getPrivate());
         // Проверка подписи. Хэш для data вычисляется внути автоматически.
         boolean valid = Signature.verify(data, signature, pair.getPublic());

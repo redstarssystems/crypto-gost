@@ -76,6 +76,8 @@ public final class InMemoryPskStore implements PskStore {
         }
 
         // Периодическая очистка просроченных записей (раз в ~1024 вставок).
+        // WHY: evictExpired на каждой вставке — O(n) на горячем пути handshake,
+        // где n растёт до maxSize. Периодический вызов снижает overhead до O(n/1024).
         if ((addCounter.incrementAndGet() & 0x3FF) == 0) {
             evictExpired();
         }
@@ -119,6 +121,12 @@ public final class InMemoryPskStore implements PskStore {
             }
         }
         return best;
+    }
+
+    @Override
+    public void clear() {
+        store.values().forEach(e -> e.destroyPsk());
+        store.clear();
     }
 
     @Override

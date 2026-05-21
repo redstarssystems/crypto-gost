@@ -33,6 +33,11 @@
             <groupId>io.netty</groupId>
             <artifactId>netty-handler</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>4.12.0</version>
+        </dependency>
 
         <!-- Jetty 12 -->
         <dependency>
@@ -89,6 +94,49 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.5.0</version>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.3</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <finalName>gost-curl</finalName>
+                            <artifactSet>
+                                <excludes>
+                                    <exclude>io.netty:*</exclude>
+                                    <exclude>io.undertow:*</exclude>
+                                    <exclude>io.xnio:*</exclude>
+                                    <exclude>org.eclipse.jetty:*</exclude>
+                                    <exclude>org.apache.tomcat:*</exclude>
+                                    <exclude>org.wildfly.common:*</exclude>
+                                    <exclude>org.wildfly.client:*</exclude>
+                                    <exclude>org.jboss.logging:*</exclude>
+                                    <exclude>org.jboss.threads:*</exclude>
+                                    <exclude>org.jboss.xnio:*</exclude>
+                                </excludes>
+                            </artifactSet>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>org.rssys.gost.jsse.examples.GostCurl</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 
@@ -120,6 +168,16 @@
                                         <source>src/test/java-springboot</source>
                                     </sources>
                                 </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-maven-plugin</artifactId>
+                        <version>3.4.5</version>
+                        <executions>
+                            <execution>
+                                <goals><goal>repackage</goal></goals>
                             </execution>
                         </executions>
                     </plugin>

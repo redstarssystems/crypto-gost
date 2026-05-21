@@ -634,6 +634,12 @@ public final class TlsMessageParser {
         int listEnd = pos + listLen;
         List<TlsCertificate> chain = new ArrayList<>();
         while (pos < listEnd) {
+            // Ранний выход: не парсим больше MAX_CERT_CHAIN_LENGTH сертификатов —
+            // защита от CPU DoS (каждый TlsCertificate выполняет полный DER-парсинг).
+            if (chain.size() >= TlsConstants.MAX_CERT_CHAIN_LENGTH) {
+                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                        "Certificate chain exceeds maximum length");
+            }
             checkBounds(certBody, pos, 3, "Certificate");
             int certLen = ((certBody[pos] & 0xFF) << 16)
                     | ((certBody[pos + 1] & 0xFF) << 8)

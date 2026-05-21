@@ -1,8 +1,10 @@
 package org.rssys.gost.jsse.socket;
+
 import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.engine.GostSSLEngine;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.tls13.TlsUtils;
+import org.rssys.gost.jsse.engine.GostSSLEngine;
 import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 
 import org.rssys.gost.tls13.TlsConstants;
@@ -272,6 +274,7 @@ public final class GostSSLSocket extends SSLSocket {
                     System.arraycopy(leftover, leftoverOff, b, off, toRead);
                     leftoverOff += toRead;
                     if (leftoverOff >= leftover.length) {
+                        TlsUtils.wipeArray(leftover);
                         leftover = null;
                         leftoverOff = 0;
                     }
@@ -300,6 +303,7 @@ public final class GostSSLSocket extends SSLSocket {
                         if (readDst.hasRemaining()) {
                             leftover = new byte[readDst.remaining()];
                             readDst.get(leftover);
+                            TlsUtils.wipeArray(readDst.array());
                             leftoverOff = 0;
                         }
                         return toRead;
@@ -322,6 +326,10 @@ public final class GostSSLSocket extends SSLSocket {
         @Override
         public void close() {
             closed = true;
+            TlsUtils.wipeArray(leftover);
+            leftover = null;
+            leftoverOff = 0;
+            TlsUtils.wipeArray(readDst.array());
         }
     }
 

@@ -54,6 +54,8 @@ public final class TlsDerParser {
 
     // OID: CRLDistributionPoints 2.5.29.31
     public static final byte[] CDP_OID_BYTES = {0x55, 0x1D, 0x1F};
+    // OID: IssuingDistributionPoint 2.5.29.28
+    public static final byte[] IDP_OID_BYTES = {0x55, 0x1D, 0x1C};
     // OID: CertificatePolicies 2.5.29.32
     public static final byte[] CP_OID_BYTES = {0x55, 0x1D, 0x20};
 

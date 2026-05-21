@@ -1,0 +1,14 @@
+[
+  {"name":"org.rssys.gost.jsse.RssysGostJsseProvider", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.engine.GostSSLContextSpi", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.engine.GostKeyManagerFactorySpi", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.engine.GostTrustManagerFactorySpi", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.manager.GostX509KeyManager", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.manager.GostX509TrustManager", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.socket.GostSSLSocketFactory", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.socket.GostSSLSocket", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.socket.GostSSLServerSocket", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.GostJsseConstants", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.GostSsl", "allDeclaredConstructors":true, "allPublicMethods":true},
+  {"name":"org.rssys.gost.jsse.GostSslDev", "allDeclaredConstructors":true, "allPublicMethods":true}
+]

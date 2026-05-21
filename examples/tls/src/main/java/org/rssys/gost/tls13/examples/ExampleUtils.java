@@ -105,23 +105,23 @@ public final class ExampleUtils {
     }
 
     static byte[] buildAlgId(ECParameters params) {
-        String signOid = params.hlen == 32 ? GostOids.SIG_WITH_DIGEST_256 : GostOids.SIG_WITH_DIGEST_512;
+        String signOid = params.hlen == 32 ? GostOids.SIGN_ALG_256 : GostOids.SIGN_ALG_512;
         String curveOid = curveOidOf(params);
         String digestOid = params.hlen == 32 ? GostOids.DIGEST_256 : GostOids.DIGEST_512;
         return derSequence(derOid(signOid), derSequence(derOid(curveOid), derOid(digestOid)));
     }
 
     static String curveOidOf(ECParameters params) {
-        if (params == ECParameters.tc26a256()) return "1.2.643.7.1.1.2.1";
+        if (params == ECParameters.tc26a256()) return GostOids.CURVE_256A;
         if (params == ECParameters.cryptoProA()) return GostOids.CURVE_CP_A;
-        if (params == ECParameters.tc26a512()) return "1.2.643.7.1.1.2.2";
-        return "1.2.643.7.1.1.2.1";
+        if (params == ECParameters.tc26a512()) return GostOids.CURVE_512A;
+        return GostOids.CURVE_256A;
     }
 
     // ---- Сертификаты ----
-    static byte[] buildAlgIdSHA256() {
-        return derSequence(derOid(GostOids.SIG_WITH_DIGEST_256),
-                derSequence(derOid("1.2.643.7.1.1.2.1"), derOid(GostOids.DIGEST_256)));
+    static byte[] buildAlgIdStreebog256() {
+        return derSequence(derOid(GostOids.SIGN_ALG_256),
+                derSequence(derOid(GostOids.CURVE_256A), derOid(GostOids.DIGEST_256)));
     }
 
     static byte[] buildTbs(PublicKeyParameters pub, ECParameters params,

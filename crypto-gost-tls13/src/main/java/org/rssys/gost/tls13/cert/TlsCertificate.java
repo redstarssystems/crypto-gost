@@ -19,6 +19,7 @@ import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.Base64;
 
 /**
  * Минимальный парсер X.509 сертификата для GOST R 34.10-2012.
@@ -495,6 +496,56 @@ public final class TlsCertificate {
     /** @return полный DER-encoded сертификат (defensive copy) */
     public byte[] getEncoded() {
         return certData.clone();
+    }
+
+    /**
+     * Возвращает DER-encoded сертификат.
+     * <p>Симметричный аналог {@link #fromDer(byte[])}.
+     *
+     * @return DER-encoded сертификат
+     */
+    public byte[] toDer() {
+        return getEncoded();
+    }
+
+    /**
+     * Кодирует сертификат в PEM-формат (Base64 с заголовками).
+     * <p>Симметричный аналог {@link #fromPemOrDer(byte[])}.
+     * <p>Строка содержит ровно один блок {@code -----BEGIN CERTIFICATE-----}.
+     * Для записи в файл: {@code Files.write(path, cert.toPem().getBytes())}.
+     *
+     * @return PEM-строка (включая заголовки и переводы строк)
+     */
+    public String toPem() {
+        byte[] der = getEncoded();
+        String b64 = Base64.getEncoder().encodeToString(der);
+        StringBuilder sb = new StringBuilder();
+        sb.append("-----BEGIN CERTIFICATE-----\n");
+        for (int i = 0; i < b64.length(); i += 64) {
+            sb.append(b64, i, Math.min(i + 64, b64.length())).append('\n');
+        }
+        sb.append("-----END CERTIFICATE-----\n");
+        return sb.toString();
+    }
+
+    /**
+     * Кодирует цепочку сертификатов в PEM-формат.
+     * <p>Симметричный аналог {@link #listFromPem(byte[])}.
+     * <p>Порядок сертификатов сохраняется: от leaf до root.
+     * Результат можно записать в файл для nginx / trust store.
+     *
+     * @param chain цепочка сертификатов
+     * @return PEM-строка с несколькими блоками {@code -----BEGIN CERTIFICATE-----}
+     */
+    public static String chainToPem(List<TlsCertificate> chain) {
+        if (chain == null) {
+            throw new IllegalArgumentException("chain must not be null");
+        }
+        StringBuilder sb = new StringBuilder();
+        for (TlsCertificate cert : chain) {
+            sb.append(cert.toPem());
+        }
+        return sb.toString();
     }
 
     /** @return raw DER Issuer Distinguished Name */
@@ -1487,7 +1538,14 @@ public final class TlsCertificate {
                 int[] dpNameTlv = readTlv(der, dpPos);
                 int gnPos = dpNameTlv[0];
                 int gnEnd = dpNameTlv[1];
-                // [0] fullName = GeneralNames (SEQUENCE)
+                // DistributionPointName ::= CHOICE { fullName [0] GeneralNames, ... }
+                // Пропускаем все [0] EXPLICIT обёртки до GeneralNames SEQUENCE
+                int maxDepth = 10;
+                while (gnPos < gnEnd && (der[gnPos] & 0xFF) == TAG_CTX_0 && --maxDepth > 0) {
+                    int[] ctxTlv = readTlv(der, gnPos);
+                    gnPos = ctxTlv[0];
+                }
+                // GeneralNames (SEQUENCE)
                 if (gnPos < gnEnd && (der[gnPos] & 0xFF) == TAG_SEQUENCE) {
                     int[] gnSeqTlv = readTlv(der, gnPos);
                     int gnInner = gnSeqTlv[0];
@@ -1499,6 +1557,7 @@ public final class TlsCertificate {
                             String uri = new String(der, uriTlv[0], uriTlv[1] - uriTlv[0],
                                     java.nio.charset.StandardCharsets.US_ASCII);
                             uriList.add(uri);
+                            gnInner = uriTlv[1];
                         } else {
                             gnInner = readTlv(der, gnInner)[1];
                         }
@@ -1932,5 +1991,86 @@ public final class TlsCertificate {
         return result.toArray(new String[0]);
     }
 
+    /**
+     * Создаёт сертификат из DER-байтов.
+     *
+     * @param der DER-encoded X.509 сертификат
+     * @return сертификат
+     * @throws IllegalArgumentException если DER невалиден
+     */
+    public static TlsCertificate fromDer(byte[] der) {
+        return new TlsCertificate(der);
+    }
+
+    /**
+     * Создаёт сертификат из PEM- или DER-байтов с автоопределением формата.
+     *
+     * <p>Определяет формат по первому байту: {@code 0x30} = DER,
+     * {@code 0x2D} = PEM (строка начинается с '-'). PEM-блок должен содержать
+     * ровно один сертификат.
+     *
+     * @param data PEM- или DER-байты сертификата
+     * @return сертификат
+     * @throws IllegalArgumentException если данные не являются валидным сертификатом
+     */
+    public static TlsCertificate fromPemOrDer(byte[] data) {
+        if (data == null || data.length == 0) {
+            throw new IllegalArgumentException("Certificate data must not be null or empty");
+        }
+        if ((data[0] & 0xFF) == 0x30) {
+            return new TlsCertificate(data);
+        }
+        if (data[0] == (byte) 0x2D) {
+            return new TlsCertificate(pemToDer(data));
+        }
+        throw new IllegalArgumentException(
+            "Unrecognized certificate format: first byte 0x" + Integer.toHexString(data[0] & 0xFF)
+            + " (expected 0x30 for DER or 0x2D for PEM)");
+    }
+
+    /**
+     * Разбирает PEM-файл, содержащий один или несколько сертификатов (цепочку),
+     * и возвращает список {@link TlsCertificate}.
+     *
+     * <p>Обрабатывает файлы с несколькими блоками {@code -----BEGIN CERTIFICATE-----},
+     * включая цепочки из PEM-файлов УЦ Минцифры.
+     *
+     * @param pem PEM-байты, содержащие один или несколько сертификатов
+     * @return список сертификатов (порядок из файла)
+     * @throws IllegalArgumentException если ни один сертификат не распознан
+     */
+    public static List<TlsCertificate> listFromPem(byte[] pem) {
+        String text = new String(pem, java.nio.charset.StandardCharsets.US_ASCII);
+        String[] blocks = text.split("-----BEGIN CERTIFICATE-----");
+        List<TlsCertificate> result = new ArrayList<>();
+        for (String block : blocks) {
+            int end = block.indexOf("-----END CERTIFICATE-----");
+            if (end < 0) {
+                continue;
+            }
+            String b64 = block.substring(0, end).replaceAll("\\s", "");
+            if (b64.isEmpty()) {
+                continue;
+            }
+            byte[] der = Base64.getDecoder().decode(b64);
+            result.add(new TlsCertificate(der));
+        }
+        if (result.isEmpty()) {
+            throw new IllegalArgumentException("No valid PEM certificates found");
+        }
+        return result;
+    }
+
+    /**
+     * Декодирует PEM-формат (Base64 между заголовками) в DER-байты.
+     *
+     * @param pem байты PEM-сертификата
+     * @return DER-байты
+     */
+    private static byte[] pemToDer(byte[] pem) {
+        String text = new String(pem, java.nio.charset.StandardCharsets.US_ASCII);
+        String b64 = text.replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
+        return Base64.getDecoder().decode(b64);
+    }
 }
 

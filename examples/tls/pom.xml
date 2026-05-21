@@ -24,5 +24,10 @@
             <artifactId>crypto-gost-tls13</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-jsse</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 </project>

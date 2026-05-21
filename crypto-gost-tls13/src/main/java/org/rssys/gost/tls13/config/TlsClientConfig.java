@@ -7,6 +7,7 @@ import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -22,7 +23,7 @@ public final class TlsClientConfig {
     private final TlsCiphersuite ciphersuite;
     private List<TlsCertificate> clientCertificateChain;
     private PrivateKeyParameters clientPrivateKey;
-    private PublicKeyParameters caPublicKey;
+    private List<PublicKeyParameters> caPublicKeys;
     private String serverHostname;
     private boolean requireOcspStapling;
     private List<String> alpnProtocols;
@@ -70,12 +71,20 @@ public final class TlsClientConfig {
     }
 
     /**
-     * @param caPub открытый ключ CA
+     * @param caPubKeys список доверенных ключей CA (null или пустой = не проверять цепочку)
+     * @return this
+     */
+    public TlsClientConfig withCaPublicKeys(List<PublicKeyParameters> caPubKeys) {
+        this.caPublicKeys = caPubKeys;
+        return this;
+    }
+
+    /**
+     * @param caPub открытый ключ CA (null = не проверять цепочку)
      * @return this
      */
     public TlsClientConfig withCaPublicKey(PublicKeyParameters caPub) {
-        this.caPublicKey = caPub;
-        return this;
+        return withCaPublicKeys(caPub != null ? Collections.singletonList(caPub) : null);
     }
 
     /**
@@ -117,7 +126,12 @@ public final class TlsClientConfig {
         return clientCertificateChain;
     }
     public PrivateKeyParameters getClientPrivateKey() { return clientPrivateKey; }
-    public PublicKeyParameters getCaPublicKey() { return caPublicKey; }
+    public List<PublicKeyParameters> getCaPublicKeys() { return caPublicKeys; }
+
+    public PublicKeyParameters getCaPublicKey() {
+        return (caPublicKeys != null && !caPublicKeys.isEmpty())
+                ? caPublicKeys.get(0) : null;
+    }
     public String getServerHostname() { return serverHostname; }
     public List<String> getAlpnProtocols() { return alpnProtocols; }
 }

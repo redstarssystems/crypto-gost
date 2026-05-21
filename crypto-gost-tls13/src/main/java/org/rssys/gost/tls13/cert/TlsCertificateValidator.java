@@ -11,6 +11,7 @@ import org.rssys.gost.tls13.message.TlsEncoding;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -34,13 +35,13 @@ public final class TlsCertificateValidator {
      * @param chain              цепочка leaf-first (leaf = chain[0])
      * @param serverHostname     ожидаемое DNS-имя сервера (null = не проверять)
      * @param requireOcspStapling true — OCSP-ответ обязателен
-     * @param caPublicKey        ключ CA (null = не проверять цепочку)
+     * @param caPublicKeys       список доверенных ключей CA (null или пустой = не проверять цепочку)
      * @throws TlsException при ошибке валидации
      */
     public static void checkServerCertificateChain(List<TlsCertificate> chain,
                                               String serverHostname,
                                               boolean requireOcspStapling,
-                                              PublicKeyParameters caPublicKey) throws TlsException {
+                                              List<PublicKeyParameters> caPublicKeys) throws TlsException {
         TlsCertificate leaf = chain.get(0);
 
         if (leaf.isExpired()) {
@@ -71,10 +72,11 @@ public final class TlsCertificateValidator {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Server did not provide OCSP stapling response");
         }
-        if (leaf.hasOcspResponse() && caPublicKey != null) {
+        boolean hasCaKeys = caPublicKeys != null && !caPublicKeys.isEmpty();
+        if (leaf.hasOcspResponse() && hasCaKeys) {
             PublicKeyParameters ocspKey = chain.size() > 1
                     ? chain.get(1).getPublicKey()
-                    : caPublicKey;
+                    : caPublicKeys.get(0);
             TlsCertificate issuer = chain.size() > 1 ? chain.get(1) : null;
             try {
                 leaf.verifyOcspResponse(ocspKey, issuer);
@@ -92,8 +94,16 @@ public final class TlsCertificateValidator {
                         if (dc.isExpired()) continue;
                         if (!dc.isOcspSigning()) continue;
                         if (!dc.isKeyUsageValid()) continue;
-                        if (!dc.verify(issuer != null
-                                ? issuer.getPublicKey() : caPublicKey)) continue;
+                        boolean delegValid;
+                        if (issuer != null) {
+                            delegValid = dc.verify(issuer.getPublicKey());
+                        } else {
+                            delegValid = false;
+                            for (PublicKeyParameters k : caPublicKeys) {
+                                if (dc.verify(k)) { delegValid = true; break; }
+                            }
+                        }
+                        if (!delegValid) continue;
                         PublicKeyParameters dcKey = dc.getPublicKey();
                         try {
                             leaf.verifyOcspResponse(dcKey, issuer);
@@ -110,7 +120,10 @@ public final class TlsCertificateValidator {
             }
         }
 
-        // OCSP для intermediate сертификатов (best-effort, RFC не требует fail-closed)
+        // OCSP для intermediate сертификатов: fail-closed.
+        // Невалидный OCSP-ответ прерывает handshake — TlsException не перехватывается намеренно.
+        // RFC 6960 не обязывает проверять OCSP для intermediate в TLS, но если ответ есть —
+        // он должен быть корректным.
         for (int i = 1; i < chain.size() - 1; i++) {
             TlsCertificate ic = chain.get(i);
             if (ic.hasOcspResponse()) {
@@ -119,8 +132,8 @@ public final class TlsCertificateValidator {
             }
         }
 
-        if (caPublicKey != null) {
-            validateChain(chain, caPublicKey);
+        if (hasCaKeys) {
+            validateChain(chain, caPublicKeys);
         }
     }
 
@@ -130,12 +143,12 @@ public final class TlsCertificateValidator {
      * Включает: expiry, unknown critical extensions, algorithm consistency,
      * KeyUsage.digitalSignature, EKU.clientAuth, и валидацию цепочки до CA.
      *
-     * @param chain       цепочка leaf-first (leaf = chain[0])
-     * @param caPublicKey ключ CA (null = не проверять цепочку)
+     * @param chain        цепочка leaf-first (leaf = chain[0])
+     * @param caPublicKeys список доверенных ключей CA (null или пустой = не проверять цепочку)
      * @throws TlsException при ошибке валидации
      */
     public static void checkClientCertificateChain(List<TlsCertificate> chain,
-                                               PublicKeyParameters caPublicKey) throws TlsException {
+                                               List<PublicKeyParameters> caPublicKeys) throws TlsException {
         // Defense-in-depth: engine перехватывает пустой chain раньше (receiveClientCertificate),
         // но если сюда дойдёт пустой список — IndexOutOfBounds недопустим.
         // certificate_required семантически корректен: сервер требует сертификат клиента.
@@ -166,8 +179,8 @@ public final class TlsCertificateValidator {
                     "Client certificate: ExtendedKeyUsage missing clientAuth");
         }
 
-        if (caPublicKey != null) {
-            validateChain(chain, caPublicKey);
+        if (caPublicKeys != null && !caPublicKeys.isEmpty()) {
+            validateChain(chain, caPublicKeys);
         }
     }
 
@@ -183,14 +196,14 @@ public final class TlsCertificateValidator {
      *       intermediate CA между cert[i] и leaf; n-i-2 считало бы к root)</li>
      *   <li>algorithm consistency и unknown critical extensions</li>
      * </ul>
-     * Root-сертификат верифицируется переданным {@code caPublicKey}.
+     * Root-сертификат верифицируется переданным {@code caPublicKeys}.
      *
-     * @param chain       цепочка leaf-first
-     * @param caPublicKey доверенный ключ CA
+     * @param chain        цепочка leaf-first
+     * @param caPublicKeys список доверенных ключей CA (не пустой, не null)
      * @throws TlsException при ошибке валидации цепочки
      */
     public static void validateChain(List<TlsCertificate> chain,
-                                PublicKeyParameters caPublicKey) throws TlsException {
+                                List<PublicKeyParameters> caPublicKeys) throws TlsException {
         int n = chain.size();
         for (int i = 0; i < n - 1; i++) {
             TlsCertificate cert = chain.get(i);
@@ -237,9 +250,13 @@ public final class TlsCertificateValidator {
             throw new TlsException(TlsConstants.ALERT_CERTIFICATE_EXPIRED,
                     "Certificate chain: root is expired or not yet valid");
         }
-        if (!root.verify(caPublicKey)) {
+        boolean rootVerified = false;
+        for (PublicKeyParameters key : caPublicKeys) {
+            if (root.verify(key)) { rootVerified = true; break; }
+        }
+        if (!rootVerified) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "Certificate chain: root signature verification failed");
+                    "Certificate chain: root not signed by any trusted CA");
         }
         if (!root.isAlgConsistent()) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,

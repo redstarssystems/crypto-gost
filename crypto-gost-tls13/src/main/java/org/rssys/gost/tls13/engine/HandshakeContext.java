@@ -148,6 +148,7 @@ public final class HandshakeContext {
      *   <li>key schedule (обнуляет все секреты)</li>
      *   <li>транскрипт (обнуляет ссылку)</li>
      *   <li>публичный ECDHE-ключ пира (обнуляет ссылку)</li>
+     *   <li>дайджесты транскрипта (сброс + обнуление ссылок)</li>
      * </ul>
      */
     public void destroy() {
@@ -163,6 +164,14 @@ public final class HandshakeContext {
         if (ecdhePrivateKey != null) {
             ecdhePrivateKey.destroy();
             ecdhePrivateKey = null;
+        }
+        if (hsDigest256 != null) {
+            hsDigest256.reset();
+            hsDigest256 = null;
+        }
+        if (hsDigest512 != null) {
+            hsDigest512.reset();
+            hsDigest512 = null;
         }
     }
 }

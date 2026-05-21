@@ -90,13 +90,13 @@ class GostSSLSocketTcpTest {
 
     private GostX509KeyManager createServerKeyManager() throws Exception {
         GostX509KeyManager km = new GostX509KeyManager();
-        km.addKeyEntry("default", toJcaChain(serverCert, rootCa), serverCert.priv);
+        km.addKeyEntry("default", CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
         return km;
     }
 
     private GostX509KeyManager createClientKeyManager() throws Exception {
         GostX509KeyManager km = new GostX509KeyManager();
-        km.addKeyEntry("client", toJcaChain(clientCert, rootCa), clientCert.priv);
+        km.addKeyEntry("client", CertificateBridge.toJcaChain(clientCert.cert, rootCa.cert), clientCert.priv);
         return km;
     }
 
@@ -106,17 +106,6 @@ class GostSSLSocketTcpTest {
 
     private GostX509TrustManager createTrustManager(PublicKeyParameters caKey) {
         return new GostX509TrustManager(caKey, false);
-    }
-
-    private java.security.cert.X509Certificate[] toJcaChain(
-            TlsTestHelper.CertBundle leaf, TlsTestHelper.CertBundle... intermediates) throws Exception {
-        java.security.cert.X509Certificate[] result =
-                new java.security.cert.X509Certificate[1 + intermediates.length];
-        result[0] = org.rssys.gost.jsse.bridge.CertificateBridge.toJca(leaf.cert);
-        for (int i = 0; i < intermediates.length; i++) {
-            result[1 + i] = org.rssys.gost.jsse.bridge.CertificateBridge.toJca(intermediates[i].cert);
-        }
-        return result;
     }
 
     // ========================================================================

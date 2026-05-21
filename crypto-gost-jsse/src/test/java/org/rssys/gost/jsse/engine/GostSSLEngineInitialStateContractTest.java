@@ -43,7 +43,7 @@ class GostSSLEngineInitialStateContractTest {
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
         serverKm = new GostX509KeyManager();
-        serverKm.addKeyEntry("default", toJcaChain(serverCert, rootCa), serverCert.priv);
+        serverKm.addKeyEntry("default", CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
     }
 
     @Test
@@ -215,7 +215,7 @@ class GostSSLEngineInitialStateContractTest {
     }
 
     @Test
-    @DisplayName("closeOutbound() легален, closeInbound() без closeOutbound кидает")
+    @DisplayName("closeOutbound() легален, closeInbound() без closeOutbound закрывает inbound (RFC 8446 §6.1)")
     void testCloseInInitial() throws Exception {
         GostSSLEngine engine = createClientEngine();
         // closeOutbound() всегда легален по JSSE-контракту
@@ -223,12 +223,13 @@ class GostSSLEngineInitialStateContractTest {
         assertTrue(engine.isOutboundDone(), "closeOutbound должен пометить outbound как done");
         assertFalse(engine.isInboundDone(), "inbound не должен быть закрыт на этом этапе");
 
+        // WHY: RFC 8446 §6.1 не требует closeSent перед closeInbound.
+        // Netty SslHandler вызывает closeInbound() при channelInactive
+        // (обрыв TCP, таймаут) — без close_notify.
         GostSSLEngine engine2 = createClientEngine();
-        assertThrows(javax.net.ssl.SSLException.class,
-                engine2::closeInbound,
-                "closeInbound без closeOutbound должен кидать SSLException");
-        assertFalse(engine2.isInboundDone(),
-                "inbound не должен быть done после неудачного closeInbound");
+        engine2.closeInbound();
+        assertTrue(engine2.isInboundDone(),
+                "inbound должен быть done после closeInbound без closeOutbound");
 
         GostSSLEngine engine3 = createClientEngine();
         engine3.closeOutbound();
@@ -252,14 +253,4 @@ class GostSSLEngineInitialStateContractTest {
         return new GostSSLEngine(serverKm, tm, "localhost", 0, false);
     }
 
-    private static java.security.cert.X509Certificate[] toJcaChain(
-            TlsTestHelper.CertBundle leaf, TlsTestHelper.CertBundle... intermediates) throws Exception {
-        java.security.cert.X509Certificate[] result =
-                new java.security.cert.X509Certificate[1 + intermediates.length];
-        result[0] = org.rssys.gost.jsse.bridge.CertificateBridge.toJca(leaf.cert);
-        for (int i = 0; i < intermediates.length; i++) {
-            result[1 + i] = org.rssys.gost.jsse.bridge.CertificateBridge.toJca(intermediates[i].cert);
-        }
-        return result;
-    }
 }

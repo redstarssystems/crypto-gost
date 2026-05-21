@@ -11,11 +11,11 @@ import java.math.BigInteger;
  * <p>
  * Принимает данные через {@link #update(byte[], int, int)}, затем:
  * <ul>
- *   <li>{@link #sign()} — вычисляет хэш и вырабатывает подпись r||s</li>
+ *   <li>{@link #sign()} — вычисляет хэш и вырабатывает подпись s||r (X.509-формат)</li>
  *   <li>{@link #verify(byte[])} — вычисляет хэш и проверяет подпись</li>
  * </ul>
  * <p>
- * Подпись кодируется как конкатенация r и s в big-endian, каждая длиной rolen байт,
+ * Подпись кодируется как конкатенация s и r в big-endian (X.509-формат), каждая длиной rolen байт,
  * где rolen = ceil(n.bitLength() / 8). Итоговая длина: 2 * rolen.
  */
 public final class DigestSigner implements Signer {

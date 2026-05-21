@@ -54,10 +54,10 @@ public final class GostSSLSessionContext implements SSLSessionContext {
         this.maxIdentityEntries = n;
     }
 
-    private final InMemoryPskStore pskStore;
+    private InMemoryPskStore pskStore;
     private final ReentrantLock sessionsLock = new ReentrantLock();
     private final Map<ByteBuffer, GostSSLSession> sessions;
-    private final Map<HostPort, byte[]> identityByHost;
+    private Map<HostPort, byte[]> identityByHost;
     private final TlsCiphersuite ciphersuite;
     private final int hashLen;
     private volatile int sessionTimeout = 86400;
@@ -276,6 +276,25 @@ public final class GostSSLSessionContext implements SSLSessionContext {
         long st = sessionTimeout;
         long capped = (st == 0) ? RFC_MAX_TICKET_LIFETIME : Math.min(st, RFC_MAX_TICKET_LIFETIME);
         return Math.min(ticketLifetime, capped);
+    }
+
+    /**
+     * Переключает pskStore и identityByHost на shared-объекты из другого контекста.
+     * <p>
+     * После вызова оба экземпляра читают и пишут в одни и те же хранилища —
+     * PSK, сохранённые через любой из них, видны обоим (необходимо для
+     * разделения сессионного контекста между клиентом и сервером в тестах
+     * PSK resumption через Netty).
+     * <p>
+     * Предусловие: вызывается в однопоточном контексте строителя
+     * {@code GostSslContextBuilder.build()} до начала handshake.
+     * После начала handshake — неопределённое поведение.
+     *
+     * @param shared контекст, чьи pskStore и identityByHost становятся общими
+     */
+    public void redirectToSharedState(GostSSLSessionContext shared) {
+        this.pskStore = shared.pskStore;
+        this.identityByHost = shared.identityByHost;
     }
 
     /**

@@ -151,7 +151,7 @@ class GostSSLEnginePostHandshakeTest {
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
         serverKeyManager.addKeyEntry("default",
-                toJcaChain(serverCert, rootCa), serverCert.priv);
+                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
 
         // WHY: первый handshake — полный, чтобы получить PSK через NST
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
@@ -206,7 +206,7 @@ class GostSSLEnginePostHandshakeTest {
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
         serverKeyManager.addKeyEntry("default",
-                toJcaChain(serverCert, rootCa), serverCert.priv);
+                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
 
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
         GostSSLEngine server1 = GostSSLEngine.createForServer(
@@ -265,7 +265,7 @@ class GostSSLEnginePostHandshakeTest {
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
         serverKeyManager.addKeyEntry("default",
-                toJcaChain(serverCert, rootCa), serverCert.priv);
+                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -357,7 +357,7 @@ class GostSSLEnginePostHandshakeTest {
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
         serverKeyManager.addKeyEntry("default",
-                toJcaChain(serverCert, rootCa), serverCert.priv);
+                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -413,7 +413,7 @@ class GostSSLEnginePostHandshakeTest {
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
         serverKeyManager.addKeyEntry("default",
-                toJcaChain(serverCert, rootCa), serverCert.priv);
+                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -623,13 +623,4 @@ class GostSSLEnginePostHandshakeTest {
      * @return массив X509Certificate
      * @throws Exception если преобразование не удалось
      */
-    private static java.security.cert.X509Certificate[] toJcaChain(
-            TlsTestHelper.CertBundle leaf, TlsTestHelper.CertBundle... intermediates) throws Exception {
-        java.security.cert.X509Certificate[] result = new java.security.cert.X509Certificate[1 + intermediates.length];
-        result[0] = org.rssys.gost.jsse.bridge.CertificateBridge.toJca(leaf.cert);
-        for (int i = 0; i < intermediates.length; i++) {
-            result[1 + i] = org.rssys.gost.jsse.bridge.CertificateBridge.toJca(intermediates[i].cert);
-        }
-        return result;
-    }
 }

@@ -107,6 +107,9 @@ public final class TlsConstants {
     /** Максимальный размер одного сертификата в DER (256 КБ).
      *  Типичный ГОСТ-сертификат — 1–10 КБ, 256 КБ даёт 25x запас. */
     public static final int MAX_CERT_SIZE = 262_144;
+    /** Максимум delegated OCSP-responder сертификатов в BasicOCSPResponse certs [0]
+     *  (RFC 6960 §4.2.2.1). Практически всегда 0–1, 10 — щедрый запас. */
+    public static final int MAX_DELEGATED_CERTS = 10;
 
     // максимальный размер ciphertext в TLS-записи (RFC 8446 §5.1)
     // 2^14 + 1 (inner_type) + 16 (max padding) + 16 (MGM tag) = 16401

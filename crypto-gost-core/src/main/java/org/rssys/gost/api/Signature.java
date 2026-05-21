@@ -28,7 +28,7 @@ import java.util.function.Supplier;
  * что исключает атаки на случайный нонс.
  *
  * <h3>Формат подписи:</h3>
- * Конкатенация r ∥ s в big-endian, каждая компонента длиной {@code ceil(n.bitLength()/8)} байт.
+ * X.509-формат: конкатенация s ∥ r в big-endian, каждая компонента длиной {@code ceil(n.bitLength()/8)} байт.
  * Итоговая длина: 64 байта для 256-битных кривых, 128 байт для 512-битных.
  *
  * <p>Без DER/ASN.1 кодирования — чистый бинарный формат.
@@ -67,7 +67,7 @@ public final class Signature {
      *
      * @param data данные для подписи (произвольная длина)
      * @param priv закрытый ключ
-     * @return подпись r ∥ s (64 или 128 байт)
+     * @return подпись s ∥ r (64 или 128 байт)
      * @throws IllegalStateException если закрытый ключ уничтожен
      */
     public static byte[] sign(byte[] data, PrivateKeyParameters priv) {
@@ -93,7 +93,7 @@ public final class Signature {
      * <p>Хэш-функция выбирается автоматически по кривой.
      *
      * @param data      данные, для которых проверяется подпись
-     * @param signature подпись r ∥ s (64 или 128 байт)
+     * @param signature подпись s ∥ r (64 или 128 байт)
      * @param pub       открытый ключ
      * @return {@code true} если подпись верна
      * @throws IllegalArgumentException если длина подписи не соответствует кривой
@@ -128,7 +128,7 @@ public final class Signature {
      *
      * @param hash готовый хэш (длина должна быть равна hlen кривой)
      * @param priv закрытый ключ
-     * @return подпись r ∥ s (64 или 128 байт)
+     * @return подпись s ∥ r (64 или 128 байт)
      * @throws IllegalArgumentException если длина хэша не соответствует кривой
      * @throws IllegalStateException    если закрытый ключ уничтожен
      */
@@ -155,7 +155,7 @@ public final class Signature {
      * Хэш должен соответствовать кривой — см. {@link #signHash}.
      *
      * @param hash      готовый хэш (длина должна быть равна hlen кривой)
-     * @param signature подпись r ∥ s (64 или 128 байт)
+     * @param signature подпись s ∥ r (64 или 128 байт)
      * @param pub       открытый ключ
      * @return {@code true} если подпись верна
      * @throws IllegalArgumentException если длина хэша не соответствует кривой

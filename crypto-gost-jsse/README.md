@@ -1083,7 +1083,7 @@ resumption, reconnect под нагрузкой и таймауты в сете�
     make -C examples/jsse test-int-all
 
     # Или напрямую через Maven:
-    mvn test -pl crypto-gost-jsse,examples/jsse -am -Dgroups="integration"
+    mvn test -pl crypto-gost-jsse,examples/jsse -am -Dgroups="integration" -Dsurefire.excludedGroups=
 
     # Отдельные группы:
     make -C examples/jsse test-integration   # 16 тестов examples/jsse
@@ -1106,8 +1106,9 @@ resumption, reconnect под нагрузкой и таймауты в сете�
     make -C examples/jsse test-stress ARGS=-Dstress.duration=1
 
     # Через Maven напрямую
-    mvn test -pl examples/jsse -am \
+    mvn test -pl examples/jsse \
       -Dtest="JsseStressTest#stressTest" \
+      -Dsurefire.excludedGroups="" \
       -Dstress.duration=5 \
       -Dstress.cacheSize=5000
 

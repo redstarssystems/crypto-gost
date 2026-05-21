@@ -56,9 +56,7 @@ public class GostSslBuilder {
     /**
      * Добавляет доверенный CA-сертификат (DER X.509).
      * <p>
-     * <b>Ограничение:</b> GostX509TrustManager принимает один CA-ключ.
-     * При повторном вызове используется только последний добавленный CA.
-     * Для цепочек сертификатов используйте PKCS12 (см. {@link #certificate(byte[], char[])}).
+     * Добавленные CA используются все при проверке цепочки сертификатов.
      */
     public GostSslBuilder trustCa(byte[] caDer) {
         if (this.trustedCaDers == null) {

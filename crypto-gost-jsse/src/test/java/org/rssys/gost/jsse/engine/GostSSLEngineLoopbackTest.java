@@ -4,6 +4,7 @@ import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.ocsp.OcspPolicy;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -27,6 +28,7 @@ import javax.net.ssl.SSLPeerUnverifiedException;
 import java.nio.ByteBuffer;
 import java.security.Security;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -87,7 +89,7 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        serverKeyManager.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -110,10 +112,10 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        serverKeyManager.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
 
         GostX509KeyManager clientKeyManager = new GostX509KeyManager();
-        clientKeyManager.addKeyEntry("client", toJcaChain(clientCertBundle, rootCa), clientCertBundle.priv);
+        clientKeyManager.addKeyEntry("client", CertificateBridge.toJcaChain(clientCertBundle.cert, rootCa.cert), clientCertBundle.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(caPub, false),
@@ -137,10 +139,10 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        serverKeyManager.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
 
         GostX509KeyManager clientKeyManager = new GostX509KeyManager();
-        clientKeyManager.addKeyEntry("client", toJcaChain(clientCertBundle, rootCa), clientCertBundle.priv);
+        clientKeyManager.addKeyEntry("client", CertificateBridge.toJcaChain(clientCertBundle.cert, rootCa.cert), clientCertBundle.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(caPub, false),
@@ -164,7 +166,7 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        serverKeyManager.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -196,8 +198,8 @@ class GostSSLEngineLoopbackTest {
 
         // WHY: два сертификата на сервере — проверяем SNI-селектор
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
-        serverKeyManager.addKeyEntry("api", toJcaChain(serverCertApi, rootCa), serverCertApi.priv);
+        serverKeyManager.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
+        serverKeyManager.addKeyEntry("api", CertificateBridge.toJcaChain(serverCertApi.cert, rootCa.cert), serverCertApi.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -223,7 +225,7 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        serverKeyManager.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -248,7 +250,7 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        serverKeyManager.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -315,7 +317,7 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        serverKeyManager.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKeyManager, new GostX509TrustManager(null, false),
@@ -374,7 +376,7 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager skm = new GostX509KeyManager();
-        skm.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa),
+        skm.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert),
                 serverCertDefault.priv);
         GostX509KeyManager ckm = new GostX509KeyManager();
 
@@ -420,6 +422,75 @@ class GostSSLEngineLoopbackTest {
                 "ALPN клиента должен быть h2");
         assertEquals("h2", serverEngine.getHandshakeApplicationProtocol(),
                 "ALPN сервера (getHandshakeApplicationProtocol) должен быть h2");
+    }
+
+    // ========================================================================
+    // Multi-CA
+    // ========================================================================
+
+    @Test
+    @DisplayName("Multi-CA: сертификат подписан вторым CA из двух — handshake успешен")
+    void testMultiCaPositiveSecondCa() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        // Два независимых CA
+        TlsTestHelper.CertBundle ca1 = TlsTestHelper.createRootCA(params);
+        TlsTestHelper.CertBundle ca2 = TlsTestHelper.createRootCA(params);
+        PublicKeyParameters caPub2 = ca2.cert.getPublicKey();
+
+        // Серверный сертификат подписан CA #2
+        TlsTestHelper.CertBundle serverCert = TlsTestHelper.createCertSignedBy(
+                params, ca2.priv, caPub2, ca2.subjectDn,
+                "240501120000Z", "290501120000Z",
+                new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
+                false, null);
+
+        GostX509KeyManager serverKm = new GostX509KeyManager();
+        serverKm.addKeyEntry("default", CertificateBridge.toJcaChain(serverCert.cert, ca2.cert), serverCert.priv);
+
+        GostX509TrustManager tm = new GostX509TrustManager(
+                List.of(ca1.cert.getPublicKey(), caPub2),
+                OcspPolicy.IF_PRESENT, null);
+
+        GostSSLEngine serverEngine = new GostSSLEngine(serverKm, tm, "localhost", 0, false);
+        GostSSLEngine clientEngine = new GostSSLEngine(
+                new GostX509KeyManager(), tm, "localhost", 0, true);
+
+        doLoopback(clientEngine, serverEngine, pair);
+    }
+
+    @Test
+    @DisplayName("Multi-CA: сертификат подписан третьим CA (не в списке) — handshake падает")
+    void testMultiCaNegativeThirdCa() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        TlsTestHelper.CertBundle ca1 = TlsTestHelper.createRootCA(params);
+        TlsTestHelper.CertBundle ca2 = TlsTestHelper.createRootCA(params);
+        TlsTestHelper.CertBundle ca3 = TlsTestHelper.createRootCA(params);
+        PublicKeyParameters caPub3 = ca3.cert.getPublicKey();
+
+        // Серверный сертификат подписан CA #3 (не в списке доверенных)
+        TlsTestHelper.CertBundle serverCert = TlsTestHelper.createCertSignedBy(
+                params, ca3.priv, caPub3, ca3.subjectDn,
+                "240501120000Z", "290501120000Z",
+                new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
+                false, null);
+
+        GostX509KeyManager serverKm = new GostX509KeyManager();
+        serverKm.addKeyEntry("default", CertificateBridge.toJcaChain(serverCert.cert, ca3.cert), serverCert.priv);
+
+        GostX509TrustManager tm = new GostX509TrustManager(
+                List.of(ca1.cert.getPublicKey(), ca2.cert.getPublicKey()),
+                OcspPolicy.IF_PRESENT, null);
+
+        GostSSLEngine serverEngine = new GostSSLEngine(serverKm, tm, "localhost", 0, false);
+        GostSSLEngine clientEngine = new GostSSLEngine(
+                new GostX509KeyManager(), tm, "localhost", 0, true);
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> doLoopback(clientEngine, serverEngine, pair));
+        assertInstanceOf(SSLException.class, ex.getCause(),
+                "Причина должна быть SSLException, не " + ex.getCause());
     }
 
     // ========================================================================
@@ -583,28 +654,6 @@ class GostSSLEngineLoopbackTest {
                 + engine.getHandshakeStatus());
     }
 
-    /**
-     * Конвертирует связку сертификатов TlsCertificate в JCA X509Certificate[].
-     * <p>
-     * JSSE API (GostX509KeyManager, GostX509TrustManager) требует
-     * X509Certificate[], поэтому перед передачей в эти классы все внутренние
-     * TlsCertificate нужно конвертировать через CertificateBridge.
-     *
-     * @param leaf          листовой сертификат
-     * @param intermediates промежуточные CA-сертификаты (опционально)
-     * @return массив X509Certificate, leaf на [0], intermediates на [1..n]
-     * @throws Exception если DER-конвертация не удалась
-     */
-    private static java.security.cert.X509Certificate[] toJcaChain(
-            TlsTestHelper.CertBundle leaf, TlsTestHelper.CertBundle... intermediates) throws Exception {
-        java.security.cert.X509Certificate[] result = new java.security.cert.X509Certificate[1 + intermediates.length];
-        result[0] = org.rssys.gost.jsse.bridge.CertificateBridge.toJca(leaf.cert);
-        for (int i = 0; i < intermediates.length; i++) {
-            result[1 + i] = org.rssys.gost.jsse.bridge.CertificateBridge.toJca(intermediates[i].cert);
-        }
-        return result;
-    }
-
     // ========================================================================
     // Regression: wrap() возвращает FINISHED при HANDSHAKE→DATA
     // ========================================================================
@@ -614,7 +663,7 @@ class GostSSLEngineLoopbackTest {
     void testWrapReturnsFinished() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
         GostX509KeyManager skm = new GostX509KeyManager();
-        skm.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        skm.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
         GostSSLEngine server = new GostSSLEngine(
                 skm, new GostX509TrustManager(null, false), "localhost", 0, false);
         GostSSLEngine client = new GostSSLEngine(
@@ -637,7 +686,7 @@ class GostSSLEngineLoopbackTest {
     void testDeferredClientAppKeys() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
         GostX509KeyManager skm = new GostX509KeyManager();
-        skm.addKeyEntry("default", toJcaChain(serverCertDefault, rootCa), serverCertDefault.priv);
+        skm.addKeyEntry("default", CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert), serverCertDefault.priv);
         GostSSLEngine server = new GostSSLEngine(
                 skm, new GostX509TrustManager(null, false), "localhost", 0, false);
         GostSSLEngine client = new GostSSLEngine(

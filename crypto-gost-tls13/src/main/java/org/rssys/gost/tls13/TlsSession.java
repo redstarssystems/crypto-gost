@@ -46,7 +46,7 @@ public final class TlsSession implements AutoCloseable {
     // Аутентификация (долговременный ключ для CertificateVerify)
     private final List<TlsCertificate> ourCertificateChain;
     private final PrivateKeyParameters ourPrivateKey;
-    private final PublicKeyParameters caPublicKey;
+    private final List<PublicKeyParameters> caPublicKeys;
     private final String serverHostname;
     private final boolean requireOcspStapling;
     private final byte[] ocspResponse;
@@ -117,7 +117,7 @@ public final class TlsSession implements AutoCloseable {
     public static TlsSession createClient(TlsClientConfig config, TlsTransport transport) {
         TlsSession session = new TlsSession(transport, config.getCiphersuite(),
                 config.getClientCertificateChain(), config.getClientPrivateKey(),
-                config.getCaPublicKey(), config.getServerHostname(),
+                config.getCaPublicKeys(), config.getServerHostname(),
                 config.isOcspRequired(), null);
         session.alpnProtocols = config.getAlpnProtocols();
         return session;
@@ -137,10 +137,12 @@ public final class TlsSession implements AutoCloseable {
                                           TlsCertificate ourCertificate,
                                           PrivateKeyParameters ourPrivateKey,
                                           PublicKeyParameters caPublicKey) {
+        List<PublicKeyParameters> keys = caPublicKey != null
+                ? Collections.singletonList(caPublicKey) : null;
         return createClient(new TlsClientConfig(ciphersuite)
                 .withClientCertificateChain(ourCertificate)
                 .withClientPrivateKey(ourPrivateKey)
-                .withCaPublicKey(caPublicKey), transport);
+                .withCaPublicKeys(keys), transport);
     }
 
     /**
@@ -154,7 +156,7 @@ public final class TlsSession implements AutoCloseable {
     public static TlsSession createServer(TlsServerConfig config, TlsTransport transport) {
         TlsSession session = new TlsSession(transport, config.getCiphersuite(),
                 config.getServerCertificateChain(), config.getServerPrivateKey(),
-                config.getCaPublicKey(), null, false, config.getOcspStaplingResponse());
+                config.getCaPublicKeys(), null, false, config.getOcspStaplingResponse());
         session.sniSelector = config.getSniSelector();
         session.alpnProtocols = config.getAlpnProtocols();
         session.ticketsToSend = config.getTicketsToSend();
@@ -174,7 +176,7 @@ public final class TlsSession implements AutoCloseable {
                        TlsCiphersuite ciphersuite,
                        List<TlsCertificate> ourCertificateChain,
                        PrivateKeyParameters ourPrivateKey,
-                       PublicKeyParameters caPublicKey,
+                       List<PublicKeyParameters> caPublicKeys,
                        String serverHostname,
                        boolean requireOcspStapling,
                        byte[] ocspResponse) {
@@ -185,7 +187,7 @@ public final class TlsSession implements AutoCloseable {
         this.hashLen = ciphersuite.getHashLen();
         this.ourCertificateChain = ourCertificateChain;
         this.ourPrivateKey = ourPrivateKey;
-        this.caPublicKey = caPublicKey;
+        this.caPublicKeys = caPublicKeys;
         this.serverHostname = serverHostname;
         this.requireOcspStapling = requireOcspStapling;
         this.ocspResponse = ocspResponse;
@@ -234,7 +236,8 @@ public final class TlsSession implements AutoCloseable {
         checkNotClosed();
         byte[] pskKey = null;
         try {
-            boolean requestClientAuth = (role == TlsHandshakeEngine.Role.SERVER && caPublicKey != null);
+            boolean requestClientAuth = (role == TlsHandshakeEngine.Role.SERVER
+                    && caPublicKeys != null && !caPublicKeys.isEmpty());
 
             this.engine = new TlsHandshakeEngine(role, ciphersuite, messageBuilder,
                     selectedEcParams, selectedNamedGroup, selectedSigScheme,
@@ -994,7 +997,7 @@ public final class TlsSession implements AutoCloseable {
      */
     void checkServerCertificateChain(List<TlsCertificate> chain) throws TlsException {
         TlsCertificateValidator.checkServerCertificateChain(
-                chain, serverHostname, requireOcspStapling, caPublicKey);
+                chain, serverHostname, requireOcspStapling, caPublicKeys);
     }
 
     /**
@@ -1008,7 +1011,7 @@ public final class TlsSession implements AutoCloseable {
      * @throws TlsException при ошибке валидации
      */
     void checkClientCertificateChain(List<TlsCertificate> chain) throws TlsException {
-        TlsCertificateValidator.checkClientCertificateChain(chain, caPublicKey);
+        TlsCertificateValidator.checkClientCertificateChain(chain, caPublicKeys);
     }
 
     // validateChain вынесен в TlsCertificateValidator.validateChain()

@@ -8,6 +8,7 @@ import org.rssys.gost.tls13.cert.TlsCertificate;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Конфигурация сервера TLS 1.3.
@@ -22,7 +23,7 @@ public final class TlsServerConfig {
     private final List<TlsCertificate> serverCertificateChain;
     private final PrivateKeyParameters serverPrivateKey;
     private byte[] ocspResponse;
-    private PublicKeyParameters caPublicKey;
+    private List<PublicKeyParameters> caPublicKeys;
     private List<String> alpnProtocols;
     private SniCertificateSelector sniSelector;
     private int ticketsToSend = 1;
@@ -60,18 +61,28 @@ public final class TlsServerConfig {
     }
 
     /**
-     * @param caPublicKey публичный ключ корневого CA для проверки клиентского сертификата.
-     *                    Если задан — сервер ОБЯЗЫВАЕТ клиента предоставить сертификат,
-     *                    иначе клиентский Finished отклоняется (mTLS, required mode).
+     * @param caPubKeys список доверенных ключей CA для проверки клиентского сертификата.
+     *                  Если задан (не null, не пуст) — сервер ОБЯЗЫВАЕТ клиента
+     *                  предоставить сертификат, иначе клиентский Finished отклоняется
+     *                  (mTLS, required mode).
      * @return this
      *
      * <p><b>Ограничение:</b> certificate_authorities extension (RFC 8446 §4.2.4)
      * не отправляется в CertificateRequest. Клиенты с несколькими сертификатами
      * должны выбирать вручную через конфигурацию.</p>
      */
-    public TlsServerConfig withCaPublicKey(PublicKeyParameters caPublicKey) {
-        this.caPublicKey = caPublicKey;
+    public TlsServerConfig withCaPublicKeys(List<PublicKeyParameters> caPubKeys) {
+        this.caPublicKeys = caPubKeys;
         return this;
+    }
+
+    /**
+     * @param caPublicKey публичный ключ корневого CA
+     * @return this
+     */
+    public TlsServerConfig withCaPublicKey(PublicKeyParameters caPublicKey) {
+        return withCaPublicKeys(caPublicKey != null
+                ? Collections.singletonList(caPublicKey) : null);
     }
 
     /**
@@ -92,7 +103,12 @@ public final class TlsServerConfig {
     public TlsCiphersuite getCiphersuite() { return ciphersuite; }
     public List<TlsCertificate> getServerCertificateChain() { return serverCertificateChain; }
     public PrivateKeyParameters getServerPrivateKey() { return serverPrivateKey; }
-    public PublicKeyParameters getCaPublicKey() { return caPublicKey; }
+    public List<PublicKeyParameters> getCaPublicKeys() { return caPublicKeys; }
+
+    public PublicKeyParameters getCaPublicKey() {
+        return (caPublicKeys != null && !caPublicKeys.isEmpty())
+                ? caPublicKeys.get(0) : null;
+    }
     public byte[] getOcspStaplingResponse() { return ocspResponse; }
     public List<String> getAlpnProtocols() { return alpnProtocols; }
     public SniCertificateSelector getSniSelector() { return sniSelector; }

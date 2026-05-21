@@ -42,6 +42,24 @@ public final class CertificateBridge {
     }
 
     /**
+     * TlsCertificate + опциональная цепочка промежуточных → X509Certificate[].
+     * Удобная перегрузка для тестов, работающих с CertBundle.
+     */
+    public static X509Certificate[] toJcaChain(TlsCertificate leaf, TlsCertificate... intermediates)
+            throws CertificateException {
+        if (leaf == null) return new X509Certificate[0];
+        int len = 1 + (intermediates != null ? intermediates.length : 0);
+        X509Certificate[] result = new X509Certificate[len];
+        result[0] = toJca(leaf);
+        if (intermediates != null) {
+            for (int i = 0; i < intermediates.length; i++) {
+                result[1 + i] = toJca(intermediates[i]);
+            }
+        }
+        return result;
+    }
+
+    /**
      * X509Certificate → TlsCertificate через getEncoded().
      */
     public static TlsCertificate toTls(X509Certificate cert) {

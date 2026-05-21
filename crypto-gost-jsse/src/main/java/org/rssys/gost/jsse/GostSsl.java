@@ -1,9 +1,12 @@
 package org.rssys.gost.jsse;
 
 import org.rssys.gost.jca.spec.GostDerCodec;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.jsse.ocsp.OcspPolicy;
+import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.cert.Pkcs12Loader;
 import org.rssys.gost.tls13.cert.TlsCertificate;
@@ -11,10 +14,13 @@ import org.rssys.gost.tls13.cert.TlsCertificate;
 import javax.net.ssl.*;
 import java.io.ByteArrayInputStream;
 import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
 import java.security.Security;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -49,7 +55,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * SSLContext cli = GostSsl.clientContext(caDer);
  *
  * // Разработка
- * SSLContext dev = GostSsl.trustAllClientContext();
+ * SSLContext dev = GostSslDev.trustAllClientContextInsecure();
  * }</pre>
  * <p>
  * <b>Ограничения:</b>
@@ -91,19 +97,19 @@ public final class GostSsl {
     /** Серверный SSLContext из PEM-строк (cert, private key, CA). */
     public static SSLContext serverContext(String certPem, String keyPem, String caPem) {
         return buildContext(pemToDer(certPem), pemToDer(keyPem), null, null,
-                new byte[][]{pemToDer(caPem)}, false, -1, false, true);
+                new byte[][]{TlsCertificate.fromPemOrDer(caPem.getBytes(StandardCharsets.US_ASCII)).toDer()}, false, -1, false, true);
     }
 
     /** Клиентский SSLContext из PEM-строк — mTLS. */
     public static SSLContext clientContext(String certPem, String keyPem, String caPem) {
         return buildContext(pemToDer(certPem), pemToDer(keyPem), null, null,
-                new byte[][]{pemToDer(caPem)}, false, -1, false, false);
+                new byte[][]{TlsCertificate.fromPemOrDer(caPem.getBytes(StandardCharsets.US_ASCII)).toDer()}, false, -1, false, false);
     }
 
     /** Клиентский SSLContext из CA-сертификата PEM — без собственного сертификата. */
     public static SSLContext clientContext(String caPem) {
         return buildContext(null, null, null, null,
-                new byte[][]{pemToDer(caPem)}, false, -1, false, false);
+                new byte[][]{TlsCertificate.fromPemOrDer(caPem.getBytes(StandardCharsets.US_ASCII)).toDer()}, false, -1, false, false);
     }
 
     // ========================================================================
@@ -282,7 +288,7 @@ public final class GostSsl {
             } else if (p12Data != null) {
                 Pkcs12Loader.Result result = Pkcs12Loader.load(p12Data, p12Password);
                 km = new GostX509KeyManager();
-                X509Certificate[] chain = toX509Chain(result.getCertificateChain());
+                X509Certificate[] chain = CertificateBridge.toJca(result.getCertificateChain());
                 km.addKeyEntry("default", chain, result.getPrivateKey());
             }
 
@@ -291,10 +297,14 @@ public final class GostSsl {
             if (trustAll) {
                 tm = new GostX509TrustManager(null, false);
             } else if (trustedCaDers != null && trustedCaDers.length > 0) {
-                // Берём первый CA для trust manager
-                byte[] caDer = trustedCaDers[0];
-                TlsCertificate tlsCa = new TlsCertificate(caDer);
-                tm = new GostX509TrustManager(tlsCa.getPublicKey(), ocspEnabled);
+                // Распаковываем все доверенные CA в список ключей
+                List<PublicKeyParameters> caKeys = new ArrayList<>(trustedCaDers.length);
+                for (byte[] caDer : trustedCaDers) {
+                    caKeys.add(new TlsCertificate(caDer).getPublicKey());
+                }
+                OcspPolicy policy = ocspEnabled
+                        ? OcspPolicy.STAPLING_REQUIRED : OcspPolicy.IF_PRESENT;
+                tm = new GostX509TrustManager(caKeys, policy, null);
             } else {
                 throw new GostSslException("No CA certificate provided for trust verification");
             }
@@ -331,21 +341,6 @@ public final class GostSsl {
         km.addKeyEntry("default", new X509Certificate[]{cert},
                 GostDerCodec.decodePrivateKey(keyDer));
         return km;
-    }
-
-    private static X509Certificate[] toX509Chain(java.util.List<TlsCertificate> tlsCerts) {
-        try {
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            X509Certificate[] chain = new X509Certificate[tlsCerts.size()];
-            for (int i = 0; i < tlsCerts.size(); i++) {
-                chain[i] = (X509Certificate)
-                        cf.generateCertificate(new ByteArrayInputStream(
-                                tlsCerts.get(i).getEncoded()));
-            }
-            return chain;
-        } catch (Exception e) {
-            throw new GostSslException("Failed to parse certificate chain from PKCS12", e);
-        }
     }
 
     private static byte[] pemToDer(String pem) {

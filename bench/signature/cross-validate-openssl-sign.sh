@@ -4,9 +4,9 @@
 # Direction: crypto-gost подписывает, OpenSSL engine gost верифицирует.
 #
 # Формат подписи:
-#   crypto-gost : r_BE || s_BE  (r первые rolen байт, s вторые rolen байт)
-#   OpenSSL gost: s_BE || r_BE  (s первые rolen байт, r вторые rolen байт)
-#   Скрипт выполняет перестановку автоматически перед передачей в OpenSSL.
+#   crypto-gost : s_BE || r_BE  (s первые rolen байт, r вторые rolen байт, X.509-формат)
+#   OpenSSL gost: s_BE || r_BE  (X.509-формат)
+#   Конвертация не требуется — crypto-gost и OpenSSL используют единый формат.
 #
 # Поддерживаемые кривые (совместимость OID подтверждена):
 #   CryptoPro-A  OID 1.2.643.2.2.35.1  ↔  OpenSSL engine gost paramset A
@@ -99,7 +99,6 @@ run_one() {
     local msgfile="$4"
 
     local sigfile="$TMPDIR_LOCAL/sig.bin"
-    local sig_conv="$TMPDIR_LOCAL/sig_conv.bin"  # конвертированный формат для OpenSSL
     local pubfile="$TMPDIR_LOCAL/pub.der"
     local sig_bad="$TMPDIR_LOCAL/sig_bad.bin"
 
@@ -112,26 +111,19 @@ run_one() {
         return
     fi
 
-    # Step 2: crypto-gost подписывает — формат r_BE || s_BE
+    # Step 2: crypto-gost подписывает — формат s_BE || r_BE (X.509)
     if ! $SIG_TOOL sign "$curve" "$privhex" "$msgfile" "$sigfile" 2>/dev/null; then
         printf "  %-14s  gost->ossl  FAIL (sign error)\n" "$label"
         FAIL=$((FAIL + 1))
         return
     fi
 
-    # Step 3: конвертируем r_BE||s_BE → s_BE||r_BE для OpenSSL engine gost
-    python3 -c "
-sig = open('$sigfile','rb').read()
-r_be = sig[:32]; s_be = sig[32:]
-open('$sig_conv','wb').write(s_be + r_be)
-"
-
-    # Step 4: OpenSSL engine gost верифицирует
+    # Step 3: OpenSSL engine gost верифицирует напрямую (единый формат s||r)
     local verify_result
     # || true: не прерываем скрипт при ошибке верификации (set -e)
     verify_result=$(openssl dgst $OSSL_DIGEST_256 $OSSL_ENGINE \
         -verify "$pubfile" \
-        -signature "$sig_conv" \
+        -signature "$sigfile" \
         "$msgfile" 2>&1) || true
 
     if echo "$verify_result" | grep -q "Verified OK"; then
@@ -143,10 +135,10 @@ open('$sig_conv','wb').write(s_be + r_be)
         return
     fi
 
-    # Step 5: Tamper-тест — портим первый байт подписи, OpenSSL должен отклонить
+    # Step 4: Tamper-тест — портим первый байт подписи (s-компоненты), OpenSSL должен отклонить
     TOTAL=$((TOTAL + 1))
     python3 -c "
-sig = open('$sig_conv','rb').read()
+sig = open('$sigfile','rb').read()
 bad = bytearray(sig); bad[0] ^= 0x01
 open('$sig_bad','wb').write(bytes(bad))
 "
@@ -197,8 +189,8 @@ check_prereqs
 echo "============================================================"
 echo "  Кросс-валидация: crypto-gost → OpenSSL engine gost"
 echo "  Подпись: ГОСТ Р 34.10-2012 (256-бит, CryptoPro кривые)"
-echo "  Направление: crypto-gost подписывает, OpenSSL верифицирует"
-echo "  Формат: crypto-gost r||s → конвертируется в s||r для OpenSSL"
+  echo "  Направление: crypto-gost подписывает, OpenSSL верифицирует"
+  echo "  Формат: crypto-gost и OpenSSL — единый X.509-формат s||r"
 echo "============================================================"
 echo
 
