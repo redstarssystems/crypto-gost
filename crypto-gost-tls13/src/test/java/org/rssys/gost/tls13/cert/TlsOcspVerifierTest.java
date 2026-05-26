@@ -78,6 +78,28 @@ class TlsOcspVerifierTest {
                 "Expected hashAlgorithm error, got: " + ex.getMessage());
     }
 
+    @Test
+    @DisplayName("thisUpdate в будущем → отказ (RFC 6960 §3.2)")
+    void testThisUpdateInFuture() throws Exception {
+        byte[] ocsp = TlsTestHelper.buildOcspResponse(
+                leaf.cert.getSerialNumber(), root.priv,
+                root.cert.getPublicKey(), root.subjectDn);
+        byte[] mutated = ocsp.clone();
+        // Ищем полный TLV UTCTime (0x17) со значением "250501120000Z"
+        // producedAt (0x18 GeneralizedTime) не содержит подстроку-совпадение с тегом 0x17
+        byte[] needle = {0x17, 0x0D, 0x32, 0x35, 0x30, 0x35, 0x30, 0x31, 0x31, 0x32, 0x30, 0x30, 0x30, 0x30, 0x5A};
+        byte[] replacement = {0x17, 0x0D, 0x34, 0x39, 0x30, 0x31, 0x30, 0x31, 0x31, 0x32, 0x30, 0x30, 0x30, 0x30, 0x5A};
+        int idx = indexOf(mutated, needle);
+        assertTrue(idx >= 0, "thisUpdate TLV должен быть найден в OCSP-ответе");
+        System.arraycopy(replacement, 0, mutated, idx, replacement.length);
+
+        TlsException ex = assertThrows(TlsException.class, () ->
+                TlsOcspVerifier.verify(mutated, leaf.cert.getSerialNumber(),
+                        root.cert.getPublicKey()));
+        assertTrue(ex.getMessage().contains("future"),
+                "Ожидалось thisUpdate future, получено: " + ex.getMessage());
+    }
+
     private static int indexOf(byte[] haystack, byte[] needle) {
         outer:
         for (int i = 0; i <= haystack.length - needle.length; i++) {

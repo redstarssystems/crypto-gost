@@ -53,12 +53,12 @@ public class CertValidationBench {
     @Benchmark
     public void chainOnly(Blackhole bh) throws Exception {
         TlsCertificateValidator.checkServerCertificateChain(
-                chain2, null, false, caKey);
+                chain2, null, false, List.of(caKey));
     }
 
     @Benchmark
     public void chainWithHostname(Blackhole bh) throws Exception {
         TlsCertificateValidator.checkServerCertificateChain(
-                chain2, "example.com", false, caKey);
+                chain2, "example.com", false, List.of(caKey));
     }
 }

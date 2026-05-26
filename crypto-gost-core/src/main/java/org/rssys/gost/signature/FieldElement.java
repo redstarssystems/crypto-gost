@@ -67,6 +67,10 @@ public final class FieldElement {
          */
         final long[] rModP;
         /**
+         * p − 2 — константа для инверсии через малую теорему Ферма a^(p−2) mod p.
+         */
+        final BigInteger expPMinus2;
+        /**
          * {@code R² mod p} — используется для конвертации {@code a → a·R mod p}
          * через одно {@code montMul(a, R²) = a·R² · R⁻¹ = a·R mod p}.
          */
@@ -100,6 +104,7 @@ public final class FieldElement {
             // R mod p = 2^(64n) mod p
             BigInteger R = BigInteger.ONE.shiftLeft(64 * n);
             this.rModP = toLimbs(R.mod(modulus), n);
+            this.expPMinus2 = modulus.subtract(BigInteger.TWO);
             // R² mod p = R·R mod p
             this.r2ModP = toLimbs(R.multiply(R).mod(modulus), n);
 
@@ -159,15 +164,17 @@ public final class FieldElement {
         return new FieldElement(mp.rModP.clone(), mp);
     }
 
-    // CT-выбор между двумя FieldElement по биту (0 → a, 1 → b)
-    private static FieldElement selectFE(FieldElement a, FieldElement b, long cond) {
+    // В hot-path invert() каждый вызов selectFE создаёт новый long[] — ~4 alloc на итерацию.
+    // cswap обменивает содержимое массивов напрямую через маскированный XOR, без аллокаций.
+    // Для CT достаточно, что обе ветки (swap и no-swap) выполняют одинаковое количество
+    // операций с одинаковым шаблоном доступа к памяти.
+    private static void cswap(long[] a, long[] b, long cond) {
         long mask = -cond;
-        long[] al = a.limbs(), bl = b.limbs();
-        long[] rl = new long[al.length];
-        for (int i = 0; i < al.length; i++) {
-            rl[i] = al[i] ^ ((al[i] ^ bl[i]) & mask);
+        for (int i = 0; i < a.length; i++) {
+            long t = mask & (a[i] ^ b[i]);
+            a[i] ^= t;
+            b[i] ^= t;
         }
-        return a.withLimbs(rl);
     }
 
     /**
@@ -176,31 +183,48 @@ public final class FieldElement {
      * без ветвлений по значению. Работает только для простого p.
      */
     public FieldElement invert() {
-        // Вычисляем показатель e = p − 2 (как массив бит)
-        // p берём из mp, конвертируем через toBigInteger вспомогательный
-        BigInteger pBig = toBigInteger(mp.p, mp.n);
-        BigInteger exp = pBig.subtract(BigInteger.TWO);
+        int n = mp.n;
+        BigInteger exp = mp.expPMinus2;
         int bitLen = exp.bitLength();
 
-        // Square-and-multiply ladder (left-to-right), constant number of iterations
-        // r0 = 1 (нейтраль умножения), r1 = this
-        FieldElement r0 = FieldElement.one(mp);
-        FieldElement r1 = this;
+        // Пять предвыделенных буферов: 0 аллокаций на итерацию
+        // вместо ~6 в оригинале (2×selectFE + 2×montMul + 2×condSub).
+        // a, b — начальные r0=1, r1=this
+        // c, d — рабочие s0, s1 для результатов montMul
+        // t — временный буфер для CIOS
+        long[] a = new long[n];
+        long[] b = new long[n];
+        long[] c = new long[n];
+        long[] d = new long[n];
+        long[] t = new long[n + 2];
 
+        System.arraycopy(mp.rModP, 0, a, 0, n);
+        System.arraycopy(limbs, 0, b, 0, n);
+
+        long[] r0 = a, r1 = b, s0 = c, s1 = d;
+
+        // Лестница Монтгомери (square-and-multiply, слева направо).
+        // На каждой итерации:
+        //   1) cswap(r0, r1, bit) — если бит=1, обмен: квадрат пойдёт
+        //      в r0, а произведение в r1 (Montgomery ladder invariant)
+        //   2) s0 = r0*r1, s1 = r0²
+        //   3) cswap(s0, s1, bit) — обратный обмен, восстанавливающий
+        //      правильное положение: r0' = r0², r1' = r0*r1
+        //   4) ref-swap: r0 ссылается на s1, r1 на s0; старые буферы
+        //      переиспользуются как s0, s1 на следующей итерации
         for (int i = bitLen - 1; i >= 0; i--) {
             long bit = exp.testBit(i) ? 1L : 0L;
-            // CT-swap если бит = 1
-            FieldElement t0 = selectFE(r0, r1, bit);
-            FieldElement t1 = selectFE(r1, r0, bit);
-            // r0, r1 после swap
-            // double-and-add: r1 = r0*r1, r0 = r0^2
-            FieldElement newR1 = t0.multiply(t1);
-            FieldElement newR0 = t0.square();
-            // swap обратно
-            r0 = selectFE(newR0, newR1, bit);
-            r1 = selectFE(newR1, newR0, bit);
+            cswap(r0, r1, bit);
+            montMulBuf(r0, r1, t, s0, mp);
+            montMulBuf(r0, r0, t, s1, mp);
+            cswap(s0, s1, bit);
+
+            long[] tmp0 = r0, tmp1 = r1;
+            r0 = s1; r1 = s0;
+            s0 = tmp0; s1 = tmp1;
         }
-        return r0;
+
+        return new FieldElement(r0, mp);
     }
 
 
@@ -340,12 +364,18 @@ public final class FieldElement {
      * Koç, Acar, Kaliski — «Analyzing and Comparing Montgomery Multiplication Algorithms»
      * IEEE Micro 1996, Algorithm CIOS.
      */
+    // Hot-path multiply/square: свежие массивы, JIT знает t.length=n+2, out.length=n.
+    // bounds check elimination от new long[] — +12-15% vs буферной версии.
+    // CIOS-цикл (for i 0..n, for j 0..n) ДУБЛИРУЕТ montMulBuf(). Отличия:
+    //   — t и out выделяются здесь (montMulBuf получает готовые);
+    //   — t обнуляется через new long[] (montMulBuf — явным циклом).
+    // РЕГРЕССИЯ: тест montMulEqualsMontMulBuf улавливает расхождение.
     static long[] montMul(long[] a, long[] b, MontgomeryParams mp) {
         int n = mp.n;
-        long[] t = new long[n + 2];  // рабочий буфер с двумя guard-битами
+        long[] t = new long[n + 2];
+        long[] out = new long[n];
 
         for (int i = 0; i < n; i++) {
-            // Шаг 1: t = t + a[i]·b
             long carry = 0;
             for (int j = 0; j < n; j++) {
                 long lo = mulLo(a[i], b[j]);
@@ -360,10 +390,8 @@ public final class FieldElement {
             t[n] += carry;
             t[n + 1] += Long.compareUnsigned(t[n], carry) < 0 ? 1L : 0L;
 
-            // Шаг 2: редукция — вычисляем m = t[0]·m0 mod 2^64
-            long m = t[0] * mp.m0;  // нижние 64 бита произведения
+            long m = t[0] * mp.m0;
 
-            // t = t + m·p
             carry = 0;
             for (int j = 0; j < n; j++) {
                 long lo = mulLo(m, mp.p[j]);
@@ -380,15 +408,68 @@ public final class FieldElement {
             t[n] = sum;
             t[n + 1] += c1;
 
-            // Сдвиг: t >>= 64 (отбрасываем t[0], который стал 0)
             System.arraycopy(t, 1, t, 0, n + 1);
             t[n + 1] = 0;
         }
 
-        // Финальная условная редукция: если t >= p, вернуть t - p
-        long[] result = new long[n];
-        System.arraycopy(t, 0, result, 0, n);
-        return conditionalSubtract(result, mp.p, t[n]);
+        System.arraycopy(t, 0, out, 0, n);
+        conditionalSubtract(out, mp.p, t[n], out);
+        return out;
+    }
+
+    // Буферная версия montMul для hot-path в invert().
+    // Параметры:
+    //   t   — рабочий буфер размера n+2 (переиспользуется между вызовами)
+    //   out — результат размера n (предвыделен, перезаписывается)
+    // Вызов conditionalSubtract(out, ..., out) безопасен: каждая итерация
+    // читает out[i] до записи, коллизии индексов нет.
+    // CIOS-цикл (for i 0..n, for j 0..n) ДУБЛИРУЕТ montMul(). Отличия:
+    //   — t и out получены извне (montMul выделяет сам);
+    //   — t обнуляется явным циклом (montMul — через new long[]).
+    // РЕГРЕССИЯ: тест montMulEqualsMontMulBuf улавливает расхождение.
+    static void montMulBuf(long[] a, long[] b, long[] t, long[] out, MontgomeryParams mp) {
+        int n = mp.n;
+        for (int j = 0; j < n + 2; j++) t[j] = 0L;
+
+        for (int i = 0; i < n; i++) {
+            long carry = 0;
+            for (int j = 0; j < n; j++) {
+                long lo = mulLo(a[i], b[j]);
+                long hi = mulHi(a[i], b[j]);
+                long sum = t[j] + lo;
+                long c1 = Long.compareUnsigned(sum, t[j]) < 0 ? 1L : 0L;
+                sum += carry;
+                long c2 = Long.compareUnsigned(sum, carry) < 0 ? 1L : 0L;
+                t[j] = sum;
+                carry = hi + c1 + c2;
+            }
+            t[n] += carry;
+            t[n + 1] += Long.compareUnsigned(t[n], carry) < 0 ? 1L : 0L;
+
+            long m = t[0] * mp.m0;
+
+            carry = 0;
+            for (int j = 0; j < n; j++) {
+                long lo = mulLo(m, mp.p[j]);
+                long hi = mulHi(m, mp.p[j]);
+                long sum = t[j] + lo;
+                long c1 = Long.compareUnsigned(sum, t[j]) < 0 ? 1L : 0L;
+                sum += carry;
+                long c2 = Long.compareUnsigned(sum, carry) < 0 ? 1L : 0L;
+                t[j] = sum;
+                carry = hi + c1 + c2;
+            }
+            long sum = t[n] + carry;
+            long c1 = Long.compareUnsigned(sum, t[n]) < 0 ? 1L : 0L;
+            t[n] = sum;
+            t[n + 1] += c1;
+
+            System.arraycopy(t, 1, t, 0, n + 1);
+            t[n + 1] = 0;
+        }
+
+        System.arraycopy(t, 0, out, 0, n);
+        conditionalSubtract(out, mp.p, t[n], out);
     }
 
     /**
@@ -454,7 +535,7 @@ public final class FieldElement {
             lt |= aLtP & ~gt & ~lt;
         }
         // ge = 1 если overflow, ИЛИ a > p, ИЛИ a == p
-        long ge = overflowBit | gt | (~lt & ~gt & 1L);
+        long ge = overflowBit | gt | (1L ^ (lt | gt));
 
         // mask: 0 → не вычитать, -1L (все биты 1) → вычитать
         long mask = -ge;
@@ -471,6 +552,31 @@ public final class FieldElement {
             result[i] = d;
         }
         return result;
+    }
+
+    // Версия без аллокации для hot-path: записывает результат в переданный out.
+    // out может совпадать с a — чтение a[i] предшествует записи out[i].
+    private static void conditionalSubtract(long[] a, long[] p, long overflowBit, long[] out) {
+        int n = a.length;
+        long gt = 0, lt = 0;
+        for (int i = n - 1; i >= 0; i--) {
+            long aGtP = Long.compareUnsigned(a[i], p[i]) > 0 ? 1L : 0L;
+            long aLtP = Long.compareUnsigned(a[i], p[i]) < 0 ? 1L : 0L;
+            gt |= aGtP & ~lt & ~gt;
+            lt |= aLtP & ~gt & ~lt;
+        }
+        long ge = overflowBit | gt | (1L ^ (lt | gt));
+        long mask = -ge;
+        long borrow = 0;
+        for (int i = 0; i < n; i++) {
+            long sub = p[i] & mask;
+            long diff = a[i] - sub;
+            long borrowSub = Long.compareUnsigned(a[i], sub) < 0 ? 1L : 0L;
+            long d = diff - borrow;
+            long borrowCin = Long.compareUnsigned(diff, borrow) < 0 ? 1L : 0L;
+            borrow = borrowSub | borrowCin;
+            out[i] = d;
+        }
     }
 
     // -------------------------------------------------------------------------

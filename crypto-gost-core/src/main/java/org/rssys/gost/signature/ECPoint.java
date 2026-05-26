@@ -43,7 +43,6 @@ public final class ECPoint {
   public BigInteger getY() { return y.toBigInteger(); }
 
   public ECPoint twice() {
-    if (isInfinity()) return this;
     FieldElement y2 = y.square();
     FieldElement s  = x.multiply(y2).shiftLeft(2);
     FieldElement m;
@@ -64,7 +63,17 @@ public final class ECPoint {
     FieldElement nx = m.square().subtract(s.shiftLeft(1));
     FieldElement ny = m.multiply(s.subtract(nx)).subtract(y2.square().shiftLeft(3));
     FieldElement nz = y.multiply(z).shiftLeft(1);
-    return new ECPoint(nx, ny, nz, params);
+
+    // CT-select: если isInfinity → this, иначе → новый результат
+    long[] zLimbs = z.limbs();
+    long zAcc = 0;
+    for (long limb : zLimbs) zAcc |= limb;
+    long isInf = (~(zAcc | -zAcc)) >>> 63;
+
+    FieldElement rx = selectFE(nx, x, isInf);
+    FieldElement ry = selectFE(ny, y, isInf);
+    FieldElement rz = selectFE(nz, z, isInf);
+    return new ECPoint(rx, ry, rz, params);
   }
 
   public ECPoint add(ECPoint other) {

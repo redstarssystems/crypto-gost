@@ -397,6 +397,8 @@ class TlsCertificateTest {
         byte[] ocspBytes = TlsTestHelper.buildDummyOcspResponse();
         TlsMessageBuilder builder = new TlsMessageBuilder(
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                        TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
                 0x0022, 0x0709, bundle.priv, List.of(bundle.cert), 32);
         byte[] certBody = builder.buildCertificateBody(ocspBytes);
         List<TlsCertificate> chain = TlsMessageParser.parseCertificate(certBody);

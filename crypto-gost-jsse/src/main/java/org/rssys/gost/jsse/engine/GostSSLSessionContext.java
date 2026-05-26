@@ -247,7 +247,7 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     PskEntry getForClientResumption(String host, int port) {
         byte[] identity = identityByHost.get(new HostPort(host, port));
         if (identity == null) return null;
-        return pskStore.get(identity);
+        return pskStore.peek(identity);
     }
 
     /**

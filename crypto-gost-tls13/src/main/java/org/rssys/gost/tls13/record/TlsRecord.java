@@ -92,6 +92,7 @@ public final class TlsRecord {
     /** Обнуляет ключи, IV, scratch-буферы и сбрасывает seqNum. */
     public void destroy() {
         treeCache.destroy();
+        mgm.destroy();
         TlsUtils.wipeArray(startKey);
         TlsUtils.wipeArray(startIv);
         TlsUtils.wipeArray(innerPlaintext);
@@ -118,7 +119,16 @@ public final class TlsRecord {
     }
 
     /**
-     * Устанавливает порядковый номер (для синхронизации после смены ключей).
+     * Устанавливает порядковый номер записи.
+     * <p>
+     * <b>Назначение:</b> только для тестов и бенчмарков. В production-коде не используется —
+     * смена ключей (KeyUpdate, RFC 8446 §7.2) создаёт новый экземпляр {@code TlsRecord}
+     * с новым ключом и {@code seqNum = 0}.
+     * <p>
+     * <b>Внимание:</b> НЕ вызывать на активном {@code TlsRecord}. При фиксированном
+     * {@code startKey} / {@code startIv} установка {@code seqNum} в уже использованное
+     * значение приводит к повтору nonce ({@code nonce = startIv XOR seqNum}) при очередном
+     * вызове {@link #protect}. Повтор nonce при одном ключе — нарушение безопасности MGM.
      *
      * @param seqNum порядковый номер
      */

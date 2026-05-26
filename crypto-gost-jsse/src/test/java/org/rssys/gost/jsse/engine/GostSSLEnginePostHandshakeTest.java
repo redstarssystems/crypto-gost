@@ -116,13 +116,12 @@ class GostSSLEnginePostHandshakeTest {
     }
 
     @Test
-    @DisplayName("Один тикет — один get: второй вызов возвращает null (RFC 8446 §8.1)")
+    @DisplayName("PSK: peek не сжигает тикет, только явный remove")
     void pskTicketSingleUse() throws Exception {
-        // WHY: RFC 8446 §8.1 требует одноразовости PSK для защиты от replay.
-        // InMemoryPskStore.get() атомарно удаляет запись при чтении.
-        // Этот тест верифицирует что повторный get с тем же тикетом
-        // возвращает null — регрессия была бы незаметна через socket-тесты,
-        // т.к. оба соединения проходят успешно в обоих случаях.
+        // WHY: клиентский peek() не удаляет запись — тикет должен быть
+        // удалён только после подтверждения PSK сервером (ServerHello c PSK).
+        // Тест верифицирует: (1) peek отдаёт тикет, (2) повторный peek
+        // тоже отдаёт (не потреблён), (3) после явного remove — null.
         GostSSLSessionContext ctx = new GostSSLSessionContext(cs, cs.getHashLen());
         byte[] rms = new byte[32];
         byte[] nonce = new byte[8];
@@ -135,9 +134,12 @@ class GostSSLEnginePostHandshakeTest {
         ctx.saveNewSessionTicket("host", PSK_BINDING_PORT, rms, nstBody);
 
         assertNotNull(ctx.getForClientResumption("host", PSK_BINDING_PORT),
-                "PSK должен быть доступен при первом запросе");
+                "PSK доступен при первом запросе");
+        assertNotNull(ctx.getForClientResumption("host", PSK_BINDING_PORT),
+                "peek не сжигает тикет — второй запрос тоже не null");
+        ctx.getPskStore().remove(ticket);
         assertNull(ctx.getForClientResumption("host", PSK_BINDING_PORT),
-                "Тот же PSK не должен быть доступен повторно (RFC 8446 §8.1)");
+                "После явного remove тикет недоступен");
     }
 
     // ========================================================================

@@ -252,6 +252,7 @@ class TlsMessageParserTest {
 
         TlsMessageBuilder builder = new TlsMessageBuilder(
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
                 TlsConstants.GRP_GC256A, TlsConstants.SIG_GOST_TC26_A_256,
                 kp.getPrivate(), Collections.emptyList(), 32);
         byte[] ch = builder.buildClientHello(point);
@@ -299,6 +300,7 @@ class TlsMessageParserTest {
 
         TlsMessageBuilder builder = new TlsMessageBuilder(
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
                 TlsConstants.GRP_GC256A, TlsConstants.SIG_GOST_TC26_A_256,
                 kp.getPrivate(), Collections.emptyList(), 32);
         byte[] ch = builder.buildClientHelloWithPsk(point, new byte[8], 42L);
@@ -430,6 +432,7 @@ class TlsMessageParserTest {
 
         TlsMessageBuilder builder = new TlsMessageBuilder(
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
                 TlsConstants.GRP_GC256A, TlsConstants.SIG_GOST_TC26_A_256,
                 kp.getPrivate(), Collections.emptyList(), 32);
         byte[] chBody = builder.buildClientHello(point, "Example.COM.");

@@ -94,14 +94,34 @@ public final class InMemoryPskStore implements PskStore {
         // Если тикет expired — возвращаем null, запись уже удалена.
         PskEntry entry = store.remove(key);
         if (entry == null) return null;
-        if (entry.isExpired(System.currentTimeMillis())) return null;
+        if (entry.isExpired(System.currentTimeMillis())) {
+            entry.destroyPsk();
+            return null;
+        }
+        return entry;
+    }
+
+    @Override
+    public PskEntry peek(byte[] ticket) {
+        ByteArrayKey key = new ByteArrayKey(ticket);
+        PskEntry entry = store.get(key);
+        if (entry == null) return null;
+        if (entry.isExpired(System.currentTimeMillis())) {
+            return null;
+        }
         return entry;
     }
 
     @Override
     public void evictExpired() {
         long now = System.currentTimeMillis();
-        store.values().removeIf(e -> e.isExpired(now));
+        store.values().removeIf(e -> {
+            if (e.isExpired(now)) {
+                e.destroyPsk();
+                return true;
+            }
+            return false;
+        });
     }
 
     @Override

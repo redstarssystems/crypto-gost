@@ -99,6 +99,17 @@ public final class Mgm {
     // Batch-буфер для CTR-гаммы — BATCH блоков, выделяется один раз
     private final byte[] gammaBuf = new byte[BATCH * BLOCK];
 
+    // Scratch-буферы таблицы GF(2^128) — без аллокаций на горячем пути
+    private final long[] mulTabHi = new long[16];
+    private final long[] mulTabLo = new long[16];
+
+    /**
+     * Результат последнего вызова {@link #gf128MulTo}.
+     * Перезаписывается при каждом вызове — прочитать немедленно.
+     * Содержит X⊗Y в GF(2^128).
+     */
+    private long mulResHi, mulResLo;
+
     /**
      * Создаёт MGM с тегом размером с блок шифра (16 байт для Кузнечика).
      *
@@ -430,8 +441,9 @@ public final class Mgm {
      *   Z_{i+1} = incr_l(Z_i)
      * </pre>
      *
-     * Нулевых аллокаций: {@link Kuznyechik#encryptToFields} пишет H_i прямо в поля шифра,
-     * {@link #gf128MulAccum} накапливает результат в {@code sumHi}/{@code sumLo}.
+     * Без аллокаций в куче (scratch-поля): {@link Kuznyechik#encryptToFields} пишет H_i
+     * прямо в поля шифра, {@link #gf128MulAccum} использует scratch-буферы {@code mulTabHi}/
+     * {@code mulTabLo} и накапливает результат в {@code sumHi}/{@code sumLo}.
      */
     private void macStep(long bhi, long blo) {
         // H_i = E(K, Z_i)
@@ -459,9 +471,9 @@ public final class Mgm {
 
         // finSum = sum ^ (H (*) lenBlock), где lenBlock = (aadBitLen || ctBitLen)
         // Длины в битах помещаются в 64 бита → hi-части lenBlock = 0, используем только lo
-        gf128MulAccumTo(hhi, hlo, aadBitLen, ctBitLen);
-        long fsHi = sumHi ^ tmpHi;
-        long fsLo = sumLo ^ tmpLo;
+        gf128MulTo(hhi, hlo, aadBitLen, ctBitLen);
+        long fsHi = sumHi ^ mulResHi;
+        long fsLo = sumLo ^ mulResLo;
 
         // T = MSB_S(E(K, finSum))
         cipher.encryptToFields(fsHi, fsLo);
@@ -502,8 +514,8 @@ public final class Mgm {
     // -----------------------------------------------------------------------
 
     /**
-     * Накапливает {@code sum ^= X ⊗ Y} в GF(2^128). Нет аллокаций.
-     * Используется в {@link #macStep} на горячем пути.
+     * Вычисляет {@code result = X ⊗ Y} в GF(2^128) и сохраняет в {@link #mulResHi}/{@link #mulResLo}.
+     * Таблица строится в scratch-полях {@link #mulTabHi}/{@link #mulTabLo} — без аллокаций в куче.
      *
      * <h3>Алгоритм: 4-битный Horner</h3>
      * Вместо 128 итераций по 1 биту — 32 итерации по 4 бита (nibble) с
@@ -521,47 +533,36 @@ public final class Mgm {
      * </pre>
      * {@code mulW4(r)} = r · w^4: 4 последовательных multiply-by-w,
      * каждый = 2 сдвига + 1 условный XOR с 0x87.
-     *
-     * <p>Итого: ~60 op (таблица) + 32 × ~14 op (цикл) ≈ 510 op
-     * против ~896 op (1-bit) → ускорение ~1.75×.
      */
-    private void gf128MulAccum(long xHi, long xLo, long yHi, long yLo) {
-        // ---- Шаг 1: tab[k] = k · Y ----
-        final long[] tabHi = new long[16];
-        final long[] tabLo = new long[16];
-        tabHi[1] = yHi;  tabLo[1] = yLo;
+    private void gf128MulTo(long xHi, long xLo, long yHi, long yLo) {
+        // ---- Шаг 1: tab[k] = k · Y в scratch-полях mulTabHi/mulTabLo ----
+        mulTabHi[1] = yHi;  mulTabLo[1] = yLo;
         for (int k = 2; k < 16; k++) {
             if ((k & 1) == 0) {
-                // tab[k] = tab[k/2] · w
-                long ph = tabHi[k >> 1], pl = tabLo[k >> 1];
+                long ph = mulTabHi[k >> 1], pl = mulTabLo[k >> 1];
                 long msb = ph >>> 63;
-                tabHi[k] = (ph << 1) | (pl >>> 63);
-                tabLo[k] = (pl << 1) ^ (GF128_POLY & -msb);
+                mulTabHi[k] = (ph << 1) | (pl >>> 63);
+                mulTabLo[k] = (pl << 1) ^ (GF128_POLY & -msb);
             } else {
-                // tab[k] = tab[k-1] ^ Y
-                tabHi[k] = tabHi[k - 1] ^ yHi;
-                tabLo[k] = tabLo[k - 1] ^ yLo;
+                mulTabHi[k] = mulTabHi[k - 1] ^ yHi;
+                mulTabLo[k] = mulTabLo[k - 1] ^ yLo;
             }
         }
 
         // ---- Шаг 2: Horner, 32 nibble от MSB к LSB ----
         long rHi = 0L, rLo = 0L;
 
-        // 16 nibbles из xHi: биты 127..64, по 4 бита (старший nibble = биты 127:124)
         for (int shift = 60; shift >= 0; shift -= 4) {
-            // mulW4(r): 4 × multiply-by-w, развёрнуто для скорости
             long m, h, l;
             m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
             m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
             m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
             m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            // ^ tab[nibble]
             int n = (int)(xHi >>> shift) & 0xF;
-            rHi ^= tabHi[n];
-            rLo ^= tabLo[n];
+            rHi ^= mulTabHi[n];
+            rLo ^= mulTabLo[n];
         }
 
-        // 16 nibbles из xLo: биты 63..0
         for (int shift = 60; shift >= 0; shift -= 4) {
             long m, h, l;
             m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
@@ -569,53 +570,22 @@ public final class Mgm {
             m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
             m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
             int n = (int)(xLo >>> shift) & 0xF;
-            rHi ^= tabHi[n];
-            rLo ^= tabLo[n];
+            rHi ^= mulTabHi[n];
+            rLo ^= mulTabLo[n];
         }
 
-        sumHi ^= rHi;
-        sumLo ^= rLo;
+        mulResHi = rHi;
+        mulResLo = rLo;
     }
 
-    // Scratch-поля для writeTag — не на горячем пути processBytes
-    private long tmpHi, tmpLo;
-
-    /** Как {@link #gf128MulAccum}, но результат → {@link #tmpHi}/{@link #tmpLo}. */
-    private void gf128MulAccumTo(long xHi, long xLo, long yHalfHi, long yHalfLo) {
-        final long[] tabHi = new long[16];
-        final long[] tabLo = new long[16];
-        tabHi[1] = yHalfHi; tabLo[1] = yHalfLo;
-        for (int k = 2; k < 16; k++) {
-            if ((k & 1) == 0) {
-                long ph = tabHi[k >> 1], pl = tabLo[k >> 1];
-                long msb = ph >>> 63;
-                tabHi[k] = (ph << 1) | (pl >>> 63);
-                tabLo[k] = (pl << 1) ^ (GF128_POLY & -msb);
-            } else {
-                tabHi[k] = tabHi[k - 1] ^ yHalfHi;
-                tabLo[k] = tabLo[k - 1] ^ yHalfLo;
-            }
-        }
-        long rHi = 0L, rLo = 0L;
-        for (int shift = 60; shift >= 0; shift -= 4) {
-            long m, h, l;
-            m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
-            m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
-            m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            int n = (int)(xHi >>> shift) & 0xF;
-            rHi ^= tabHi[n]; rLo ^= tabLo[n];
-        }
-        for (int shift = 60; shift >= 0; shift -= 4) {
-            long m, h, l;
-            m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
-            m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
-            m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            int n = (int)(xLo >>> shift) & 0xF;
-            rHi ^= tabHi[n]; rLo ^= tabLo[n];
-        }
-        tmpHi = rHi; tmpLo = rLo;
+    /**
+     * Накапливает {@code sum ^= X ⊗ Y} в GF(2^128). Без аллокаций в куче (scratch-поля).
+     * Используется в {@link #macStep} на горячем пути.
+     */
+    private void gf128MulAccum(long xHi, long xLo, long yHi, long yLo) {
+        gf128MulTo(xHi, xLo, yHi, yLo);
+        sumHi ^= mulResHi;
+        sumLo ^= mulResLo;
     }
 
     // -----------------------------------------------------------------------
@@ -678,6 +648,33 @@ public final class Mgm {
         LONG_BE.set(result, 0, rHi);
         LONG_BE.set(result, 8, rLo);
         return result;
+    }
+
+    /**
+     * Обнуляет всё состояние: делегирует {@link Kuznyechik#destroy()},
+     * затирает счётчики, аккумулятор MAC, ICN и scratch-буферы.
+     * После вызова экземпляр непригоден для использования.
+     */
+    public void destroy() {
+        cipher.destroy();
+        yHi = 0L; yLo = 0L;
+        zHi = 0L; zLo = 0L;
+        sumHi = 0L; sumLo = 0L;
+        aadBitLen = 0L;
+        ctBitLen = 0L;
+        if (icn != null) {
+            Arrays.fill(icn, (byte) 0);
+            icn = null;
+        }
+        Arrays.fill(partial, (byte) 0);
+        Arrays.fill(gammaBuf, (byte) 0);
+        Arrays.fill(mulTabHi, 0L);
+        Arrays.fill(mulTabLo, 0L);
+        mulResHi = 0L; mulResLo = 0L;
+        initialized = false;
+        forEncryption = false;
+        aadFinished = false;
+        finished = false;
     }
 
     private void checkInitialized() {

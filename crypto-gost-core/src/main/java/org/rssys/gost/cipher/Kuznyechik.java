@@ -36,7 +36,7 @@ import java.util.Arrays;
  * один lookup вместо двух, 16 PI-обращений на блок устранены.
  * <p>
  * Для расшифрования S⁻¹ применяется <em>после</em> L⁻¹, поэтому PI_INV нельзя встроить
- * в T_INV по входу. Вместо этого добавлены таблицы {@code SI_HI[p][b] / SI_LO[p][b]}
+ * в T_INV по входу. Вместо этого добавлена таблица {@code SI_HI[p][b]}
  * ({@code = (long)PI_INV[b] << (56-8·p)}) — применение S⁻¹ к 128-битному значению за
  * 16 lookups + 16 OR, без побайтовых shift-chains.
  *
@@ -152,21 +152,20 @@ public final class Kuznyechik implements BlockCipher {
     // Расшифрование (XSL⁻¹ = XOR + L⁻¹ + S⁻¹):
     //   T_INV_HI[i][x] = верхние 8 байт L⁻¹(e_i · x)  — без PI_INV
     //   T_INV_LO[i][x] = нижние  8 байт L⁻¹(e_i · x)  — без PI_INV
-    //   S⁻¹ применяется отдельно после сборки L⁻¹-результата через SI_HI/SI_LO.
+    //   S⁻¹ применяется отдельно после сборки L⁻¹-результата через SI_HI.
     //
     // S⁻¹ как long-таблица (расшифрование):
-    //   SI_HI[p][b] = (long)PI_INV[b] << (56 - 8·p)  для позиции байта p в hi-части
-    //   SI_LO[p][b] = (long)PI_INV[b] << (56 - 8·p)  для позиции байта p в lo-части
+    //   SI_HI[p][b] = (long)PI_INV[b] << (56 - 8·p)  (одна таблица для hi и lo:
+    //   позиция байта p внутри 64-битного слова не зависит от hi/lo)
     //   Применение S⁻¹ к паре (rhi, rlo): 16 lookups + 16 OR — без shift-chains.
     //
-    // Суммарный размер: ≈ 164 КБ — L2-resident на современных CPU.
+    // Суммарный размер: ≈ 144 КБ — L2-resident на современных CPU.
     // -----------------------------------------------------------------------
     private static final long[][] T_HI_S   = new long[16][256];
     private static final long[][] T_LO_S   = new long[16][256];
     private static final long[][] T_INV_HI = new long[16][256];
     private static final long[][] T_INV_LO = new long[16][256];
     private static final long[][] SI_HI    = new long[8][256];
-    private static final long[][] SI_LO    = new long[8][256];
 
     static {
         buildAllTables();
@@ -240,7 +239,6 @@ public final class Kuznyechik implements BlockCipher {
             for (int b = 0; b < 256; b++) {
                 long v = (long) PI_INV[b] << shift;
                 SI_HI[p][b] = v;
-                SI_LO[p][b] = v;
             }
         }
     }
@@ -292,9 +290,12 @@ public final class Kuznyechik implements BlockCipher {
             throw new IllegalArgumentException(
                     "invalid key size: " + key.length + " bytes, required " + KEY_SIZE + " bytes");
         }
+        Arrays.fill(skHi, 0L);
+        Arrays.fill(skLo, 0L);
+        this.keyInitialized = false;
         this.forEncryption  = forEncryption;
-        this.keyInitialized = true;
         generateSubKeys(key);
+        this.keyInitialized = true;
     }
 
     @Override
@@ -311,6 +312,20 @@ public final class Kuznyechik implements BlockCipher {
     @Override
     public void reset() {
         // subKeys не изменяются при обработке блоков — сброс не требуется
+        encBufHi = 0L;
+        encBufLo = 0L;
+    }
+
+    /**
+     * Обнуляет раундовые ключи, scratch-поля и сбрасывает флаг инициализации.
+     * После вызова экземпляр можно повторно инициализировать через {@link #init}.
+     */
+    public void destroy() {
+        Arrays.fill(skHi, 0L);
+        Arrays.fill(skLo, 0L);
+        encBufHi = 0L;
+        encBufLo = 0L;
+        keyInitialized = false;
     }
 
     // -----------------------------------------------------------------------
@@ -339,9 +354,9 @@ public final class Kuznyechik implements BlockCipher {
     // -----------------------------------------------------------------------
     // Расшифрование: 9 раундов XSL⁻¹ + финальный XOR с K0
     //
-    // XSL⁻¹ = XOR с ключом → L⁻¹ (через T_INV) → S⁻¹ (через SI_HI/SI_LO).
+    // XSL⁻¹ = XOR с ключом → L⁻¹ (через T_INV) → S⁻¹ (через SI_HI).
     // Порядок S⁻¹ после L⁻¹ делает невозможным встраивание PI_INV в T_INV по входу
-    // (в отличие от шифрования). SI_HI[p][b] / SI_LO[p][b] хранят (long)PI_INV[b]
+    // (в отличие от шифрования). SI_HI[p][b] хранит (long)PI_INV[b]
     // сдвинутый на позицию p — побайтовый OR собирает результат без shift-chains.
     // -----------------------------------------------------------------------
     private void decryptBlockInlined(byte[] in, int inOff, byte[] out, int outOff) {
@@ -356,16 +371,16 @@ public final class Kuznyechik implements BlockCipher {
             long rhi = invLHi(xhi, xlo);
             long rlo = invLLo(xhi, xlo);
 
-            // S⁻¹ через SI_HI/SI_LO: каждый байт вносит вклад на свою позицию в long
+            // S⁻¹ через SI_HI: каждый байт вносит вклад на свою позицию в long
             hi = SI_HI[0][(int)(rhi >>> 56) & 0xFF] | SI_HI[1][(int)(rhi >>> 48) & 0xFF]
                     | SI_HI[2][(int)(rhi >>> 40) & 0xFF] | SI_HI[3][(int)(rhi >>> 32) & 0xFF]
                     | SI_HI[4][(int)(rhi >>> 24) & 0xFF] | SI_HI[5][(int)(rhi >>> 16) & 0xFF]
                     | SI_HI[6][(int)(rhi >>>  8) & 0xFF] | SI_HI[7][(int) rhi          & 0xFF];
 
-            lo = SI_LO[0][(int)(rlo >>> 56) & 0xFF] | SI_LO[1][(int)(rlo >>> 48) & 0xFF]
-                    | SI_LO[2][(int)(rlo >>> 40) & 0xFF] | SI_LO[3][(int)(rlo >>> 32) & 0xFF]
-                    | SI_LO[4][(int)(rlo >>> 24) & 0xFF] | SI_LO[5][(int)(rlo >>> 16) & 0xFF]
-                    | SI_LO[6][(int)(rlo >>>  8) & 0xFF] | SI_LO[7][(int) rlo          & 0xFF];
+            lo = SI_HI[0][(int)(rlo >>> 56) & 0xFF] | SI_HI[1][(int)(rlo >>> 48) & 0xFF]
+                    | SI_HI[2][(int)(rlo >>> 40) & 0xFF] | SI_HI[3][(int)(rlo >>> 32) & 0xFF]
+                    | SI_HI[4][(int)(rlo >>> 24) & 0xFF] | SI_HI[5][(int)(rlo >>> 16) & 0xFF]
+                    | SI_HI[6][(int)(rlo >>>  8) & 0xFF] | SI_HI[7][(int) rlo          & 0xFF];
         }
 
         // Финальный XOR с K0

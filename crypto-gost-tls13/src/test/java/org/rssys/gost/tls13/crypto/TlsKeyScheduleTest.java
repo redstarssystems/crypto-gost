@@ -153,9 +153,9 @@ class TlsKeyScheduleTest {
         TlsKeySchedule ks = new TlsKeySchedule(
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.deriveHandshakeSecret(new byte[32]);
-        ks.deriveMasterSecret();
         byte[] transcript = hash256("test".getBytes());
         byte[] hsSecret = ks.getServerHandshakeTrafficSecret(transcript);
+        ks.deriveMasterSecret();
         byte[] apSecret = ks.getServerApplicationTrafficSecret(transcript);
         assertFalse(Arrays.equals(
                 ks.deriveTrafficKeys(hsSecret).getKey(),
@@ -248,10 +248,10 @@ class TlsKeyScheduleTest {
     @DisplayName("application ключи отличаются от handshake ключей")
     void testapplicationKeysDifferFromHandshakeKeys() {
         TlsKeySchedule ks = createKeySchedule256();
-        ks.deriveMasterSecret();
 
         byte[] hsTranscript = hash256("handshake transcript".getBytes());
         TlsTrafficKeys hsServerKeys = deriveKeys(ks, ks.getServerHandshakeTrafficSecret(hsTranscript));
+        ks.deriveMasterSecret();
 
         byte[] apTranscript = hash256("application transcript".getBytes());
         TlsTrafficKeys apServerKeys = deriveKeys(ks, ks.getServerApplicationTrafficSecret(apTranscript));

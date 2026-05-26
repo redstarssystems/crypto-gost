@@ -1941,6 +1941,7 @@ class TlsSessionTest {
         PskStore throwingStore = new PskStore() {
             @Override public PskEntry get(byte[] ticket) { return null; }
             @Override public PskEntry getForResumption() { return null; }
+            @Override public PskEntry peek(byte[] ticket) { return null; }
             @Override public void remove(byte[] ticket) {}
             @Override public int size() { return 0; }
             @Override public void evictExpired() {}
@@ -1989,6 +1990,7 @@ class TlsSessionTest {
         PskStore throwingStore = new PskStore() {
             @Override public PskEntry get(byte[] ticket) { return null; }
             @Override public PskEntry getForResumption() { return null; }
+            @Override public PskEntry peek(byte[] ticket) { return null; }
             @Override public void remove(byte[] ticket) {}
             @Override public int size() { return 0; }
             @Override public void evictExpired() {}
@@ -2686,6 +2688,7 @@ class TlsSessionTest {
         byte[] ecdhePoint = TlsEncoding.encodePoint(KeyGenerator.generateKeyPair(
                 ECParameters.tc26a256()).getPublic());
         TlsMessageBuilder builder = new TlsMessageBuilder(getCsL(),
+                List.of(getCsL().getId()),
                 TlsConstants.GRP_GC256A, TlsConstants.SIG_GOST_TC26_A_256,
                 (PrivateKeyParameters) null, (List<TlsCertificate>) null, 32);
         byte[] chBody = builder.buildClientHelloWithPsk(ecdhePoint, ticket, ticketAgeAdd);

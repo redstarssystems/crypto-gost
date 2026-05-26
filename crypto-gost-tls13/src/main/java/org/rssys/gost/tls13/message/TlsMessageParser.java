@@ -480,6 +480,7 @@ public final class TlsMessageParser {
         int sessionIdLen = body[pos] & 0xFF;
         checkBounds(body, pos, 1 + sessionIdLen, ctx);
         pos += 1 + sessionIdLen;
+        checkBounds(body, pos, 3, ctx);
         int cipherSuiteId = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
         pos += 2; // cipher suite
         pos += 1; // compression
@@ -823,7 +824,8 @@ public final class TlsMessageParser {
                 int identitiesLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
                 if (identitiesLen < 4) return null;
                 int identityLen = ((body[pos + 2] & 0xFF) << 8) | (body[pos + 3] & 0xFF);
-                if (2 + identitiesLen > extDataLen || identityLen < 1) return null;
+                if (2 + identitiesLen > extDataLen || identityLen < 1
+                        || identityLen + 6 > identitiesLen) return null;
                 return Arrays.copyOfRange(body, pos + 4, pos + 4 + identityLen);
             }
             pos += extDataLen;

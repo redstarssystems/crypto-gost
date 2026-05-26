@@ -128,7 +128,7 @@ public final class ECDSASigner implements Destroyable {
     BigInteger k = generateK(hash);
 
     // Используем constant-time multiply (лестница Монтгомери) без предвычисленных таблиц
-    ECPoint rPoint = cachedG.multiply(k).normalize();
+    ECPoint rPoint = cachedG.multiply(k);
     BigInteger r = rPoint.getX().mod(params.n);
 
     BigInteger dVal = new BigInteger(1, dBytes);

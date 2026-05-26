@@ -242,6 +242,12 @@ public final class TlsOcspVerifier {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "OCSP: thisUpdate missing");
         }
+        long clockSkewMs = 5 * 60 * 1000L;
+        if (TlsDerParser.parseTime(der, timePos)
+                .after(new Date(System.currentTimeMillis() + clockSkewMs))) {
+            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                    "OCSP: thisUpdate is in the future");
+        }
         timePos = TlsDerParser.readTlv(der, timePos)[1];
         if (timePos < srSeq[1] && (der[timePos] & 0xFF) == 0xA0) {
             int[] nuExplTlv = TlsDerParser.readTlv(der, timePos);

@@ -30,6 +30,7 @@ import java.util.Locale;
 public final class TlsMessageBuilder {
 
     private final TlsCiphersuite ciphersuite;
+    private final List<Integer> offeredCipherSuiteIds;
     private final int selectedNamedGroup;
     private int selectedSigScheme;
     private final PrivateKeyParameters ourPrivateKey;
@@ -90,25 +91,35 @@ public final class TlsMessageBuilder {
     };
 
     /**
-     * @param ciphersuite       cipher suite (определяет AEAD, KDF, TLSTREE-константы)
-     * @param selectedNamedGroup выбранная именованная группа (по умолчанию GC256A)
-     * @param selectedSigScheme  схема подписи для CertificateVerify
-     * @param ourPrivateKey     закрытый ключ для подписи (null для клиента без аутентификации)
-     * @param ourCertificateChain цепочка сертификатов (leaf первый, root последний; null для клиента без аутентификации)
-     * @param hashLen           32 для Streebog-256, 64 для Streebog-512
+     * @param ciphersuite           cipher suite (определяет AEAD, KDF, TLSTREE-константы)
+     * @param offeredCipherSuiteIds список cipher suite ID для отправки в ClientHello
+     * @param selectedNamedGroup    выбранная именованная группа (по умолчанию GC256A)
+     * @param selectedSigScheme     схема подписи для CertificateVerify
+     * @param ourPrivateKey        закрытый ключ для подписи (null для клиента без аутентификации)
+     * @param ourCertificateChain  цепочка сертификатов (leaf первый, root последний; null для клиента без аутентификации)
+     * @param hashLen              32 для Streebog-256, 64 для Streebog-512
      */
     public TlsMessageBuilder(TlsCiphersuite ciphersuite,
+                             List<Integer> offeredCipherSuiteIds,
                              int selectedNamedGroup,
                              int selectedSigScheme,
                              PrivateKeyParameters ourPrivateKey,
                              List<TlsCertificate> ourCertificateChain,
                              int hashLen) {
         this.ciphersuite = ciphersuite;
+        this.offeredCipherSuiteIds = offeredCipherSuiteIds;
         this.selectedNamedGroup = selectedNamedGroup;
         this.selectedSigScheme = selectedSigScheme;
         this.ourPrivateKey = ourPrivateKey;
         this.ourCertificateChain = ourCertificateChain;
         this.hashLen = hashLen;
+    }
+
+    /**
+     * @return список cipher suite ID, отправленных в ClientHello
+     */
+    public List<Integer> getOfferedCipherSuiteIds() {
+        return offeredCipherSuiteIds;
     }
 
     /**
@@ -460,18 +471,18 @@ public final class TlsMessageBuilder {
 
     /**
      * Собирает preamble ClientHello: legacy_version, random, legacy_session_id,
-     * cipher_suites (2 ГОСТ-набора), compression_methods.
+     * cipher_suites (из {@link #offeredCipherSuiteIds}), compression_methods.
      * <p>
-     * Фиксированный размер 43 байта: 2 + 32 + 1 + 4 + 2 + 1 = 42,
-     * но cipher_suites имеют 2-байтовый заголовок длины, итого 43.
+     * Размер: 39 + 2 × количество cipher suites.
      *
-     * @return preamble ClientHello (43 байта)
+     * @return preamble ClientHello (размер зависит от числа cipher suites)
      */
     private byte[] buildClientHelloPreamble() {
         byte[] random = new byte[TlsConstants.RANDOM_LENGTH];
         CryptoRandom.INSTANCE.nextBytes(random);
 
-        byte[] out = new byte[43];
+        int suitesBytes = offeredCipherSuiteIds.size() * 2;
+        byte[] out = new byte[39 + suitesBytes];
         int pos = 0;
         out[pos++] = TlsConstants.LEGACY_VERSION_MAJOR;
         out[pos++] = TlsConstants.LEGACY_VERSION_MINOR;
@@ -479,13 +490,13 @@ public final class TlsMessageBuilder {
         pos += TlsConstants.RANDOM_LENGTH;
         out[pos++] = 0;  // legacy_session_id length — всегда пусто в TLS 1.3
 
-        // cipher suites: длина(2) + 2 набора × 2 байта
-        out[pos++] = 0x00;
-        out[pos++] = 0x04;
-        out[pos++] = (byte) (TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L >>> 8);
-        out[pos++] = (byte) TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        out[pos++] = (byte) (TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S >>> 8);
-        out[pos++] = (byte) TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S;
+        // cipher suites: длина(2) + N наборов × 2 байта
+        out[pos++] = (byte) (suitesBytes >>> 8);
+        out[pos++] = (byte) suitesBytes;
+        for (int id : offeredCipherSuiteIds) {
+            out[pos++] = (byte) (id >>> 8);
+            out[pos++] = (byte) id;
+        }
 
         out[pos++] = 0x01;  // длина списка методов сжатия (только null)
         out[pos  ] = 0x00;  // null compression — RFC 8446 §4.1.2: MUST be present, single 0x00

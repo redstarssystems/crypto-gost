@@ -215,9 +215,9 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         } catch (TlsException e) {
             String msg = e.getMessage();
             if (msg != null && (msg.contains("revoked") || msg.contains("OCSP"))) {
-                LOG.log(Level.ERROR, "Revocation status: {0}", msg);
+                LOG.log(Level.WARNING, "Revocation status: {0}", msg);
             } else {
-                LOG.log(Level.ERROR, "Certificate validation failed: {0}",
+                LOG.log(Level.WARNING, "Certificate validation failed: {0}",
                         msg != null && msg.length() > 200 ? msg.substring(0, 200) : msg);
             }
             throw new CertificateException("Certificate validation failed: " + msg, e);

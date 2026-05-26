@@ -197,6 +197,8 @@ public final class TlsSession implements AutoCloseable {
                 ? resolveSigScheme(leafCert)
                 : TlsConstants.SIG_GOST_TC26_A_256;
         this.messageBuilder = new TlsMessageBuilder(ciphersuite,
+                List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                        TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
                 selectedNamedGroup, selectedSigScheme,
                 ourPrivateKey, ourCertificateChain, hashLen);
     }

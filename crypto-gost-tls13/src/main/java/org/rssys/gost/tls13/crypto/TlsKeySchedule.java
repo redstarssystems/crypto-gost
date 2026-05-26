@@ -76,6 +76,7 @@ public final class TlsKeySchedule {
         byte[] derived = HkdfStreebog.deriveSecret(
                 early, TlsConstants.LABEL_DERIVED, emptyHash, hashLen);
         try {
+            TlsUtils.wipeArray(handshakeSecret);
             handshakeSecret = HkdfStreebog.extract(derived, ecdheSharedSecret, hashLen);
         } finally {
             TlsUtils.wipeArray(derived);
@@ -100,6 +101,8 @@ public final class TlsKeySchedule {
             masterSecret = HkdfStreebog.extract(derived, zero, hashLen);
         } finally {
             TlsUtils.wipeArray(derived);
+            TlsUtils.wipeArray(handshakeSecret);
+            handshakeSecret = null;
         }
     }
 
@@ -109,6 +112,8 @@ public final class TlsKeySchedule {
      * @param transcriptHash хеш транскрипта
      * @return сырой handshake traffic secret (серверный) без обнуления.
      *         Нужен для выработки finished_key.
+     *         Caller обязан затереть возвращённый массив через
+     *         {@link TlsUtils#wipeArray} после использования.
      */
     public byte[] getServerHandshakeTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
@@ -120,6 +125,8 @@ public final class TlsKeySchedule {
      * @param transcriptHash хеш транскрипта
      * @return сырой handshake traffic secret (клиентский) без обнуления.
      *         Нужен для выработки finished_key.
+     *         Caller обязан затереть возвращённый массив через
+     *         {@link TlsUtils#wipeArray} после использования.
      */
     public byte[] getClientHandshakeTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
@@ -133,6 +140,8 @@ public final class TlsKeySchedule {
      * @param transcriptHash хеш транскрипта
      * @return сырой application traffic secret (серверный) без обнуления.
      *         Нужен для KeyUpdate (RFC 8446 §7.2).
+     *         Caller обязан затереть возвращённый массив через
+     *         {@link TlsUtils#wipeArray} после использования.
      */
     public byte[] getServerApplicationTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
@@ -144,6 +153,8 @@ public final class TlsKeySchedule {
      * @param transcriptHash хеш транскрипта
      * @return сырой application traffic secret (клиентский) без обнуления.
      *         Нужен для KeyUpdate (RFC 8446 §7.2).
+     *         Caller обязан затереть возвращённый массив через
+     *         {@link TlsUtils#wipeArray} после использования.
      */
     public byte[] getClientApplicationTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
@@ -197,6 +208,7 @@ public final class TlsKeySchedule {
             throw new IllegalArgumentException("PSK must not be null or empty");
         }
         byte[] zero = new byte[hashLen];
+        TlsUtils.wipeArray(earlySecret);
         earlySecret = HkdfStreebog.extract(zero, psk, hashLen);
     }
 

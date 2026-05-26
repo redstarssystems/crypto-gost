@@ -35,13 +35,21 @@ public final class TlsCertificateValidator {
      * @param chain              цепочка leaf-first (leaf = chain[0])
      * @param serverHostname     ожидаемое DNS-имя сервера (null = не проверять)
      * @param requireOcspStapling true — OCSP-ответ обязателен
-     * @param caPublicKeys       список доверенных ключей CA (null или пустой = не проверять цепочку)
+     * @param caPublicKeys       список доверенных ключей CA (null или пустой = не проверять цепочку;
+     *                           OCSP leaf не верифицируется при self-signed chain.size() == 1;
+     *                           при chain.size() > 1 OCSP верифицируется ключом issuer-сертификата)
      * @throws TlsException при ошибке валидации
      */
     public static void checkServerCertificateChain(List<TlsCertificate> chain,
-                                              String serverHostname,
-                                              boolean requireOcspStapling,
-                                              List<PublicKeyParameters> caPublicKeys) throws TlsException {
+                                               String serverHostname,
+                                               boolean requireOcspStapling,
+                                               List<PublicKeyParameters> caPublicKeys) throws TlsException {
+        // Defense-in-depth: engine перехватывает пустой chain раньше (receiveCertificate),
+        // но IndexOutOfBounds здесь недопустим — RFC 8446 §4.4.2 требует непустой список от сервера.
+        if (chain == null || chain.isEmpty()) {
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    "Empty server certificate chain");
+        }
         TlsCertificate leaf = chain.get(0);
 
         if (leaf.isExpired()) {
@@ -73,7 +81,8 @@ public final class TlsCertificateValidator {
                     "Server did not provide OCSP stapling response");
         }
         boolean hasCaKeys = caPublicKeys != null && !caPublicKeys.isEmpty();
-        if (leaf.hasOcspResponse() && hasCaKeys) {
+        boolean canVerifyOcsp = hasCaKeys || chain.size() > 1;
+        if (leaf.hasOcspResponse() && canVerifyOcsp) {
             PublicKeyParameters ocspKey = chain.size() > 1
                     ? chain.get(1).getPublicKey()
                     : caPublicKeys.get(0);
@@ -284,12 +293,20 @@ public final class TlsCertificateValidator {
     public static void verifyCertificateVerify(byte[] cvBody, TlsCertificate cert,
                                           byte[] hsTranscript,
                                           boolean isServer) throws IOException {
+        if (cvBody.length < 4) {
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    "CertificateVerify body too short: " + cvBody.length);
+        }
         int scheme = ((cvBody[0] & 0xFF) << 8) | (cvBody[1] & 0xFF);
         if (!cert.hasSignatureScheme(scheme)) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate key type does not match signature scheme " + scheme);
         }
         int sigLen = ((cvBody[2] & 0xFF) << 8) | (cvBody[3] & 0xFF);
+        if (4 + sigLen > cvBody.length) {
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    "CertificateVerify: sigLen " + sigLen + " exceeds message body");
+        }
         byte[] sig = Arrays.copyOfRange(cvBody, 4, 4 + sigLen);
 
         String context = isServer

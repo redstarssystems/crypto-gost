@@ -46,14 +46,16 @@ class TlsHandshakeEngineTest {
     }
 
     private static TlsMessageBuilder clientBuilder(boolean withCert) {
-        return new TlsMessageBuilder(cs(), NAMED_GROUP, SIG_SCHEME,
+        return new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                NAMED_GROUP, SIG_SCHEME,
                 withCert ? clientCert.priv : null,
                 withCert ? List.of(clientCert.cert) : null,
                 HASH_LEN);
     }
 
     private static TlsMessageBuilder serverBuilder() {
-        return new TlsMessageBuilder(cs(), NAMED_GROUP, SIG_SCHEME,
+        return new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                NAMED_GROUP, SIG_SCHEME,
                 serverCert.priv,
                 List.of(serverCert.cert),
                 HASH_LEN);

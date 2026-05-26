@@ -1,7 +1,5 @@
 package org.rssys.gost.tls13;
 
-import java.util.List;
-
 /**
  * Константы протокола TLS 1.3 (RFC 8446) для ГОСТ-криптографии
  * по RFC 9367 (TLS 1.3 GOST Cipher Suites).
@@ -41,12 +39,6 @@ public final class TlsConstants {
             "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L";
     public static final String IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S =
             "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_S";
-
-    // набор предлагаемых cipher suites (RFC 8446 §4.1.2): L предпочтительнее
-    public static final List<Integer> OFFERED_CIPHER_SUITE_IDS = List.of(
-            TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-            TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S
-    );
 
     // схемы подписи ГОСТ (RFC 9367 §3.2 + RFC 8446)
     // 256-бит

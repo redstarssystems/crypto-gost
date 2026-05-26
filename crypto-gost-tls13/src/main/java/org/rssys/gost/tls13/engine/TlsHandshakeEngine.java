@@ -824,7 +824,7 @@ public final class TlsHandshakeEngine {
 
         if (parsedSH.cipherSuiteId != ciphersuite.getId()) {
             // Сервер выбрал другой cipher suite из предложенных клиентом
-            if (!TlsConstants.OFFERED_CIPHER_SUITE_IDS.contains(parsedSH.cipherSuiteId)) {
+            if (!messageBuilder.getOfferedCipherSuiteIds().contains(parsedSH.cipherSuiteId)) {
                 throw new TlsException(TlsConstants.ALERT_ILLEGAL_PARAMETER,
                         "ServerHello: cipher suite " + parsedSH.cipherSuiteId + " не в списке предложенных");
             }
@@ -1183,7 +1183,10 @@ public final class TlsHandshakeEngine {
                             TlsCiphersuite.paramsToNamedGroup(
                                     newChain.get(0).getPublicKey().getParams()));
                     this.messageBuilder = new TlsMessageBuilder(
-                            ciphersuite, selectedNamedGroup, newScheme,
+                            ciphersuite,
+                            List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                                    TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
+                            selectedNamedGroup, newScheme,
                             creds.getPrivateKey(), newChain, hashLen);
                     ocspForCert = creds.getOcspResponse();
                 }

@@ -32,6 +32,9 @@ public interface PskStore {
     /** Удаляет тикет (single-use: RFC 8446 §8.1). */
     void remove(byte[] ticket);
 
+    /** @return запись по идентификатору тикета без удаления, или null если нет/expired */
+    PskEntry peek(byte[] ticket);
+
     /** @return количество сохранённых тикетов */
     int size();
 

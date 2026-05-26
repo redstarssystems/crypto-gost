@@ -51,7 +51,7 @@ class GostX509TrustManagerLoggerTest {
     }
 
     @Test
-    @DisplayName("Лог: cert validation failure ERROR")
+    @DisplayName("Лог: cert validation failure WARNING")
     void testValidationFailureLogged() {
         GostX509TrustManager tm = new GostX509TrustManager(null, false);
 
@@ -60,8 +60,8 @@ class GostX509TrustManagerLoggerTest {
         assertThrows(java.security.cert.CertificateException.class,
                 () -> tm.validateChainWithOcsp(chain, "wrong-host", false));
 
-        assertTrue(testLogger.containsLevel(Logger.Level.ERROR),
-                "При ошибке валидации должен быть ERROR лог");
+        assertTrue(testLogger.containsLevel(Logger.Level.WARNING),
+                "При ошибке валидации должен быть WARNING лог");
     }
 
     private static final class TestLogger implements System.Logger {

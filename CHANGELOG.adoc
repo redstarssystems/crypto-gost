@@ -1,5 +1,56 @@
 = История изменений
 
+== [0.3.3] - 26-05-2026
+
+
+=== Модуль crypto-gost-core
+
+==== Исправлено
+
+* *Рефакторинг Mgm*: устранены аллокации long[16] × 2 на каждый блок MAC на горячем пути. Таблица GF(2¹²⁸) умножения вынесена в scratch-поля mulTabHi/mulTabLo, результат — в mulResHi/mulResLo по паттерну encBufHi/encBufLo. Дублирующий метод gf128MulAccumTo и поля tmpHi/tmpLo удалены. Исправлен JavaDoc.
+* Обнуление encBufHi/encBufLo в Kuznyechik.reset(): после завершения сессии промежуточные значения шифра больше не остаются в памяти экземпляра.
+* Добавлена цепочка явного обнуления ключевого материала:
+** Kuznyechik.destroy() затирает раундовые ключи skHi/skLo и scratch-поля;
+** Mgm.destroy() делегирует в Kuznyechik.destroy() и обнуляет счётчики, MAC-аккумулятор, ICN и scratch-буферы;
+** TlsRecord.destroy() вызывает mgm.destroy() в составе существующей процедуры закрытия сессии.
+** GostMgmCipherSpi уничтожает предыдущий экземпляр Mgm перед реинициализацией.
+** MgmCipher.sealWithIcn и open гарантируют уничтожение через try-finally.
+** Исправлен порядок в Kuznyechik.init(): keyInitialized устанавливается в true только после успешного завершения generateSubKeys.
+* Удалена избыточная таблица SI_LO[8][256] в Kuznyechik: таблицы SI_HI и SI_LO были математически идентичны, путь расшифрования переведён на единую SI_HI. Экономия 16 КБ статической памяти, суммарный размер таблиц снижен с 160 КБ до 144 КБ.
+* Рефакторинг FieldElement.invert(): пять предвыделенных буферов с CT-swap (cswap) вместо ~2500 ephemeral-аллокаций на вызов. CT-свойства сохранены: фиксированное число итераций, ветвлений по данным нет. Трёхпараметровый montMul оставлен как standalone CIOS с локальными аллокациями — JIT элиминирует bounds checks, производительность multiply/square на 512-бит на уровне baseline (+2% к v0.3.2). Четырёхпараметровая буферная версия переименована в montMulBuf и используется только в invert(). expPMinus2 кэширован в MontgomeryParams. Убран лишний вызов normalize() в ECDSASigner.generateSignature(). Добавлен тест эквивалентности montMul ≡ montMulBuf на 100 случайных входах для кривых 256 и 512 бит.
+* Улучшена читаемость условия в conditionalSubtract: выражение (~lt & ~gt & 1L) заменено на 1L ^ (lt | gt). Оба варианта математически эквивалентны, но новый читается напрямую — «не меньше и не больше, значит равно» — без риска случайно потерять & 1L при будущих правках. Добавлены тесты на граничный случай a == p. Старое: (~lt & ~gt & 1L) — работало только благодаря & 1L, маскирующему битовую инверсию всех 64 бит. Новое, не требует маски, не сломается при рефакторинге.
+*  Устранено ветвление по данным в ECPoint.twice(): убран ранний возврат if (isInfinity()) return this в ECPoint.twice(). Результат теперь вычисляется для любой входной точки, выбор между новым результатом и исходной точкой выполняется через CT-select по маске z-координаты. Устраняет ветвление по секретному скаляру и timing-утечку позиции его старшего бита.
+
+=== Модуль crypto-gost-tls13
+
+==== Исправлено
+
+* Устранено дублирование списка cipher suites: TlsConstants.OFFERED_CIPHER_SUITE_IDS удалена, список передаётся в конструктор TlsMessageBuilder и используется как для сборки ClientHello, так и для валидации ServerHello. При добавлении нового suite достаточно обновить один вызов конструктора.
+* Добавлены bounds-проверки в TlsCertificateValidator.verifyCertificateVerify: минимальная длина тела (< 4 байт → ALERT_DECODE_ERROR) и корректность sigLen (4 + sigLen > длина тела → ALERT_DECODE_ERROR). Ранее слишком короткое тело вызывало ArrayIndexOutOfBoundsException вместо корректного TLS alert, а завышенный sigLen молча дополнялся нулями.
+* Исправлена верификация OCSP leaf в TlsCertificateValidator: при наличии issuer-сертификата в цепочке (chain.size() > 1) OCSP-ответ теперь верифицируется ключом issuer даже без caPublicKeys. Ранее весь блок OCSP leaf пропускался при caPublicKeys = null, хотя ключ для верификации был доступен из цепочки. Поведение приведено к единообразию с intermediate OCSP.
+* Добавлена проверка thisUpdate в TlsOcspVerifier: если thisUpdate находится в будущем (с допуском 5 минут на расхождение часов), выбрасывается ALERT_BAD_CERTIFICATE. Ранее это требование RFC 6960 §3.2 (MUST) не выполнялось.
+* Добавлена защита от пустой цепочки в TlsCertificateValidator.checkServerCertificateChain: явная проверка null || isEmpty с ALERT_DECODE_ERROR перед chain.get(0). Ранее пустой список вызывал IndexOutOfBoundsException вместо корректного TLS alert. Приведено к единообразию с checkClientCertificateChain.
+* defensive hardening TlsKeySchedule: старое значение handshakeSecret затирается перед перезаписью в deriveHandshakeSecret, аналогично earlySecret в deriveEarlySecret. Добавлен явный API-контракт в Javadoc четырёх getter-ов (get*TrafficSecret): caller обязан затереть возвращённый массив через TlsUtils.wipeArray после использования.
+* TlsKeySchedule.deriveMasterSecret(): handshakeSecret затирается и обнуляется сразу после вывода masterSecret. По RFC 8446 §7.1 он более не нужен; defence-in-depth устраняет присутствие ключевого материала в heap до destroy().
+* Исправлена утечка ключевого материала PSK в InMemoryPskStore: evictExpired() и get() теперь вызывают entry.destroyPsk() перед удалением просроченных записей. Ранее byte[] psk оставался в heap до GC вместо немедленного затирания. Приведено к единообразию с clear() и max-size eviction.
+* Добавлена проверка границ массива перед чтением полей cipherSuite и compression в TlsMessageParser.parseServerHello(). Устраняет возможный выход за пределы массива при усечённом теле сообщения ServerHello.
+* Добавлена проверка размера PSK-идентификатора в TlsMessageParser.parseClientHelloPskIdentity(): identityLen теперь ограничен сверху значением identitiesLen - 6. Устраняет возможную избыточную аллокацию при намеренно искажённом поле длины в расширении pre_shared_key.
+* Добавлена обработка ошибок разбора в двух непокрытых местах: OcspCertIdHasher.hashIssuerName и hashIssuerPublicKey теперь перехватывают исключения при битом DER и пробрасывают их как IllegalArgumentException; TlsCrlVerifier.verify оборачивает весь разбор CRL в обработчик и пробрасывает ошибки как TlsException с кодом ALERT_DECODE_ERROR. Ранее при искажённом входе исключение уходило наружу без обработки.
+* Исправлена семантика клиентского поиска PSK-тикета: ранее тикет удалялся из хранилища до начала согласования, что приводило к его безвозвратной потере при отказе сервера от возобновления сессии. Теперь тикет удаляется только после подтверждения сервером (получение ServerHello с расширением PSK). Добавлен метод peek() в интерфейс и реализацию хранилища — неразрушающий поиск с проверкой срока действия.
+
+=== Модуль crypto-gost-jsse
+
+==== Исправлено
+
+* Гонка данных на pendingWriteKeysExist: теперь поле объявлено как volatile, что обеспечивает happens-before между записью ключевого кортежа (pendingWriteKey/pendingWriteIv/pendingWriteTagLen) под inboundLock и его чтением под outboundLock в wrap(). Без фикса метод wrap() мог не применить app-ключи и отправить данные под handshake-ключами, что вызывает fatal alert на принимающей стороне.
+* Гонка данных на полях состояния: engineState, handshakeDone, closeSent, closeReceived. Теперь они объявлены как volatile, что обеспечивает visibility между записями под inboundLock/outboundLock и чтениями из getHandshakeStatus(), isOutboundDone(), isInboundDone() и перекрёстными обращениями между wrap и unwrap.
+* Исправлено повреждение данных при гонке потоков (data corruption race) на outgoingQueue при конкурентных вызовах wrap() и unwrap(). ArrayDeque<byte[]> заменён на ConcurrentLinkedDeque<byte[]>, обеспечивающий thread-safety для операций addLast, poll, addFirst, isEmpty при доступе из разных lock'ов или без лока.
+* Исправлена гонка данных на writerRecord между wrap() (outboundLock) и unwrap() (inboundLock): в handleEngineKeyChanges() серверный путь замены writerRecord теперь не вызывает writerRecord.destroy() под inboundLock. Вместо этого старый writerRecord сохраняется в deferredWriterDestroy и уничтожается в wrap() под outboundLock через applyDeferredWriterDestroy(). Гонка была введена цепочкой уничтожения ключей (Kuznyechik.destroy() → keyInitialized = false), которая превратила существовавшую в v0.3.2 молчаливую гонку в IllegalStateException. Добавлена зачистка deferredWriterDestroy в destroyHandshakeEngine() на случай закрытия соединения до применения отложенного уничтожения.
+* В GostSSLEngine.createCertValidationTask() добавлен перехват непроверяемых исключений при валидации сертификата. Ранее такое исключение оставляло движок в состоянии ожидания без возможности продолжить или завершить соединение. Теперь любая ошибка валидации переводит движок в состояние ошибки с корректным закрытием соединения.
+* Уровень журналирования при ошибке валидации сертификата снижен с ERROR (SEVERE) до WARNING в GostX509TrustManager: отказ в доверии и отзыв сертификата — штатные сценарии, а не сбои инфраструктуры. Обновлён соответствующий тест.
+* Устранено дублирование кода в GostSSLEngine: повторяющийся блок автоматического обновления ключей вынесен в приватный метод tryAutoKeyUpdate(), логика замены writerRecord — в методы swapWriterRecord() и setPendingWriteKeys(). Поведение не изменилось.
+
+
 == [0.3.2] - 21-05-2026
 
 Окончание функционального развития. Библиотека функционально закончена. Нового API или какого-то развития больше не ожидается. Основные ошибки были найдены и устранены. Далее только исправление ошибок, найденных в процессе реальной эксплуатации.

@@ -157,6 +157,7 @@ public final class GostMgmCipherSpi extends CipherSpi {
                 + ". Use IvParameterSpec(16 bytes, MSB=0) or GCMParameterSpec");
         }
 
+        if (mgm != null) mgm.destroy();
         mgm = new Mgm(new Kuznyechik());
         mgm.init(forEncryption, new ParametersWithIV(keyParam, icn));
 

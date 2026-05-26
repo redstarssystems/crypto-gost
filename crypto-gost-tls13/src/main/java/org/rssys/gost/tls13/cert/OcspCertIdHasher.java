@@ -21,8 +21,12 @@ public final class OcspCertIdHasher {
     }
 
     public static byte[] hashIssuerName(byte[] issuerCertDer) {
-        byte[] subjectDer = extractSubject(issuerCertDer);
-        return Digest.digest256(subjectDer);
+        try {
+            byte[] subjectDer = extractSubject(issuerCertDer);
+            return Digest.digest256(subjectDer);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("Failed to extract issuerNameHash from cert DER", e);
+        }
     }
 
     public static byte[] hashIssuerName(TlsCertificate issuer) {
@@ -30,8 +34,12 @@ public final class OcspCertIdHasher {
     }
 
     public static byte[] hashIssuerPublicKey(byte[] issuerCertDer) {
-        byte[] bsValue = extractBitStringValue(issuerCertDer);
-        return Digest.digest256(bsValue);
+        try {
+            byte[] bsValue = extractBitStringValue(issuerCertDer);
+            return Digest.digest256(bsValue);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("Failed to extract issuerKeyHash from cert DER", e);
+        }
     }
 
     public static byte[] hashIssuerPublicKey(TlsCertificate issuer) {

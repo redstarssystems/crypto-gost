@@ -49,7 +49,7 @@
     </modules>
 
     <properties>
-        <revision>0.3.2</revision>
+        <revision>0.3.3</revision>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.10.2</junit.version>

@@ -37,7 +37,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.security.cert.CertificateException;
-import java.util.ArrayDeque;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -86,15 +86,14 @@ public final class GostSSLEngine extends SSLEngine {
     private TlsCiphersuite ciphersuite;
 
     private final ByteArrayOutputStream handshakeInputBuf = new ByteArrayOutputStream();
-    private final ArrayDeque<byte[]> outgoingQueue = new ArrayDeque<>();
+    private final ConcurrentLinkedDeque<byte[]> outgoingQueue = new ConcurrentLinkedDeque<>();
     private final ByteArrayOutputStream incomingAppBuf = new ByteArrayOutputStream();
 
-    private EngineState engineState = EngineState.INITIAL;
+    private volatile EngineState engineState = EngineState.INITIAL;
     private boolean handshakeStarted;
-    private boolean handshakeDone;
-    private boolean closed;
-    private boolean closeSent;
-    private boolean closeReceived;
+    private volatile boolean handshakeDone;
+    private volatile boolean closeSent;
+    private volatile boolean closeReceived;
 
     // WHY: два отдельных lock для inbound/outbound — SSLEngine допускает параллельные
     // wrap (outbound) и unwrap (inbound). Один lock заблокировал бы оба направления.
@@ -133,7 +132,9 @@ public final class GostSSLEngine extends SSLEngine {
     private byte[] pendingWriteKey;
     private byte[] pendingWriteIv;
     private int pendingWriteTagLen;
-    private boolean pendingWriteKeysExist;
+    private volatile boolean pendingWriteKeysExist;
+    /** Старый writerRecord, ожидающий destroy() под outboundLock. */
+    private TlsRecord deferredWriterDestroy;
 
     // Переиспользуемый массив для отслеживания позиций dst-буферов в unwrap (GC pressure: #8)
     private int[] dstPosBefore = new int[1];
@@ -142,6 +143,9 @@ public final class GostSSLEngine extends SSLEngine {
     private java.security.cert.X509Certificate[] localCertChain;
     // DNS-имя, запрошенное клиентом через SNI (для тестов и GostSSLContextSpi)
     private String requestedServerName;
+
+    /** Тикет текущего PSK resumption — для remove после подтверждения сервером */
+    private byte[] currentPskTicketIdentity;
 
     // Контекст сессии (PSK resumption)
     private GostSSLSessionContext sessionContext;
@@ -248,7 +252,10 @@ public final class GostSSLEngine extends SSLEngine {
             }
 
             this.messageBuilder = new TlsMessageBuilder(
-                    ciphersuite, namedGroup, sigScheme, privateKey, certChain, hashLen);
+                    ciphersuite,
+                    List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                            TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
+                    namedGroup, sigScheme, privateKey, certChain, hashLen);
 
             this.handshakeEngine = new TlsHandshakeEngine(
                     TlsHandshakeEngine.Role.CLIENT,
@@ -266,6 +273,7 @@ public final class GostSSLEngine extends SSLEngine {
             if (sessionContext != null && peerHost != null && !peerHost.isEmpty()) {
                 PskEntry entry = sessionContext.getForClientResumption(peerHost, peerPort);
                 if (entry != null) {
+                    currentPskTicketIdentity = entry.getTicket();
                     long ticketAge = ((System.currentTimeMillis() - entry.getIssueTime()) / 1000L) & 0xFFFFFFFFL;
                     long obfuscatedAge = (ticketAge + entry.getTicketAgeAdd()) & 0xFFFFFFFFL;
                     handshakeEngine.setPsk(entry.getPsk(), entry.getTicket(), obfuscatedAge);
@@ -299,7 +307,10 @@ public final class GostSSLEngine extends SSLEngine {
             }
 
             this.messageBuilder = new TlsMessageBuilder(
-                    ciphersuite, namedGroup, sigScheme, privateKey, certChain, hashLen);
+                    ciphersuite,
+                    List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                            TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
+                    namedGroup, sigScheme, privateKey, certChain, hashLen);
 
             // requestClientAuth = need || want: в обоих случаях CR отправляется.
             // optionalClientAuth = !needClientAuth: если только want (без need),
@@ -370,7 +381,7 @@ public final class GostSSLEngine extends SSLEngine {
 
     @Override
     public void beginHandshake() throws SSLException {
-        if (closed) throw new SSLException("Engine is closed");
+        if (engineState == EngineState.CLOSED) throw new SSLException("Engine is closed");
         if (handshakeStarted) throw new SSLException("Handshake already started");
 
         try {
@@ -423,6 +434,9 @@ public final class GostSSLEngine extends SSLEngine {
                 byte[] frame = outgoingQueue.poll();
                 if (frame != null) {
                     byte[] record;
+                    // WHY: deferredWriterDestroy мог быть установлен из handleEngineKeyChanges
+                    // под inboundLock. Уничтожаем под outboundLock перед любым protect().
+                    applyDeferredWriterDestroy();
                     if (writerRecord != null) {
                         record = writerRecord.protect(TlsConstants.CT_HANDSHAKE, frame);
                     } else if (pendingWriteKeysExist) {
@@ -505,6 +519,7 @@ public final class GostSSLEngine extends SSLEngine {
                                 SSLEngineResult.Status.BUFFER_OVERFLOW,
                                 SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING, 0, 0);
                     }
+                    applyDeferredWriterDestroy();
                     byte[] encrypted = writerRecord.protect(TlsConstants.CT_HANDSHAKE, postFrame);
                     dst.put(encrypted);
 
@@ -528,23 +543,14 @@ public final class GostSSLEngine extends SSLEngine {
                 }
                 if (totalSrcRemaining == 0) {
                     // После проверки post-handshake — авто-KeyUpdate если близки к SNMAX
-                    if (writerRecord != null && writerRecord.isApproachingRekeyLimit()
-                            && handshakeEngine != null && !handshakeEngine.hasPendingWriteUpdate()) {
-                        try {
-                            handshakeEngine.initiateKeyUpdate(false);
-                            byte[] kuFrame;
-                            while ((kuFrame = handshakeEngine.poll()) != null) {
-                                outgoingQueue.addLast(kuFrame);
-                            }
-                        } catch (TlsException e) {
-                            throw new SSLException("KeyUpdate initiation failed", e);
-                        }
-                    }
+                    tryAutoKeyUpdate();
                     return new SSLEngineResult(
                             SSLEngineResult.Status.OK,
                             SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
                             0, 0);
                 }
+
+                applyDeferredWriterDestroy();
 
                 // Фрагментируем по MAX_PLAINTEXT_LENGTH - 1 (1 байт на inner content type)
                 int maxFragment = TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
@@ -580,18 +586,7 @@ public final class GostSSLEngine extends SSLEngine {
                 }
 
                 // Авто-KeyUpdate после отправки app data
-                if (writerRecord != null && writerRecord.isApproachingRekeyLimit()
-                        && handshakeEngine != null && !handshakeEngine.hasPendingWriteUpdate()) {
-                    try {
-                        handshakeEngine.initiateKeyUpdate(false);
-                        byte[] kuFrame;
-                        while ((kuFrame = handshakeEngine.poll()) != null) {
-                            outgoingQueue.addLast(kuFrame);
-                        }
-                    } catch (TlsException e) {
-                        throw new SSLException("KeyUpdate initiation failed", e);
-                    }
-                }
+                tryAutoKeyUpdate();
 
                 return new SSLEngineResult(
                         SSLEngineResult.Status.OK,
@@ -949,6 +944,15 @@ public final class GostSSLEngine extends SSLEngine {
                 throw e;
             }
 
+            // PSK принят сервером — удаляем тикет из store (single-use, RFC 8446 §8.1)
+            if (clientMode && handshakeEngine != null && handshakeEngine.isPskAccepted()
+                    && currentPskTicketIdentity != null) {
+                if (sessionContext != null) {
+                    sessionContext.getPskStore().remove(currentPskTicketIdentity);
+                }
+                currentPskTicketIdentity = null;
+            }
+
             // WHY: SNI нужен GostSSLContextSpi для выбора сертификата и тестам для проверки
             if (!clientMode && handshakeEngine != null && requestedServerName == null) {
                 String sni = handshakeEngine.getRequestedServerName();
@@ -1030,37 +1034,66 @@ public final class GostSSLEngine extends SSLEngine {
                 // Откладываем ТОЛЬКО на этапе HANDSHAKE — KeyUpdate в DATA
                 // применяется немедленно.
                 if (handshakeEngine.isDone() && engineState == EngineState.HANDSHAKE) {
-                    this.pendingWriteKey = newKeys.getKey();
-                    this.pendingWriteIv = newKeys.getIv();
-                    this.pendingWriteTagLen = ciphersuite.getTagLen();
-                    this.pendingWriteKeysExist = true;
+                    setPendingWriteKeys(newKeys);
                 } else {
-                    if (writerRecord != null) writerRecord.destroy();
-                    writerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                            ciphersuite.getTagLen(), ciphersuite);
+                    swapWriterRecord(newKeys);
                 }
             } else {
-                // Сервер: если writerRecord уже создан (есть handshake-ключи),
-                // переключаем app-ключи немедленно. Иначе откладываем —
-                // SH будет plaintext, writerRecord создастся после.
+                // Сервер: если writerRecord уже создан — переключаем без destroy()
+                // под inboundLock (гонка с protect() в wrap под outboundLock).
+                // destroy() откладывается в deferredWriterDestroy и выполняется
+                // под outboundLock. Иначе — через pendingWriteKeysExist.
                 if (writerRecord != null) {
-                    writerRecord.destroy();
-                    writerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                            ciphersuite.getTagLen(), ciphersuite);
-                    pendingWriteKeysExist = false;
-                    pendingWriteKey = null;
-                    pendingWriteIv = null;
+                    swapWriterRecord(newKeys);
                 } else {
-                    this.pendingWriteKey = newKeys.getKey();
-                    this.pendingWriteIv = newKeys.getIv();
-                    this.pendingWriteTagLen = ciphersuite.getTagLen();
-                    this.pendingWriteKeysExist = true;
+                    setPendingWriteKeys(newKeys);
                 }
             }
         }
         if (handshakeEngine.hasReadKeysChanged() || handshakeEngine.hasWriteKeysChanged()) {
             handshakeEngine.acknowledgeKeyChange();
         }
+    }
+
+    /** Уничтожает writerRecord, отложенный из handleEngineKeyChanges (под outboundLock). */
+    private void applyDeferredWriterDestroy() {
+        if (deferredWriterDestroy != null) {
+            deferredWriterDestroy.destroy();
+            deferredWriterDestroy = null;
+        }
+    }
+
+    /** Авто-KeyUpdate при приближении к SNMAX (RFC 8446 §4.6.3). */
+    private void tryAutoKeyUpdate() throws SSLException {
+        if (writerRecord != null && writerRecord.isApproachingRekeyLimit()
+                && handshakeEngine != null && !handshakeEngine.hasPendingWriteUpdate()) {
+            try {
+                handshakeEngine.initiateKeyUpdate(false);
+                byte[] kuFrame;
+                while ((kuFrame = handshakeEngine.poll()) != null) {
+                    outgoingQueue.addLast(kuFrame);
+                }
+            } catch (TlsException e) {
+                throw new SSLException("KeyUpdate initiation failed", e);
+            }
+        }
+    }
+
+    /** Устанавливает новый writerRecord, уничтожая старый через deferred (под outboundLock). */
+    private void swapWriterRecord(TlsTrafficKeys newKeys) {
+        if (writerRecord != null) {
+            deferredWriterDestroy = writerRecord;
+        }
+        writerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
+                ciphersuite.getTagLen(), ciphersuite);
+    }
+
+    /** Сохраняет ключи для отложенного создания writerRecord в wrap(). */
+    private void setPendingWriteKeys(TlsTrafficKeys newKeys) {
+        this.pendingWriteKey = newKeys.getKey();
+        this.pendingWriteIv = newKeys.getIv();
+        this.pendingWriteTagLen = ciphersuite.getTagLen();
+        this.pendingWriteKeysExist = true;
     }
 
     /**
@@ -1088,7 +1121,8 @@ public final class GostSSLEngine extends SSLEngine {
                 handshakeEngine.acknowledgeCertificateValidation(true);
                 this.peerCertificates =
                         org.rssys.gost.jsse.bridge.CertificateBridge.toJca(certs);
-            } catch (CertificateException e) {
+            } catch (CertificateException | RuntimeException e) {
+                LOG.log(Level.WARNING, "Certificate validation failed unexpectedly", e);
                 handshakeEngine.acknowledgeCertificateValidation(false);
             } finally {
                 taskInProgress.set(false);
@@ -1164,6 +1198,8 @@ public final class GostSSLEngine extends SSLEngine {
             }
         }
 
+        currentPskTicketIdentity = null;
+
         handshakeDone = true;
 
         LOG.log(Level.INFO, "Handshake completed: suite={0}, alpn={1}",
@@ -1220,9 +1256,15 @@ public final class GostSSLEngine extends SSLEngine {
         TlsUtils.wipeArray(pendingWriteKey); pendingWriteKey = null;
         TlsUtils.wipeArray(pendingWriteIv);  pendingWriteIv  = null;
         pendingWriteKeysExist = false;
+        // Отложенный writerRecord (swap без destroy под inboundLock) — зачищаем
+        if (deferredWriterDestroy != null) {
+            deferredWriterDestroy.destroy();
+            deferredWriterDestroy = null;
+        }
         if (handshakeEngine != null) {
             handshakeEngine.destroy();
         }
+        currentPskTicketIdentity = null;
     }
 
     // ========================================================================

@@ -133,21 +133,25 @@ public final class MgmCipher {
                     "MGM ICN must be " + ICN_LEN + " bytes, got " + icn.length);
         }
 
-        Mgm mgm = new Mgm(new Kuznyechik());
-        mgm.init(true, new ParametersWithIV(key, icn));
-
-        if (aad != null && aad.length > 0) {
-            mgm.updateAAD(aad, 0, aad.length);
-        }
-
         // Пакет: [ICN (16)] [шифртекст (N)] [тег (16)]
         byte[] encrypted_buffer = new byte[ICN_LEN + plaintext.length + TAG_LEN];
         System.arraycopy(icn, 0, encrypted_buffer, 0, ICN_LEN);
 
-        mgm.processBytes(plaintext, 0, plaintext.length, encrypted_buffer, ICN_LEN);
-        mgm.finishEncryption(encrypted_buffer, ICN_LEN + plaintext.length);
+        Mgm mgm = new Mgm(new Kuznyechik());
+        try {
+            mgm.init(true, new ParametersWithIV(key, icn));
 
-        return encrypted_buffer;
+            if (aad != null && aad.length > 0) {
+                mgm.updateAAD(aad, 0, aad.length);
+            }
+
+            mgm.processBytes(plaintext, 0, plaintext.length, encrypted_buffer, ICN_LEN);
+            mgm.finishEncryption(encrypted_buffer, ICN_LEN + plaintext.length);
+
+            return encrypted_buffer;
+        } finally {
+            mgm.destroy();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -190,19 +194,24 @@ public final class MgmCipher {
         byte[] ciphertext = Arrays.copyOfRange(encryptedData, ICN_LEN, ICN_LEN + ctLen);
         // тег находится в конце буфера
 
-        Mgm mgm = new Mgm(new Kuznyechik());
-        mgm.init(false, new ParametersWithIV(key, icn));
-
-        if (aad != null && aad.length > 0) {
-            mgm.updateAAD(aad, 0, aad.length);
-        }
-
         byte[] plaintext = new byte[ctLen];
-        mgm.processBytes(ciphertext, 0, ctLen, plaintext, 0);
 
-        // Проверяем тег — бросает AuthenticationException при несовпадении
-        mgm.finishDecryption(encryptedData, ICN_LEN + ctLen);
+        Mgm mgm = new Mgm(new Kuznyechik());
+        try {
+            mgm.init(false, new ParametersWithIV(key, icn));
 
-        return plaintext;
+            if (aad != null && aad.length > 0) {
+                mgm.updateAAD(aad, 0, aad.length);
+            }
+
+            mgm.processBytes(ciphertext, 0, ctLen, plaintext, 0);
+
+            // Проверяем тег — бросает AuthenticationException при несовпадении
+            mgm.finishDecryption(encryptedData, ICN_LEN + ctLen);
+
+            return plaintext;
+        } finally {
+            mgm.destroy();
+        }
     }
 }

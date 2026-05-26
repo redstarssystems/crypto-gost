@@ -42,151 +42,155 @@ public final class TlsCrlVerifier {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "CRL is null");
         }
+        try {
+            // CertificateList ::= SEQUENCE { tbsCertList, signatureAlgorithm, signatureValue }
+            int[] clSeq = TlsDerParser.parseSequence(crlDer, 0);
+            int clEnd = clSeq[1];
+            int clPos = clSeq[0];
 
-        // CertificateList ::= SEQUENCE { tbsCertList, signatureAlgorithm, signatureValue }
-        int[] clSeq = TlsDerParser.parseSequence(crlDer, 0);
-        int clEnd = clSeq[1];
-        int clPos = clSeq[0];
+            // tbsCertList ::= SEQUENCE
+            int[] tbsCertListSeq = TlsDerParser.parseSequence(crlDer, clPos);
+            int tbsStart = clPos;                  // начало tbsCertList (весь SEQUENCE TLV)
+            int tbsEnd = tbsCertListSeq[1];        // конец value tbsCertList
+            int tbPos = tbsCertListSeq[0];
+            int tbEnd = tbsCertListSeq[1];
 
-        // tbsCertList ::= SEQUENCE
-        int[] tbsCertListSeq = TlsDerParser.parseSequence(crlDer, clPos);
-        int tbsStart = clPos;                  // начало tbsCertList (весь SEQUENCE TLV)
-        int tbsEnd = tbsCertListSeq[1];        // конец value tbsCertList
-        int tbPos = tbsCertListSeq[0];
-        int tbEnd = tbsCertListSeq[1];
+            // version INTEGER OPTIONAL (RFC 5280 §5.1.2.1 — голый INTEGER)
+            if (tbPos < tbEnd && (crlDer[tbPos] & 0xFF) == TlsDerParser.TAG_INTEGER) {
+                tbPos = TlsDerParser.readTlv(crlDer, tbPos)[1];
+            } else if (tbPos < tbEnd && (crlDer[tbPos] & 0xFF) == 0xA0) {
+                // Некоторые реализации ошибочно кодируют version как [0] EXPLICIT
+                // (как в TBSCertificate, RFC 5280 §4.1.2.1). Fallback для совместимости.
+                tbPos = TlsDerParser.readTlv(crlDer, tbPos)[1];
+            }
 
-        // version INTEGER OPTIONAL (RFC 5280 §5.1.2.1 — голый INTEGER)
-        if (tbPos < tbEnd && (crlDer[tbPos] & 0xFF) == TlsDerParser.TAG_INTEGER) {
+            // signature AlgorithmIdentifier — пропускаем (нас интересует только подпись снаружи)
+            if (tbPos >= tbEnd || (crlDer[tbPos] & 0xFF) != TlsDerParser.TAG_SEQUENCE) {
+                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                        "CRL: signature AlgorithmIdentifier missing");
+            }
             tbPos = TlsDerParser.readTlv(crlDer, tbPos)[1];
-        } else if (tbPos < tbEnd && (crlDer[tbPos] & 0xFF) == 0xA0) {
-            // Некоторые реализации ошибочно кодируют version как [0] EXPLICIT
-            // (как в TBSCertificate, RFC 5280 §4.1.2.1). Fallback для совместимости.
+
+            // issuer Name — пропускаем (SEQUENCE)
+            if (tbPos >= tbEnd || (crlDer[tbPos] & 0xFF) != TlsDerParser.TAG_SEQUENCE) {
+                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                        "CRL: issuer Name missing");
+            }
             tbPos = TlsDerParser.readTlv(crlDer, tbPos)[1];
-        }
 
-        // signature AlgorithmIdentifier — пропускаем (нас интересует только подпись снаружи)
-        if (tbPos >= tbEnd || (crlDer[tbPos] & 0xFF) != TlsDerParser.TAG_SEQUENCE) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "CRL: signature AlgorithmIdentifier missing");
-        }
-        tbPos = TlsDerParser.readTlv(crlDer, tbPos)[1];
-
-        // issuer Name — пропускаем (SEQUENCE)
-        if (tbPos >= tbEnd || (crlDer[tbPos] & 0xFF) != TlsDerParser.TAG_SEQUENCE) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "CRL: issuer Name missing");
-        }
-        tbPos = TlsDerParser.readTlv(crlDer, tbPos)[1];
-
-        // thisUpdate — обязательное поле; без него нельзя определить актуальность CRL
-        if (tbPos >= tbEnd) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "CRL: thisUpdate missing");
-        }
-        int thisUpdateTag = crlDer[tbPos] & 0xFF;
-        if (thisUpdateTag != TlsDerParser.TAG_UTC_TIME
-                && thisUpdateTag != TlsDerParser.TAG_GENERALIZED_TIME) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "CRL: expected Time at thisUpdate");
-        }
-        tbPos = TlsDerParser.readTlv(crlDer, tbPos)[1];
-
-        // nextUpdate — опционально; если есть и в прошлом — CRL устарел, reject
-        Date nextUpdate = null;
-        if (tbPos < tbEnd && ((crlDer[tbPos] & 0xFF) == TlsDerParser.TAG_UTC_TIME
-                || (crlDer[tbPos] & 0xFF) == TlsDerParser.TAG_GENERALIZED_TIME)) {
-            int[] nuTlv = TlsDerParser.readTlv(crlDer, tbPos);
-            nextUpdate = TlsDerParser.parseTime(crlDer, tbPos);
-            if (new Date().after(nextUpdate)) {
+            // thisUpdate — обязательное поле; без него нельзя определить актуальность CRL
+            if (tbPos >= tbEnd) {
                 throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "CRL: expired (nextUpdate in the past)");
+                        "CRL: thisUpdate missing");
             }
-            tbPos = nuTlv[1];
-        }
-
-        // --- FAIL-CLOSED: подпись CRL проверяем ДО сканирования revoked ---
-        // signatureAlgorithm — пропускаем (между tbsCertList и signatureValue)
-        clPos = tbsCertListSeq[1]; // после tbsCertList идёт signatureAlgorithm SEQUENCE
-        if (clPos >= clEnd || (crlDer[clPos] & 0xFF) != TlsDerParser.TAG_SEQUENCE) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "CRL: signatureAlgorithm missing");
-        }
-        clPos = TlsDerParser.readTlv(crlDer, clPos)[1];
-
-        // signatureValue BIT STRING
-        if (clPos >= clEnd || (crlDer[clPos] & 0xFF) != TlsDerParser.TAG_BIT_STRING) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "CRL: signatureValue BIT STRING missing");
-        }
-        int[] sigBitTlv = TlsDerParser.readTlv(crlDer, clPos);
-        // BIT STRING: первый байт — количество неиспользованных бит (должен быть 0)
-        byte[] sigBytes = Arrays.copyOfRange(crlDer, sigBitTlv[0] + 1, sigBitTlv[1]);
-
-        int hlen = caKey.getParams().hlen;
-        Digest.Algorithm hashAlg = hlen == 64
-                ? Digest.Algorithm.STREEBOG_512
-                : Digest.Algorithm.STREEBOG_256;
-        Digest digest = new Digest(hashAlg);
-        digest.update(crlDer, tbsStart, tbsEnd - tbsStart);
-        byte[] hash = digest.digest();
-
-        if (!Signature.verifyHash(hash, sigBytes, caKey)) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "CRL: signature verification failed");
-        }
-
-        // --- Теперь сканируем revokedCertificates ---
-        // revokedCertificates SEQUENCE OF OPTIONAL, или [0] Extensions если нет
-        if (tbPos >= tbEnd) {
-            return; // пустой CRL (нет revoked + нет extensions) — OK
-        }
-
-        // Если следующий тег — [0] EXPLICIT, это crlExtensions (revokedCertificates отсутствует)
-        // Значит сертификатов в списке нет — OK
-        if ((crlDer[tbPos] & 0xFF) == 0xA0) {
-            int[] extExplTlv = TlsDerParser.readTlv(crlDer, tbPos);
-            int extPos = extExplTlv[0];
-            int extEnd = extExplTlv[1];
-            // Проверяем issuingDistributionPoint — partial/indirect CRL
-            checkNotPartialOrIndirect(crlDer, extPos, extEnd);
-            return; // нет revoked сертификатов — OK
-        }
-
-        // revokedCertificates SEQUENCE OF RevokedCertificate
-        if ((crlDer[tbPos] & 0xFF) != TlsDerParser.TAG_SEQUENCE) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "CRL: expected revokedCertificates SEQUENCE");
-        }
-        int[] revokedSeq = TlsDerParser.readTlv(crlDer, tbPos);
-        int rvPos = revokedSeq[0];
-        int rvEnd = revokedSeq[1];
-
-        while (rvPos < rvEnd) {
-            int[] rcSeq = TlsDerParser.parseSequence(crlDer, rvPos);
-            int rcPos = rcSeq[0];
-
-            // serialNumber INTEGER
-            if (rcPos >= rcSeq[1] || (crlDer[rcPos] & 0xFF) != TlsDerParser.TAG_INTEGER) {
+            int thisUpdateTag = crlDer[tbPos] & 0xFF;
+            if (thisUpdateTag != TlsDerParser.TAG_UTC_TIME
+                    && thisUpdateTag != TlsDerParser.TAG_GENERALIZED_TIME) {
                 throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "CRL: revokedCertificates serialNumber INTEGER missing");
+                        "CRL: expected Time at thisUpdate");
             }
-            int[] serialTlv = TlsDerParser.readTlv(crlDer, rcPos);
-            byte[] revokedSerial = Arrays.copyOfRange(crlDer, serialTlv[0], serialTlv[1]);
+            tbPos = TlsDerParser.readTlv(crlDer, tbPos)[1];
 
-            if (Arrays.equals(revokedSerial, certSerial)) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "Certificate is revoked per CRL");
+            // nextUpdate — опционально; если есть и в прошлом — CRL устарел, reject
+            Date nextUpdate = null;
+            if (tbPos < tbEnd && ((crlDer[tbPos] & 0xFF) == TlsDerParser.TAG_UTC_TIME
+                    || (crlDer[tbPos] & 0xFF) == TlsDerParser.TAG_GENERALIZED_TIME)) {
+                int[] nuTlv = TlsDerParser.readTlv(crlDer, tbPos);
+                nextUpdate = TlsDerParser.parseTime(crlDer, tbPos);
+                if (new Date().after(nextUpdate)) {
+                    throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                            "CRL: expired (nextUpdate in the past)");
+                }
+                tbPos = nuTlv[1];
             }
 
-            rvPos = rcSeq[1];
-        }
+            // --- FAIL-CLOSED: подпись CRL проверяем ДО сканирования revoked ---
+            // signatureAlgorithm — пропускаем (между tbsCertList и signatureValue)
+            clPos = tbsCertListSeq[1]; // после tbsCertList идёт signatureAlgorithm SEQUENCE
+            if (clPos >= clEnd || (crlDer[clPos] & 0xFF) != TlsDerParser.TAG_SEQUENCE) {
+                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                        "CRL: signatureAlgorithm missing");
+            }
+            clPos = TlsDerParser.readTlv(crlDer, clPos)[1];
 
-        // После revokedCertificates — crlExtensions [0] OPTIONAL
-        if (rvPos < tbEnd && (crlDer[rvPos] & 0xFF) == 0xA0) {
-            int[] extExplTlv = TlsDerParser.readTlv(crlDer, rvPos);
-            int extPos = extExplTlv[0];
-            int extEnd = extExplTlv[1];
-            checkNotPartialOrIndirect(crlDer, extPos, extEnd);
+            // signatureValue BIT STRING
+            if (clPos >= clEnd || (crlDer[clPos] & 0xFF) != TlsDerParser.TAG_BIT_STRING) {
+                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                        "CRL: signatureValue BIT STRING missing");
+            }
+            int[] sigBitTlv = TlsDerParser.readTlv(crlDer, clPos);
+            // BIT STRING: первый байт — количество неиспользованных бит (должен быть 0)
+            byte[] sigBytes = Arrays.copyOfRange(crlDer, sigBitTlv[0] + 1, sigBitTlv[1]);
+
+            int hlen = caKey.getParams().hlen;
+            Digest.Algorithm hashAlg = hlen == 64
+                    ? Digest.Algorithm.STREEBOG_512
+                    : Digest.Algorithm.STREEBOG_256;
+            Digest digest = new Digest(hashAlg);
+            digest.update(crlDer, tbsStart, tbsEnd - tbsStart);
+            byte[] hash = digest.digest();
+
+            if (!Signature.verifyHash(hash, sigBytes, caKey)) {
+                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                        "CRL: signature verification failed");
+            }
+
+            // --- Теперь сканируем revokedCertificates ---
+            // revokedCertificates SEQUENCE OF OPTIONAL, или [0] Extensions если нет
+            if (tbPos >= tbEnd) {
+                return; // пустой CRL (нет revoked + нет extensions) — OK
+            }
+
+            // Если следующий тег — [0] EXPLICIT, это crlExtensions (revokedCertificates отсутствует)
+            // Значит сертификатов в списке нет — OK
+            if ((crlDer[tbPos] & 0xFF) == 0xA0) {
+                int[] extExplTlv = TlsDerParser.readTlv(crlDer, tbPos);
+                int extPos = extExplTlv[0];
+                int extEnd = extExplTlv[1];
+                // Проверяем issuingDistributionPoint — partial/indirect CRL
+                checkNotPartialOrIndirect(crlDer, extPos, extEnd);
+                return; // нет revoked сертификатов — OK
+            }
+
+            // revokedCertificates SEQUENCE OF RevokedCertificate
+            if ((crlDer[tbPos] & 0xFF) != TlsDerParser.TAG_SEQUENCE) {
+                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                        "CRL: expected revokedCertificates SEQUENCE");
+            }
+            int[] revokedSeq = TlsDerParser.readTlv(crlDer, tbPos);
+            int rvPos = revokedSeq[0];
+            int rvEnd = revokedSeq[1];
+
+            while (rvPos < rvEnd) {
+                int[] rcSeq = TlsDerParser.parseSequence(crlDer, rvPos);
+                int rcPos = rcSeq[0];
+
+                // serialNumber INTEGER
+                if (rcPos >= rcSeq[1] || (crlDer[rcPos] & 0xFF) != TlsDerParser.TAG_INTEGER) {
+                    throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                            "CRL: revokedCertificates serialNumber INTEGER missing");
+                }
+                int[] serialTlv = TlsDerParser.readTlv(crlDer, rcPos);
+                byte[] revokedSerial = Arrays.copyOfRange(crlDer, serialTlv[0], serialTlv[1]);
+
+                if (Arrays.equals(revokedSerial, certSerial)) {
+                    throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                            "Certificate is revoked per CRL");
+                }
+
+                rvPos = rcSeq[1];
+            }
+
+            // После revokedCertificates — crlExtensions [0] OPTIONAL
+            if (rvPos < tbEnd && (crlDer[rvPos] & 0xFF) == 0xA0) {
+                int[] extExplTlv = TlsDerParser.readTlv(crlDer, rvPos);
+                int extPos = extExplTlv[0];
+                int extEnd = extExplTlv[1];
+                checkNotPartialOrIndirect(crlDer, extPos, extEnd);
+            }
+        } catch (RuntimeException e) {
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    "Failed to parse CRL DER", e);
         }
     }
 

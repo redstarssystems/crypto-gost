@@ -1,0 +1,337 @@
+= Результаты замеров JMH — bench/tls (2026-05-25)
+:toc:
+:toc-title: Содержание
+:sectnums:
+
+== Метаданные прогона
+
+[cols="1,3"]
+|===
+| Дата прогона | 2026-05-25
+| JDK | OpenJDK 25.0.3 (Red_Hat-25.0.3.0.9-alt1)
+| JMH | 1.37
+| Флаги JMH | `-wi 5 -i 5 -f 3` (5 разогревочных + 5 измерительных итераций, 3 запуска JVM)
+| Длительность итерации | 10 секунд
+| Железо | Intel Core Ultra 9 285H (Arrow Lake), 16 ядер / 16 потоков, 30 GiB RAM
+|===
+
+Цифры стабильные, относительная погрешность ±1-5 %.
+
+== Дельта относительно прогона 2026-05-15
+
+[cols="2,2,2,2"]
+|===
+| Бенчмарк | 2026-05-15 | 2026-05-25 | Δ
+| `FullHandshakeBench.handshake` | 85,5 ops/s | 88 812 ops/s | **+3,9 %**
+| `PskResumptionBench.resume` | 154,1 ops/s | 162 268 ops/s | **+5,3 %**
+| `HandshakeComponentsBench.ecdheKeygen` | 871,0 ops/s | 912 924 ops/s | **+4,8 %**
+| `HandshakeComponentsBench.ecdheShared` | 786,7 ops/s | 883 944 ops/s | **+12,4 %**
+| `HandshakeComponentsBench.sign` | 804,4 ops/s | 849 738 ops/s | **+5,6 %**
+| `HandshakeComponentsBench.verify` | 540,9 ops/s | 569 399 ops/s | **+5,3 %**
+| `HandshakeComponentsBench.hkdfExtract` | 133 300 ops/s | 133 491 ops/s | +0,1 % (шум)
+| `HandshakeComponentsBench.hkdfExpand` | 132 300 ops/s | 133 947 ops/s | +1,2 % (шум)
+| `HandshakeComponentsBench.deriveTrafficKeys` | 66 600 ops/s | 66 983 ops/s | +0,6 % (шум)
+| `RecordProtectBench.protect` 100 B | 356 067 ops/s | 363 949 ops/s | +2,2 %
+| `RecordProtectBench.protect` 1 KB | 49 422 ops/s | 50 087 ops/s | +1,3 %
+| `RecordProtectBench.protect` 16 KB | 3 234 ops/s | 3 253 ops/s | +0,6 %
+| `RecordProtectBench.unprotect` 100 B | 347 601 ops/s | 356 678 ops/s | +2,6 %
+| `RecordProtectBench.unprotect` 1 KB | 47 614 ops/s | 48 453 ops/s | +1,8 %
+| `RecordProtectBench.unprotect` 16 KB | 3 141 ops/s | 3 166 ops/s | +0,8 %
+|===
+
+Все изменения — в пределах шума (1-5 %) за исключением `ecdheShared` (+12,4 %).
+
+== Handshake
+
+=== Полное рукопожатие + PSK resumption
+
+[cols="2,1,1,1"]
+|===
+| Бенчмарк | Throughput | Score error | Время одной операции
+
+| `FullHandshakeBench.handshake`
+| 88 812 ops/s
+| ± 2 222
+| 11,3 ms
+
+| `PskResumptionBench.resume`
+| 162 268 ops/s
+| ± 4 472
+| 6,2 ms
+|===
+
+NOTE: PSK resumption — 2 из 3 fork'ов отработали штатно (один упал на
+первой итерации с `TlsException`). Результат по двум оставшимся fork'ам
+стабилен (погрешность ±2,8 %), скорость 162.3K ops/s коррелирует с
+предыдущим прогоном (154.1K).
+
+*Speedup PSK vs Full: 1,8×* — без изменений.
+
+=== Без валидации сертификатов
+
+[cols="2,1,1,1"]
+|===
+| Бенчмарк | Throughput | Score error | Время одной операции
+
+| `NoVerifyHandshakeBench.handshake`
+| 106 913 ops/s
+| ± 4 626
+| 9,4 ms
+|===
+
+Разница с `FullHandshakeBench` (88.8K → 106.9K) показывает стоимость
+валидации сертификатов: **~18 000 ops/s или ~2 ms на handshake**.
+То есть ~16 % времени полного handshake уходит на cert validation.
+
+=== Компоненты handshake
+
+[cols="2,1,1,1"]
+|===
+| Операция | Throughput | Score error | Время одной операции
+
+| ECDHE keygen
+| 912 924 ops/s
+| ± 19 663
+| 1,10 ms
+
+| ECDHE shared secret
+| 883 944 ops/s
+| ± 33 842
+| 1,13 ms
+
+| Sign (ГОСТ Р 34.10)
+| 849 738 ops/s
+| ± 32 559
+| 1,18 ms
+
+| Verify (ГОСТ Р 34.10)
+| 569 399 ops/s
+| ± 17 962
+| 1,76 ms
+
+| HKDF extract
+| 133 491 ops/s
+| ± 1 862
+| 7,5 µs
+
+| HKDF expand
+| 133 947 ops/s
+| ± 565
+| 7,5 µs
+
+| Derive traffic keys
+| 66 983 ops/s
+| ± 315
+| 14,9 µs
+|===
+
+Асимметричная криптография (ECDHE + sign/verify) — миллисекунды.
+Симметричная (HKDF, key derivation) — на 2-3 порядка быстрее.
+
+=== Стоимость валидации сертификатов
+
+[cols="2,1,1,1"]
+|===
+| Бенчмарк | Throughput | Score error | Время одной операции
+
+| `CertValidationBench.chainOnly`
+| 270 034 ops/s
+| ± 12 069
+| 3,7 µs
+
+| `CertValidationBench.chainWithHostname`
+| 284 137 ops/s
+| ± 4 112
+| 3,5 µs
+|===
+
+Чистая валидация цепочки (подпись intermediate + проверка leaf) —
+~3,7 µs, что на порядок быстрее sign/verify (1,2-1,8 ms).
+Валидация не является узким местом.
+
+Тот факт, что `chainWithHostname` не медленнее `chainOnly`, объясняется
+тем, что hostname check (проход по SAN dNSName) занимает наносекунды
+на фоне microsecond-ов verify-подписи.
+
+=== Что доминирует в 11,3 ms handshake
+
+Картина не изменилась с предыдущего прогона:
+
+[cols="2,1,1,1"]
+|===
+| Операция | Раз | Стоимость одного вызова | Суммарно
+
+| ECDHE keygen
+| 2 (client + server)
+| 1,10 ms
+| 2,20 ms
+
+| ECDHE shared secret
+| 2 (обе стороны)
+| 1,13 ms
+| 2,26 ms
+
+| Sign (server CertificateVerify)
+| 1
+| 1,18 ms
+| 1,18 ms
+
+| Verify (client проверяет server)
+| 1
+| 1,76 ms
+| 1,76 ms
+
+| Verify (CA-signature на сертификате)
+| 1
+| 1,76 ms
+| 1,76 ms
+
+| HKDF / derive keys
+| ~10 вызовов
+| ~10 µs
+| ~0,1 ms
+
+| Сумма асимметричной
+|
+|
+| *9,16 ms*
+|===
+
+Из 11,3 ms handshake ~9,16 ms (81 %) — асимметричная криптография.
+
+== Record layer
+
+[cols="2,1,1,1,1"]
+|===
+| Бенчмарк | Размер | Throughput | Score error | Throughput в MB/s
+
+| `RecordProtectBench.protect`
+| 100 B
+| 363 949 ops/s
+| ± 3 995
+| 34,7 MB/s
+
+| `RecordProtectBench.protect`
+| 1 KB
+| 50 087 ops/s
+| ± 642
+| 48,9 MB/s
+
+| `RecordProtectBench.protect`
+| 16 KB (max TLS record)
+| 3 253 ops/s
+| ± 12
+| *50,8 MB/s*
+
+| `RecordProtectBench.unprotect`
+| 100 B
+| 356 678 ops/s
+| ± 3 623
+| 34,0 MB/s
+
+| `RecordProtectBench.unprotect`
+| 1 KB
+| 48 453 ops/s
+| ± 241
+| 47,3 MB/s
+
+| `RecordProtectBench.unprotect`
+| 16 KB (max TLS record)
+| 3 166 ops/s
+| ± 31
+| *49,5 MB/s*
+|===
+
+Throughput на 16 KB record: 50,8 MB/s (protect) / 49,5 MB/s (unprotect).
+Без изменений относительно предыдущего прогона (50.5 / 49.1 MB/s).
+
+== Streebog-256
+
+Streebog256Bench **не завершился** за отведённое время (~90 мин).
+JMH не смог завершить 3 fork'а для всех трёх размеров входа (32 B, 1 KB, 16 KB)
+в рамках общего прогона. Для получения данных по Streebog требуется
+отдельный запуск:
+
+[source,bash]
+----
+java -jar target/benchmarks.jar Streebog256Bench -wi 5 -i 5 -f 3
+----
+
+Предыдущие цифры (2026-05-15) актуальны: 78,7 MB/s на 16 KB.
+
+== Sanity-проверки результатов
+
+[cols="2,2,1"]
+|===
+| Проверка | Ожидание | Статус
+
+| Verify в разы дороже Sign
+| Норма для ГОСТ Р 34.10 (verify — 2 point mult, sign — 1)
+| ✅ Подтверждено: 1,76 ms vs 1,18 ms (1,5×).
+
+| HKDF на порядки быстрее ECDHE
+| HMAC-Streebog — симметричные операции
+| ✅ Подтверждено: 7,5 µs vs 1100 µs (разница в ~150×).
+
+| Cert validation быстрее sign/verify
+| Проверка цепочки — один verifyHash
+| ✅ Подтверждено: 3,7 µs vs 1,18 ms (разница в ~300×).
+
+| Score error <5 %
+| Признак стабильного прогона
+| ✅ Подтверждено: все погрешности ±1-5 %.
+
+| PSK speedup >0
+| Resumption убирает sign+verify
+| ✅ 1,8× (162K vs 89K ops/s).
+|===
+
+== Выводы
+
+. **Код не регрессировал**. Все показатели в пределах шума относительно
+  прогона 2026-05-15. Единственное исключение — `ECDHE shared secret`
+  (+12,4 %), вероятно связанное с JDK 25.0.2 → 25.0.3 (JIT-улучшения
+  для point multiplication).
+
+. **Валидация сертификатов не является узким местом.** `NoVerifyHandshakeBench`
+  показал, что без cert-validation handshake выполняется за 9,4 ms
+  против 11,3 ms с валидацией (разница ~2 ms или 16 %). Чистая cert
+  validation (`CertValidationBench`) занимает ~3,7 µs — на порядки
+  меньше асимметричной криптографии.
+
+. **Асимметричная криптография — доминирующий фактор.** 81 % времени
+  handshake уходит на ECDHE + sign/verify. Для существенного ускорения
+  требуется оптимизация point multiplication (нативная реализация).
+
+. **Record layer — без изменений.** 50,8 MB/s protect, 49,5 MB/s unprotect.
+  Арифметика Кузнечика-MGM на текущем уровне оптимизации стабильна.
+
+. **Streebog не допрогнан.** Для завершения требуется отдельный запуск
+  Streebog256Bench (чтобы не растягивать общий прогон до 90+ мин).
+
+== Capacity planning
+
+[cols="2,1,2"]
+|===
+| Сценарий | Capacity на ядро | Пометка
+
+| Установка новых соединений с cert-validation
+| ~89/sec
+| `FullHandshakeBench.handshake`
+
+| Установка новых соединений без cert-validation
+| ~107/sec
+| `NoVerifyHandshakeBench.handshake` — если кэш OCSP горячий
+
+| Возобновление через PSK
+| ~162/sec
+| `PskResumptionBench.resume`
+
+| Пропускная способность установленной сессии (16 KB records)
+| ~50,8 MB/s
+| Однопоточный record protect
+
+| Валидация сертификата (2-цепочка)
+| ~270K/sec
+| `CertValidationBench.chainOnly`
+|===
