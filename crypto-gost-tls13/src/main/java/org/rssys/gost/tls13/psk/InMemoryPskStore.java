@@ -69,7 +69,7 @@ public final class InMemoryPskStore implements PskStore {
         if (store.size() >= maxSize) {
             store.keySet().stream().findAny().ifPresent(key ->
                     store.computeIfPresent(key, (k, e) -> {
-                        e.destroyPsk();
+                        e.destroy();
                         return null;
                     })
             );
@@ -95,7 +95,7 @@ public final class InMemoryPskStore implements PskStore {
         PskEntry entry = store.remove(key);
         if (entry == null) return null;
         if (entry.isExpired(System.currentTimeMillis())) {
-            entry.destroyPsk();
+            entry.destroy();
             return null;
         }
         return entry;
@@ -117,7 +117,7 @@ public final class InMemoryPskStore implements PskStore {
         long now = System.currentTimeMillis();
         store.values().removeIf(e -> {
             if (e.isExpired(now)) {
-                e.destroyPsk();
+                e.destroy();
                 return true;
             }
             return false;
@@ -145,7 +145,7 @@ public final class InMemoryPskStore implements PskStore {
 
     @Override
     public void clear() {
-        store.values().forEach(e -> e.destroyPsk());
+        store.values().forEach(e -> e.destroy());
         store.clear();
     }
 

@@ -1,17 +1,9 @@
+.PHONY: clean doc test
+
 ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
-REVISION := $(shell grep '<revision>' $(ROOT)/pom.xml | head -1 | \
-            sed 's/.*<revision>\(.*\)<\/revision>.*/\1/')
-
-.PHONY: clean doc version test
-
-version:
-	@mkdir -p $(ROOT)/.mvn
-	@printf -- '-Drevision=%s\n' "$(REVISION)" > $(ROOT)/.mvn/maven.config
-	@printf '  .mvn/maven.config: revision=%s\n' "$(REVISION)"
 
 # То же что и mvn test (запуск всех unit-тестов), но с подсчетом их общего количества в конце
-
-test: version
+test:
 	@ret=0; \
 	mvn test $(MVN_ARGS) || ret=$$?; \
 	total=$$(find */target -name '*.txt' -path '*/surefire-reports/*' \
@@ -23,7 +15,7 @@ test: version
 	fi; \
 	exit $$ret
 
-clean: version
+clean:
 	cd $(ROOT) && mvn clean -q
 	$(MAKE) -s -C bench clean
 	$(MAKE) -s -C examples clean

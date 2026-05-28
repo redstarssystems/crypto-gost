@@ -69,6 +69,7 @@ public final class GostSSLContextSpi extends SSLContextSpi {
 
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         this.clientSessionContext = new GostSSLSessionContext(cs, cs.getHashLen());
+        this.clientSessionContext.setSessionCacheSize(20_480);
         this.serverSessionContext = new GostSSLSessionContext(cs, cs.getHashLen());
 
         this.initialized = true;

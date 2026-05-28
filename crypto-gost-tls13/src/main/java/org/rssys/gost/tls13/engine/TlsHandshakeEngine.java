@@ -88,13 +88,16 @@ public final class TlsHandshakeEngine {
         /** Тело NewSessionTicket (null если тип не NEW_SESSION_TICKET) */
         public final byte[] nstBody;
 
+        private static final PostHandshakeResult KEY_UPDATE_HANDLED_INSTANCE =
+                new PostHandshakeResult(Type.KEY_UPDATE_HANDLED, null);
+
         private PostHandshakeResult(Type type, byte[] nstBody) {
             this.type = type;
             this.nstBody = nstBody;
         }
 
         static PostHandshakeResult keyUpdateHandled() {
-            return new PostHandshakeResult(Type.KEY_UPDATE_HANDLED, null);
+            return KEY_UPDATE_HANDLED_INSTANCE;
         }
 
         static PostHandshakeResult newSessionTicket(byte[] body) {
@@ -217,6 +220,8 @@ public final class TlsHandshakeEngine {
     // но без него JSSE-путь уязвим к CPU-амплификации: каждый KU требует HKDF + MGM init)
     private int keyUpdateCount;
     private static final int MAX_KEY_UPDATES = 32;
+    private static final byte[] KU_NOT_REQUESTED = new byte[]{0};
+    private static final byte[] KU_REQUESTED = new byte[]{1};
 
     // true если мы уже инициировали KeyUpdate (для crossed-in-flight:
     // RFC 8446 §4.6.3: "If a party has already sent a KeyUpdate,
@@ -527,19 +532,19 @@ public final class TlsHandshakeEngine {
         // Вырабатываем новый writer secret из текущего (RFC 8446 §7.2)
         byte[] writerSecret = role == Role.SERVER ? serverAppTrafficSecret : clientAppTrafficSecret;
         this.pendingWriterSecret = HkdfStreebog.expandLabel(
-                writerSecret, TlsConstants.LABEL_TRAFFIC_UPD, new byte[0], hashLen, hashLen);
+                writerSecret, HkdfStreebog.PREFIXED_TRAFFIC_UPD, HkdfStreebog.EMPTY_CONTEXT, hashLen, hashLen);
 
         byte[] newKey = HkdfStreebog.expandLabel(
-                pendingWriterSecret, TlsConstants.LABEL_KEY, new byte[0],
+                pendingWriterSecret, HkdfStreebog.PREFIXED_KEY, HkdfStreebog.EMPTY_CONTEXT,
                 ciphersuite.getKeyLen(), hashLen);
         byte[] newIv = HkdfStreebog.expandLabel(
-                pendingWriterSecret, TlsConstants.LABEL_IV, new byte[0],
+                pendingWriterSecret, HkdfStreebog.PREFIXED_IV, HkdfStreebog.EMPTY_CONTEXT,
                 ciphersuite.getIvLen(), hashLen);
         this.pendingWriteKeys = new TlsTrafficKeys(newKey, newIv);
         this.pendingWriteUpdate = true;
 
         // Формируем KU-фрейм (он пойдёт в очередь и будет отправлен через poll)
-        byte[] kuBody = new byte[]{ request ? (byte)1 : 0 };
+        byte[] kuBody = request ? KU_REQUESTED : KU_NOT_REQUESTED;
         byte[] kuMsg = new TlsHandshakeMessage(
                 TlsConstants.HT_KEY_UPDATE, kuBody).encode();
         outgoingQueue.addLast(kuMsg);
@@ -605,14 +610,14 @@ public final class TlsHandshakeEngine {
 
         // Деривация нового reader secret (RFC 8446 §7.2: "traffic upd" + пустой hash)
         byte[] newReaderSecret = HkdfStreebog.expandLabel(
-                readerSecret, TlsConstants.LABEL_TRAFFIC_UPD, new byte[0], hashLen, hashLen);
+                readerSecret, HkdfStreebog.PREFIXED_TRAFFIC_UPD, HkdfStreebog.EMPTY_CONTEXT, hashLen, hashLen);
 
         // reader-ключи обновляются всегда — пир сменил свои write-ключи
         byte[] newReaderKey = HkdfStreebog.expandLabel(
-                newReaderSecret, TlsConstants.LABEL_KEY, new byte[0],
+                newReaderSecret, HkdfStreebog.PREFIXED_KEY, HkdfStreebog.EMPTY_CONTEXT,
                 ciphersuite.getKeyLen(), hashLen);
         byte[] newReaderIv = HkdfStreebog.expandLabel(
-                newReaderSecret, TlsConstants.LABEL_IV, new byte[0],
+                newReaderSecret, HkdfStreebog.PREFIXED_IV, HkdfStreebog.EMPTY_CONTEXT,
                 ciphersuite.getIvLen(), hashLen);
         TlsTrafficKeys newReadKeys = new TlsTrafficKeys(newReaderKey, newReaderIv);
 
@@ -633,7 +638,7 @@ public final class TlsHandshakeEngine {
             // it does not need to send another when it receives a KeyUpdate from the other peer."
             if (!initiatedKeyUpdate) {
                 // Нормальный случай: пир запросил — готовим ответ KU(not_requested)
-                byte[] kuBody = new byte[]{0};
+                byte[] kuBody = KU_NOT_REQUESTED;
                 byte[] kuMsg = new TlsHandshakeMessage(
                         TlsConstants.HT_KEY_UPDATE, kuBody).encode();
                 outgoingQueue.addLast(kuMsg);
@@ -642,13 +647,13 @@ public final class TlsHandshakeEngine {
                 byte[] writerSecret = role == Role.SERVER
                         ? serverAppTrafficSecret : clientAppTrafficSecret;
                 this.pendingWriterSecret = HkdfStreebog.expandLabel(
-                        writerSecret, TlsConstants.LABEL_TRAFFIC_UPD, new byte[0], hashLen, hashLen);
+                        writerSecret, HkdfStreebog.PREFIXED_TRAFFIC_UPD, HkdfStreebog.EMPTY_CONTEXT, hashLen, hashLen);
 
                 byte[] newWriterKey = HkdfStreebog.expandLabel(
-                        pendingWriterSecret, TlsConstants.LABEL_KEY, new byte[0],
+                        pendingWriterSecret, HkdfStreebog.PREFIXED_KEY, HkdfStreebog.EMPTY_CONTEXT,
                         ciphersuite.getKeyLen(), hashLen);
                 byte[] newWriterIv = HkdfStreebog.expandLabel(
-                        pendingWriterSecret, TlsConstants.LABEL_IV, new byte[0],
+                        pendingWriterSecret, HkdfStreebog.PREFIXED_IV, HkdfStreebog.EMPTY_CONTEXT,
                         ciphersuite.getIvLen(), hashLen);
                 this.pendingWriteKeys = new TlsTrafficKeys(newWriterKey, newWriterIv);
                 this.pendingWriteUpdate = true;
@@ -858,6 +863,8 @@ public final class TlsHandshakeEngine {
         if (pskAccepted) {
             ctx.getKeySchedule().deriveEarlySecret(pskKey);
         }
+        TlsUtils.wipeArray(pskKey);
+        pskKey = null;
         try {
             ctx.getKeySchedule().deriveHandshakeSecret(sharedSecret);
         } finally {
@@ -1121,6 +1128,15 @@ public final class TlsHandshakeEngine {
         // для обработки KeyUpdate и NewSessionTicket. ctx уничтожается
         // (транскрипт после handshake не нужен), но app traffic secrets
         // сохранены в полях экземпляра.
+        // Handshake-ключи больше не нужны — соединение перешло на app traffic keys
+        if (handshakeServerKeys != null) { handshakeServerKeys.destroy(); handshakeServerKeys = null; }
+        if (handshakeClientKeys != null) { handshakeClientKeys.destroy(); handshakeClientKeys = null; }
+        TlsUtils.wipeArray(serverHandshakeTrafficSecret);
+        serverHandshakeTrafficSecret = null;
+        TlsUtils.wipeArray(clientHandshakeTrafficSecret);
+        clientHandshakeTrafficSecret = null;
+
+        receivedCertificates = null;
         state = State.POST_HANDSHAKE;
         ctx.destroy();
     }
@@ -1160,6 +1176,9 @@ public final class TlsHandshakeEngine {
             PskEntry entry = serverPskStore.get(pskIdentityRaw);
             if (entry != null && !entry.isExpired(System.currentTimeMillis())) {
                 pskKey = entry.getPsk();
+            }
+            if (entry != null) {
+                entry.destroy();
             }
         }
         if (pskIdentityRaw != null && pskKey != null) {
@@ -1247,6 +1266,8 @@ public final class TlsHandshakeEngine {
         if (pskAccepted) {
             ctx.getKeySchedule().deriveEarlySecret(pskKey);
         }
+        TlsUtils.wipeArray(pskKey);
+        pskKey = null;
         try {
             ctx.getKeySchedule().deriveHandshakeSecret(sharedSecret);
         } finally {
@@ -1451,6 +1472,15 @@ public final class TlsHandshakeEngine {
         writeKeys = appServerKeys;
         writeKeysChanged = true;
 
+        // Handshake-ключи больше не нужны — соединение перешло на app traffic keys
+        if (handshakeServerKeys != null) { handshakeServerKeys.destroy(); handshakeServerKeys = null; }
+        if (handshakeClientKeys != null) { handshakeClientKeys.destroy(); handshakeClientKeys = null; }
+        TlsUtils.wipeArray(serverHandshakeTrafficSecret);
+        serverHandshakeTrafficSecret = null;
+        TlsUtils.wipeArray(clientHandshakeTrafficSecret);
+        clientHandshakeTrafficSecret = null;
+
+        receivedCertificates = null;
         state = State.POST_HANDSHAKE;
         ctx.destroy();
     }
@@ -1536,6 +1566,9 @@ public final class TlsHandshakeEngine {
      * @param obfuscatedTicketAge obfuscated_ticket_age
      */
     public void setPsk(byte[] psk, byte[] identity, long obfuscatedTicketAge) {
+        if (psk == null) {
+            throw new IllegalArgumentException("psk must not be null");
+        }
         this.pskKey = psk.clone();
         this.pskIdentity = identity;
         this.obfuscatedTicketAge = obfuscatedTicketAge;

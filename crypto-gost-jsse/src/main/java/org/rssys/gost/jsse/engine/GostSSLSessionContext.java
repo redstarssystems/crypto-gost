@@ -72,7 +72,8 @@ public final class GostSSLSessionContext implements SSLSessionContext {
         this.sessions = new LinkedHashMap<>(16, 0.75f, true) {
             @Override
             protected boolean removeEldestEntry(Map.Entry<ByteBuffer, GostSSLSession> eldest) {
-                return sessionCacheSize > 0 && size() > sessionCacheSize;
+                if (sessionCacheSize > 0 && size() > sessionCacheSize) return true;
+                return !eldest.getValue().isValid();
             }
         };
         this.identityByHost = new ConcurrentHashMap<>();
@@ -89,7 +90,13 @@ public final class GostSSLSessionContext implements SSLSessionContext {
         if (sessionId == null) return null;
         sessionsLock.lock();
         try {
-            return sessions.get(ByteBuffer.wrap(sessionId));
+            ByteBuffer key = ByteBuffer.wrap(sessionId);
+            GostSSLSession session = sessions.get(key);
+            if (session != null && !session.isValid()) {
+                sessions.remove(key);
+                return null;
+            }
+            return session;
         } finally {
             sessionsLock.unlock();
         }
@@ -231,6 +238,14 @@ public final class GostSSLSessionContext implements SSLSessionContext {
         System.Logger prev = LOG;
         LOG = testLogger;
         return prev;
+    }
+
+    /**
+     * Удаляет привязку host:port→identity из identityByHost.
+     * Вызывается из GostSSLEngine.processHandshakeFrames() при успешном PSK resumption.
+     */
+    void removeIdentity(String host, int port) {
+        identityByHost.remove(new HostPort(host, port));
     }
 
     /**

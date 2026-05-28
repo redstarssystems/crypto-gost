@@ -51,6 +51,9 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
     /** Кэш OCSP-ответов: key = (issuerSerialHex, certSerialHex) → CachedStatus. TTL = 1 час */
     private long ocspCacheTtlMs = 3600_000L;
     private static final long GRACE_MS = 3600_000L; // grace-период для nextUpdate (перекос часов)
+
+    /** Максимум записей в кэше OCSP (soft cap — защита от OOM при большом числе уникальных сертификатов). */
+    private static final int OCSP_CACHE_MAX_ENTRIES = 500;
     private final ConcurrentHashMap<OcspCacheKey, CachedOcspStatus> ocspCache = new ConcurrentHashMap<>();
 
     /** setter для тестов */
@@ -316,6 +319,10 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
                         : System.currentTimeMillis() + ocspCacheTtlMs;
                 ocspCache.put(cacheKey, new CachedOcspStatus(
                         result.response(), result.nonce(), expiresAt));
+                // Soft cap — случайное вытеснение при превышении (паттерн CrlCache)
+                if (ocspCache.size() > OCSP_CACHE_MAX_ENTRIES) {
+                    ocspCache.keySet().stream().findAny().ifPresent(ocspCache::remove);
+                }
                 LOG.log(Level.INFO, "OCSP fetch success for cert={0} from {1} ({2}ms)",
                         cacheKey.certSerial, ocspUri, elapsedMs);
                 break;
@@ -404,10 +411,13 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
                 bytesToHex(issuerSerial), bytesToHex(certSerial));
     }
 
+    private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();
+
     private static String bytesToHex(byte[] bytes) {
         StringBuilder sb = new StringBuilder(bytes.length * 2);
         for (byte b : bytes) {
-            sb.append(String.format("%02x", b & 0xFF));
+            sb.append(HEX_CHARS[(b >> 4) & 0xF]);
+            sb.append(HEX_CHARS[b & 0xF]);
         }
         return sb.toString();
     }

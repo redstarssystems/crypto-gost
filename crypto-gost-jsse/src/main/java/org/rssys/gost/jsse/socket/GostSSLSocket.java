@@ -204,12 +204,12 @@ public final class GostSSLSocket extends SSLSocket {
                         socketOut.flush();
                         break;
                     case NEED_UNWRAP: {
-                        byte[] record = readTlsRecord();
+                        ByteBuffer record = readTlsRecord();
                         if (record == null) {
                             throw new IOException("Connection closed by peer during handshake");
                         }
                         readDst.clear();
-                        engine.unwrap(ByteBuffer.wrap(record), readDst);
+                        engine.unwrap(record, readDst);
                         readDst.flip();
                         break;
                     }
@@ -283,11 +283,11 @@ public final class GostSSLSocket extends SSLSocket {
 
                 // Цикл: читаем TLS-записи, пока не получим app data
                 while (true) {
-                    byte[] record = readTlsRecord();
+                    ByteBuffer record = readTlsRecord();
                     if (record == null) return -1;
 
                     readDst.clear();
-                    SSLEngineResult unwrapResult = engine.unwrap(ByteBuffer.wrap(record), readDst);
+                    SSLEngineResult unwrapResult = engine.unwrap(record, readDst);
                     readDst.flip();
 
                     switch (unwrapResult.getStatus()) {
@@ -749,14 +749,14 @@ public final class GostSSLSocket extends SSLSocket {
      * EOF между записями (clean close): возвращает null.
      * EOF внутри записи (truncation): IOException.
      *
-     * @return массив байт записи (header + body), или null при чистом EOF
+     * @return ByteBuffer записи (header + body), или null при чистом EOF
      * @throws IOException при ошибке ввода-вывода или truncation
      */
-    private byte[] readTlsRecord() throws IOException {
-        byte[] header = new byte[RECORD_HEADER];
+    private ByteBuffer readTlsRecord() throws IOException {
+        byte[] hdr = new byte[RECORD_HEADER];
         int off = 0;
         while (off < RECORD_HEADER) {
-            int n = socketIn.read(header, off, RECORD_HEADER - off);
+            int n = socketIn.read(hdr, off, RECORD_HEADER - off);
             if (n == -1) {
                 if (off == 0) return null;
                 throw new EOFException("Truncated TLS record header: "
@@ -764,22 +764,21 @@ public final class GostSSLSocket extends SSLSocket {
             }
             off += n;
         }
-        int bodyLen = ((header[3] & 0xFF) << 8) | (header[4] & 0xFF);
-        byte[] body = new byte[bodyLen];
-        readFully(socketIn, body);
+        int bodyLen = ((hdr[3] & 0xFF) << 8) | (hdr[4] & 0xFF);
+        if (bodyLen > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
+            throw new IOException("TLS record too large: " + bodyLen);
+        }
         byte[] record = new byte[RECORD_HEADER + bodyLen];
-        System.arraycopy(header, 0, record, 0, RECORD_HEADER);
-        System.arraycopy(body, 0, record, RECORD_HEADER, bodyLen);
-        return record;
+        System.arraycopy(hdr, 0, record, 0, RECORD_HEADER);
+        readFully(socketIn, record, RECORD_HEADER, bodyLen);
+        return ByteBuffer.wrap(record, 0, RECORD_HEADER + bodyLen);
     }
 
     /**
      * Читает ровно {@code len} байт из {@code in} в {@code buf}.
      * EOF до чтения всех байт: {@link EOFException}.
      */
-    private static void readFully(InputStream in, byte[] buf) throws IOException {
-        int off = 0;
-        int len = buf.length;
+    private static void readFully(InputStream in, byte[] buf, int off, int len) throws IOException {
         while (len > 0) {
             int n = in.read(buf, off, len);
             if (n == -1) throw new EOFException("Unexpected EOF");

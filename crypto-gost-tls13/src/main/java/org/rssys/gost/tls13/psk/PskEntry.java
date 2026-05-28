@@ -51,8 +51,8 @@ public final class PskEntry {
         return (now - issueTime) > ticketLifetime * 1000L;
     }
 
-    /** Затирает PSK при вытеснении записи. Пакетный — для реализаций PskStore. */
-    void destroyPsk() {
+    /** Затирает PSK при вытеснении записи. */
+    public void destroy() {
         byte[] k = psk;
         if (k != null) {
             TlsUtils.wipeArray(k);

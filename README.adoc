@@ -25,8 +25,13 @@ WARNING: *Данная библиотека не является сертифи
 
 NOTE:** Библиотека функционально закончена. Нового API или какого-то развития больше не ожидается. Только исправление ошибок.**
 
+== Документация
 
-=== Цели и задачи
+* link:crypto-gost-core/README.md[Криптографическое ядро:] базовые функции шифрования, хеширования, электронной подписи, JCA-провайдер и др.
+* link:crypto-gost-tls13/README.md[TLS 1.3] — реализация протокола защищенной передачи данных по сети.
+* link:crypto-gost-jsse/README.md[JSSE-провайдер].
+
+== Цели и задачи
 
 Создавая эту библиотеку я хотел устранить следующие недостатки:
 
@@ -58,20 +63,20 @@ NOTE:** Библиотека функционально закончена. Но
 [source,bash]
 ----
 gpg --import KEYS
-gpg -v v0.3.3
+gpg -v v0.3.4
 ----
 
-- *Способ 2.* Скачайте артефакты https://gitflic.ru/project/red-stars-systems/crypto-gost/release?sort=TIME&direction=DESC[отсюда] и установите нужные модули. Для модуля `crypto-gost-core` пример установки: +
+- *Способ 2.* Скачайте артефакты https://gitflic.ru/project/red-stars-systems/crypto-gost/release?sort=TIME&direction=DESC[отсюда] и установите нужные модули. Пример установки для модуля `crypto-gost-core`: +
 +
 [source,bash]
 ----
 mvn install:install-file \
-  -Dfile=crypto-gost-core-0.3.3.jar \
-  -Dsources=crypto-gost-core-0.3.3-sources.jar \
-  -Djavadoc=crypto-gost-core-0.3.3-javadoc.jar \
+  -Dfile=crypto-gost-core-0.3.4.jar \
+  -Dsources=crypto-gost-core-0.3.4-sources.jar \
+  -Djavadoc=crypto-gost-core-0.3.4-javadoc.jar \
   -DgroupId=org.rssys \
   -DartifactId=crypto-gost-core \
-  -Dversion=0.3.3 \
+  -Dversion=0.3.4 \
   -Dpackaging=jar
 ----
 
@@ -82,19 +87,19 @@ mvn install:install-file \
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-core</artifactId>
-    <version>0.3.3</version>
+    <version>0.3.4</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-tls13</artifactId>
-    <version>0.3.3</version>
+    <version>0.3.4</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-jsse</artifactId>
-    <version>0.3.3</version>
+    <version>0.3.4</version>
 </dependency>
 ----
 
@@ -102,21 +107,13 @@ mvn install:install-file \
 [source,bash]
 ----
 gpg --import KEYS
-gpg --verify crypto-gost-core-0.3.3.jar.asc crypto-gost-core-0.3.3.jar
+gpg --verify crypto-gost-core-0.3.4.jar.asc crypto-gost-core-0.3.4.jar
 ----
-
-
-== Документация
-
-* link:crypto-gost-jsse/README.md[JSSE-провайдер].
-* link:crypto-gost-tls13/README.md[TLS 1.3].
-* link:crypto-gost-core/README.md[Криптографическое ядро].
-
 
 == Бенчмарки
 
 * link:bench/README.md[Методики бенчмарков и кросс-валидации]
-* link:crypto-gost-jsse/doc/stress-test-03.md[Стресс-тестирование JSSE-модуля]
+* link:crypto-gost-jsse/doc/stress-test-04.md[Стресс-тестирование JSSE-модуля (отчёт №4)]
 
 
 == Раздел для разработчиков
@@ -126,11 +123,13 @@ gpg --verify crypto-gost-core-0.3.3.jar.asc crypto-gost-core-0.3.3.jar
 * `mvn test` — запуск тестов.
 * `mvn package` — получение дистрибутива библиотеки.
 * `mvn install` — установка дистрибутива библиотеки в локальный .m2.
+* `make doc` — генерация md-файлов (Markdown) из adoc-файлов (asciidoc).
 
 В папке _bench_ созданы примеры кросс-верификации *crypto-gost*, *BouncyCastle 1.83* и *OpenSSL*, а также много других бенчмарков.
 
 В каталоге _examples/_ находятся интеграционные тесты и примеры использования.
 
+Документация в этом проекте ведется в asciidoc-формате и на основе него генерируется в markdown и другие форматы.
 
 == Проблематика
 
@@ -149,7 +148,7 @@ gpg --verify crypto-gost-core-0.3.3.jar.asc crypto-gost-core-0.3.3.jar
 * Если мне нужны только ГОСТ-алгоритмы, то 95% остального кода c западной криптографией мне не нужно.
 * Нужен контроль изменений в новых версиях, как в плане безопасности, так и производительности.
 * Отсутствие современной реализации TLS 1.3 для ГОСТ.
-* Безопасность, даже для личных проектов, очень важна. Авторы Bouncycastle развивают прежде всего западные алгоритмы и устраняют недостатки в них. В качестве примера приведу https://nvd.nist.gov/vuln/detail/CVE-2025-14813[CVE-2025-14813]  для режиме шифрования CTR. Атакующий может восстановить открытый текст без знания ключа. Уязвимы все версии BC-JAVA от 1.59 до 1.83
+* Безопасность, даже для личных проектов, очень важна. Авторы Bouncycastle развивают прежде всего западные алгоритмы и устраняют недостатки в них. В качестве примера приведу https://www.cve.org/CVERecord?id=CVE-2025-14813[CVE-2025-14813]  для режиме шифрования CTR. Атакующий может восстановить открытый текст без знания ключа. Уязвимы все версии BC-JAVA от 1.59 до 1.83
 
 Классический алгоритм электронной подписи на эллиптических кривых (ECDSA) при каждой подписи требует некое число `k`, которое нужно использовать при подписи совместно с закрытым ключом. Некоторые авторы реализуют ECDSA со случайным `k`, что требует криптографически качественного генератора случайных чисел (ГСЧ/RNG) при каждой подписи. А если ваш сайт или приложение работают в облачной среде, то неизвестно как настроена виртуализация и проброс энтропии в виртуальную машину для выработки случайных чисел `k`, нужных для *каждой* подписи.
 
@@ -265,7 +264,7 @@ IMPORTANT: Данная реализация *crypto-gost* претендует 
 
 Нужно отметить существенное падение скорости подписи и проверки в `crypto-gost`, связанные с реализацией. Что лучше: безопасность vs скорость? Данная библиотека поставила целью преследовать безопасность, как наивысший критерий. Какой смысл в быстрой подписи, если любая операция ведет к компроментации закрытого ключа.
 
-IMPORTANT: С учетом https://nvd.nist.gov/vuln/detail/CVE-2025-14813[CVE-2025-14813] и вышеприведенной таблицы в части электронной подписи, я категорически не рекомендую использовать ГОСТ от Bouncycastle даже для личных проектов.
+IMPORTANT: С учетом https://www.cve.org/CVERecord?id=CVE-2025-14813[CVE-2025-14813] и вышеприведенной таблицы в части электронной подписи, я категорически не рекомендую использовать ГОСТ от Bouncycastle даже для личных проектов.
 
 == Лицензия
 

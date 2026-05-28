@@ -27,12 +27,12 @@
         <dependency>
             <groupId>org.rssys</groupId>
             <artifactId>crypto-gost-jsse</artifactId>
-            <version>${revision}</version>
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.rssys</groupId>
             <artifactId>crypto-gost-tls13</artifactId>
-            <version>${revision}</version>
+            <version>${project.version}</version>
             <classifier>tests</classifier>
             <type>test-jar</type>
             <scope>compile</scope>

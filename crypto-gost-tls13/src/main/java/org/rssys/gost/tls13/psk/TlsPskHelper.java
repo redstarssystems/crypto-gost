@@ -53,7 +53,7 @@ public final class TlsPskHelper {
         d = newDigest(hashLen);
         d.doFinal(emptyHash, 0);
         byte[] binderKey = HkdfStreebog.deriveSecret(
-                earlySecret, TlsConstants.LABEL_RES_BINDER, emptyHash, hashLen);
+                earlySecret, HkdfStreebog.PREFIXED_RES_BINDER, emptyHash, hashLen);
         TlsUtils.wipeArray(earlySecret);
         TlsUtils.wipeArray(emptyHash);
 
@@ -98,7 +98,7 @@ public final class TlsPskHelper {
     public static byte[] derivePsk(byte[] resumptionMasterSecret, byte[] ticketNonce, int hashLen) {
         if (resumptionMasterSecret == null) return null;
         return HkdfStreebog.expandLabel(
-                resumptionMasterSecret, TlsConstants.LABEL_RESUMPTION,
+                resumptionMasterSecret, HkdfStreebog.PREFIXED_RESUMPTION,
                 ticketNonce, hashLen, hashLen);
     }
 }

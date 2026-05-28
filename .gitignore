@@ -33,7 +33,9 @@ logs
 .factorypath
 .java-version
 .lein-*
+.claude/*
 .lsp/.cache
+.agents/*
 /AGENTS.md
 .lsp/sqlite.db
 .nrepl-history

@@ -74,7 +74,7 @@ public final class TlsKeySchedule {
         byte[] early = getEarlySecret();
         byte[] emptyHash = computeEmptyHash();
         byte[] derived = HkdfStreebog.deriveSecret(
-                early, TlsConstants.LABEL_DERIVED, emptyHash, hashLen);
+                early, HkdfStreebog.PREFIXED_DERIVED, emptyHash, hashLen);
         try {
             TlsUtils.wipeArray(handshakeSecret);
             handshakeSecret = HkdfStreebog.extract(derived, ecdheSharedSecret, hashLen);
@@ -95,7 +95,7 @@ public final class TlsKeySchedule {
         }
         byte[] emptyHash = computeEmptyHash();
         byte[] derived = HkdfStreebog.deriveSecret(
-                handshakeSecret, TlsConstants.LABEL_DERIVED, emptyHash, hashLen);
+                handshakeSecret, HkdfStreebog.PREFIXED_DERIVED, emptyHash, hashLen);
         try {
             byte[] zero = new byte[hashLen];
             masterSecret = HkdfStreebog.extract(derived, zero, hashLen);
@@ -117,7 +117,7 @@ public final class TlsKeySchedule {
      */
     public byte[] getServerHandshakeTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
-                handshakeSecret, TlsConstants.LABEL_SERVER_HANDSHAKE_TRAFFIC,
+                handshakeSecret, HkdfStreebog.PREFIXED_S_HS_TRAFFIC,
                 transcriptHash, hashLen);
     }
 
@@ -130,7 +130,7 @@ public final class TlsKeySchedule {
      */
     public byte[] getClientHandshakeTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
-                handshakeSecret, TlsConstants.LABEL_CLIENT_HANDSHAKE_TRAFFIC,
+                handshakeSecret, HkdfStreebog.PREFIXED_C_HS_TRAFFIC,
                 transcriptHash, hashLen);
     }
 
@@ -145,7 +145,7 @@ public final class TlsKeySchedule {
      */
     public byte[] getServerApplicationTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
-                masterSecret, TlsConstants.LABEL_SERVER_APPLICATION_TRAFFIC,
+                masterSecret, HkdfStreebog.PREFIXED_S_AP_TRAFFIC,
                 transcriptHash, hashLen);
     }
 
@@ -158,7 +158,7 @@ public final class TlsKeySchedule {
      */
     public byte[] getClientApplicationTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
-                masterSecret, TlsConstants.LABEL_CLIENT_APPLICATION_TRAFFIC,
+                masterSecret, HkdfStreebog.PREFIXED_C_AP_TRAFFIC,
                 transcriptHash, hashLen);
     }
 
@@ -179,7 +179,7 @@ public final class TlsKeySchedule {
     public byte[] computeVerifyData(byte[] trafficSecret, byte[] transcript) {
         checkNotDestroyed();
         byte[] finishedKey = HkdfStreebog.expandLabel(
-                trafficSecret, TlsConstants.LABEL_FINISHED, new byte[0],
+                trafficSecret, HkdfStreebog.PREFIXED_FINISHED, HkdfStreebog.EMPTY_CONTEXT,
                 hashLen, hashLen);
         Hmac hmac = HkdfStreebog.newHmac(hashLen);
         hmac.init(finishedKey);
@@ -226,7 +226,7 @@ public final class TlsKeySchedule {
         }
         byte[] emptyHash = computeEmptyHash();
         return HkdfStreebog.deriveSecret(
-                masterSecret, TlsConstants.LABEL_RES_MASTER, emptyHash, hashLen);
+                masterSecret, HkdfStreebog.PREFIXED_RES_MASTER, emptyHash, hashLen);
     }
 
     // ========================================================================
@@ -271,10 +271,10 @@ public final class TlsKeySchedule {
      */
     public TlsTrafficKeys deriveTrafficKeys(byte[] trafficSecret) {
         byte[] key = HkdfStreebog.expandLabel(
-                trafficSecret, TlsConstants.LABEL_KEY, new byte[0],
+                trafficSecret, HkdfStreebog.PREFIXED_KEY, HkdfStreebog.EMPTY_CONTEXT,
                 ciphersuite.getKeyLen(), hashLen);
         byte[] iv = HkdfStreebog.expandLabel(
-                trafficSecret, TlsConstants.LABEL_IV, new byte[0],
+                trafficSecret, HkdfStreebog.PREFIXED_IV, HkdfStreebog.EMPTY_CONTEXT,
                 ciphersuite.getIvLen(), hashLen);
         return new TlsTrafficKeys(key, iv);
     }

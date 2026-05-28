@@ -308,21 +308,6 @@ public final class ECPoint {
     return table;
   }
 
-  public ECPoint multiplyWNaf(BigInteger k, ECPoint[] precomputed, int w) {
-    int[] naf = computeWNaf(k, w);
-    ECPoint[] table = (precomputed != null) ? precomputed : buildWNafTable(w);
-    ECPoint result = infinity(params);
-    for (int i = naf.length - 1; i >= 0; i--) {
-      result = result.twice();
-      int digit = naf[i];
-      if (digit != 0) {
-        int idx = (Math.abs(digit) - 1) >> 1;
-        ECPoint pt = table[idx];
-        result = result.add(digit > 0 ? pt : negatePoint(pt));
-      }
-    }
-    return result.normalize();
-  }
 
   static int[] computeWNaf(BigInteger k, int w) {
     int pow2w = 1 << w, pow2w1 = 1 << (w - 1);

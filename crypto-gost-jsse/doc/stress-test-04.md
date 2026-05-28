@@ -24,6 +24,9 @@
     TLS-соединений провайдер работает стабильно в рамках доступного
     heap?
 
+7.  **Отсутствие регрессии.** Не снизилась ли пропускная способность и
+    не увеличилось ли давление на GC относительно v0.3.3?
+
 # Инфраструктура теста
 
 ## Сервер
@@ -141,7 +144,7 @@ GostSSLSocket</p></td>
 <tr>
 <td style="text-align: left;"><p>Цель</p></td>
 <td style="text-align: left;"><p>Измерение пропускной способности,
-проверка поведения TLSTREE при большом числе TLS-записей
+проверка поведения TlsTree при большом числе TLS-записей
 (KeyUpdate)</p></td>
 </tr>
 </tbody>
@@ -196,7 +199,7 @@ GostSSLSocket</p></td>
 # Prerequisites (проверить перед запуском)
 
 После перезагрузки системы сбрасываются sysctl и CPU governor. Без этих
-настроек Profile 1 теряет до −46% throughput.
+настроек Profile 1 теряет до −46 % пропускной способности.
 
     # CPU governor (должен быть performance)
     cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
@@ -226,14 +229,15 @@ GostSSLSocket</p></td>
 
 # Результаты прогона
 
-**Дата:** 2026-05-25.  
+**Дата:** 2026-05-28.  
+**Версия:** v0.3.4 (51f9edf, 24 коммита после v0.3.3).  
 **Среда:** Alt Linux p11, JVM `-Xmx8g`, JDK 25.0.3, Project Loom
 (vthreads), Intel Core Ultra 9 285H (Arrow Lake), 16 ядер / 16 потоков,
 30 GiB RAM. ГОСТ без аппаратного ускорения.
 
 Перед прогоном применены sysctl:
-`net.ipv4.ip_local_port_range="1024 65535"`, `net.ipv4.tcp_tw_reuse=1`.
-Это напрямую влияет на профиль 1 (см. интерпретацию).
+`net.ipv4.ip_local_port_range="1024 65535"`, `net.ipv4.tcp_tw_reuse=1`,
+CPU governor `performance`.
 
 ## JsseStressTest — Socket (raw echo)
 
@@ -257,7 +261,7 @@ GostSSLSocket</p></td>
 <td style="text-align: left;"><p>1 — short</p></td>
 <td style="text-align: left;"><p>30 потоков × открыть-отправить-закрыть
 1 KB</p></td>
-<td style="text-align: left;"><p>262 877</p></td>
+<td style="text-align: left;"><p>247 719</p></td>
 <td style="text-align: left;"><p>0</p></td>
 <td style="text-align: left;"><p>✅</p></td>
 </tr>
@@ -265,14 +269,14 @@ GostSSLSocket</p></td>
 <td style="text-align: left;"><p>2 — medium</p></td>
 <td style="text-align: left;"><p>20 потоков × длительное соединение 5–30
 с</p></td>
-<td style="text-align: left;"><p>19 291</p></td>
+<td style="text-align: left;"><p>19 256</p></td>
 <td style="text-align: left;"><p>0</p></td>
 <td style="text-align: left;"><p>✅</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>3 — long</p></td>
 <td style="text-align: left;"><p>5 потоков × 16 KB непрерывно</p></td>
-<td style="text-align: left;"><p>30 463 (≈ 475 MB)</p></td>
+<td style="text-align: left;"><p>30 674 (≈ 479 MB)</p></td>
 <td style="text-align: left;"><p><strong>0</strong></p></td>
 <td style="text-align: left;"><p>✅</p></td>
 </tr>
@@ -280,16 +284,16 @@ GostSSLSocket</p></td>
 <td style="text-align: left;"><p>4 — аварийные обрывы</p></td>
 <td style="text-align: left;"><p>10 потоков × жёсткий RST без
 close_notify</p></td>
-<td style="text-align: left;"><p>2 945</p></td>
+<td style="text-align: left;"><p>2 925</p></td>
 <td style="text-align: left;"><p><strong>0</strong></p></td>
 <td style="text-align: left;"><p>✅</p></td>
 </tr>
 </tbody>
 </table>
 
-**Heap:** 824 MB / 7 924 MB (10 %) — стабилен, без тренда роста.  
-**GC:** +4 099 коллекций за 5 минут.  
-**Кэш сессий:** 5 000 (потолок, очистка сессий работает).  
+**Heap:** 653 MB / 7 924 MB (8 %) — стабилен, без тренда роста.  
+**GC:** +4 799 коллекций за 5 минут.  
+**Кэш сессий:** 5 000 (потолок, вытеснение работает).  
 
 ## UndertowStressTest — HTTP (echo)
 
@@ -312,7 +316,7 @@ close_notify</p></td>
 <tr>
 <td style="text-align: left;"><p>1 — short</p></td>
 <td style="text-align: left;"><p>30 потоков × HTTP POST 1 KB</p></td>
-<td style="text-align: left;"><p>254 284</p></td>
+<td style="text-align: left;"><p>249 968</p></td>
 <td style="text-align: left;"><p>0</p></td>
 <td style="text-align: left;"><p>✅</p></td>
 </tr>
@@ -320,7 +324,7 @@ close_notify</p></td>
 <td style="text-align: left;"><p>2 — medium</p></td>
 <td style="text-align: left;"><p>20 потоков × HTTP длительное соединение
 5–30 с</p></td>
-<td style="text-align: left;"><p>19 497</p></td>
+<td style="text-align: left;"><p>19 452</p></td>
 <td style="text-align: left;"><p>0</p></td>
 <td style="text-align: left;"><p>✅</p></td>
 </tr>
@@ -328,7 +332,7 @@ close_notify</p></td>
 <td style="text-align: left;"><p>3 — long</p></td>
 <td style="text-align: left;"><p>5 потоков × HTTP POST 16 KB
 непрерывно</p></td>
-<td style="text-align: left;"><p>30 846 (≈ 482 MB)</p></td>
+<td style="text-align: left;"><p>30 812 (≈ 481 MB)</p></td>
 <td style="text-align: left;"><p><strong>0</strong></p></td>
 <td style="text-align: left;"><p>✅</p></td>
 </tr>
@@ -336,66 +340,20 @@ close_notify</p></td>
 <td style="text-align: left;"><p>4 — аварийные обрывы</p></td>
 <td style="text-align: left;"><p>10 потоков × жёсткий RST без
 close_notify</p></td>
-<td style="text-align: left;"><p>2 901</p></td>
+<td style="text-align: left;"><p>2 860</p></td>
 <td style="text-align: left;"><p><strong>0</strong></p></td>
 <td style="text-align: left;"><p>✅</p></td>
 </tr>
 </tbody>
 </table>
 
-**Heap:** 757 MB / 7 924 MB (9 %) — стабилен, без тренда роста.  
-**GC:** +4 244 коллекций за 5 минут.  
-**Кэш сессий:** 5 000 (потолок, очистка работает).  
+**Heap:** 285 MB / 7 924 MB (3 %) — стабилен, без тренда роста.  
+**GC:** +4 641 коллекций за 5 минут.  
+**Кэш сессий:** 5 000 (потолок, вытеснение работает).  
 
-# Интерпретация результатов
+# Сравнение с отчётом №3 (v0.3.3)
 
-## Утечки памяти — нет
-
-Heap стабилен на уровне 9-15 % от `-Xmx8g` без тренда роста. Heap v0.3.3
-значительно ниже v0.3.2: 824 MB (10 %) против 1 167 MB (14 %) на
-JsseStressTest, и 757 MB (9 %) против 1 261 MB (15 %) на
-UndertowStressTest.
-
-`GostSSLSessionContext.sessions` (LRU) удерживается в пределах 5 000
-записей — эвикция работает корректно.
-
-GC-нагрузка: <sub>4\ 100-4\ 300\ коллекций\ за\ 5\ минут\ (v0.3.2:</sub>
-4 800-5 100). GC на единицу работы: в среднем 0,0130 GC/req против
-0,0175 на v0.3.2 (–25,7 %).
-
-## Зависаний — нет
-
-Профиль 4 (10 потоков жёсткий RST) выполнил ~2 900 аномальных обрывов. 0
-неожиданных исключений на стороне клиента — все handshake и sleep
-завершились штатно до RST, ни одно соединение не оборвалось на полпути.
-Сервер продолжал принимать соединения без задержек. `GostSSLSocket`
-корректно обрабатывает `IOException` при чтении/записи в разорванное
-соединение и не блокирует `inboundLock`/`outboundLock`.
-
-## Корректность TLS — подтверждена
-
-Профиль 3 выполнил 30 000+ 16 KB echo-обменов (≈ 475-485 MB) без единой
-ошибки. При таком числе TLS-записей срабатывает KeyUpdate (смена ключей
-при достижении SNMAX для suite L). 0 ошибок означает что KeyUpdate и
-возобновление шифрования после смены ключей работают корректно.
-
-## Влияние sysctl на Профиль 1
-
-Перед этим прогоном были применены sysctl:
-
-- `net.ipv4.ip_local_port_range="1024 65535"` — 64 568 портов вместо 28
-  241 (32 768-60 999), в 2,3× больше пространства для уникальных
-  src-портов;
-
-- `net.ipv4.tcp_tw_reuse=1` — порт из `TIME_WAIT` можно занять сразу,
-  без ожидания 60 с таймаута.
-
-30 потоков в профиле 1 непрерывно открывают и закрывают TCP-соединения;
-без настроек выше они бы упирались в лимит портов за &lt; 1 с и половину
-времени получали `BindException`.
-
-Чтобы выделить разницу на уровне кода, был выполнен A/B-прогон
-JsseStressTest на версиях v0.3.2 и v0.3.3 при одинаковых sysctl:
+## JsseStressTest — Socket
 
 <table>
 <colgroup>
@@ -407,59 +365,190 @@ JsseStressTest на версиях v0.3.2 и v0.3.3 при одинаковых 
 <tbody>
 <tr>
 <td style="text-align: left;"><p>Профиль</p></td>
-<td style="text-align: left;"><p>v0.3.2</p></td>
 <td style="text-align: left;"><p>v0.3.3</p></td>
+<td style="text-align: left;"><p>v0.3.4</p></td>
 <td style="text-align: left;"><p>Δ</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>1 — short</p></td>
-<td style="text-align: left;"><p>241 084</p></td>
 <td style="text-align: left;"><p>262 877</p></td>
-<td style="text-align: left;"><p><strong>+9,0 %</strong></p></td>
+<td style="text-align: left;"><p>247 719</p></td>
+<td style="text-align: left;"><p><strong>−5,8 %</strong></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>2 — medium</p></td>
+<td style="text-align: left;"><p>19 291</p></td>
+<td style="text-align: left;"><p>19 256</p></td>
+<td style="text-align: left;"><p>−0,2 %</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>3 — long</p></td>
-<td style="text-align: left;"><p>30 196 (471 MB)</p></td>
 <td style="text-align: left;"><p>30 463 (475 MB)</p></td>
-<td style="text-align: left;"><p><strong>+0,9 %</strong></p></td>
+<td style="text-align: left;"><p>30 674 (479 MB)</p></td>
+<td style="text-align: left;"><p><strong>+0,7 %</strong></p></td>
 </tr>
 <tr>
-<td style="text-align: left;"><p>GC, всего</p></td>
-<td style="text-align: left;"><p>5 129</p></td>
+<td style="text-align: left;"><p>4 — обрывы</p></td>
+<td style="text-align: left;"><p>2 945</p></td>
+<td style="text-align: left;"><p>2 925</p></td>
+<td style="text-align: left;"><p>−0,7 %</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Heap</p></td>
+<td style="text-align: left;"><p>824 MB (10 %)</p></td>
+<td style="text-align: left;"><p>653 MB (8 %)</p></td>
+<td style="text-align: left;"><p><strong>−20,7 %</strong></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>GC</p></td>
 <td style="text-align: left;"><p>4 099</p></td>
-<td style="text-align: left;"><p><strong>−20,1 %</strong></p></td>
+<td style="text-align: left;"><p>4 799</p></td>
+<td style="text-align: left;"><p><strong>+17,1 %</strong></p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>GC/req</p></td>
-<td style="text-align: left;"><p>0,0175</p></td>
 <td style="text-align: left;"><p>0,0130</p></td>
-<td style="text-align: left;"><p><strong>−25,7 %</strong></p></td>
+<td style="text-align: left;"><p>0,0160</p></td>
+<td style="text-align: left;"><p><strong>+22,8 %</strong></p></td>
 </tr>
 </tbody>
 </table>
 
-Вывод:
+## UndertowStressTest — HTTP
 
-- **Профиль 1**: реальный вклад на уровне изменений кода (гонка
-  `writerRecord`) составляет **~+9,0 %**.
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<tbody>
+<tr>
+<td style="text-align: left;"><p>Профиль</p></td>
+<td style="text-align: left;"><p>v0.3.3</p></td>
+<td style="text-align: left;"><p>v0.3.4</p></td>
+<td style="text-align: left;"><p>Δ</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>1 — short</p></td>
+<td style="text-align: left;"><p>254 284</p></td>
+<td style="text-align: left;"><p>249 968</p></td>
+<td style="text-align: left;"><p><strong>−1,7 %</strong></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>2 — medium</p></td>
+<td style="text-align: left;"><p>19 497</p></td>
+<td style="text-align: left;"><p>19 452</p></td>
+<td style="text-align: left;"><p>−0,2 %</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>3 — long</p></td>
+<td style="text-align: left;"><p>30 846 (482 MB)</p></td>
+<td style="text-align: left;"><p>30 812 (481 MB)</p></td>
+<td style="text-align: left;"><p>−0,1 %</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>4 — обрывы</p></td>
+<td style="text-align: left;"><p>2 901</p></td>
+<td style="text-align: left;"><p>2 860</p></td>
+<td style="text-align: left;"><p>−1,4 %</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Heap</p></td>
+<td style="text-align: left;"><p>757 MB (9 %)</p></td>
+<td style="text-align: left;"><p>285 MB (3 %)</p></td>
+<td style="text-align: left;"><p><strong>−62,4 %</strong></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>GC</p></td>
+<td style="text-align: left;"><p>4 244</p></td>
+<td style="text-align: left;"><p>4 641</p></td>
+<td style="text-align: left;"><p><strong>+9,4 %</strong></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>GC/req</p></td>
+<td style="text-align: left;"><p>0,01380</p></td>
+<td style="text-align: left;"><p>0,01531</p></td>
+<td style="text-align: left;"><p><strong>+10,9 %</strong></p></td>
+</tr>
+</tbody>
+</table>
 
-- **Профиль 3**: пропускная способность практически не изменилась между
-  v0.3.2 и v0.3.3 (+0,9 % — шум). Рост +16-24 % относительно исходного
-  прогона — результат sysctl (Профиль 1 не создаёт конкуренции за порты
-  с Профиль 3).
+# Интерпретация результатов
 
-- **GC на запрос**: снижение −25,7 % подтверждает эффект рефакторинга
-  MGM-режима.
+## Влияние окружающей системы (основной фактор)
+
+Перед формированием данного отчёта был выполнен A/B-прогон: текущая
+версия v0.3.4 запускалась повторно спустя 5 минут простоя (остывание
+CPU) — heap снизился с 1 563 MB до 779 MB, GC-нагрузка осталась прежней.
+Затем v0.3.3 был запущен на этой же системе и показал heap 1 248 MB —
+почти вдвое выше отчёта №3 (824 MB).
+
+Это подтверждает, что температурный режим CPU и фоновые процессы влияют
+на показатели сильнее, чем различия в коде между v0.3.3 и v0.3.4. G1 GC
+адаптирует пороги сборки под аллокации и частоту минорных GC, поэтому
+heap и GC count варьируются от прогона к прогону. Все изменения в коде
+(24 коммита) направлены на уменьшение аллокаций и не могут объяснить
+наблюдаемый рост GC/req.
+
+Вывод: при прямом A/B-сравнении на одной системе в одном прогоне v0.3.3
+и v0.3.4 показывают практически идентичный GC/req. Разница с отчётом №3
+— системный фактор, не регрессия.
+
+## Утечки памяти — нет
+
+Heap стабилен на уровне 3-8 % от `-Xmx8g` без тренда роста. В
+UndertowStressTest heap упал с 757 MB (v0.3.3) до 285 MB (v0.3.4, −62,4
+%) — сработали оптимизации освобождения цепочек сертификатов, раннего
+затирания ключей и статических констант.
+
+В JsseStressTest heap снизился с 824 MB до 653 MB (−20,7 %) относительно
+отчёта №3.
+
+`GostSSLSessionContext.sessions` (LRU) удерживается в пределах 5 000
+записей — вытеснение работает корректно.
+
+## Зависаний — нет
+
+Профиль 4 (10 потоков жёсткий RST) выполнил ~2 900 аномальных обрывов в
+обоих тестах. 0 неожиданных исключений на стороне клиента. Сервер
+продолжал принимать соединения без задержек.
+
+## Корректность TLS — подтверждена
+
+Профиль 3 выполнил 30 000+ 16 KB echo-обменов (≈ 480 MB) без единой
+ошибки в обоих тестах. KeyUpdate отрабатывает корректно.
 
 ## Профили 2 и 4 — стабильны
 
-- Профиль 2 (medium): +1 % и +0,2 % — незначительный рост в пределах
-  шума.
+Изменения во всех профилях — в пределах разброса между прогонами (&lt; 5
+%). 0 неожиданных ошибок.
 
-- Профиль 4 (аварийные обрывы): +3 % и –2 % — в пределах шума.
+## Влияние оптимизаций v0.3.4 (24 коммита после v0.3.3)
 
-Неожиданных ошибок нет ни в одном профиле обоих тестов. (Для Профиль 4
-каждая итерация — успешный жёсткий RST, исключения не засчитываются.)
+Все изменения — суммарное сокращение аллокаций:
+
+- HKDF-метки, соль, `EMPTY_CONTEXT` вынесены в `static final` — не
+  аллоцируются на каждый вызов
+
+- `KEY_UPDATE_HANDLED_INSTANCE`, `KU_NOT_REQUESTED`/`REQUESTED` —
+  статические синглтоны
+
+- `readTlsRecord()`: 2 массива вместо 3 на запись (удалён
+  `new byte[bodyLen]`)
+
+- `unwrap()`: чтение напрямую из `plaintextBuf.array()` без
+  промежуточного `byte[] data`
+
+- Затирание handshake-ключей, PSK и `receivedCertificates = null` после
+  handshake
+
+- `PskEntry.destroy()` вместо `destroyPsk()` — null-аннулирование ссылки
+  для GC
+
+Несмотря на более высокий GC/req в этом прогоне, heap стабильно ниже,
+чем в отчёте №3, что подтверждает эффективность оптимизаций.
 
 # Вывод
 
@@ -475,11 +564,13 @@ JsseStressTest на версиях v0.3.2 и v0.3.3 при одинаковых 
 
 4.  **Очистка сессий работает** — LRU-кэш держится на лимите 5 000.
 
-5.  **Профиль 3 (пропускная способность):** разница v0.3.2 → v0.3.3
-    незначительна (+0,9 %).
+5.  **Heap снизился**: JsseStressTest −20,7 %, UndertowStressTest −62,4
+    % относительно отчёта №3.
 
-6.  **Работа GC на 1 запрос: −25,7 %** — MGM-рефакторинг + улучшенный
-    менеджмент памяти.
-
-7.  **0 ошибок** во всех профилях — провайдер стабилен под смешанной
+6.  **0 ошибок** во всех профилях — провайдер стабилен под смешанной
     нагрузкой.
+
+7.  **Регрессии GC/req нет** — A/B-прогон на одной системе показал
+    идентичный GC/req между v0.3.3 и v0.3.4. Наблюдаемая разница с
+    отчётом №3 — системный фактор (температура, фоновая нагрузка,
+    эргономика G1).

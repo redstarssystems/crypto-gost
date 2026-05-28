@@ -316,9 +316,8 @@ public final class GostSsl {
 
             // Session cache
             if (sessionCacheSize >= 0) {
-                GostSSLSessionContext srvCtx =
-                        (GostSSLSessionContext) ctx.getServerSessionContext();
-                srvCtx.setSessionCacheSize(sessionCacheSize);
+                ctx.getClientSessionContext().setSessionCacheSize(sessionCacheSize);
+                ctx.getServerSessionContext().setSessionCacheSize(sessionCacheSize);
             }
 
             return ctx;

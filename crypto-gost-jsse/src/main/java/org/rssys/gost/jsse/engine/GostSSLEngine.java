@@ -107,6 +107,8 @@ public final class GostSSLEngine extends SSLEngine {
 
     // Сессия и OCSP
     private GostSSLSession session;
+    /** null-сессия до handshake (кэш для getSession(), RFC JSSE spec) */
+    private final GostSSLSession preHandshakeSession;
     /** peer-сертификаты, сохранённые до создания session (immutable pattern) */
     private java.security.cert.X509Certificate[] peerCertificates;
 
@@ -174,6 +176,9 @@ public final class GostSSLEngine extends SSLEngine {
         this.ciphersuite = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         this.sessionContext = clientSessionContext;
         this.serverSessionContext = serverSessionContext;
+        this.preHandshakeSession = new GostSSLSession(
+                GostJsseConstants.SSL_NULL_CIPHER, this.peerHost, this.peerPort,
+                null, null);
     }
 
     /**
@@ -273,10 +278,13 @@ public final class GostSSLEngine extends SSLEngine {
             if (sessionContext != null && peerHost != null && !peerHost.isEmpty()) {
                 PskEntry entry = sessionContext.getForClientResumption(peerHost, peerPort);
                 if (entry != null) {
-                    currentPskTicketIdentity = entry.getTicket();
-                    long ticketAge = ((System.currentTimeMillis() - entry.getIssueTime()) / 1000L) & 0xFFFFFFFFL;
-                    long obfuscatedAge = (ticketAge + entry.getTicketAgeAdd()) & 0xFFFFFFFFL;
-                    handshakeEngine.setPsk(entry.getPsk(), entry.getTicket(), obfuscatedAge);
+                    byte[] psk = entry.getPsk();
+                    if (psk != null) {
+                        currentPskTicketIdentity = entry.getTicket();
+                        long ticketAge = ((System.currentTimeMillis() - entry.getIssueTime()) / 1000L) & 0xFFFFFFFFL;
+                        long obfuscatedAge = (ticketAge + entry.getTicketAgeAdd()) & 0xFFFFFFFFL;
+                        handshakeEngine.setPsk(psk, entry.getTicket(), obfuscatedAge);
+                    }
                 }
             }
 
@@ -813,35 +821,38 @@ public final class GostSSLEngine extends SSLEngine {
         plaintextBuf.flip();
         byte contentType = r.contentType;
         int dataLen = plaintextBuf.remaining();
-        byte[] data = new byte[dataLen];
-        plaintextBuf.get(data);
+        byte[] rawArray = plaintextBuf.array();
+        int rawOffset = plaintextBuf.arrayOffset() + plaintextBuf.position();
 
         if (contentType == TlsConstants.CT_ALERT) {
-            handleAlert(data);
+            byte[] alertData = new byte[dataLen];
+            plaintextBuf.get(alertData);
+            handleAlert(alertData);
             return consumed;
         }
 
         if (contentType == TlsConstants.CT_HANDSHAKE) {
-            // Добавляем в буфер сборки handshake-сообщений
-            handshakeInputBuf.write(data);
+            handshakeInputBuf.write(rawArray, rawOffset, dataLen);
             processHandshakeFrames();
             return consumed;
         }
 
         if (contentType == TlsConstants.CT_APPLICATION_DATA) {
-            // Копируем в dst буферы
-            int remainingData = data.length;
+            // Копируем в dst буферы напрямую из backing array plaintextBuf
+            int remainingData = dataLen;
+            int dataOff = rawOffset;
             int dstIndex = offset;
             while (remainingData > 0 && dstIndex < offset + length) {
                 ByteBuffer dst = dsts[dstIndex];
                 if (dst == null) { dstIndex++; continue; }
                 int toWrite = Math.min(remainingData, dst.remaining());
-                dst.put(data, data.length - remainingData, toWrite);
+                dst.put(rawArray, dataOff, toWrite);
+                dataOff += toWrite;
                 remainingData -= toWrite;
                 dstIndex++;
             }
             if (remainingData > 0) {
-                incomingAppBuf.write(data, data.length - remainingData, remainingData);
+                incomingAppBuf.write(rawArray, dataOff, remainingData);
             }
             return consumed;
         }
@@ -949,6 +960,7 @@ public final class GostSSLEngine extends SSLEngine {
                     && currentPskTicketIdentity != null) {
                 if (sessionContext != null) {
                     sessionContext.getPskStore().remove(currentPskTicketIdentity);
+                    sessionContext.removeIdentity(peerHost, peerPort);
                 }
                 currentPskTicketIdentity = null;
             }
@@ -1500,9 +1512,7 @@ public final class GostSSLEngine extends SSLEngine {
     @Override
     public SSLSession getSession() {
         if (session != null) return session;
-        // Рукотворный session до handshake (по JSSE spec)
-        return new GostSSLSession(GostJsseConstants.SSL_NULL_CIPHER, peerHost, peerPort,
-                null, null);
+        return preHandshakeSession;
     }
 
     @Override

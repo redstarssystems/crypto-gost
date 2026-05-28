@@ -207,10 +207,9 @@ class JsseStressTest {
         long reqs1 = profileRequests[1].get();
         assertTrue(reqs1 > 0,
                 "Профиль 1: должен быть хотя бы один запрос");
-
-        // Число request'ов должно быть больше нуля
-        assertTrue(reqs1 > 0,
-                "Профиль 1: должен быть хотя бы один запрос");
+        assertTrue(profileErrors[1].get() * 100 < profileRequests[1].get(),
+                "Профиль 1: ошибок более 1% (" + profileErrors[1].get()
+                + " из " + profileRequests[1].get() + ")");
 
         System.out.printf("[RESULT] Profile 1: %d req, %d err%n",
                 profileRequests[1].get(), profileErrors[1].get());

@@ -346,13 +346,6 @@ public final class TlsSession implements AutoCloseable {
                         }
                     }
 
-                    // Сервер: удаляем одноразовый PSK после успешной проверки binder
-                    if (role == TlsHandshakeEngine.Role.SERVER && engine.isPskAccepted()) {
-                        byte[] chBody = TlsHandshakeMessage.decode(frame).getBody();
-                        byte[] pskIdentity = TlsMessageParser.parseClientHelloPskIdentity(chBody);
-                        if (pskIdentity != null) pskStore.remove(pskIdentity);
-                    }
-
                     // Обрабатываем исходящие фреймы
                     processEngineOutgoing(engine, role);
 
@@ -418,6 +411,7 @@ public final class TlsSession implements AutoCloseable {
 
             this.ciphersuite = engine.getNegotiatedCiphersuite();
             handshakeDone = true;
+            handshakeBuffer.reset();
 
             if (role == TlsHandshakeEngine.Role.SERVER) {
                     for (int nst = 0; nst < ticketsToSend; nst++) {

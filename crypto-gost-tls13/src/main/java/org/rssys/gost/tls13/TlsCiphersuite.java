@@ -225,13 +225,22 @@ public final class TlsCiphersuite {
      */
     public static int ianaNameToNamedGroup(String name) {
         if (name == null) throw new IllegalArgumentException("name must not be null");
-        if (name.equals(TlsConstants.IANA_GC256A)) return TlsConstants.GRP_GC256A;
-        if (name.equals(TlsConstants.IANA_GC256B)) return TlsConstants.GRP_GC256B;
-        if (name.equals(TlsConstants.IANA_GC256C)) return TlsConstants.GRP_GC256C;
-        if (name.equals(TlsConstants.IANA_GC256D)) return TlsConstants.GRP_GC256D;
-        if (name.equals(TlsConstants.IANA_GC512A)) return TlsConstants.GRP_GC512A;
-        if (name.equals(TlsConstants.IANA_GC512B)) return TlsConstants.GRP_GC512B;
-        if (name.equals(TlsConstants.IANA_GC512C)) return TlsConstants.GRP_GC512C;
+        switch (name) {
+            case TlsConstants.IANA_GC256A:
+                return TlsConstants.GRP_GC256A;
+            case TlsConstants.IANA_GC256B:
+                return TlsConstants.GRP_GC256B;
+            case TlsConstants.IANA_GC256C:
+                return TlsConstants.GRP_GC256C;
+            case TlsConstants.IANA_GC256D:
+                return TlsConstants.GRP_GC256D;
+            case TlsConstants.IANA_GC512A:
+                return TlsConstants.GRP_GC512A;
+            case TlsConstants.IANA_GC512B:
+                return TlsConstants.GRP_GC512B;
+            case TlsConstants.IANA_GC512C:
+                return TlsConstants.GRP_GC512C;
+        }
         throw new IllegalArgumentException("Unknown named group IANA name: " + name);
     }
 
@@ -265,13 +274,22 @@ public final class TlsCiphersuite {
      */
     public static int ianaNameToSignatureScheme(String name) {
         if (name == null) throw new IllegalArgumentException("name must not be null");
-        if (name.equals(TlsConstants.IANA_SIG_GOST_TC26_A_256)) return TlsConstants.SIG_GOST_TC26_A_256;
-        if (name.equals(TlsConstants.IANA_SIG_GOST_CRYPTOPRO_A))  return TlsConstants.SIG_GOST_CRYPTOPRO_A;
-        if (name.equals(TlsConstants.IANA_SIG_GOST_CRYPTOPRO_B))  return TlsConstants.SIG_GOST_CRYPTOPRO_B;
-        if (name.equals(TlsConstants.IANA_SIG_GOST_CRYPTOPRO_C))  return TlsConstants.SIG_GOST_CRYPTOPRO_C;
-        if (name.equals(TlsConstants.IANA_SIG_GOST_TC26_512_A))   return TlsConstants.SIG_GOST_TC26_512_A;
-        if (name.equals(TlsConstants.IANA_SIG_GOST_TC26_512_B))   return TlsConstants.SIG_GOST_TC26_512_B;
-        if (name.equals(TlsConstants.IANA_SIG_GOST_TC26_512_C))   return TlsConstants.SIG_GOST_TC26_512_C;
+        switch (name) {
+            case TlsConstants.IANA_SIG_GOST_TC26_A_256:
+                return TlsConstants.SIG_GOST_TC26_A_256;
+            case TlsConstants.IANA_SIG_GOST_CRYPTOPRO_A:
+                return TlsConstants.SIG_GOST_CRYPTOPRO_A;
+            case TlsConstants.IANA_SIG_GOST_CRYPTOPRO_B:
+                return TlsConstants.SIG_GOST_CRYPTOPRO_B;
+            case TlsConstants.IANA_SIG_GOST_CRYPTOPRO_C:
+                return TlsConstants.SIG_GOST_CRYPTOPRO_C;
+            case TlsConstants.IANA_SIG_GOST_TC26_512_A:
+                return TlsConstants.SIG_GOST_TC26_512_A;
+            case TlsConstants.IANA_SIG_GOST_TC26_512_B:
+                return TlsConstants.SIG_GOST_TC26_512_B;
+            case TlsConstants.IANA_SIG_GOST_TC26_512_C:
+                return TlsConstants.SIG_GOST_TC26_512_C;
+        }
         throw new IllegalArgumentException("Unknown signature scheme IANA name: " + name);
     }
 

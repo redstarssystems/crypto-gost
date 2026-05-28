@@ -479,6 +479,6 @@ class HkdfStreebogTest {
     @DisplayName("expandLabel: null label → исключение")
     void testexpandLabelNullLabelThrows() {
         assertThrows(IllegalArgumentException.class,
-                () -> HkdfStreebog.expandLabel(new byte[32], null, new byte[0], 32, 32));
+                () -> HkdfStreebog.expandLabel(new byte[32], (String) null, new byte[0], 32, 32));
     }
 }

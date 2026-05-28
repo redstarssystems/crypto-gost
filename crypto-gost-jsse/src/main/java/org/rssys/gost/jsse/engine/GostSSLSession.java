@@ -11,7 +11,6 @@ import org.rssys.gost.util.CryptoRandom;
 import java.security.Principal;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -33,7 +32,6 @@ public final class GostSSLSession extends ExtendedSSLSession {
     private final int peerPort;
     private final X509Certificate[] peerCertificates;
     private final X509Certificate[] localCertificates;
-    private final List<String> localSupportedSignatureAlgorithms;
     private final long creationTime;
     private final byte[] sessionId;
     private final String applicationProtocol;
@@ -46,6 +44,8 @@ public final class GostSSLSession extends ExtendedSSLSession {
     // Session context (задаётся после создания, в finishHandshake)
     private GostSSLSessionContext sessionContext;
     private volatile boolean invalidated;
+
+    private static final String[] LOCAL_SIG_ALGS = {GostJsseConstants.KEY_ALG_ECGOST_2012};
 
     // Application buffer sizes — дефолты TLS 1.3
     private int applicationBufferSize = GostJsseConstants.DEFAULT_APPLICATION_BUFFER_SIZE;
@@ -81,7 +81,6 @@ public final class GostSSLSession extends ExtendedSSLSession {
         this.peerPort = peerPort;
         this.peerCertificates = peerCertificates != null ? peerCertificates.clone() : new X509Certificate[0];
         this.localCertificates = localCertificates != null ? localCertificates.clone() : new X509Certificate[0];
-        this.localSupportedSignatureAlgorithms = Collections.singletonList(GostJsseConstants.KEY_ALG_ECGOST_2012);
         this.applicationProtocol = applicationProtocol;
         this.creationTime = System.currentTimeMillis();
         this.lastAccessedTime = creationTime;
@@ -251,7 +250,7 @@ public final class GostSSLSession extends ExtendedSSLSession {
 
     @Override
     public String[] getLocalSupportedSignatureAlgorithms() {
-        return localSupportedSignatureAlgorithms.toArray(new String[0]);
+        return LOCAL_SIG_ALGS.clone();
     }
 
     @Override
