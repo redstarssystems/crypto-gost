@@ -55,4 +55,6 @@ README.xml
 .flattened-pom.xml
 /crypto-gost-tls13/doc/architecture.xml
 /crypto-gost-tls13/doc/manual-interop-test.xml
+.cifuzz-corpus/
+**/crash-*
 

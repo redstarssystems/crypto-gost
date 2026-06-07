@@ -1,26 +1,29 @@
 package org.rssys.gost.cipher.mode;
 
-import org.rssys.gost.cipher.BlockCipher;
 import org.rssys.gost.cipher.CipherParameters;
+import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.StreamCipher;
 import org.rssys.gost.util.DataLengthException;
-import org.rssys.gost.util.OutputLengthException;
 
 /**
  * Режим OFB (Output FeedBack).
  */
 public class Ofb extends AbstractStreamMode implements StreamCipher {
 
-    /** Текущий блок гаммы. */
+    /** Scratch-буфер гаммы (blockSize байт, zero-alloc). */
     private final byte[] Y;
 
     /** Позиция внутри текущего блока гаммы. */
     private int byteCount;
 
-    public Ofb(BlockCipher cipher) {
+    /** Прямая ссылка на Kuznyechik для zero-alloc encryptToFields. */
+    private final Kuznyechik kuz;
+
+    public Ofb(Kuznyechik cipher) {
         super(cipher);
-        this.Y = new byte[blockSize];
+        this.kuz = cipher;
+        this.Y   = new byte[blockSize];
     }
 
     @Override
@@ -58,33 +61,55 @@ public class Ofb extends AbstractStreamMode implements StreamCipher {
         return blockSize;
     }
 
+    @Override
+    protected int processBlocks(byte[] in, int inOff, int len, byte[] out, int outOff) {
+        if (byteCount != 0 || m != blockSize) {
+            return 0;
+        }
+        int limit = len - (len % blockSize);
+        if (limit == 0) {
+            return 0;
+        }
+        for (int i = 0; i < limit; i += blockSize) {
+            long rHi = (long) LONG_BE.get(R, 0);
+            long rLo = (long) LONG_BE.get(R, 8);
+            kuz.encryptToFields(rHi, rLo);
+            long gHi = kuz.getEncBufHi();
+            long gLo = kuz.getEncBufLo();
+            // R = зашифрованное значение (обратная связь)
+            LONG_BE.set(R, 0, gHi);
+            LONG_BE.set(R, 8, gLo);
+            long inHi = (long) LONG_BE.get(in, inOff + i);
+            long inLo = (long) LONG_BE.get(in, inOff + i + 8);
+            LONG_BE.set(out, outOff + i,     inHi ^ gHi);
+            LONG_BE.set(out, outOff + i + 8, inLo ^ gLo);
+        }
+        return limit;
+    }
+
     public byte returnByte(byte in) {
         return calculateByte(in);
     }
 
     /**
-     * Основной метод: XOR байта с гаммой Y.
-     * Каждые blockSize байт генерируется новый Y и обновляется R.
+     * Основной метод: XOR байта с гаммой.
+     * Каждые blockSize байт генерируется новый Y через encryptToFields (zero-alloc).
      */
     @Override
     protected byte calculateByte(byte in) {
         if (byteCount == 0) {
-            generateY();
+            long rHi = (long) LONG_BE.get(R, 0);
+            long rLo = (long) LONG_BE.get(R, 8);
+            kuz.encryptToFields(rHi, rLo);
+            LONG_BE.set(Y, 0, kuz.getEncBufHi());
+            LONG_BE.set(Y, 8, kuz.getEncBufLo());
         }
         byte rv = (byte) (Y[byteCount] ^ in);
         if (++byteCount == blockSize) {
             byteCount = 0;
-            // R = LSB(R, m - blockSize) || Y — сдвиг с гаммой (не шифртекстом)
             shiftRegister(Y, 0, blockSize);
         }
         return rv;
-    }
-
-    /**
-     * Генерация гаммы Y: зашифровать MSB(R, blockSize).
-     */
-    private void generateY() {
-        cipher.processBlock(R, 0, Y, 0);
     }
 
     @Override

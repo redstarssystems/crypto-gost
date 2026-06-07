@@ -6,6 +6,7 @@ import org.rssys.gost.signature.ECDSASigner;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.TlsConstants;
 import java.math.BigInteger;
 import java.util.function.Supplier;
 
@@ -151,6 +152,6 @@ public final class TlsSignatureCodec {
      * @return фабрика дайджестов
      */
     private static Supplier<org.rssys.gost.digest.Digest> digestFactory(ECParameters params) {
-        return params.hlen == 32 ? Streebog256::new : Streebog512::new;
+        return params.hlen == TlsConstants.STREEBOG_256_HASH_LEN ? Streebog256::new : Streebog512::new;
     }
 }

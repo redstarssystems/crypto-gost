@@ -26,6 +26,11 @@
         </dependency>
         <dependency>
             <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-examples</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
             <artifactId>crypto-gost-netty</artifactId>
             <version>${project.version}</version>
         </dependency>

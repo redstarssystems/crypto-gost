@@ -19,7 +19,7 @@
 
     - **`GostX509TrustManager`** — `X509ExtendedTrustManager` для
       ГОСТ-сертификатов; валидация цепочки, OCSP (stapling + client-side
-      fetch), hostname verification.
+      fetch), CRL (client-side fetch), hostname verification.
 
     - **`GostSSLSocketFactory` / `GostSSLServerSocketFactory`** — socket
       factories.
@@ -41,6 +41,9 @@
 
     - **OCSP**: stapling (сервер прикладывает OCSP-ответ), client-side
       fetch (через `JdkHttpOcspFetcher`), кэширование.
+
+    - **CRL**: client-side fetch (через `JdkHttpCrlFetcher`), политики
+      `DISABLED` / `IF_CDP_PRESENT` / `REQUIRE`, SSRF-защита.
 
     - **Session resumption**: PSK через `NewSessionTicket`.
 
@@ -168,10 +171,12 @@ DER X.509 / PKCS#8
 
 ### Ограничения
 
-- PKCS12 с нестандартным GOST PBE не поддерживается.
+- PKCS12 с GOST PBE поддерживается нативно (PBKDF2-HMAC-Streebog +
+  Кузнечик CTR-ACPKM).
 
-- `GostX509TrustManager` принимает один CA-ключ (используется
-  последний).
+- `GostX509TrustManager` принимает список CA-ключей
+  (`List<PublicKeyParameters>`) — все переданные CA участвуют в проверке
+  цепочки.
 
 - `selfSignedContext` не реализован — используйте PKCS12 с тестовым
   сертификатом.
@@ -189,7 +194,7 @@ DER X.509 / PKCS#8
 Через PKCS12 (рекомендуется для production — ключ и цепочка в одном
 файле):
 
-    import org.rssys.gost.tls13.cert.Pkcs12Loader;
+    import org.rssys.gost.tls13.cert.GostPkcs12Loader;
     import org.rssys.gost.signature.PrivateKeyParameters;
     import org.rssys.gost.tls13.cert.TlsCertificate;
     import org.rssys.gost.jsse.bridge.CertificateBridge;
@@ -197,15 +202,15 @@ DER X.509 / PKCS#8
     import java.nio.file.Paths;
     import java.util.List;
 
-    Pkcs12Loader.Result p12 = Pkcs12Loader.load(
+    GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(
             Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray());
     PrivateKeyParameters privateKey = p12.getPrivateKey();
     List<TlsCertificate> tlsChain  = p12.getCertificateChain();
     java.security.cert.X509Certificate[] jcaChain =
             CertificateBridge.toJca(tlsChain);
 
-GOST PBE не поддерживается — только PBES2 (PBKDF2-HMAC-SHA256 +
-AES-256-CBC).
+GOST PBE — нативная поддержка (PBKDF2-HMAC-Streebog + Кузнечик
+CTR-ACPKM).
 
 Через DER-файлы:
 
@@ -264,6 +269,17 @@ AES-256-CBC).
             caKey,
             OcspPolicy.STAPLING_OR_FETCH,
             new JdkHttpOcspFetcher());
+
+    // Вариант В: + OCSP + CRL (client-side fetch)
+    import org.rssys.gost.jsse.crl.CrlPolicy;
+    import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
+
+    GostX509TrustManager tm = new GostX509TrustManager(
+            List.of(caKey1, caKey2),
+            OcspPolicy.STAPLING_OR_FETCH,
+            new JdkHttpOcspFetcher(),
+            CrlPolicy.IF_CDP_PRESENT,
+            new JdkHttpCrlFetcher());
 
     // Для разработки/тестов — trust-all (без проверки CA):
     GostX509TrustManager tmAll = new GostX509TrustManager(null, false);
@@ -368,7 +384,8 @@ CA-ключ.
 Во всех примерах ниже используется готовый `SSLContext`, созданный по
 одному из двух шаблонов:
 
-Вариант 1 — GostX509KeyManager напрямую (DER-файлы или Pkcs12Loader):
+Вариант 1 — GostX509KeyManager напрямую (DER-файлы или
+GostPkcs12Loader):
 
     import org.rssys.gost.jsse.RssysGostJsseProvider;
     import org.rssys.gost.jsse.manager.GostX509KeyManager;
@@ -376,7 +393,7 @@ CA-ключ.
     import org.rssys.gost.jsse.bridge.CertificateBridge;
     import org.rssys.gost.signature.PrivateKeyParameters;
     import org.rssys.gost.signature.PublicKeyParameters;
-    import org.rssys.gost.tls13.cert.Pkcs12Loader;
+    import org.rssys.gost.tls13.cert.GostPkcs12Loader;
     import org.rssys.gost.tls13.cert.TlsCertificate;
 
     import javax.net.ssl.KeyManager;
@@ -391,7 +408,7 @@ CA-ключ.
     Security.addProvider(new RssysGostJsseProvider());
 
     // Шаг 2: загрузка сертификата и ключа через PKCS12
-    Pkcs12Loader.Result p12 = Pkcs12Loader.load(
+    GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(
             Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray());
     PrivateKeyParameters privateKey = p12.getPrivateKey();
     List<TlsCertificate> tlsChain  = p12.getCertificateChain();
@@ -415,7 +432,6 @@ CA-ключ.
 
     import org.rssys.gost.jsse.RssysGostJsseProvider;
     import org.rssys.gost.jsse.manager.GostX509TrustManager;
-    import org.rssys.gost.jca.RssysGostProvider;
 
     import javax.net.ssl.KeyManagerFactory;
     import javax.net.ssl.SSLContext;
@@ -424,9 +440,8 @@ CA-ключ.
     import java.security.Security;
 
     Security.addProvider(new RssysGostJsseProvider());
-    Security.addProvider(new RssysGostProvider()); // для загрузки PKCS12 KeyStore
 
-    KeyStore ks = KeyStore.getInstance("PKCS12", "RssysGostProvider");
+    KeyStore ks = KeyStore.getInstance("PKCS12");
     ks.load(Files.newInputStream(Paths.get("server.p12")), "password".toCharArray());
 
     KeyManagerFactory kmf = KeyManagerFactory.getInstance("GostX509", "RssysGostJsse");
@@ -1035,9 +1050,6 @@ LRU-эвiction.
   (GC256A).
 
 - PSK-тикеты одноразовые (RFC 8446 §8.1).
-
-- GOST PBE для PKCS12 не поддерживается — только PBES2
-  (PBKDF2-HMAC-SHA256 + AES-256-CBC).
 
 - KeyManagerFactory — только алгоритм `GostX509` (не `PKIX`, не
   `NewSunX509`).

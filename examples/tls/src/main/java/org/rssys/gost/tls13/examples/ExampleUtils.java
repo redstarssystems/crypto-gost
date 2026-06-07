@@ -1,158 +1,159 @@
 package org.rssys.gost.tls13.examples;
 
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.Signature;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.util.DerCodec;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.GostOids;
+import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicInteger;
 
-/** Вспомогательные методы для примеров (построение сертификатов, DER). */
+/**
+ * Вспомогательные методы для примеров — построение сертификатов X.509
+ * и DER-кодирование вручную.
+ * <p>
+ * Единственная точка сборки сертификатов в модуле examples/tls.
+ * Использует {@link DerCodec} для DER-примитивов, {@link KeyGenerator}
+ * для генерации ключей, {@link Signature} для подписи TBSCertificate.
+ */
 public final class ExampleUtils {
 
-    private static int certCounter;
+    private static final AtomicInteger certCounter = new AtomicInteger(0);
 
     private ExampleUtils() {}
 
+    /**
+     * Результат создания сертификата — сам сертификат и связанные с ним ключи.
+     * <p>
+     * В отличие от {@link #createRootCA()} / {@link #createServerCert(TlsCertificate, PrivateKeyParameters, PublicKeyParameters)},
+     * возвращает ключи (нужны для JSSE-примеров, где ключи подставляются в KeyManager).
+     */
+    public record CertBundle(
+            TlsCertificate cert,
+            PrivateKeyParameters priv,
+            PublicKeyParameters pub
+    ) {}
+
     // ---- DER ----
-    static final int TAG_SEQUENCE = 0x30;
-    static final int TAG_SET = 0x31;
-    static final int TAG_OID = 0x06;
-    static final int TAG_UTF8_STRING = 0x0C;
-    static final int TAG_BIT_STRING = 0x03;
-    static final int TAG_OCTET_STRING = 0x04;
-    static final int TAG_CTX_0 = 0xA0;
-    static final int TAG_CTX_3 = 0xA3;
 
     static byte[] derTlv(int tag, byte[] content) {
-        byte[] lenBytes = buildLength(content.length);
-        byte[] result = new byte[1 + lenBytes.length + content.length];
-        result[0] = (byte) tag;
-        System.arraycopy(lenBytes, 0, result, 1, lenBytes.length);
-        System.arraycopy(content, 0, result, 1 + lenBytes.length, content.length);
-        return result;
-    }
-
-    static byte[] buildLength(int len) {
-        if (len < 0x80) return new byte[]{(byte) len};
-        if (len < 0x100) return new byte[]{(byte) 0x81, (byte) len};
-        return new byte[]{(byte) 0x82, (byte) (len >> 8), (byte) len};
+        return DerCodec.encodeTlv(tag, content);
     }
 
     static byte[] derSequence(byte[]... elements) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        for (byte[] el : elements) out.write(el, 0, el.length);
-        return derTlv(TAG_SEQUENCE, out.toByteArray());
+        return DerCodec.encodeSequence(elements);
     }
 
     static byte[] derOid(String oidStr) {
-        String[] parts = oidStr.split("\\.");
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        int[] arcs = new int[parts.length];
-        for (int i = 0; i < parts.length; i++) arcs[i] = Integer.parseInt(parts[i]);
-        out.write(40 * arcs[0] + arcs[1]);
-        for (int i = 2; i < arcs.length; i++) {
-            if (arcs[i] < 128) {
-                out.write(arcs[i]);
-            } else {
-                out.write(0x80 | (arcs[i] >>> 7));
-                out.write(arcs[i] & 0x7F);
-            }
-        }
-        return derTlv(TAG_OID, out.toByteArray());
+        return DerCodec.encodeOid(oidStr);
     }
 
     static byte[] derBitString(byte[] content) {
-        byte[] withUnused = new byte[content.length + 1];
-        withUnused[0] = 0;
-        System.arraycopy(content, 0, withUnused, 1, content.length);
-        return derTlv(TAG_BIT_STRING, withUnused);
+        return DerCodec.encodeBitString(content);
     }
 
-    static byte[] derUtcTime(String time) {
-        return derTlv(0x17, time.getBytes(StandardCharsets.US_ASCII));
+    static byte[] derTime(String time) {
+        int tag = time.length() == 13 ? DerCodec.TAG_UTC_TIME : DerCodec.TAG_GENERALIZED_TIME;
+        return derTlv(tag, time.getBytes(StandardCharsets.US_ASCII));
     }
 
     // ---- DN ----
-    static byte[] buildDN(String cn) {
+
+    /**
+     * Строит DER-encoded Distinguished Name из CN.
+     * <p>
+     * Формат: SEQUENCE { SET { SEQUENCE { OID(CN), UTF8String(cn) } } }
+     * Одно RDN (CommonName) — достаточно для демо-сертификатов.
+     */
+    public static byte[] buildDN(String cn) {
         byte[] attr = derSequence(derOid(GostOids.ATTR_CN),
-                derTlv(TAG_UTF8_STRING, cn.getBytes(StandardCharsets.UTF_8)));
-        return derSequence(derTlv(TAG_SET, attr));
+                derTlv(DerCodec.TAG_UTF8_STRING, cn.getBytes(StandardCharsets.UTF_8)));
+        return derSequence(derTlv(DerCodec.TAG_SET, attr));
     }
 
     // ---- Подпись ----
+
+    /**
+     * Хэширует данные через Streebog (256 или 512 бит).
+     * Выбор дайджеста определяется hlen — длиной хэша в байтах.
+     */
     static byte[] doHash(byte[] data, int hlen) {
-        if (hlen == 32) {
-            Streebog256 d = new Streebog256();
-            d.update(data, 0, data.length);
-            byte[] h = new byte[32];
-            d.doFinal(h, 0);
-            return h;
-        }
-        Streebog512 d = new Streebog512();
-        d.update(data, 0, data.length);
-        byte[] h = new byte[64];
-        d.doFinal(h, 0);
-        return h;
+        if (hlen == TlsConstants.STREEBOG_256_HASH_LEN) return Digest.digest256(data);
+        if (hlen == TlsConstants.STREEBOG_512_HASH_LEN) return Digest.digest512(data);
+        throw new IllegalArgumentException("Unsupported hash length: " + hlen);
     }
 
-    static byte[] buildAlgId(ECParameters params) {
-        String signOid = params.hlen == 32 ? GostOids.SIGN_ALG_256 : GostOids.SIGN_ALG_512;
-        String curveOid = curveOidOf(params);
-        String digestOid = params.hlen == 32 ? GostOids.DIGEST_256 : GostOids.DIGEST_512;
-        return derSequence(derOid(signOid), derSequence(derOid(curveOid), derOid(digestOid)));
-    }
-
-    static String curveOidOf(ECParameters params) {
-        if (params == ECParameters.tc26a256()) return GostOids.CURVE_256A;
-        if (params == ECParameters.cryptoProA()) return GostOids.CURVE_CP_A;
-        if (params == ECParameters.tc26a512()) return GostOids.CURVE_512A;
-        return GostOids.CURVE_256A;
+    /**
+     * AlgorithmIdentifier для ГОСТ-подписи.
+     * <p>
+     * Формат: SEQUENCE { signwithdigest OID } — без parameters (RFC 9215 §4.2).
+     * signOid выбирается по hlen (32 → SIGN_ALG_256, 64 → SIGN_ALG_512).
+     */
+    public static byte[] buildAlgId(ECParameters params) {
+        String signOid = params.hlen == TlsConstants.STREEBOG_256_HASH_LEN ? GostOids.SIGN_ALG_256 : GostOids.SIGN_ALG_512;
+        return derSequence(derOid(signOid));
     }
 
     // ---- Сертификаты ----
+
+    /**
+     * AlgorithmIdentifier с фиксированным Streebog256/256A.
+     * Используется в {@link #buildTbs(PublicKeyParameters, ECParameters, byte[], byte[], byte[])}
+     * когда нужно переиспользовать подпись и у нас нет params.
+     */
     static byte[] buildAlgIdStreebog256() {
-        return derSequence(derOid(GostOids.SIGN_ALG_256),
-                derSequence(derOid(GostOids.CURVE_256A), derOid(GostOids.DIGEST_256)));
+        return derSequence(derOid(GostOids.SIGN_ALG_256));
     }
 
-    static byte[] buildTbs(PublicKeyParameters pub, ECParameters params,
+    /**
+     * Строит TBSCertificate (RFC 5280 §4.1.2).
+     * <p>
+     * SerialNumber фиксирован (1) — для демо-сертификатов уникальность не нужна.
+     * Validity: 2025-01-01 — 2106-01-01 (широкое окно, не протухнет).
+     * Расширения передаются сырыми DER-байтами — {@code buildTbs} уже оборачивает их
+     * в контейнер extensions [3].
+     */
+    public static byte[] buildTbs(PublicKeyParameters pub, ECParameters params,
                            byte[] issuerDn, byte[] subjectDn,
                            byte[] additionalExtensions) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.write(TAG_CTX_0);
-        out.write(0x03);
-        out.write(0x02);
-        out.write(0x01);
-        out.write(0x02);
-        out.write(derTlv(0x02, new byte[]{0x01}));  // serial = 1
+        // v3 — обязательный контейнер [0] EXPLICIT INTEGER
+        out.write(DerCodec.encodeContextConstructed(0, DerCodec.encodeInteger(2)));
+        out.write(DerCodec.encodeInteger(1));
         out.write(buildAlgId(params));
         out.write(issuerDn);
-        out.write(derSequence(derUtcTime("250101120000Z"), derUtcTime("360101120000Z")));
+        out.write(derSequence(derTime("20250101120000Z"), derTime("21060101120000Z")));
         out.write(subjectDn);
         byte[] spki = GostDerCodec.encodePublicKey(pub);
         out.write(spki, 0, spki.length);
         if (additionalExtensions != null) {
-            byte[] extensionsSeq = derSequence(additionalExtensions);
-            out.write(derTlv(TAG_CTX_3, extensionsSeq));
+            byte[] extensionsSeq = DerCodec.encodeSequence(additionalExtensions);
+            out.write(DerCodec.encodeContextConstructed(3, extensionsSeq));
         }
         return derSequence(out.toByteArray());
     }
 
-    static TlsCertificate createCert(PrivateKeyParameters issuerPriv,
-                                     PublicKeyParameters issuerPub,
-                                     PublicKeyParameters subjectPub,
-                                     ECParameters params,
-                                     byte[] issuerDn, byte[] subjectDn,
-                                     byte[] exts) throws Exception {
+    /**
+     * Собирает подписанный сертификат X.509: TBS → хэш → подпись → обёртка.
+     * <p>
+     * Схема: SEQUENCE { tbs, AlgorithmIdentifier, BIT STRING signature }
+     * Подпись ставится по схеме signHash (не sign) — хэшируем TBS отдельно.
+     */
+    public static TlsCertificate createCert(PrivateKeyParameters issuerPriv,
+                                      PublicKeyParameters issuerPub,
+                                      PublicKeyParameters subjectPub,
+                                      ECParameters params,
+                                      byte[] issuerDn, byte[] subjectDn,
+                                      byte[] exts) throws Exception {
         byte[] tbs = buildTbs(subjectPub, params, issuerDn, subjectDn, exts);
         int hlen = params.hlen;
         byte[] hash = doHash(tbs, hlen);
@@ -161,61 +162,140 @@ public final class ExampleUtils {
         return new TlsCertificate(certDer);
     }
 
+    /**
+     * Создаёт самоподписанный корневой CA (BasicConstraints: cA=TRUE).
+     * <p>
+     * Возвращает только сертификат, ключ отбрасывается — в TLS-примерах
+     * CA-ключ больше не нужен после подписания дочерних сертификатов.
+     * Если нужны ключи — используй {@link #createRootCABundle()}.
+     */
     public static TlsCertificate createRootCA() throws Exception {
+        return createRootCABundle().cert();
+    }
+
+    /**
+     * Создаёт корневой CA и возвращает его вместе с ключами.
+     * <p>
+     * В отличие от {@link #createRootCA()} не теряет закрытый ключ —
+     * нужен для JSSE-примеров, где ключ подставляется в KeyManager.
+     */
+    public static CertBundle createRootCABundle() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] dn = buildDN("Example Root CA " + (++certCounter));
+        byte[] dn = buildDN("Example Root CA " + (certCounter.incrementAndGet()));
         byte[] bcExt = buildBasicConstraintsExt(true, null);
-        return createCert(kp.getPrivate(), kp.getPublic(), kp.getPublic(),
-                params, dn, dn, bcExt);
+        TlsCertificate cert = createCert(kp.getPrivate(), kp.getPublic(),
+                kp.getPublic(), params, dn, dn, bcExt);
+        return new CertBundle(cert, kp.getPrivate(), kp.getPublic());
     }
 
+    /**
+     * Создаёт серверный сертификат (SAN localhost, KU digitalSignature),
+     * подписанный переданным CA.
+     * <p>
+     * Возвращает только сертификат — ключ не возвращается.
+     * Для получения ключа используй {@link #createServerCertBundle(CertBundle)}.
+     */
     public static TlsCertificate createServerCert(TlsCertificate ca, PrivateKeyParameters caPriv,
-                                                   PublicKeyParameters caPub) throws Exception {
-        ECParameters params = ECParameters.tc26a256();
-        org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] subjectDn = buildDN("Example Server " + (++certCounter));
-        byte[] sanExt = buildSanExt(new String[]{"localhost"}, null);
-        byte[] kuExt = buildKeyUsageExt(new byte[]{(byte) 0x80}); // digitalSignature
-        byte[] combined = derSequence(sanExt, kuExt);
-        return createCert(caPriv, caPub, kp.getPublic(), params,
-                ca.getSubjectDnBytes(), subjectDn, combined);
+                                                    PublicKeyParameters caPub) throws Exception {
+        return createServerCertBundle(ca, caPriv, caPub).cert();
     }
 
-    public static TlsCertificate createClientCert(TlsCertificate ca, PrivateKeyParameters caPriv,
-                                                   PublicKeyParameters caPub) throws Exception {
+    /**
+     * Создаёт серверный сертификат и возвращает его вместе с ключами.
+     * <p>
+     * Сертификат содержит SAN localhost и KU digitalSignature.
+     * Issuer DN берётся из CA-сертификата (ca.getSubjectDnBytes()).
+     * Ключи сервера генерируются и возвращаются — нужны для JSSE KeyManager.
+     */
+    public static CertBundle createServerCertBundle(TlsCertificate ca, PrivateKeyParameters caPriv,
+                                                     PublicKeyParameters caPub) throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] subjectDn = buildDN("Example Client " + (++certCounter));
+        byte[] subjectDn = buildDN("Example Server " + (certCounter.incrementAndGet()));
+        byte[] sanExt = buildSanExt(new String[]{"localhost"}, null);
+        byte[] kuExt = buildKeyUsageExt(new byte[]{(byte) 0x80});
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write(sanExt);
+        buf.write(kuExt);
+        TlsCertificate cert = createCert(caPriv, caPub, kp.getPublic(), params,
+                ca.getSubjectDnBytes(), subjectDn, buf.toByteArray());
+        return new CertBundle(cert, kp.getPrivate(), kp.getPublic());
+    }
+
+    /** Удобная перегрузка, принимающая {@link CertBundle} вместо отдельных ключей. */
+    public static CertBundle createServerCertBundle(CertBundle ca) throws Exception {
+        return createServerCertBundle(ca.cert(), ca.priv(), ca.pub());
+    }
+
+    /**
+     * Создаёт клиентский сертификат (KU digitalSignature, EKU clientAuth),
+     * подписанный переданным CA.
+     */
+    public static TlsCertificate createClientCert(TlsCertificate ca, PrivateKeyParameters caPriv,
+                                                    PublicKeyParameters caPub) throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = buildDN("Example Client " + (certCounter.incrementAndGet()));
         byte[] kuExt = buildKeyUsageExt(new byte[]{(byte) 0x80});
         byte[] ekuExt = buildEkuExt(GostOids.EXT_CLIENT_AUTH);
-        byte[] combined = derSequence(kuExt, ekuExt);
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        buf.write(kuExt);
+        buf.write(ekuExt);
         return createCert(caPriv, caPub, kp.getPublic(), params,
-                ca.getSubjectDnBytes(), subjectDn, combined);
+                ca.getSubjectDnBytes(), subjectDn, buf.toByteArray());
     }
 
     // ---- Расширения ----
-    static byte[] buildBasicConstraintsExt(boolean isCA, Integer pathLen) throws IOException {
+
+    /**
+     * BasicConstraints (2.5.29.19).
+     * <p>
+     * critical-флаг выставляется только для CA-сертификатов — не-CA
+     * сертификаты не получают critical, чтобы не ломать старые парсеры,
+     * которые не знают X.509 v3 расширений (RFC 5280 §4.2.1.9).
+     */
+    public static byte[] buildBasicConstraintsExt(boolean isCA, Integer pathLen) throws IOException {
         ByteArrayOutputStream bc = new ByteArrayOutputStream();
-        if (isCA) bc.write(derTlv(0x01, new byte[]{(byte) 0xFF})); // BOOLEAN TRUE
+        if (isCA) bc.write(derTlv(0x01, new byte[]{(byte) 0xFF}));
         if (pathLen != null) bc.write(derTlv(0x02, new byte[]{pathLen.byteValue()}));
         byte[] extValue = derOctetString(derSequence(bc.toByteArray()));
+        // critical выставляем только если isCA — не-CA сертификаты без critical
         return derSequence(derOid(GostOids.EXT_BC), isCA ? derTlv(0x01, new byte[]{(byte) 0xFF}) : new byte[0], extValue);
     }
 
-    static byte[] buildKeyUsageExt(byte[] kuBits) {
+    /**
+     * KeyUsage (2.5.29.15).
+     * <p>
+     * Всегда critical — RFC 5280 требует для всех сертификатов, содержащих
+     * открытый ключ, используемый для проверки подписи.
+     */
+    public static byte[] buildKeyUsageExt(byte[] kuBits) {
         byte[] extValue = derOctetString(derBitString(kuBits));
         return derSequence(derOid(GostOids.EXT_KU), derTlv(0x01, new byte[]{(byte) 0xFF}), extValue);
     }
 
-    static byte[] buildEkuExt(String... oids) throws IOException {
+    /**
+     * ExtendedKeyUsage (2.5.29.37).
+     * <p>
+     * Принимает массив OID (serverAuth, clientAuth) — для серверных
+     * и клиентских сертификатов. Non-critical по RFC 5280.
+     */
+    public static byte[] buildEkuExt(String... oids) throws IOException {
         ByteArrayOutputStream seq = new ByteArrayOutputStream();
         for (String oid : oids) seq.write(derOid(oid));
         byte[] extValue = derOctetString(derSequence(seq.toByteArray()));
         return derSequence(derOid(GostOids.EXT_EKU), extValue);
     }
 
-    static byte[] buildSanExt(String[] dnsNames, String[] ipAddresses) throws IOException {
+    /**
+     * SubjectAltName (2.5.29.17).
+     * <p>
+     * Принимает DNS-имена (тег 0x82) и IP-адреса (тег 0x87).
+     * DNS-имена передаются как ASCII — так требует RFC 5280 §4.2.1.6.
+     * IP-адреса конвертируются через InetAddress.getByName() для поддержки IPv4 и IPv6.
+     */
+    public static byte[] buildSanExt(String[] dnsNames, String[] ipAddresses) throws IOException {
         ByteArrayOutputStream gn = new ByteArrayOutputStream();
         if (dnsNames != null) {
             for (String name : dnsNames) {
@@ -232,7 +312,7 @@ public final class ExampleUtils {
     }
 
     static byte[] derOctetString(byte[] data) {
-        return derTlv(TAG_OCTET_STRING, data);
+        return DerCodec.encodeOctetString(data);
     }
 
     static byte[] buildOcspExt() throws IOException {

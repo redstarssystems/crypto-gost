@@ -204,9 +204,11 @@ class UndertowStressTest {
         long reqs1 = profileRequests[1].get();
         assertTrue(reqs1 > 0,
                 "Профиль 1: должен быть хотя бы один запрос");
-        assertTrue(profileErrors[1].get() * 100 < profileRequests[1].get(),
-                "Профиль 1: ошибок более 1% (" + profileErrors[1].get()
-                + " из " + profileRequests[1].get() + ")");
+        long errs1 = profileErrors[1].get();
+        long total1 = reqs1 + errs1;
+        assertTrue(errs1 * 100 < total1,
+                "Профиль 1: ошибок более 1% (" + errs1
+                + " из " + total1 + ")");
 
         System.out.printf("[RESULT] Profile 1: %d req, %d err%n",
                 profileRequests[1].get(), profileErrors[1].get());
@@ -228,8 +230,10 @@ class UndertowStressTest {
         byte[] httpReq = buildHttpPost("/echo", "application/octet-stream",
                 generatePayload(1024), false);
         while (running) {
-            try (SSLSocket s = (SSLSocket) clientCtx.getSocketFactory()
-                    .createSocket("localhost", port)) {
+            SSLSocket s = null;
+            try {
+                s = (SSLSocket) clientCtx.getSocketFactory()
+                        .createSocket("localhost", port);
                 s.setSoTimeout(15000);
                 OutputStream out = s.getOutputStream();
                 out.write(httpReq);
@@ -239,6 +243,8 @@ class UndertowStressTest {
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
                 System.err.println("[PROFILE1_ERR] " + e);
+            } finally {
+                if (s != null) try { s.close(); } catch (Exception ignored) {}
             }
         }
     }
@@ -248,8 +254,10 @@ class UndertowStressTest {
         while (running) {
             int sessionDuration = 5000 + CryptoRandom.INSTANCE.nextInt(25001);
             long deadline = System.currentTimeMillis() + sessionDuration;
-            try (SSLSocket s = (SSLSocket) clientCtx.getSocketFactory()
-                    .createSocket("localhost", port)) {
+            SSLSocket s = null;
+            try {
+                s = (SSLSocket) clientCtx.getSocketFactory()
+                        .createSocket("localhost", port);
                 s.setSoTimeout(15000);
                 OutputStream out = s.getOutputStream();
                 InputStream in = s.getInputStream();
@@ -268,6 +276,8 @@ class UndertowStressTest {
                 break;
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
+            } finally {
+                if (s != null) try { s.close(); } catch (Exception ignored) {}
             }
         }
     }
@@ -278,8 +288,10 @@ class UndertowStressTest {
         byte[] httpReq = buildHttpPost("/echo", "application/octet-stream", chunk, false);
 
         while (running) {
-            try (SSLSocket s = (SSLSocket) clientCtx.getSocketFactory()
-                    .createSocket("localhost", port)) {
+            SSLSocket s = null;
+            try {
+                s = (SSLSocket) clientCtx.getSocketFactory()
+                        .createSocket("localhost", port);
                 s.setSoTimeout(30000);
                 OutputStream out = s.getOutputStream();
                 InputStream in = s.getInputStream();
@@ -293,6 +305,8 @@ class UndertowStressTest {
                 }
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
+            } finally {
+                if (s != null) try { s.close(); } catch (Exception ignored) {}
             }
         }
     }

@@ -52,8 +52,8 @@ public final class TlsSession implements AutoCloseable {
     private final byte[] ocspResponse;
 
     // Параметры, выбранные при handshake (RFC 8446: независимо от cipher suite)
-    private int selectedNamedGroup = TlsConstants.GRP_GC256A;
-    private final ECParameters selectedEcParams = ECParameters.tc26a256();
+    private int selectedNamedGroup = TlsConstants.GRP_GC256B;
+    private ECParameters selectedEcParams = ECParameters.cryptoProA();
     private int selectedSigScheme;
 
     // Защищённая передача
@@ -61,7 +61,7 @@ public final class TlsSession implements AutoCloseable {
     private TlsRecord writerRecord;
 
     // Построитель сообщений
-    private final TlsMessageBuilder messageBuilder;
+    private TlsMessageBuilder messageBuilder;
 
     // Состояние
     private boolean handshakeDone;
@@ -160,6 +160,19 @@ public final class TlsSession implements AutoCloseable {
         session.sniSelector = config.getSniSelector();
         session.alpnProtocols = config.getAlpnProtocols();
         session.ticketsToSend = config.getTicketsToSend();
+        int configNamedGroup = config.getSelectedNamedGroup();
+        if (configNamedGroup != 0 && configNamedGroup != session.selectedNamedGroup) {
+            session.selectedNamedGroup = configNamedGroup;
+            session.selectedEcParams = TlsCiphersuite.namedGroupToParams(configNamedGroup);
+            session.messageBuilder = new TlsMessageBuilder(
+                    session.ciphersuite,
+                    session.messageBuilder.getOfferedCipherSuiteIds(),
+                    configNamedGroup,
+                    session.selectedSigScheme,
+                    session.ourPrivateKey,
+                    session.ourCertificateChain,
+                    session.hashLen);
+        }
         return session;
     }
 
@@ -296,6 +309,12 @@ public final class TlsSession implements AutoCloseable {
                 }
                 sessionRecordBuf.flip();
 
+                // RFC 8446 §D.4: CCS в TLS 1.3 silently ignored (middlebox compatibility)
+                if (sessionRecordBuf.get(sessionRecordBuf.position())
+                        == TlsConstants.CT_CHANGE_CIPHER_SPEC) {
+                    continue;
+                }
+
                 if (readerRecord != null) {
                     handshakeBuffer.ensureCapacity(handshakeBuffer.size + TlsConstants.MAX_PLAINTEXT_LENGTH);
                     ByteBuffer dest = ByteBuffer.wrap(handshakeBuffer.buf, handshakeBuffer.size,
@@ -378,7 +397,7 @@ public final class TlsSession implements AutoCloseable {
                             engine.acknowledgeCertificateValidation(true);
                             this.peerCertificates = certs;
                         } catch (TlsException e) {
-                            engine.acknowledgeCertificateValidation(false);
+                            engine.acknowledgeCertificateValidation(false, e.getAlertCode());
                             throw e;
                         }
                     }
@@ -388,7 +407,7 @@ public final class TlsSession implements AutoCloseable {
             }
 
             if (engine.isError()) {
-                throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
+                throw new TlsException(engine.getErrorAlertCode(),
                         "Handshake failed: " + engine.getErrorMessage());
             }
 

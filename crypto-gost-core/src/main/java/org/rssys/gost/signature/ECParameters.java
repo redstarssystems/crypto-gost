@@ -20,6 +20,8 @@ public final class ECParameters {
   public final BigInteger gy;
   public final BigInteger n;
   public final int hlen;
+  /** Кофактор h = m/q, где m — полный порядок группы #E(Fp), q — порядок подгруппы. */
+  public final int cofactor;
 
   /** Параметры Монтгомери для поля GF(p). Вычисляются один раз при создании кривой. */
   public final FieldElement.MontgomeryParams montParams;
@@ -38,7 +40,7 @@ public final class ECParameters {
           "91E38443A5E82C0D880923425712B2BB658B9196932E02C78B2582FE742DAA28",
           "32879423AB1A0375895786C4BB46E9565FDE0B5344766740AF268ADB32322E5C",
           "400000000000000000000000000000000FD8CDDFC87B6635C115AF556C360C67",
-          32
+          32, 1
   );
   private static final ECParameters TC26_A_512    = new ECParameters(
           "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
@@ -47,7 +49,7 @@ public final class ECParameters {
           "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003",
           "7503CFE87A836AE3A61B8816E25450E6CE5E1C93ACF1ABC1778064FDCBEFA921DF1626BE4FD036E93D75E6A50E3A41E98028FE5FC235F5B889A589CB5215F2A4",
           "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF27E69532F48D89116FF22B8D4E0560609B4B38ABFAD2B85DCACDB1411F10B275",
-          64
+          64, 1
   );
   private static final ECParameters TC26_B_512    = new ECParameters(
           "8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006F",
@@ -56,7 +58,7 @@ public final class ECParameters {
           "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002",
           "1A8F7EDA389B094C2C071E3647A8940F3C123B697578C213BE6DD9E6C8EC7335DCB228FD1EDF4A39152CBCAAF8C0398828041055F94CEEEC7E21340780FE41BD",
           "800000000000000000000000000000000000000000000000000000000000000149A1EC142565A545ACFDB77BD9D40CFA8B996712101BEA0EC6346C54374F25BD",
-          64
+          64, 1
   );
   private static final ECParameters TC26_C_512    = new ECParameters(
           "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
@@ -65,7 +67,7 @@ public final class ECParameters {
           "E2E31EDFC23DE7BDEBE241CE593EF5DE2295B7A9CBAEF021D385F7074CEA043AA27272A7AE602BF2A7B9033DB9ED3610C6FB85487EAE97AAC5BC7928C1950148",
           "F5CE40D95B5EB899ABBCCFF5911CB8577939804D6527378B8C108C3D2090FF9BE18E2D33E3021ED2EF32D85822423B6304F726AA854BAE07D0396E9A9ADDC40F",
           "3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC98CDBA46506AB004C33A9FF5147502CC8EDA9E7A769A12694623CEF47F023ED",
-          64
+          64, 4
   );
   private static final ECParameters CRYPTO_PRO_A  = new ECParameters(
           "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
@@ -74,7 +76,7 @@ public final class ECParameters {
           "0000000000000000000000000000000000000000000000000000000000000001",
           "8D91E471E0989CDA27DF505A453F2B7635294F2DDF23E3B122ACC99C9E9F1E14",
           "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF6C611070995AD10045841B09B761B893",
-          32
+          32, 1
   );
   private static final ECParameters CRYPTO_PRO_B  = new ECParameters(
           "8000000000000000000000000000000000000000000000000000000000000C99",
@@ -83,7 +85,7 @@ public final class ECParameters {
           "0000000000000000000000000000000000000000000000000000000000000001",
           "3FA8124359F96680B83D1C3EB2C070E5C545C9858D03ECFB744BF8D717717EFC",
           "800000000000000000000000000000015F700CFFF1A624E5E497161BCC8A198F",
-          32
+          32, 1
   );
   private static final ECParameters CRYPTO_PRO_C  = new ECParameters(
           "9B9F605F5A858107AB1EC85E6B41C8AACF846E86789051D37998F7B9022D759B",
@@ -92,7 +94,7 @@ public final class ECParameters {
           "0000000000000000000000000000000000000000000000000000000000000000",
           "41ECE55743711A8C3CBF3783CD08C0EE4D4DC440D4641A8F366E550DFDB3BB67",
           "9B9F605F5A858107AB1EC85E6B41C8AA582CA3511EDDFB74F02F3A6598980BB9",
-          32
+          32, 1
   );
 
   /**
@@ -103,11 +105,12 @@ public final class ECParameters {
    * @param bHex  коэффициент b (hex)
    * @param gxHex x-координата базовой точки G (hex)
    * @param gyHex y-координата базовой точки G (hex)
-   * @param nHex  порядок подгруппы q (hex)
-   * @param hlen  длина хэша в байтах (32 для 256-bit, 64 для 512-bit)
+   * @param nHex    порядок подгруппы q (hex)
+   * @param hlen    длина хэша в байтах (32 для 256-bit, 64 для 512-bit)
+   * @param cofactor кофактор h = m/q (1 для всех стандартных ГОСТ-кривых, кроме TC26-C-512 где h=4)
    */
   public ECParameters(String pHex, String aHex, String bHex,
-                      String gxHex, String gyHex, String nHex, int hlen) {
+                      String gxHex, String gyHex, String nHex, int hlen, int cofactor) {
     this.p = new BigInteger(pHex, 16);
     this.a = new BigInteger(aHex, 16);
     this.b = new BigInteger(bHex, 16);
@@ -115,6 +118,7 @@ public final class ECParameters {
     this.gy = new BigInteger(gyHex, 16);
     this.n = new BigInteger(nHex, 16);
     this.hlen = hlen;
+    this.cofactor = cofactor;
     // Монтгомери-параметры — вычисляются один раз, переиспользуются в ECPoint
     this.montParams    = new FieldElement.MontgomeryParams(this.p);
     this.aIsZero       = this.a.signum() == 0;

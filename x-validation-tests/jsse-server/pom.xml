@@ -1,0 +1,72 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.rssys</groupId>
+        <artifactId>crypto-gost</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>gost-crossval-jsse-server</artifactId>
+    <packaging>jar</packaging>
+    <name>crypto-gost cross-validation jsse application server tests</name>
+
+    <properties>
+        <skipTests>false</skipTests>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-jsse</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-tls13</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>gost-crossval-utils</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- Jetty 12 -->
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-server</artifactId>
+            <version>12.0.19</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Undertow 2 -->
+        <dependency>
+            <groupId>io.undertow</groupId>
+            <artifactId>undertow-core</artifactId>
+            <version>2.3.18.Final</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Tomcat 11 embed -->
+        <dependency>
+            <groupId>org.apache.tomcat.embed</groupId>
+            <artifactId>tomcat-embed-core</artifactId>
+            <version>11.0.7</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

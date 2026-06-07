@@ -25,6 +25,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.rssys.gost.util.AuthenticationException;
@@ -308,6 +309,70 @@ class TlsSessionTest {
         client.close();
     }
 
+    @Test
+    @DisplayName("Middlebox CCS (20) молча игнорируется в TLS 1.3 (RFC 8446 §D.4)")
+    void testSilentlyIgnoreChangeCipherSpec() throws Exception {
+        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
+
+        var c2s = new LinkedBlockingQueue<byte[]>();
+        var s2c = new LinkedBlockingQueue<byte[]>();
+        var ccsInjected = new AtomicBoolean(false);
+
+        // Серверный транспорт: при первом sendRecord сначала отправляем ServerHello,
+        // затем следом CCS — имитация middlebox-вставки (RFC 8446 §D.4)
+        InMemoryTlsTransport serverTransport = new InMemoryTlsTransport(c2s) {
+            @Override
+            public void sendRecord(byte[] record) throws IOException {
+                s2c.add(record.clone());
+                if (ccsInjected.compareAndSet(false, true)) {
+                    // CCS: content_type=20, legacy_record_version=0x0303, length=1, payload=0x01
+                    s2c.add(new byte[]{TlsConstants.CT_CHANGE_CIPHER_SPEC, 0x03, 0x03, 0x00, 0x01, 0x01});
+                }
+            }
+        };
+        InMemoryTlsTransport clientTransport = new InMemoryTlsTransport(s2c) {
+            @Override
+            public void sendRecord(byte[] record) throws IOException {
+                c2s.add(record.clone());
+            }
+        };
+
+        TlsSession server = TlsSession.createServer(serverTransport, cs, bundle.cert, bundle.priv);
+        TlsSession client = TlsSession.createClient(clientTransport, cs, null, null);
+
+        Phaser phaser = new Phaser(3);
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+
+        Future<Void> cf = exec.submit(() -> {
+            phaser.arriveAndAwaitAdvance();
+            client.handshakeAsClient();
+            return null;
+        });
+        Future<Void> sf = exec.submit(() -> {
+            phaser.arriveAndAwaitAdvance();
+            server.handshakeAsServer();
+            return null;
+        });
+        phaser.arriveAndAwaitAdvance();
+        cf.get(15, TimeUnit.SECONDS);
+        sf.get(15, TimeUnit.SECONDS);
+        exec.shutdown();
+
+        assertTrue(client.isHandshakeDone(), "Клиент: handshake завершён despite CCS");
+        assertTrue(server.isHandshakeDone(), "Сервер: handshake завершён despite CCS");
+
+        // Прикладные данные проходят сквозь установленное соединение
+        client.write("data".getBytes());
+        assertArrayEquals("data".getBytes(), server.read());
+
+        server.write("reply".getBytes());
+        assertArrayEquals("reply".getBytes(), client.read());
+
+        server.close();
+        client.close();
+    }
+
     // =======================================================================
     // close_notify
     // =======================================================================
@@ -569,7 +634,7 @@ class TlsSessionTest {
     void testHandshakeHostnameMatch() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                params, "240501120000Z", "290501120000Z",
+                params, "20240501120000Z", "21060101120000Z",
                 new String[]{"server.com"});
         var tp = InMemoryTlsTransport.newPair();
         TlsSession server = TlsSession.createServer(tp.getServerTransport(),
@@ -607,7 +672,7 @@ class TlsSessionTest {
     void testHandshakeHostnameMismatch() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                params, "240501120000Z", "290501120000Z",
+                params, "20240501120000Z", "21060101120000Z",
                 new String[]{"server.com"});
         var tp = InMemoryTlsTransport.newPair();
         TlsSession server = TlsSession.createServer(tp.getServerTransport(),
@@ -648,7 +713,7 @@ class TlsSessionTest {
         ECParameters params = ECParameters.tc26a256();
         String sniHost = "my-server.example.com";
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                params, "240501120000Z", "290501120000Z",
+                params, "20240501120000Z", "21060101120000Z",
                 new String[]{sniHost});
         var tp = InMemoryTlsTransport.newPair();
 
@@ -696,10 +761,10 @@ class TlsSessionTest {
 
         // Два сертификата с разными SAN: один для multi, другой для fallback
         TlsTestHelper.CertBundle defaultBundle = TlsTestHelper.createCertWithKey(
-                params, "240501120000Z", "290501120000Z",
+                params, "20240501120000Z", "21060101120000Z",
                 new String[]{defaultHost});
         TlsTestHelper.CertBundle multiBundle = TlsTestHelper.createCertWithKey(
-                params, "240501120000Z", "290501120000Z",
+                params, "20240501120000Z", "21060101120000Z",
                 new String[]{multiHost});
 
         // Selector: для multiHost возвращает multi-credentials, для остальных — null (fallback)
@@ -821,7 +886,7 @@ class TlsSessionTest {
     void testHandshakeKuWithoutDigitalSignature() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                params, "240501120000Z", "290501120000Z",
+                params, "20240501120000Z", "21060101120000Z",
                 null, new byte[]{(byte) 0x20}, null);
         var tp = InMemoryTlsTransport.newPair();
         TlsSession server = TlsSession.createServer(tp.getServerTransport(),
@@ -861,7 +926,7 @@ class TlsSessionTest {
     void testHandshakeEkuWithoutServerAuth() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                params, "240501120000Z", "290501120000Z",
+                params, "20240501120000Z", "21060101120000Z",
                 null, new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.3"});
         var tp = InMemoryTlsTransport.newPair();
         TlsSession server = TlsSession.createServer(tp.getServerTransport(),
@@ -901,7 +966,7 @@ class TlsSessionTest {
     void testHandshakeWithIpSan() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                params, "240501120000Z", "290501120000Z",
+                params, "20240501120000Z", "21060101120000Z",
                 null, null, null, new String[]{"192.168.1.1"});
         var tp = InMemoryTlsTransport.newPair();
 
@@ -1041,7 +1106,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1061,7 +1126,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1096,7 +1161,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1119,7 +1184,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1144,7 +1209,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1152,14 +1217,14 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.9"},
                 false, null);
         // OCSP подписан dc.priv, а не root.priv → первичный путь упадёт
         leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
                 leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
                 root.cert.getPublicKey(), root.subjectDn,
-                "20300101120000Z", new byte[][]{dc.cert.getEncoded()}));
+                "21060101120000Z", new byte[][]{dc.cert.getEncoded()}));
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
                 .withCaPublicKey(root.cert.getPublicKey())
@@ -1176,7 +1241,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1184,13 +1249,13 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
         leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
                 leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
                 root.cert.getPublicKey(), root.subjectDn,
-                "20300101120000Z", new byte[][]{dc.cert.getEncoded()}));
+                "21060101120000Z", new byte[][]{dc.cert.getEncoded()}));
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
                 .withCaPublicKey(root.cert.getPublicKey())
@@ -1208,7 +1273,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1218,13 +1283,13 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle dc = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), wrongRoot.priv, wrongRoot.cert.getPublicKey(),
                 wrongRoot.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.9"},
                 false, null);
         leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
                 leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
                 root.cert.getPublicKey(), root.subjectDn,
-                "20300101120000Z", new byte[][]{dc.cert.getEncoded()}));
+                "21060101120000Z", new byte[][]{dc.cert.getEncoded()}));
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
                 .withCaPublicKey(root.cert.getPublicKey())
@@ -1242,7 +1307,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1256,7 +1321,7 @@ class TlsSessionTest {
         leaf.cert.setOcspResponse(TlsTestHelper.buildOcspResponseWithDelegatedCerts(
                 leaf.cert.getSerialNumber(), dc.priv, dc.cert.getPublicKey(),
                 root.cert.getPublicKey(), root.subjectDn,
-                "20300101120000Z", new byte[][]{dc.cert.getEncoded()}));
+                "21060101120000Z", new byte[][]{dc.cert.getEncoded()}));
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
                 .withCaPublicKey(root.cert.getPublicKey())
@@ -1280,7 +1345,7 @@ class TlsSessionTest {
         return TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 kuFlags, null, true, pathLen);
     }
 
@@ -1289,7 +1354,7 @@ class TlsSessionTest {
         return TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 kuFlags, null, false, null);
     }
 
@@ -1298,7 +1363,7 @@ class TlsSessionTest {
         return TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), issuer.priv, issuer.cert.getPublicKey(),
                 issuer.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1357,17 +1422,17 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle ca2 = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x04}, null, true, 0);
         TlsTestHelper.CertBundle ca1 = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), ca2.priv, ca2.cert.getPublicKey(),
                 ca2.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x04}, null, true, null);
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), ca1.priv, ca1.cert.getPublicKey(),
                 ca1.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -1479,7 +1544,7 @@ class TlsSessionTest {
         byte[] wrongIssuer = TlsTestHelper.buildDN("Wrong Issuer");
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertWithForcedIssuer(
                 ECParameters.tc26a256(), root.priv, wrongIssuer,
-                "Test Leaf", "240501120000Z", "290501120000Z");
+                "Test Leaf", "20240501120000Z", "21060101120000Z");
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
                 .withCaPublicKey(root.cert.getPublicKey())
@@ -1498,7 +1563,7 @@ class TlsSessionTest {
         return TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), issuer.priv, issuer.cert.getPublicKey(),
                 issuer.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_CLIENT_AUTH},
                 false, null);
     }
@@ -1508,7 +1573,7 @@ class TlsSessionTest {
         return TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), issuer.priv, issuer.cert.getPublicKey(),
                 issuer.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x80}, new String[]{"1.3.6.1.5.5.7.3.3"},
                 false, null);
     }
@@ -1630,7 +1695,7 @@ class TlsSessionTest {
         cf.get(15, TimeUnit.SECONDS);
         ExecutionException ex = assertThrows(ExecutionException.class, () -> sf.get(15, TimeUnit.SECONDS));
         assertInstanceOf(TlsException.class, ex.getCause());
-        assertEquals(TlsConstants.ALERT_BAD_CERTIFICATE, ((TlsException) ex.getCause()).getAlertCode());
+        assertEquals(TlsConstants.ALERT_UNKNOWN_CA, ((TlsException) ex.getCause()).getAlertCode());
         exec.shutdown();
     }
 
@@ -2354,7 +2419,7 @@ class TlsSessionTest {
         inbound.add(peerRecord.protect(TlsConstants.CT_HANDSHAKE,
                 Arrays.copyOfRange(hsMsg, maxPayload, hsMsg.length)));
 
-        HandshakeContext ctx = new HandshakeContext();
+        HandshakeContext ctx = new HandshakeContext(TlsConstants.STREEBOG_256_HASH_LEN);
         TlsHandshakeMessage parsed = session.receiveDecryptedHandshake(ctx);
         assertEquals(TlsConstants.HT_CERTIFICATE, parsed.getType());
         assertArrayEquals(hsBody, parsed.getBody());
@@ -2386,7 +2451,7 @@ class TlsSessionTest {
                 getCsL().getTagLen(), getCsL());
         inbound.add(peerRecord.protect(TlsConstants.CT_HANDSHAKE, combined));
 
-        HandshakeContext ctx = new HandshakeContext();
+        HandshakeContext ctx = new HandshakeContext(TlsConstants.STREEBOG_256_HASH_LEN);
         TlsHandshakeMessage parsed1 = session.receiveDecryptedHandshake(ctx);
         assertEquals(TlsConstants.HT_CLIENT_HELLO, parsed1.getType());
         assertArrayEquals(body1, parsed1.getBody());
@@ -2970,22 +3035,22 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle ca3 = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
                 root.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x04}, null, true, 1);
         TlsTestHelper.CertBundle ca2 = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), ca3.priv, ca3.cert.getPublicKey(),
                 ca3.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x04}, null, true, null);
         TlsTestHelper.CertBundle ca1 = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), ca2.priv, ca2.cert.getPublicKey(),
                 ca2.subjectDn,
-                "240501120000Z", "290501120000Z", null,
+                "20240501120000Z", "21060101120000Z", null,
                 new byte[]{(byte) 0x04}, null, true, null);
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), ca1.priv, ca1.cert.getPublicKey(),
                 ca1.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"},
                 new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
                 false, null);
@@ -3009,7 +3074,7 @@ class TlsSessionTest {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), expiredInt.priv, expiredInt.cert.getPublicKey(),
                 expiredInt.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"}, null, null, false, null);
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())
@@ -3033,7 +3098,7 @@ class TlsSessionTest {
                 "20000101000000Z", "20050101000000Z", null, null, null, true, null);
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 params, expiredRoot.priv, expiredRoot.cert.getPublicKey(), expiredRoot.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"}, null, null, false, null);
 
         TlsSession session = TlsSession.createClient(new TlsClientConfig(getCsL())

@@ -1,0 +1,62 @@
+= Результаты стресс-теста TlsSessionStreamTest (2026-05-28)
+:toc:
+:toc-title: Содержание
+:sectnums:
+
+== Метаданные прогона
+
+[cols="1,3"]
+|===
+| Дата прогона | 2026-05-28
+| Методика | link:../../../crypto-gost-tls13/doc/tls-session-stress.adoc[]
+| JDK | OpenJDK 25.0.3 (Red_Hat-25.0.3.0.9-alt1)
+| Железо | Intel Core Ultra 9 285H (Arrow Lake), 16 ядер / 16 потоков, 30 GiB RAM
+| ОС | Alt Linux p11
+| Команда запуска | `make test-stress-tlssession` (однопоточный throughput)
+| Вариант | TlsSessionStreamTest — непрерывная запись 16383-байтовых блоков,
+без ожидания echo (link:../../../crypto-gost-tls13/doc/tls-session-stress.adoc#что-измеряется[подробнее])
+|===
+
+== Результат
+
+----
+[RESULT] Valid runs: 5 (of 5)
+[RESULT] Min: 46.4 MB/s, Max: 48.0 MB/s, Median: 47.4 MB/s
+----
+
+*Valid runs:* 5 из 5 — все прогоны пригодны (отбраковки не было).
+
+*Медиана:* **47.4 MB/s** — устойчивая оценка пропускной способности.
+
+*Разброс:* 46.4–48.0 MB/s (~3 %) — стабильно, признаки флуктуаций системы отсутствуют.
+
+== Сравнение с эталоном
+
+JMH-микробенчмарк `TlsRecord.protect` (16 KB records) показывает ~50.8 MB/s
+(link:результаты-jmh-tls-2026-05-25.adoc[прогон 2026-05-25]).
+
+Отклонение медианы стресс-теста от JMH-эталона:
+
+[cols="1,1,1"]
+|===
+| Источник | Throughput | Δ от JMH
+| JMH record protect 16 KB | 50.8 MB/s | —
+| TlsSessionStreamTest (медиана) | 47.4 MB/s | –6.7 %
+|===
+
+Отклонение –6.7 % — в пределах ожиданий. Накладные расходы
+TlsSession+SocketTlsTransport (handshake, record framing, TCP стэк)
+добавляют ~7 % относительно JMH-микробенчмарка, меряющего только protect().
+
+CAUTION: Сравнение ориентировочное — JMH меряет только шифрование одного
+record, без TCP, без TlsSession, без handshake.
+
+== Вывод
+
+. Пропускная способность TlsSession: **~47 MB/s** (однопоточный поток,
+  16383-байтовые блоки, Kuznyechik-MGM-Streebog-256).
+
+. Результат стабилен относительно JMH-эталона.
+
+. Двусторонний обмен (full-duplex) будет ниже — методика измеряет
+  только одно направление (верхняя оценка).

@@ -20,6 +20,7 @@ toc::[]
 * *Session resumption*: `PSK` через `NewSessionTicket` (`InMemoryPskStore` in-memory, single-use).
 * *OCSP stapling*: сервер прикладывает OCSP-ответ к сертификату.
 * *Post-handshake messages*: `NewSessionTicket` (сохранение для `PSK`).
+* *HRR (RFC 8446 §4.1.3)* — смена ECDHE-группы через HelloRetryRequest, включая пересчёт PSK binder для второго ClientHello.
 .. *Криптография*:
 * *Key schedule*: `HKDF-Streebog` (RFC 5869) по схеме TLS 1.3 (RFC 8446 §7.1).
 * *Защита записей*: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446 §5.3.
@@ -40,7 +41,7 @@ toc::[]
 .. *ByteBuffer API:*
 * `TlsRecord.protect/unprotect` — ByteBuffer-перегрузки для zero-copy интеграции с NIO.
 .. *Загрузка ключей:*
-* `Pkcs12Loader` — чтение PFX (PKCS#12) с `PBKDF2-HMAC-SHA256 + AES-256-CBC`.
+* `GostPkcs12Loader` — чтение PFX (PKCS#12) с нативной поддержкой ГОСТ PBE: PBKDF2-HMAC-Streebog + Кузнечик CTR-ACPKM (RFC 9337/9548) и fallback на JDK KeyStore.
 .. *Завершение сессии:*
 * `close_notify` — корректное закрытие по протоколу.
 * Затирание ключевого материала при закрытии или ошибке.
@@ -52,7 +53,6 @@ toc::[]
 .. *Ограничения:*
 * Только resumption PSK (0-RTT и external PSK не поддерживаются).
 * Только `psk_dhe_ke` (pure PSK без ECDHE не поддерживается).
-* `HelloRetryRequest` (RFC 8446 §4.1.4) не поддерживается — используется только одна named group (GC256A по умолчанию).
 * Только ГОСТ (non-GOST cipher suites не поддерживаются).
 
 +
@@ -272,8 +272,8 @@ TlsSession client = TlsSession.createClient(
 
 Сервер запрашивает сертификат клиента через `withCaPublicKey()` в `TlsServerConfig`.
 
-Клиент передаёт свой сертификат и закрытый ключ через `withClientCertificate()`
-(или `withClientCertificateChain(chain)` для полной цепочки) и
+Клиент передаёт свой сертификат и закрытый ключ через `withClientCertificateChain()`
+(один сертификат или полная цепочка) и
 `withClientPrivateKey()`.
 
 [source,java]
@@ -328,7 +328,7 @@ PrivateKeyParameters clientPriv = org.rssys.gost.jca.spec.GostDerCodec.decodePri
 
 TlsSession client = TlsSession.createClient(
         new TlsClientConfig(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L)
-        .withClientCertificate(clientCert)
+        .withClientCertificateChain(clientCert)
         .withClientPrivateKey(clientPriv), transport);
 
 try {
@@ -579,26 +579,56 @@ boolean serverValid = serverCert.verify(caCert.getPublicKey());
 
 ----
 
-Пример загрузки из PKCS12-файла — рекомендуется для production (ключ и цепочка в одном файле):
+Пример загрузки из PKCS#12-файла — рекомендуется для production (ключ и цепочка в одном файле):
 
 [source,java]
 ----
-import org.rssys.gost.tls13.cert.Pkcs12Loader;
+import org.rssys.gost.tls13.cert.GostPkcs12Loader;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
-Pkcs12Loader.Result p12 = Pkcs12Loader.load(
+GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(
         Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray());
-org.rssys.gost.signature.PrivateKeyParameters key = p12.getPrivateKey();
-java.util.List<TlsCertificate> chain = p12.getCertificateChain();
+PrivateKeyParameters key   = p12.getPrivateKey();
+List<TlsCertificate> chain = p12.getCertificateChain(); // leaf — первый элемент
 ----
 
-**Ограничение:** GOST PBE не поддерживается — только PBES2 (PBKDF2-HMAC-SHA256 + AES-256-CBC).
+ГОСТ PBE поддерживается нативно: PBKDF2-HMAC-Стрибог-512 + Кузнечик CTR-ACPKM(-OMAC)
+по RFC 9337/9548. Не-ГОСТ схемы — прозрачный fallback на JDK KeyStore.
+
+Пример создания PFX-контейнера ГОСТ — для упаковки сгенерированного ключа и сертификата:
+
+[source,java]
+----
+import org.rssys.gost.tls13.cert.GostPkcs12Builder;
+import java.nio.file.Path;
+
+// Минимальный вариант: ключ + leaf-сертификат
+byte[] pfx = GostPkcs12Builder.newBuilder()
+        .key(privateKey)
+        .certificate(leafCert)
+        .password("changeit".toCharArray())
+        .build();
+
+// С цепочкой CA и записью в файл
+GostPkcs12Builder.newBuilder()
+        .key(privateKey)
+        .certificate(leafCert)
+        .caCertificate(intermediateCert)
+        .caCertificate(rootCert)
+        .password("changeit".toCharArray())
+        .friendlyName("server-cert")
+        .buildAndWriteTo(Path.of("server.p12")); // temp + atomic rename
+----
+
+По умолчанию используются: Кузнечик CTR-ACPKM-OMAC, 2000 итераций PBKDF2.
+
+Для совместимости с системами без поддержки OMAC — `.encScheme(GostOids.KUZ_CTR_ACPKM)`.
+Созданный PFX читается `GostPkcs12Loader.load()` и проходит структурную валидацию OpenSSL.
 
 Для тестовой разработки можно использовать самоподписанный сертификат:
 `TlsTestHelper.createCertWithKey(params)` (класс находится в `src/test/` —
 **недоступен в production-сборке**, только для тестов).
-
 
 === Проверка сертификата
 
@@ -674,9 +704,95 @@ try (TlsSession session = TlsSession.createClient(config, transport)) {
 **`TlsHandshakeEngine`** — это более сложная пошаговая стейт машина, отвязанная от I/O. Она предназначена
 для нестандартных сценариев: асинхронный транспорт, собственный selector-цикл,
 интеграция с JSSE (`SSLEngine`). `TlsSession` использует `TlsHandshakeEngine` внутри.
+.
 
-.Дополнительная документация:
-- link:doc/architecture.md[crypto-gost-tls13/doc/architecture.md] — описание слоёв, ключевых классов, handshake flow, threading model, ограничений..
+=== Запуск тестов производительности и устойчивости
+
+Модуль включает два теста, помеченных `@Tag("stress")`, которые исключены
+из обычного прогона `mvn test` (через `surefire.excludedGroups`).
+
+==== Пропускная способность (throughput)
+
+Однопоточный замер скорости передачи данных через `TlsSession`.
+
+Описание методики: link:doc/tls-session-stress.md[Методика измерения throughput].
+
+[source,sh]
+----
+# По умолчанию: 5 прогонов × ~20 с ≈ 100 с
+make test-stress-tlssession
+
+# Управление временем (прогрев, замер, число прогонов)
+make test-stress-tlssession ARGS="-Dstress.warmup=2 -Dstress.measure=10 -Dstress.iters=3"
+
+# Через Maven напрямую
+mvn test -pl crypto-gost-tls13 -am \
+  -Dtest="org.rssys.gost.tls13.stress.TlsSessionStreamTest" \
+  -Dsurefire.excludedGroups= \
+  -Dsurefire.failIfNoSpecifiedTests=false
+----
+
+==== Смешанная нагрузка (стресс-тест)
+
+Проверка устойчивости `TlsSession` под смешанной нагрузкой: утечки памяти,
+зависания, обрывы, максимум одновременных сессий. +
+
+Описание методики: link:doc/tls-session-stress-mixed.md[Методика измерения стабильности под смешнанной нагрузкой].
+
+Управление длительностью и параметрами через свойства `-Dstress.*`:
+
+[source,sh]
+----
+# Полный прогон (5 минут)
+make test-stress-tlssession-mixed
+
+# Быстрый прогон (1 минута)
+make test-stress-tlssession-mixed ARGS=-Dstress.duration=1
+
+# Прогон для вердикта об утечке (30 минут)
+make test-stress-tlssession-mixed ARGS=-Dstress.duration=30
+
+# Через Maven напрямую
+mvn test -pl crypto-gost-tls13 -am \
+  -Dtest="org.rssys.gost.tls13.stress.TlsSessionStressTest" \
+  -Dsurefire.excludedGroups= \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dstress.duration=5
+----
+
+Доступные параметры:
+
+[cols="3,1,2"]
+|===
+| Свойство | По умолч. | Описание
+| `stress.duration` | 5 | Длительность смешанной нагрузки, минут
+| `stress.maxSessions` | 10000 | Потолок цикла в maxConcurrentSessions
+| `stress.step` | 50 | Шаг наращивания в maxConcurrentSessions
+|===
+
+=== Кросс-валидация
+
+==== PKCS#12 (PFX-контейнеры)
+
+Для модуля `crypto-gost-tls13` выполнена двусторонняя кросс-валидация
+формата PFX (PKCS#12) с ГОСТ-алгоритмами.
+
+*OpenSSL → crypto-gost*: `GostPkcs12Loader` загружает PFX, созданный OpenSSL
+(`genpkey` → `req` → `pkcs12 -export`). Проверяется: чтение ключа и сертификата,
+соответствие публичного ключа (`Q = d×G`), подпись/верификация,
+реакция на повреждённые данные и неверный пароль.
+
+*crypto-gost → OpenSSL*: `GostPkcs12Builder` создаёт PFX, OpenSSL выполняет
+структурную валидацию (`pkcs12 -info`). Затем PFX перечитывается `GostPkcs12Loader`
+и выполняется roundtrip sign/verify. Покрыты все 5 кривых ГОСТ.
+
+Все тесты в модуле `x-validation-tests/pkcs12`. OpenSSL должен быть собран
+с link:../x-validation-tests/doc/openssl-3.6-gost-how-to.md[поддержкой ГОСТ].
+
+[source,sh]
+----
+mvn -Pcrossval -pl x-validation-tests/pkcs12 -am test -Dexec.skip=true
+----
 
 == Поддержать проект
 

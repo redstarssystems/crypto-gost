@@ -6,6 +6,10 @@ import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.util.DataLengthException;
 import org.rssys.gost.util.OutputLengthException;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
+
 /**
  * Абстрактный базовый класс для потоковых режимов блочного шифрования
  * (CFB, CTR, OFB по ГОСТ Р 34.13-2015).
@@ -42,23 +46,51 @@ abstract class AbstractStreamMode implements BlockCipher {
     /** Флаг инициализации: true после успешного вызова init(). */
     protected boolean initialized;
 
+    // -----------------------------------------------------------------------
+    // VarHandle для long-based криптоопераций (Stage 2+)
+    // -----------------------------------------------------------------------
+
+    /** VarHandle для чтения/записи long из byte[] в big-endian порядке. */
+    protected static final VarHandle LONG_BE =
+            MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
+
+    // -----------------------------------------------------------------------
+
     protected AbstractStreamMode(BlockCipher cipher) {
         this.cipher    = cipher;
         this.blockSize = cipher.getBlockSize();
     }
 
     /**
-     * Обрабатывает {@code len} байт входного буфера побайтово через {@link #calculateByte}.
+     * Обрабатывает {@code len} байт: делегирует полные блоки в {@link #processBlocks},
+     * неполный хвост — побайтово через {@link #calculateByte}.
      */
     public int processBytes(byte[] in, int inOff, int len, byte[] out, int outOff)
             throws DataLengthException, IllegalStateException {
         checkInitialized();
         checkInputBounds(in, inOff, len);
         checkOutputBounds(out, outOff, len);
-        for (int i = 0; i < len; i++) {
+        int processed = processBlocks(in, inOff, len, out, outOff);
+        for (int i = processed; i < len; i++) {
             out[outOff + i] = calculateByte(in[inOff + i]);
         }
         return len;
+    }
+
+    /**
+     * Обрабатывает полные блоки входных данных. По умолчанию — побайтово через
+     * {@link #calculateByte} (функционально эквивалентно старому processBytes).
+     * <p>
+     * Подклассы переопределяют для блочной long-арифметики.
+     *
+     * @return количество обработанных байт (всегда кратно blockSize)
+     */
+    protected int processBlocks(byte[] in, int inOff, int len, byte[] out, int outOff) {
+        int limit = len - (len % blockSize);
+        for (int i = 0; i < limit; i++) {
+            out[outOff + i] = calculateByte(in[inOff + i]);
+        }
+        return limit;
     }
 
     /**

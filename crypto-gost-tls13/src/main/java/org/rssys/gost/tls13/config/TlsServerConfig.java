@@ -3,6 +3,7 @@ package org.rssys.gost.tls13.config;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
@@ -27,6 +28,7 @@ public final class TlsServerConfig {
     private List<String> alpnProtocols;
     private SniCertificateSelector sniSelector;
     private int ticketsToSend = 1;
+    private int selectedNamedGroup;
 
     /**
      * @param ciphersuite             cipher suite (не null)
@@ -99,6 +101,22 @@ public final class TlsServerConfig {
         return this;
     }
 
+    /**
+     * @param groupId идентификатор именованной группы (RFC 9367 §3.1),
+     *                например {@link TlsConstants#GRP_GC512C}.
+     *                0 = использовать GC256A (значение сессии по умолчанию).
+     * @return this
+     * @throws IllegalArgumentException если группа не поддерживается
+     */
+    public TlsServerConfig withSelectedNamedGroup(int groupId) {
+        if (groupId != 0) {
+            // ранняя валидация: группа должна быть в RFC 9367
+            TlsCiphersuite.namedGroupToParams(groupId);
+        }
+        this.selectedNamedGroup = groupId;
+        return this;
+    }
+
     // package-private аксессоры для фабрики TlsSession
     public TlsCiphersuite getCiphersuite() { return ciphersuite; }
     public List<TlsCertificate> getServerCertificateChain() { return serverCertificateChain; }
@@ -113,6 +131,7 @@ public final class TlsServerConfig {
     public List<String> getAlpnProtocols() { return alpnProtocols; }
     public SniCertificateSelector getSniSelector() { return sniSelector; }
     public int getTicketsToSend() { return ticketsToSend; }
+    public int getSelectedNamedGroup() { return selectedNamedGroup; }
 
     /**
      * Устанавливает количество NewSessionTicket, отправляемых клиенту

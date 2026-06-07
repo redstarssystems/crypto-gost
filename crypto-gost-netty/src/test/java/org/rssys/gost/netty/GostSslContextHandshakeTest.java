@@ -51,12 +51,12 @@ class GostSslContextHandshakeTest {
         rootCa = TlsTestHelper.createRootCA(params);
         TlsTestHelper.CertBundle serverCert = TlsTestHelper.createCertSignedBy(
                 params, rootCa.priv, rootCa.cert.getPublicKey(), rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
         TlsTestHelper.CertBundle clientCert = TlsTestHelper.createCertSignedBy(
                 params, rootCa.priv, rootCa.cert.getPublicKey(), rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 null, new byte[]{(byte) 0x80}, null,
                 false, null);
 
@@ -120,7 +120,7 @@ class GostSslContextHandshakeTest {
         TlsTestHelper.CertBundle sc = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), rootCa.priv,
                 rootCa.cert.getPublicKey(), rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
         skm.addKeyEntry("default", CertificateBridge.toJcaChain(sc.cert, rootCa.cert), sc.priv);
@@ -148,7 +148,7 @@ class GostSslContextHandshakeTest {
         TlsTestHelper.CertBundle sc = TlsTestHelper.createCertSignedBy(
                 ECParameters.tc26a256(), rootCa.priv,
                 rootCa.cert.getPublicKey(), rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
         skm.addKeyEntry("default", CertificateBridge.toJcaChain(sc.cert, rootCa.cert), sc.priv);

@@ -38,7 +38,7 @@ class GostSslContextHandshakePskResumptionTest {
         TlsTestHelper.CertBundle rootCa = TlsTestHelper.createRootCA(params);
         TlsTestHelper.CertBundle serverCert = TlsTestHelper.createCertSignedBy(
                 params, rootCa.priv, rootCa.cert.getPublicKey(), rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
 

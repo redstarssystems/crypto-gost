@@ -1,20 +1,22 @@
 package org.rssys.gost.tls13.message;
 
 import org.rssys.gost.digest.Digest;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.tls13.crypto.HkdfStreebog;
 import org.rssys.gost.tls13.crypto.TlsKeySchedule;
 import org.rssys.gost.tls13.crypto.TlsSignatureCodec;
+
+import org.rssys.gost.tls13.TlsException;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Сборка handshake-сообщений TLS 1.3 (RFC 8446 §4, RFC 9367).
@@ -29,16 +31,19 @@ import java.util.Locale;
  */
 public final class TlsMessageBuilder {
 
-    private final TlsCiphersuite ciphersuite;
+    private TlsCiphersuite ciphersuite;
     private final List<Integer> offeredCipherSuiteIds;
     private final int selectedNamedGroup;
     private int selectedSigScheme;
     private final PrivateKeyParameters ourPrivateKey;
     private final List<TlsCertificate> ourCertificateChain;
-    private final int hashLen;
+    private int hashLen;
 
     // ALPN (RFC 7301): список протоколов клиента для включения в ClientHello
     private List<String> clientAlpnProtocols;
+
+    /** legacy_session_id из ClientHello для эхо-отражения (RFC 8446 §4.1.3). Null если пусто. */
+    private byte[] clientSessionId;
 
     // Расширение supported_versions для ClientHello:
     // — вместо new byte[] + BAOS в buildCommonExtensions
@@ -115,6 +120,68 @@ public final class TlsMessageBuilder {
         this.hashLen = hashLen;
     }
 
+    private void updateCiphersuite(TlsCiphersuite negotiated) {
+        this.ciphersuite = negotiated;
+        this.hashLen = negotiated.getHashLen();
+    }
+
+    /**
+     * Согласует cipher suite по ClientHello клиента (RFC 8446 §4.1.1).
+     * Сервер выбирает по своему приоритету: сначала preferred, затем offeredCipherSuiteIds.
+     *
+     * @param chBody    тело ClientHello
+     * @param preferred предпочтительный suite сервера (может быть null)
+     * @return согласованный suite, или null если пересечений нет
+     * @throws TlsException при malformed ClientHello
+     */
+    public TlsCiphersuite negotiateCiphersuite(byte[] chBody, TlsCiphersuite preferred)
+            throws TlsException {
+        TlsCiphersuite matched = matchClientCiphersuite(chBody, offeredCipherSuiteIds, preferred);
+        if (matched != null && matched != this.ciphersuite) {
+            updateCiphersuite(matched);
+        }
+        return matched;
+    }
+
+    /**
+     * Находит согласованный ciphersuite: сначала предпочтительный suite сервера,
+     * затем первое пересечение по приоритету сервера (RFC 8446 §4.1.1).
+     */
+    private static TlsCiphersuite matchClientCiphersuite(byte[] chBody, List<Integer> offeredSuites,
+            TlsCiphersuite preferredSuite) throws TlsException {
+        try {
+            int pos = 2 + TlsConstants.RANDOM_LENGTH;
+            int sidLen = chBody[pos] & 0xFF;
+            pos += 1 + sidLen;
+            int csLen = ((chBody[pos] & 0xFF) << 8) | (chBody[pos + 1] & 0xFF);
+            pos += 2;
+            int clientCsEnd = pos + csLen;
+            // Сначала предпочтительный suite сервера
+            if (preferredSuite != null) {
+                int preferredId = preferredSuite.getId();
+                for (int i = pos; i < clientCsEnd; i += 2) {
+                    int clientId = ((chBody[i] & 0xFF) << 8) | (chBody[i + 1] & 0xFF);
+                    if (clientId == preferredId) {
+                        return preferredSuite;
+                    }
+                }
+            }
+            // Fallback: первое пересечение по приоритету сервера (RFC 8446 §4.1.1)
+            for (int offeredId : offeredSuites) {
+                for (int i = pos; i < clientCsEnd; i += 2) {
+                    int clientId = ((chBody[i] & 0xFF) << 8) | (chBody[i + 1] & 0xFF);
+                    if (clientId == offeredId) {
+                        return TlsCiphersuite.byId(offeredId);
+                    }
+                }
+            }
+            return null;
+        } catch (IndexOutOfBoundsException e) {
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    "Malformed ClientHello (cipher suites)");
+        }
+    }
+
     /**
      * @return список cipher suite ID, отправленных в ClientHello
      */
@@ -140,6 +207,16 @@ public final class TlsMessageBuilder {
      */
     public void setClientAlpnProtocols(List<String> protocols) {
         this.clientAlpnProtocols = protocols;
+    }
+
+    /**
+     * Устанавливает legacy_session_id из ClientHello для эхо-отражения.
+     * Вызывать до buildServerHello.
+     *
+     * @param sessionId legacy_session_id клиента или null/пустой если отсутствует
+     */
+    public void setClientSessionId(byte[] sessionId) {
+        this.clientSessionId = (sessionId != null && sessionId.length > 0) ? sessionId : null;
     }
 
     /**
@@ -181,11 +258,25 @@ public final class TlsMessageBuilder {
      * @param serverName DNS-имя сервера для SNI (null = без расширения)
      * @return тело ClientHello (без handshake-заголовка)
      */
-    public byte[] buildClientHello(byte[] ecdhePoint, String serverName) {
+    /**
+     * Собирает ClientHello с несколькими key_share entry (multi key_share, RFC 8446 §4.2.8).
+     * Позволяет клиенту предложить несколько групп в первом сообщении, избегая HRR.
+     *
+     * @param ecdhePoints карта: NamedGroup → закодированная точка X||Y
+     * @param serverName  DNS-имя сервера для SNI (null = без расширения)
+     * @return тело ClientHello (без handshake-заголовка)
+     */
+    public byte[] buildClientHello(Map<Integer, byte[]> ecdhePoints, String serverName) {
+        return buildClientHello(ecdhePoints, serverName, null);
+    }
+
+    public byte[] buildClientHello(Map<Integer, byte[]> ecdhePoints, String serverName,
+                                    byte[] cookie) {
         byte[] preamble = buildClientHelloPreamble();
         ByteArrayOutputStream ext = new ByteArrayOutputStream();
-        buildCommonExtensions(ext, ecdhePoint, serverName);
+        buildCommonExtensions(ext, ecdhePoints, serverName);
         addAlpnExtension(ext);
+        addCookieExtension(ext, cookie);
         byte[] extBytes = ext.toByteArray();
         byte[] out = new byte[preamble.length + 2 + extBytes.length];
         System.arraycopy(preamble, 0, out, 0, preamble.length);
@@ -193,6 +284,10 @@ public final class TlsMessageBuilder {
         out[preamble.length + 1] = (byte) extBytes.length;
         System.arraycopy(extBytes, 0, out, preamble.length + 2, extBytes.length);
         return out;
+    }
+
+    public byte[] buildClientHello(byte[] ecdhePoint, String serverName) {
+        return buildClientHello(Map.of(selectedNamedGroup, ecdhePoint), serverName, null);
     }
 
     /**
@@ -224,14 +319,32 @@ public final class TlsMessageBuilder {
      * @param serverName            DNS-имя сервера для SNI (null = без расширения)
      * @return тело ClientHello с placeholder binder
      */
-    public byte[] buildClientHelloWithPsk(byte[] ecdhePoint,
-                                           byte[] pskIdentity,
-                                           long obfuscatedTicketAge,
-                                           String serverName) {
+    /**
+     * Собирает ClientHello с PSK и несколькими key_share entry (multi key_share).
+     *
+     * @param ecdhePoints         карта: NamedGroup → закодированная точка X||Y
+     * @param pskIdentity         тикет (opaque ticket из NewSessionTicket)
+     * @param obfuscatedTicketAge obfuscated_ticket_age (uint32)
+     * @param serverName          DNS-имя сервера для SNI (null = без расширения)
+     * @return тело ClientHello с placeholder binder
+     */
+    public byte[] buildClientHelloWithPsk(Map<Integer, byte[]> ecdhePoints,
+                                            byte[] pskIdentity,
+                                            long obfuscatedTicketAge,
+                                            String serverName) {
+        return buildClientHelloWithPsk(ecdhePoints, pskIdentity, obfuscatedTicketAge, serverName, null);
+    }
+
+    public byte[] buildClientHelloWithPsk(Map<Integer, byte[]> ecdhePoints,
+                                            byte[] pskIdentity,
+                                            long obfuscatedTicketAge,
+                                            String serverName,
+                                            byte[] cookie) {
         byte[] preamble = buildClientHelloPreamble();
         ByteArrayOutputStream ext = new ByteArrayOutputStream();
-        buildCommonExtensions(ext, ecdhePoint, serverName);
+        buildCommonExtensions(ext, ecdhePoints, serverName);
         addAlpnExtension(ext);
+        addCookieExtension(ext, cookie);
 
         // psk_key_exchange_modes (RFC 8446 §4.2.9) — только psk_dhe_ke
         ext.write(PSK_DHE_KE_EXT, 0, PSK_DHE_KE_EXT.length);
@@ -271,13 +384,22 @@ public final class TlsMessageBuilder {
         return out;
     }
 
+    public byte[] buildClientHelloWithPsk(byte[] ecdhePoint,
+                                           byte[] pskIdentity,
+                                           long obfuscatedTicketAge,
+                                           String serverName) {
+        return buildClientHelloWithPsk(Map.of(selectedNamedGroup, ecdhePoint),
+                pskIdentity, obfuscatedTicketAge, serverName);
+    }
+
     /**
      * Собирает ServerHello (RFC 8446 §4.1.3, RFC 9367 §3.1).
      * <p>
-     * Формат: legacy_version(2) || random(32) || legacy_session_id(1+0) ||
+     * Формат: legacy_version(2) || random(32) || legacy_session_id(1+len) ||
      * cipher_suite(2) || compression(1) || extensions.
      * <p>
-     * Расширения: supported_versions + key_share с серверной ECDHE-точкой.
+     * Extensions: supported_versions + key_share с серверной ECDHE-точкой.
+     * legacy_session_id заполняется из {@link #setClientSessionId(byte[])}.
      *
      * @param ecdhePoint эфемерный публичный ключ сервера X || Y (little-endian)
      * @return тело ServerHello (без handshake-заголовка)
@@ -322,7 +444,12 @@ public final class TlsMessageBuilder {
 
         out.write(random, 0, random.length);
 
-        out.write(0x00);
+        if (clientSessionId != null) {
+            out.write(clientSessionId.length);
+            out.write(clientSessionId, 0, clientSessionId.length);
+        } else {
+            out.write(0x00);
+        }
 
         TlsEncoding.encodeUint16(out, ciphersuite.getId());
 
@@ -447,7 +574,7 @@ public final class TlsMessageBuilder {
         byte[] sigContent = TlsEncoding.buildSigContent(transcriptHash, contextString);
 
         int sigHashLen = ourPrivateKey.getParams().hlen;
-        Digest d = sigHashLen == 64 ? new Streebog512() : new Streebog256();
+        Digest d = HkdfStreebog.newDigest(sigHashLen);
         d.update(sigContent, 0, sigContent.length);
         byte[] hash = new byte[sigHashLen];
         d.doFinal(hash, 0);
@@ -521,13 +648,21 @@ public final class TlsMessageBuilder {
      * @param ecdhePoint  эфемерный публичный ключ X || Y
      * @param serverName  DNS-имя сервера для SNI (null = без расширения)
      */
-    private void buildCommonExtensions(ByteArrayOutputStream ext, byte[] ecdhePoint, String serverName) {
+    /**
+     * Собирает общий набор расширений ClientHello с несколькими key_share entry.
+     *
+     * @param ext         поток для записи расширений
+     * @param keyShares   карта: NamedGroup → закодированная точка X||Y
+     * @param serverName  DNS-имя сервера для SNI (null = без расширения)
+     */
+    private void buildCommonExtensions(ByteArrayOutputStream ext,
+                                        Map<Integer, byte[]> keyShares,
+                                        String serverName) {
         // SNI: server_name extension (RFC 6066 §3, RFC 8446 §4.2.1)
         String normalized = normalizeHostname(serverName);
         if (normalized != null) {
             ByteArrayOutputStream sniData = new ByteArrayOutputStream();
             byte[] nameBytes = normalized.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
-            // ServerNameList: length(2) || name_type(1)=host_name || name_length(2) || name(N)
             TlsEncoding.encodeUint16(sniData, 3 + nameBytes.length);
             sniData.write(0x00);
             TlsEncoding.encodeUint16(sniData, nameBytes.length);
@@ -535,28 +670,40 @@ public final class TlsMessageBuilder {
             TlsEncoding.encodeExtension(ext, TlsConstants.EXT_SERVER_NAME, sniData.toByteArray());
         }
 
-        // Статические расширения: предварительно собранные байтовые массивы,
-        // чтобы не аллоцировать BAOS на каждый handshake
         ext.write(SV_CLIENT, 0, SV_CLIENT.length);
         ext.write(SUPPORTED_GROUPS_EXT, 0, SUPPORTED_GROUPS_EXT.length);
         ext.write(SIG_ALG_EXT, 0, SIG_ALG_EXT.length);
 
-        // key_share entry: группа(2) + длина_ключа(2) + точка(N)
-        byte[] ksEntry = new byte[4 + ecdhePoint.length];
-        ksEntry[0] = (byte) (selectedNamedGroup >>> 8);
-        ksEntry[1] = (byte) selectedNamedGroup;
-        ksEntry[2] = (byte) (ecdhePoint.length >>> 8);
-        ksEntry[3] = (byte) ecdhePoint.length;
-        System.arraycopy(ecdhePoint, 0, ksEntry, 4, ecdhePoint.length);
-
-        // Оборачиваем entry в список key_share: длина_списка(2) + entry
-        byte[] ks = new byte[2 + ksEntry.length];
-        ks[0] = (byte) (ksEntry.length >>> 8);
-        ks[1] = (byte) ksEntry.length;
-        System.arraycopy(ksEntry, 0, ks, 2, ksEntry.length);
-
+        // Multi key_share: все entry из карты (RFC 8446 §4.2.8: clients MAY send multiple)
+        byte[][] entries = new byte[keyShares.size()][];
+        int totalEntryLen = 0;
+        int idx = 0;
+        for (Map.Entry<Integer, byte[]> ksEntry : keyShares.entrySet()) {
+            byte[] point = ksEntry.getValue();
+            byte[] entry = new byte[4 + point.length];
+            int group = ksEntry.getKey();
+            entry[0] = (byte) (group >>> 8);
+            entry[1] = (byte) group;
+            entry[2] = (byte) (point.length >>> 8);
+            entry[3] = (byte) point.length;
+            System.arraycopy(point, 0, entry, 4, point.length);
+            entries[idx++] = entry;
+            totalEntryLen += entry.length;
+        }
+        byte[] ks = new byte[2 + totalEntryLen];
+        ks[0] = (byte) (totalEntryLen >>> 8);
+        ks[1] = (byte) totalEntryLen;
+        int ksPos = 2;
+        for (byte[] entry : entries) {
+            System.arraycopy(entry, 0, ks, ksPos, entry.length);
+            ksPos += entry.length;
+        }
         TlsEncoding.encodeExtension(ext, TlsConstants.EXT_KEY_SHARE, ks);
         ext.write(STATUS_REQUEST_EXT, 0, STATUS_REQUEST_EXT.length);
+    }
+
+    private void buildCommonExtensions(ByteArrayOutputStream ext, byte[] ecdhePoint, String serverName) {
+        buildCommonExtensions(ext, Map.of(selectedNamedGroup, ecdhePoint), serverName);
     }
 
     /**
@@ -579,6 +726,60 @@ public final class TlsMessageBuilder {
         TlsEncoding.encodeUint16(extData, listBytes.length);
         extData.write(listBytes, 0, listBytes.length);
         TlsEncoding.encodeExtension(ext, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION, extData.toByteArray());
+    }
+
+    private static void addCookieExtension(ByteArrayOutputStream ext, byte[] cookie) {
+        if (cookie == null) return;
+        byte[] payload = new byte[2 + cookie.length];
+        payload[0] = (byte) (cookie.length >>> 8);
+        payload[1] = (byte) cookie.length;
+        System.arraycopy(cookie, 0, payload, 2, cookie.length);
+        TlsEncoding.encodeExtension(ext, TlsConstants.EXT_COOKIE, payload);
+    }
+
+    /**
+     * Собирает HelloRetryRequest (RFC 8446 §4.1.3).
+     * <p>
+     * Структура тела идентична ServerHello, но:
+     * <ul>
+     *   <li>random = HRR_RANDOM (0xCF × 32)</li>
+     *   <li>key_share содержит только NamedGroup (key_exchange длины 0)</li>
+     * </ul>
+     *
+     * @param requestedGroup желаемая именованная группа сервера
+     * @param cipherSuiteId  выбранный cipher suite
+     * @return тело HelloRetryRequest (без handshake-заголовка)
+     */
+    public byte[] buildHelloRetryRequest(int requestedGroup, int cipherSuiteId) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+        out.write(TlsConstants.LEGACY_VERSION_MAJOR);
+        out.write(TlsConstants.LEGACY_VERSION_MINOR);
+
+        out.write(TlsConstants.HRR_RANDOM, 0, TlsConstants.HRR_RANDOM.length);
+
+        out.write(0x00);
+
+        TlsEncoding.encodeUint16(out, cipherSuiteId);
+
+        out.write(0x00);
+
+        ByteArrayOutputStream ext = new ByteArrayOutputStream();
+
+        ext.write(SV_SERVER, 0, SV_SERVER.length);
+
+        // key_share: только NamedGroup, key_len=0 (RFC 8446 §4.2.8)
+        byte[] ks = new byte[4];
+        ks[0] = (byte) (requestedGroup >>> 8);
+        ks[1] = (byte) requestedGroup;
+        ks[2] = 0;
+        ks[3] = 0;
+        TlsEncoding.encodeExtension(ext, TlsConstants.EXT_KEY_SHARE, ks);
+
+        TlsEncoding.encodeUint16(out, ext.size());
+        out.write(ext.toByteArray(), 0, ext.size());
+
+        return out.toByteArray();
     }
 
     /**

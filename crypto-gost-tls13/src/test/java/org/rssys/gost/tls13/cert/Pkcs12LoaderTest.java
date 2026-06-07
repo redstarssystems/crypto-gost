@@ -33,7 +33,7 @@ class Pkcs12LoaderTest {
     @DisplayName("GOST PFX: полный roundtrip — load возвращает ключ и сертификат")
     void testGostRoundtrip() throws Exception {
         byte[] pfx = buildGostPfxViaJdk();
-        Pkcs12Loader.Result result = Pkcs12Loader.load(pfx, PASSWORD);
+        GostPkcs12Loader.Result result = Pkcs12Loader.load(pfx, PASSWORD);
 
         assertNotNull(result.getPrivateKey(), "private key");
         assertNotNull(result.getCertificateChain(), "cert chain");
@@ -53,7 +53,7 @@ class Pkcs12LoaderTest {
     @DisplayName("GOST PFX: цепочка из CA + leaf")
     void testGostChain() throws Exception {
         byte[] pfx = buildGostChainPfxViaJdk();
-        Pkcs12Loader.Result result = Pkcs12Loader.load(pfx, PASSWORD);
+        GostPkcs12Loader.Result result = Pkcs12Loader.load(pfx, PASSWORD);
 
         assertNotNull(result.getPrivateKey());
         List<TlsCertificate> chain = result.getCertificateChain();
@@ -78,7 +78,7 @@ class Pkcs12LoaderTest {
         TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 params, ca.priv, ca.cert.getPublicKey(), ca.subjectDn,
-                "250101000000Z", "260101000000Z",
+                "20250101000000Z", "21060101120000Z",
                 null, null, null, null, false, null);
 
         return storePfx("leaf", leaf.priv, leaf.cert, ca.cert);

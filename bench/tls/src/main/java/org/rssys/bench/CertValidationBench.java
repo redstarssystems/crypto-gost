@@ -31,12 +31,12 @@ public class CertValidationBench {
         // Intermediate CA, signed by root
         TlsTestHelper.CertBundle intCA = TlsTestHelper.createCertSignedBy(
                 params, root.priv, root.cert.getPublicKey(), root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 null, null, null, true, null);
         // Leaf cert, signed by intermediate
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
                 params, intCA.priv, intCA.cert.getPublicKey(), intCA.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"example.com"}, null, new byte[]{(byte) 0x80},
                 new String[]{"1.3.6.1.5.5.7.3.1"}, false, null);
 

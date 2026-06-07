@@ -562,8 +562,9 @@ public class TlsKATExample1Test {
                     "ECDHE shared secret is point at infinity");
         }
         java.math.BigInteger x = shared.getX();
-        byte[] xBe = toFixedLengthBytes(x, hashLen);
-        return org.rssys.gost.util.Pack.reverseBytes(xBe);
+        byte[] xRawBe = toFixedLengthBytes(x, hashLen);
+        byte[] xRawLe = org.rssys.gost.util.Pack.reverseBytes(xRawBe);
+        return xRawLe;
     }
 
     private static byte[] toFixedLengthBytes(java.math.BigInteger value, int len) {

@@ -5,9 +5,11 @@ import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.util.DerCodec;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.GostOids;
+import org.rssys.gost.tls13.TlsConstants;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -29,14 +31,6 @@ import java.util.Base64;
  */
 public final class GenerateCsr {
 
-    private static final int TAG_SEQUENCE = 0x30;
-    private static final int TAG_SET = 0x31;
-    private static final int TAG_BIT_STRING = 0x03;
-    private static final int TAG_OID = 0x06;
-    private static final int TAG_UTF8_STRING = 0x0C;
-    private static final int TAG_INTEGER = 0x02;
-    private static final int TAG_CTX_0 = (byte) 0xA0;
-
     private GenerateCsr() {}
 
     public static void main(String[] args) throws Exception {
@@ -53,10 +47,10 @@ public final class GenerateCsr {
 
         // В signatureAlgorithm используем OID подписи с хэшем (1.2.643.7.1.1.3.2),
         // а не OID алгоритма ключа (1.2.643.7.1.1.1.1). CryptoPro-совместимость.
-        byte[] csrDer = derSequence(
+        byte[] csrDer = DerCodec.encodeSequence(
                 tbs,
                 buildSignatureAlgId(params),
-                derBitString(sigValue));
+                DerCodec.encodeBitString(sigValue));
 
         String pem = toPem(csrDer);
         System.out.println(pem);
@@ -79,7 +73,7 @@ public final class GenerateCsr {
         byte[] spki = GostDerCodec.encodePublicKey(pub);
 
         // version INTEGER { v1(0) } — RFC 2986 §4.1, просто INTEGER
-        out.write(derTlv(TAG_INTEGER, new byte[]{0x00}));
+        out.write(DerCodec.encodeTlv(DerCodec.TAG_INTEGER, new byte[]{0x00}));
 
         // subject
         out.write(buildDn(subjectDn));
@@ -88,9 +82,9 @@ public final class GenerateCsr {
         out.write(spki);
 
         // attributes [0] IMPLICIT SET — пустой, RFC 2986 §4.1 разрешает
-        out.write(new byte[]{TAG_CTX_0, 0x00});
+        out.write(DerCodec.encodeContextConstructed(0, new byte[0]));
 
-        return derSequence(out.toByteArray());
+        return DerCodec.encodeSequence(out.toByteArray());
     }
 
     private static byte[] buildDn(String dn) throws Exception {
@@ -110,39 +104,26 @@ public final class GenerateCsr {
                 case "C":  oid = "2.5.4.6"; break;
                 default:   oid = GostOids.ATTR_CN;
             }
-            byte[] attr = derSequence(
-                    derOid(oid),
-                    derTlv(TAG_UTF8_STRING, value.getBytes(StandardCharsets.UTF_8)));
-            out.write(derTlv(TAG_SET, attr));
+            byte[] attr = DerCodec.encodeSequence(
+                    DerCodec.encodeOid(oid),
+                    DerCodec.encodeTlv(DerCodec.TAG_UTF8_STRING, value.getBytes(StandardCharsets.UTF_8)));
+            out.write(DerCodec.encodeTlv(DerCodec.TAG_SET, attr));
         }
-        return derSequence(out.toByteArray());
+        return DerCodec.encodeSequence(out.toByteArray());
     }
 
     /**
      * AlgorithmIdentifier для PKCS#10 signatureAlgorithm.
      * Использует OID id_tc26_gost3410_2012_256 (1.2.643.7.1.1.3.2) —
-     * этот OID обозначает подпись ГОСТ Р 34.10-2012 вместе со хэшем Стрибог-256.
-     * В SubjectPublicKeyInfo применяется другой OID (1.2.643.7.1.1.1.1),
-     * поэтому {@code ExampleUtils.buildAlgId()} не подходит — используем этот метод.
+     * составной OID подписи и хэша, parameters отсутствуют (RFC 9215 §4.2).
+     * В SubjectPublicKeyInfo применяется другой OID (1.2.643.7.1.1.1.1)
+     * с обязательными параметрами — там этот метод не подходит.
      */
-    private static byte[] buildSignatureAlgId(ECParameters params) throws Exception {
-        String signOid = params.hlen == 32
+    private static byte[] buildSignatureAlgId(ECParameters params) {
+        String signOid = params.hlen == TlsConstants.STREEBOG_256_HASH_LEN
                 ? GostOids.SIGN_ALG_256
                 : GostOids.SIGN_ALG_512;
-        String curveOid = curveOidOf(params);
-        String digestOid = params.hlen == 32
-                ? GostOids.DIGEST_256
-                : GostOids.DIGEST_512;
-        return derSequence(
-                derOid(signOid),
-                derSequence(derOid(curveOid), derOid(digestOid)));
-    }
-
-    private static String curveOidOf(ECParameters params) {
-        if (params == ECParameters.tc26a256()) return GostOids.CURVE_256A;
-        if (params == ECParameters.cryptoProA()) return GostOids.CURVE_CP_A;
-        if (params == ECParameters.tc26a512()) return GostOids.CURVE_512A;
-        return GostOids.CURVE_256A;
+        return DerCodec.encodeSequence(DerCodec.encodeOid(signOid));
     }
 
     private static String toPem(byte[] der) {
@@ -152,50 +133,4 @@ public final class GenerateCsr {
                 + "\n-----END CERTIFICATE REQUEST-----\n";
     }
 
-    // ---- DER ----
-
-    private static byte[] derTlv(int tag, byte[] content) {
-        byte[] lenBytes = buildLength(content.length);
-        byte[] result = new byte[1 + lenBytes.length + content.length];
-        result[0] = (byte) tag;
-        System.arraycopy(lenBytes, 0, result, 1, lenBytes.length);
-        System.arraycopy(content, 0, result, 1 + lenBytes.length, content.length);
-        return result;
-    }
-
-    private static byte[] buildLength(int len) {
-        if (len < 0x80) return new byte[]{(byte) len};
-        if (len < 0x100) return new byte[]{(byte) 0x81, (byte) len};
-        return new byte[]{(byte) 0x82, (byte) (len >> 8), (byte) len};
-    }
-
-    private static byte[] derSequence(byte[]... elements) throws Exception {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        for (byte[] el : elements) out.write(el);
-        return derTlv(TAG_SEQUENCE, out.toByteArray());
-    }
-
-    private static byte[] derBitString(byte[] content) {
-        byte[] withUnused = new byte[content.length + 1];
-        withUnused[0] = 0;
-        System.arraycopy(content, 0, withUnused, 1, content.length);
-        return derTlv(TAG_BIT_STRING, withUnused);
-    }
-
-    private static byte[] derOid(String oidStr) throws Exception {
-        String[] parts = oidStr.split("\\.");
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        int[] arcs = new int[parts.length];
-        for (int i = 0; i < parts.length; i++) arcs[i] = Integer.parseInt(parts[i]);
-        out.write(40 * arcs[0] + arcs[1]);
-        for (int i = 2; i < arcs.length; i++) {
-            if (arcs[i] < 128) {
-                out.write(arcs[i]);
-            } else {
-                out.write(0x80 | (arcs[i] >>> 7));
-                out.write(arcs[i] & 0x7F);
-            }
-        }
-        return derTlv(TAG_OID, out.toByteArray());
-    }
 }

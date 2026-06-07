@@ -3,12 +3,14 @@ package org.rssys.gost.jsse;
 import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.tls13.cert.GostPkcs12Loader;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
 import javax.net.ssl.SSLContext;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Fluent builder для сложных случаев настройки {@link GostSsl}.
@@ -67,6 +69,27 @@ public class GostSslBuilder {
             copy[trustedCaDers.length] = caDer;
             this.trustedCaDers = copy;
         }
+        return this;
+    }
+
+    /**
+     * Добавляет все CA-сертификаты из PFX-контейнера в trust store.
+     * <p>
+     * Извлекает все сертификаты с флагом CA (isCA == true) из цепочки в PFX
+     * и делегирует каждый в {@link #trustCa(byte[])}.
+     *
+     * @param pfxData  байты PFX-контейнера
+     * @param password пароль PFX
+     */
+    public GostSslBuilder trustCa(byte[] pfxData, char[] password) {
+        GostPkcs12Loader.Result r = GostPkcs12Loader.load(pfxData, password);
+        List<TlsCertificate> caCerts = r.getCertificateChain().stream()
+            .filter(TlsCertificate::isCA)
+            .collect(Collectors.toList());
+        if (caCerts.isEmpty()) {
+            throw new IllegalArgumentException("No CA certificate found in PFX");
+        }
+        caCerts.forEach(ca -> trustCa(ca.getEncoded()));
         return this;
     }
 

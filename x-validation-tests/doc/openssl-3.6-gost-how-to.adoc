@@ -1,0 +1,124 @@
+= Сборка OpenSSL 3.6.0 + GOST TLS 1.3 + gost-engine
+
+Данный документ содержит инструкцию по сборке openssl для CI или любом чистом окружении.
+
+== Требования
+
+. В ОС должны присутствовать следующие пакеты:
+* util-linux (getconf)
+* perl 5+
+* make
+* gcc
+* cmake
+* git
+* wget
+
+== Параметры сборки
+
+Для воспроизводимости фиксируем конрктеные коммиты.
+
+*GOST_ENGINE_COMMIT* = `3dd0f0e4299489a537398cfa4d9daad260ac87a8`
+
+*LIBPROV_COMMIT* = `d5d381f71c90fe0c91f861784b715b189554f1f2`
+
+Обновлять эти хеши — когда требуется свежая версия gost-engine.
+
+== Порядок сборки
+
+=== 1. Подготовка исходников
+
+[source,bash]
+----
+cd /tmp
+
+# OpenSSL 3.6.0
+wget -q https://github.com/openssl/openssl/releases/download/openssl-3.6.0/openssl-3.6.0.tar.gz
+tar xzf openssl-3.6.0.tar.gz
+
+# gost-engine — фиксированный коммит
+git clone https://github.com/gost-engine/engine.git gost-engine-src
+git -C gost-engine-src checkout ${GOST_ENGINE_COMMIT}
+----
+
+=== 2. Патч TLS 1.3
+
+[source,bash]
+----
+cd /tmp/openssl-3.6.0
+
+patch -p2 < /tmp/gost-engine-src/patches/openssl-tls1.3.patch
+# exit code 0 — успешно
+
+# Проверка — патч не должен задвоиться
+test $(grep -c "SSL_MAGMA_MGM" ssl/tls13_enc.c) = 1
+test $(grep -c "SSL_KUZNYECHIK_MGM" ssl/tls13_enc.c) = 1
+----
+
+=== 3. Сборка OpenSSL
+
+[source,bash]
+----
+cd /tmp/openssl-3.6.0
+
+./Configure                           \
+  --prefix=/opt/openssl-3.6.0-gost    \
+  --libdir=lib                        \
+  --openssldir=/opt/openssl-3.6.0-gost/ssl \
+  shared                              \
+  -Wl,-rpath=/opt/openssl-3.6.0-gost/lib
+
+make -j$(getconf _NPROCESSORS_ONLN)
+make install_sw
+----
+
+=== 4. Инициализация submodule gost-engine
+
+[source,bash]
+----
+cd /tmp/gost-engine-src
+
+# libprov — фиксированный коммит
+git submodule update --init
+git -C libprov checkout ${LIBPROV_COMMIT}
+----
+
+=== 5. Сборка gost-engine как провайдера
+
+[source,bash]
+----
+cd /tmp/gost-engine-src
+mkdir -p build && cd build
+
+cmake ..                                                        \
+  -DOPENSSL_ROOT_DIR=/opt/openssl-3.6.0-gost                    \
+  -DCMAKE_BUILD_TYPE=Release                                    \
+  -DOPENSSL_ENGINES_DIR=/opt/openssl-3.6.0-gost/lib/engines-3
+
+make -j$(getconf _NPROCESSORS_ONLN)
+
+mkdir -p /opt/openssl-3.6.0-gost/lib/ossl-modules
+cp bin/gostprov.so /opt/openssl-3.6.0-gost/lib/ossl-modules/
+cp bin/libgostprov.so /opt/openssl-3.6.0-gost/lib/
+----
+
+=== 6. Проверка
+
+[source,bash]
+----
+/opt/openssl-3.6.0-gost/bin/openssl version
+# → OpenSSL 3.6.0 1 Oct 2025
+
+/opt/openssl-3.6.0-gost/bin/openssl ciphers -s -tls1_3 \
+  -ciphersuites TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L \
+  -provider gostprov -provider default
+# → TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L
+----
+
+== Примечания
+
+* Патч `openssl-tls1.3.patch` меняет `tls13_enc.c` — для поддержки MGM-режимов
+(MAGMA/KUZNYECHIK) в TLS 1.3 HKDF.
+* RPATH вшит прямо в бинарник openssl — `LD_LIBRARY_PATH` не требуется.
+* gost-provider грузится флагом `-provider gostprov`.
+* Коммиты gost-engine и libprov зафиксированы для воспроизводимой сборки.
+Обновлять — только осознанно.

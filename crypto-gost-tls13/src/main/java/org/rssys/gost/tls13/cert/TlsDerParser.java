@@ -1,5 +1,7 @@
 package org.rssys.gost.tls13.cert;
 
+import org.rssys.gost.util.DerCodec;
+
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.TimeZone;
@@ -13,21 +15,22 @@ import java.util.TimeZone;
  */
 public final class TlsDerParser {
 
-    // Константы ASN.1 тегов DER
-    public static final int TAG_SEQUENCE         = 0x30;
-    public static final int TAG_BIT_STRING       = 0x03;
-    public static final int TAG_INTEGER          = 0x02;
-    public static final int TAG_OCTET_STRING     = 0x04;
-    public static final int TAG_OID              = 0x06;
-    public static final int TAG_UTC_TIME         = 0x17;
-    public static final int TAG_GENERALIZED_TIME = 0x18;
+    // Константы ASN.1 тегов DER (общие теги — forwarding на DerCodec)
+    public static final int TAG_BOOLEAN          = DerCodec.TAG_BOOLEAN;
+    public static final int TAG_INTEGER          = DerCodec.TAG_INTEGER;
+    public static final int TAG_BIT_STRING       = DerCodec.TAG_BIT_STRING;
+    public static final int TAG_OCTET_STRING     = DerCodec.TAG_OCTET_STRING;
+    public static final int TAG_OID              = DerCodec.TAG_OID;
+    public static final int TAG_UTC_TIME         = DerCodec.TAG_UTC_TIME;
+    public static final int TAG_GENERALIZED_TIME = DerCodec.TAG_GENERALIZED_TIME;
+    public static final int TAG_SEQUENCE         = DerCodec.TAG_SEQUENCE;
+    // Контекстно-зависимые теги X.509 структур — не DER-примитивы, держим локально
     public static final int TAG_CTX_0            = 0xA0;
     public static final int TAG_CTX_1            = 0xA1;
     public static final int TAG_CTX_2            = 0xA2;
     public static final int TAG_CTX_3            = 0xA3;
     public static final int TAG_DNS_NAME         = 0x82;
     public static final int TAG_IP_ADDRESS       = 0x87;
-    public static final int TAG_BOOLEAN          = 0x01;
 
     // OID: SubjectAltName 2.5.29.17
     public static final byte[] SAN_OID_BYTES     = {0x55, 0x1D, 0x11};
@@ -58,6 +61,80 @@ public final class TlsDerParser {
     public static final byte[] IDP_OID_BYTES = {0x55, 0x1D, 0x1C};
     // OID: CertificatePolicies 2.5.29.32
     public static final byte[] CP_OID_BYTES = {0x55, 0x1D, 0x20};
+
+    // ========================================================================
+    // OID Extended Key Usage (RFC 5280 §4.2.1.12)
+    // ========================================================================
+
+    // OID: id-kp-serverAuth 1.3.6.1.5.5.7.3.1
+    public static final byte[] SERVER_AUTH_OID_BYTES = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01};
+    // OID: id-kp-clientAuth 1.3.6.1.5.5.7.3.2
+    public static final byte[] CLIENT_AUTH_OID_BYTES = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02};
+    // OID: id-kp-OCSPSigning 1.3.6.1.5.5.7.3.9
+    public static final byte[] OCSP_SIGNING_OID_BYTES = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09};
+    // OID: anyExtendedKeyUsage 2.5.29.37.0
+    public static final byte[] ANY_EKU_OID_BYTES = {0x55, 0x1D, 0x25, 0x00};
+    // ========================================================================
+    // OID Distinguished Name атрибутов (RFC 4519, ГОСТ Р 34.10)
+    // ========================================================================
+
+    // OID: id-at-commonName 2.5.4.3
+    public static final byte[] CN_OID_BYTES    = {0x55, 0x04, 0x03};
+    // OID: id-at-countryName 2.5.4.6
+    public static final byte[] C_OID_BYTES     = {0x55, 0x04, 0x06};
+    // OID: id-at-localityName 2.5.4.7
+    public static final byte[] L_OID_BYTES     = {0x55, 0x04, 0x07};
+    // OID: id-at-stateOrProvinceName 2.5.4.8
+    public static final byte[] ST_OID_BYTES    = {0x55, 0x04, 0x08};
+    // OID: id-at-streetAddress 2.5.4.9
+    public static final byte[] STREET_OID_BYTES = {0x55, 0x04, 0x09};
+    // OID: id-at-organizationName 2.5.4.10
+    public static final byte[] O_OID_BYTES     = {0x55, 0x04, 0x0A};
+    // OID: id-at-organizationalUnitName 2.5.4.11
+    public static final byte[] OU_OID_BYTES    = {0x55, 0x04, 0x0B};
+    // OID: id-at-title 2.5.4.12
+    public static final byte[] T_OID_BYTES     = {0x55, 0x04, 0x0C};
+    // OID: id-at-serialNumber 2.5.4.5
+    public static final byte[] SERIALNUM_OID_BYTES = {0x55, 0x04, 0x05};
+    // OID: id-at-surname 2.5.4.4
+    public static final byte[] SN_OID_BYTES    = {0x55, 0x04, 0x04};
+    // OID: id-at-givenName 2.5.4.42
+    public static final byte[] GN_OID_BYTES    = {0x55, 0x04, 0x2A};
+    // OID: id-at-postalCode 2.5.4.17
+    public static final byte[] POSTAL_CODE_OID_BYTES = {0x55, 0x04, 0x11};
+    // OID: id-at-uniqueIdentifier 2.5.4.45
+    public static final byte[] UNIQUE_ID_OID_BYTES = {0x55, 0x04, 0x2D};
+    // OID: id-at-pseudonym 2.5.4.65
+    public static final byte[] PSEUDONYM_OID_BYTES  = {0x55, 0x04, 0x41};
+    // OID: emailAddress 1.2.840.113549.1.9.1
+    public static final byte[] EMAIL_OID_BYTES = {(byte)0x2A, (byte)0x86, 0x48, (byte)0x86, (byte)0xF7, 0x0D, 0x01, 0x09, 0x01};
+    // OID: uid 0.9.2342.19200300.100.1.1
+    public static final byte[] UID_OID_BYTES   = {0x09, (byte)0x92, 0x26, (byte)0x89, (byte)0x93, (byte)0xF2, 0x2C, 0x64, 0x01, 0x01};
+    // OID: INN 1.2.643.3.131.1.1
+    public static final byte[] INN_OID_BYTES   = {0x2A, (byte)0x85, 0x03, 0x03, (byte)0x83, 0x01, 0x01};
+    // OID: OGRNIP 1.2.643.3.131.1.2
+    public static final byte[] OGRNIP_OID_BYTES = {0x2A, (byte)0x85, 0x03, 0x03, (byte)0x83, 0x01, 0x02};
+    // OID: INNLE 1.2.643.100.1
+    public static final byte[] INNLE_OID_BYTES = {0x2A, (byte)0x85, 0x03, 0x64, 0x01};
+    // OID: OGRN 1.2.643.100.3
+    public static final byte[] OGRN_OID_BYTES  = {0x2A, (byte)0x85, 0x03, 0x64, 0x03};
+    // OID: SNILS 1.2.643.100.5
+    public static final byte[] SNILS_OID_BYTES = {0x2A, (byte)0x85, 0x03, 0x64, 0x05};
+    // OID: organizationIdentifier 2.5.4.97
+    public static final byte[] ORG_ID_OID_BYTES = {0x55, 0x04, 0x61};
+
+    // ========================================================================
+    // OID OCSP (RFC 6960)
+    // ========================================================================
+
+    // OID: id-tc26-gost-3411-12-256 (Streebog-256) 1.2.643.7.1.1.2.2
+    public static final byte[] STREEBOG256_OID_BYTES = {
+            (byte) 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02
+    };
+    // OID: id-pkix-ocsp-nonce 1.3.6.1.5.5.7.48.1.2
+    public static final byte[] OCSP_NONCE_OID_BYTES = {
+            (byte) 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x02
+    };
 
     private TlsDerParser() {
     }

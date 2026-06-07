@@ -6,7 +6,7 @@ import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 
-import java.security.SecureRandom;
+import org.rssys.gost.util.CryptoRandom;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -35,9 +35,9 @@ class KeyGeneratorTest {
     }
 
     @Test
-    @DisplayName("generateSymmetricKey: с явным SecureRandom")
+    @DisplayName("generateSymmetricKey: с явным CryptoRandom")
     void testSymmetricKeyWithRng() {
-        SymmetricKey key = KeyGenerator.generateSymmetricKey(new SecureRandom());
+        SymmetricKey key = KeyGenerator.generateSymmetricKey(CryptoRandom.INSTANCE);
         assertEquals(32, key.getKey().length);
     }
 

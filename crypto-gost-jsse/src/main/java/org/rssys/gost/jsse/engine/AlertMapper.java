@@ -32,6 +32,8 @@ public final class AlertMapper {
                 return new SSLHandshakeException(msg);
             case TlsConstants.ALERT_BAD_CERTIFICATE:
             case TlsConstants.ALERT_CERTIFICATE_EXPIRED:
+            case TlsConstants.ALERT_CERTIFICATE_REVOKED:
+            case TlsConstants.ALERT_UNKNOWN_CA:
                 return new SSLPeerUnverifiedException(msg);
             case TlsConstants.ALERT_DECRYPT_ERROR:
             case TlsConstants.ALERT_UNEXPECTED_MESSAGE:

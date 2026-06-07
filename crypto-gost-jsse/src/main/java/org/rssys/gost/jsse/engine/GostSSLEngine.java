@@ -85,6 +85,9 @@ public final class GostSSLEngine extends SSLEngine {
     private final int peerPort;
     private TlsCiphersuite ciphersuite;
 
+    /** ECDHE-группа для key_share (клиент, RFC 8446 §4.2.8). 0 = GC256B по умолчанию. */
+    private int clientNamedGroup;
+
     private final ByteArrayOutputStream handshakeInputBuf = new ByteArrayOutputStream();
     private final ConcurrentLinkedDeque<byte[]> outgoingQueue = new ConcurrentLinkedDeque<>();
     private final ByteArrayOutputStream incomingAppBuf = new ByteArrayOutputStream();
@@ -229,9 +232,10 @@ public final class GostSSLEngine extends SSLEngine {
         // RFC 9367: cipher suites L и S используют 256-бит кривую и Streebog-256,
         // различаются только в TLSTREE-константах (C1/C2/C3, SNMAX).
         // 256-битные константы корректны для обеих suite.
-        ECParameters ecParams = ECParameters.tc26a256();
-        int namedGroup = TlsConstants.GRP_GC256A;
-        int sigScheme = TlsConstants.SIG_GOST_TC26_A_256;
+        int effectiveNamedGroup = clientNamedGroup != 0 ? clientNamedGroup : TlsConstants.GRP_GC256B;
+        ECParameters ecParams = TlsCiphersuite.namedGroupToParams(effectiveNamedGroup);
+        int namedGroup = effectiveNamedGroup;
+        int sigScheme = TlsConstants.SIG_GOST_CRYPTOPRO_A;
         int hashLen = ciphersuite.getHashLen();
 
         List<TlsCertificate> certChain = null;
@@ -254,6 +258,11 @@ public final class GostSSLEngine extends SSLEngine {
                         privateKey = ((org.rssys.gost.jsse.bridge.KeyBridge.GostPrivateKeyAdapter) pk).getDelegate();
                     }
                 }
+            }
+            // Схема подписи определяется сертификатом, а не дефолтной ECDHE-группой
+            if (privateKey != null) {
+                int certNamedGroup = TlsCiphersuite.paramsToNamedGroup(privateKey.getParams());
+                sigScheme = TlsCiphersuite.namedGroupToSignatureScheme(certNamedGroup);
             }
 
             this.messageBuilder = new TlsMessageBuilder(
@@ -312,6 +321,11 @@ public final class GostSSLEngine extends SSLEngine {
                         privateKey = ((org.rssys.gost.jsse.bridge.KeyBridge.GostPrivateKeyAdapter) pk).getDelegate();
                     }
                 }
+            }
+            // Схема подписи определяется сертификатом, а не дефолтной ECDHE-группой
+            if (privateKey != null) {
+                int certNamedGroup = TlsCiphersuite.paramsToNamedGroup(privateKey.getParams());
+                sigScheme = TlsCiphersuite.namedGroupToSignatureScheme(certNamedGroup);
             }
 
             this.messageBuilder = new TlsMessageBuilder(
@@ -387,6 +401,24 @@ public final class GostSSLEngine extends SSLEngine {
         incomingAppBuf.reset();
     }
 
+    /**
+     * Устанавливает ECDHE-группу для key_share (RFC 8446 §4.2.8).
+     * По умолчанию — GC256B. Должен быть вызван до {@link #beginHandshake()}.
+     * <p>
+     * Разные серверы могут поддерживать разные группы; клиент выбирает
+     * группу для key_share в ClientHello. Если сервер не поддерживает
+     * выбранную группу, он вернёт HelloRetryRequest с желаемой группой
+     * (RFC 8446 §4.1.3).
+     *
+     * @param namedGroup идентификатор именованной группы (TlsConstants.GRP_*)
+     * @throws IllegalArgumentException если группа не распознана
+     */
+    public void setClientNamedGroup(int namedGroup) {
+        // Валидация на входе, а не в initHandshake() — ранняя диагностика
+        TlsCiphersuite.namedGroupToParams(namedGroup);
+        this.clientNamedGroup = namedGroup;
+    }
+
     @Override
     public void beginHandshake() throws SSLException {
         if (engineState == EngineState.CLOSED) throw new SSLException("Engine is closed");
@@ -460,15 +492,10 @@ public final class GostSSLEngine extends SSLEngine {
                         pendingWriteKey = null;
                         pendingWriteIv = null;
                     } else {
-                        // Клиентский ClientHello до выработки ключей (writerRecord==null
-                        // и pendingWriteKeysExist==false). Сервер не должен попадать сюда —
-                        // getHandshakeStatus() вернёт NEED_UNWRAP до receive(ClientHello).
-                        // Если сервер попал — нарушение SSLEngine контракта.
-                        if (!clientMode) {
-                            throw new IllegalStateException(
-                                    "Server wrap() without pending write keys: " +
-                                    "beginHandshake() may not have been called");
-                        }
+                        // Клиентский ClientHello или серверный HelloRetryRequest
+                        // отправляются plaintext — handshake-ключи ещё не выработаны.
+                        // RFC 8446 §4.1.3: HRR предшествует выработке ключей, поэтому
+                        // pendingWriteKeysExist == false — корректное состояние.
                         record = buildPlaintextRecord(TlsConstants.CT_HANDSHAKE, frame);
                     }
                     if (dst.remaining() < record.length) {
@@ -799,6 +826,17 @@ public final class GostSSLEngine extends SSLEngine {
         int srcPos = src.position();
         int remaining = src.remaining();
 
+        // RFC 8446 §D.4: legacy Change Cipher Spec — silently ignore
+        if (remaining >= TlsConstants.RECORD_HEADER_SIZE + 1) {
+            byte ct = src.get(srcPos);
+            if (ct == TlsConstants.CT_CHANGE_CIPHER_SPEC) {
+                int ccsLen = ((src.get(srcPos + 3) & 0xFF) << 8)
+                        | (src.get(srcPos + 4) & 0xFF);
+                src.position(srcPos + TlsConstants.RECORD_HEADER_SIZE + ccsLen);
+                return src.position() - srcPos;
+            }
+        }
+
         plaintextBuf.clear();
         UnprotectResult r;
         try {
@@ -1003,7 +1041,7 @@ public final class GostSSLEngine extends SSLEngine {
             if (handshakeEngine.isError()) {
                 handshakeInputBuf.reset();
                 LOG.log(Level.DEBUG, "Handshake failed: {0}", handshakeEngine.getErrorMessage());
-                throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
+                throw new TlsException(handshakeEngine.getErrorAlertCode(),
                         "Handshake failed");
             }
         }
@@ -1028,6 +1066,9 @@ public final class GostSSLEngine extends SSLEngine {
      */
     private void handleEngineKeyChanges() {
         if (handshakeEngine == null) return;
+        // обновить согласованный ciphersuite
+        TlsCiphersuite negotiated = handshakeEngine.getNegotiatedCiphersuite();
+        if (negotiated != null) this.ciphersuite = negotiated;
         if (handshakeEngine.hasReadKeysChanged()) {
             TlsTrafficKeys newKeys = handshakeEngine.getReadKeys();
             if (readerRecord != null) readerRecord.destroy();
@@ -1135,7 +1176,12 @@ public final class GostSSLEngine extends SSLEngine {
                         org.rssys.gost.jsse.bridge.CertificateBridge.toJca(certs);
             } catch (CertificateException | RuntimeException e) {
                 LOG.log(Level.WARNING, "Certificate validation failed unexpectedly", e);
-                handshakeEngine.acknowledgeCertificateValidation(false);
+                byte alertCode = TlsConstants.ALERT_BAD_CERTIFICATE;
+                Throwable cause = (e instanceof CertificateException) ? e.getCause() : null;
+                if (cause instanceof TlsException) {
+                    alertCode = ((TlsException) cause).getAlertCode();
+                }
+                handshakeEngine.acknowledgeCertificateValidation(false, alertCode);
             } finally {
                 taskInProgress.set(false);
                 pendingTask.set(null);
@@ -1686,7 +1732,7 @@ public final class GostSSLEngine extends SSLEngine {
     private static String resolveKeyType(List<TlsCertificate> certs) {
         if (certs != null && !certs.isEmpty()) {
             int hlen = certs.get(0).getPublicKey().getParams().hlen;
-            return hlen == 64
+            return hlen == TlsConstants.STREEBOG_512_HASH_LEN
                     ? GostJsseConstants.KEY_TYPE_ECGOST_512
                     : GostJsseConstants.KEY_TYPE_ECGOST_256;
         }

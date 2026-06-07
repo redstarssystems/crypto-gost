@@ -1,5 +1,6 @@
 package org.rssys.gost;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import org.rssys.gost.cipher.SymmetricKey;
@@ -562,5 +563,39 @@ class HMacTest {
         Hmac mac = new Hmac(new Streebog256());
         assertThrows(IllegalArgumentException.class,
                 () -> mac.init(new ParametersWithIV(new SymmetricKey(new byte[32]), new byte[16])));
+    }
+
+    // =========================================================================
+    // Hmac: пустой ключ (RFC 2104 §2 — ключ любой длины, пустой разрешён)
+    // =========================================================================
+
+    @Test
+    @DisplayName("512: пустой ключ HMAC (RFC 2104 §2)")
+    void testHmac512_emptyKey() {
+        Hmac mac = new Hmac(new Streebog512());
+        mac.init(new byte[0]); // не должно бросать исключение
+        mac.update("test".getBytes(StandardCharsets.UTF_8), 0, 4);
+        byte[] result = new byte[64];
+        mac.doFinal(result, 0);
+        boolean allZero = true;
+        for (byte b : result) {
+            if (b != 0) { allZero = false; break; }
+        }
+        assertFalse(allZero, "HMAC с пустым ключом не должен давать нулевой результат");
+    }
+
+    @Test
+    @DisplayName("256: пустой ключ HMAC (RFC 2104 §2)")
+    void testHmac256_emptyKey() {
+        Hmac mac = new Hmac(new Streebog256());
+        mac.init(new byte[0]);
+        mac.update("test".getBytes(StandardCharsets.UTF_8), 0, 4);
+        byte[] result = new byte[32];
+        mac.doFinal(result, 0);
+        boolean allZero = true;
+        for (byte b : result) {
+            if (b != 0) { allZero = false; break; }
+        }
+        assertFalse(allZero, "HMAC с пустым ключом не должен давать нулевой результат");
     }
 }

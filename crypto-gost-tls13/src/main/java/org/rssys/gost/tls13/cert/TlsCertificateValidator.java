@@ -1,11 +1,10 @@
 package org.rssys.gost.tls13.cert;
 
 import org.rssys.gost.digest.Digest;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
+import org.rssys.gost.tls13.crypto.HkdfStreebog;
 import org.rssys.gost.tls13.crypto.TlsSignatureCodec;
 import org.rssys.gost.tls13.message.TlsEncoding;
 
@@ -264,7 +263,7 @@ public final class TlsCertificateValidator {
             if (root.verify(key)) { rootVerified = true; break; }
         }
         if (!rootVerified) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(TlsConstants.ALERT_UNKNOWN_CA,
                     "Certificate chain: root not signed by any trusted CA");
         }
         if (!root.isAlgConsistent()) {
@@ -315,7 +314,7 @@ public final class TlsCertificateValidator {
         byte[] sigContent = TlsEncoding.buildSigContent(hsTranscript, context);
 
         int sigHashLen = cert.getPublicKey().getParams().hlen;
-        Digest d = sigHashLen == 64 ? new Streebog512() : new Streebog256();
+        Digest d = HkdfStreebog.newDigest(sigHashLen);
         d.update(sigContent, 0, sigContent.length);
         byte[] hash = new byte[sigHashLen];
         d.doFinal(hash, 0);

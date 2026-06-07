@@ -20,15 +20,7 @@ import java.util.List;
  */
 public final class TlsOcspVerifier {
 
-    /** OID {@link org.rssys.gost.tls13.GostOids#DIGEST_256} — Streebog-256 */
-    public static final byte[] STREEBOG256_OID_BYTES = {
-            (byte) 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02
-    };
-
-    /** OID id-pkix-ocsp-nonce (1.3.6.1.5.5.7.48.1.2) — RFC 8954 */
-    private static final byte[] OCSP_NONCE_OID_BYTES = {
-            (byte) 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x02
-    };
+    // OID в TlsDerParser: STREEBOG256_OID_BYTES, OCSP_NONCE_OID_BYTES 
 
     private TlsOcspVerifier() {
     }
@@ -178,7 +170,7 @@ public final class TlsOcspVerifier {
         }
         int[] haOid = TlsDerParser.readTlv(der, haPos);
         if (!TlsDerParser.matchesOid(der, haOid[0], haOid[1] - haOid[0],
-                STREEBOG256_OID_BYTES)) {
+                TlsDerParser.STREEBOG256_OID_BYTES)) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "OCSP: CertID hashAlgorithm is not Streebog-256");
         }
@@ -201,7 +193,7 @@ public final class TlsOcspVerifier {
             if (chkHaPos < chkHashAlgSeq[1] && (der[chkHaPos] & 0xFF) == 0x06) {
                 int[] chkHaOid = TlsDerParser.readTlv(der, chkHaPos);
                 if (!TlsDerParser.matchesOid(der, chkHaOid[0], chkHaOid[1] - chkHaOid[0],
-                        STREEBOG256_OID_BYTES)) {
+                        TlsDerParser.STREEBOG256_OID_BYTES)) {
                     throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                             "OCSP: CertID hashAlgorithm is not Streebog-256");
                 }
@@ -226,11 +218,26 @@ public final class TlsOcspVerifier {
             }
         }
 
-        // certStatus: good = [0]{NULL}
+        // certStatus: [0] good, [1] revoked, [2] unknown (RFC 6960 §2.2)
         int stPos = cidSerialTlv[1];
-        if (stPos >= srSeq[1] || (der[stPos] & 0xFF) != 0xA0) {
+        if (stPos >= srSeq[1]) {
+            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                    "OCSP: certStatus missing");
+        }
+        int certStatusTag = der[stPos] & 0xFF;
+        if (certStatusTag == 0xA1) {
+            throw new TlsException(TlsConstants.ALERT_CERTIFICATE_REVOKED,
+                    "OCSP: certificate is revoked");
+        }
+        if (certStatusTag != 0xA0 && certStatusTag != 0x80) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
                     "OCSP: certStatus is not 'good'");
+        }
+        // 0x80: [0] IMPLICIT NULL (RFC 6960 §2.2) — проверяем length=0
+        if (certStatusTag == 0x80
+                && (stPos + 1 >= srSeq[1] || der[stPos + 1] != 0x00)) {
+            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                    "OCSP: malformed good status");
         }
 
         // проверка свежести nextUpdate
@@ -276,7 +283,7 @@ public final class TlsOcspVerifier {
         byte[] sigBytes = Arrays.copyOfRange(der, sigBitTlv[0] + 1, sigBitTlv[1]);
 
         int hlen = caKey.getParams().hlen;
-        Digest.Algorithm hashAlg = hlen == 64
+        Digest.Algorithm hashAlg = hlen == TlsConstants.STREEBOG_512_HASH_LEN
                 ? Digest.Algorithm.STREEBOG_512
                 : Digest.Algorithm.STREEBOG_256;
         Digest digest = new Digest(hashAlg);
@@ -457,7 +464,7 @@ public final class TlsOcspVerifier {
             }
             int[] extOidTlv = TlsDerParser.readTlv(der, extContent);
             boolean isNonce = TlsDerParser.matchesOid(der, extOidTlv[0],
-                    extOidTlv[1] - extOidTlv[0], OCSP_NONCE_OID_BYTES);
+                    extOidTlv[1] - extOidTlv[0], TlsDerParser.OCSP_NONCE_OID_BYTES);
             extContent = extOidTlv[1];
 
             if (isNonce) {

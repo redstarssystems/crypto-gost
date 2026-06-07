@@ -33,7 +33,7 @@ class GostX509TrustManagerLoggerTest {
         root = TlsTestHelper.createRootCA(params);
         leaf = TlsTestHelper.createCertSignedBy(params, root.priv,
                 root.cert.getPublicKey(), root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"localhost"}, (String[]) null,
                 (byte[]) null, (String[]) null,
                 false, null);

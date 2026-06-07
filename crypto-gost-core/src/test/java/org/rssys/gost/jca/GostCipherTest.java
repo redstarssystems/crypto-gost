@@ -8,8 +8,9 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.jca.key.GostSecretKey;
 
+import javax.crypto.AEADBadTagException;
 import javax.crypto.spec.IvParameterSpec;
-import java.security.SecureRandom;
+import org.rssys.gost.util.CryptoRandom;
 import java.security.Security;
 import java.util.Arrays;
 
@@ -41,7 +42,7 @@ class GostCipherTest {
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
 
         byte[] iv = new byte[8];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         // JCA шифрование
@@ -64,7 +65,7 @@ class GostCipherTest {
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
 
         byte[] iv = new byte[8];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         // JCA
@@ -85,7 +86,7 @@ class GostCipherTest {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
         byte[] iv = new byte[8];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         javax.crypto.Cipher enc = javax.crypto.Cipher.getInstance("Kuznyechik/CTR/NoPadding", PROVIDER);
@@ -110,7 +111,7 @@ class GostCipherTest {
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
 
         byte[] iv = new byte[16];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         javax.crypto.Cipher enc = javax.crypto.Cipher.getInstance("Kuznyechik/CBC/PKCS5Padding", PROVIDER);
@@ -130,7 +131,7 @@ class GostCipherTest {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
         byte[] iv = new byte[16];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         // Данные некратные 16 байт
@@ -155,7 +156,7 @@ class GostCipherTest {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
         byte[] iv = new byte[16];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         // JCA
@@ -176,7 +177,7 @@ class GostCipherTest {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
         byte[] iv = new byte[16];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         javax.crypto.Cipher enc = javax.crypto.Cipher.getInstance("Kuznyechik/CBC/NoPadding", PROVIDER);
@@ -200,7 +201,7 @@ class GostCipherTest {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
         byte[] iv = new byte[16];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         javax.crypto.Cipher enc = javax.crypto.Cipher.getInstance("Kuznyechik/OFB/NoPadding", PROVIDER);
@@ -224,7 +225,7 @@ class GostCipherTest {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
         GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
         byte[] iv = new byte[16];
-        new SecureRandom().nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         IvParameterSpec ivSpec = new IvParameterSpec(iv);
 
         javax.crypto.Cipher enc = javax.crypto.Cipher.getInstance("Kuznyechik/CFB/NoPadding", PROVIDER);
@@ -236,6 +237,43 @@ class GostCipherTest {
         byte[] pt = dec.doFinal(ct);
 
         assertArrayEquals(DATA_48, pt);
+    }
+
+    // -----------------------------------------------------------------------
+    // CTR-ACPKM-OMAC
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("CTR-ACPKM-OMAC/NoPadding: roundtrip через JCA SPI")
+    void testOmacDecryptViaJca() throws Exception {
+        SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
+        GostSecretKey key = new GostSecretKey("Kuznyechik", keyParam);
+
+        byte[] ukm = new byte[16];
+        CryptoRandom.INSTANCE.nextBytes(ukm);
+        IvParameterSpec ivSpec = new IvParameterSpec(ukm);
+
+        byte[] plaintext = new byte[64];
+        CryptoRandom.INSTANCE.nextBytes(plaintext);
+
+        javax.crypto.Cipher enc = javax.crypto.Cipher.getInstance(
+            "Kuznyechik/CTR-ACPKM-OMAC/NoPadding", PROVIDER);
+        enc.init(javax.crypto.Cipher.ENCRYPT_MODE, key, ivSpec);
+        byte[] ct = enc.doFinal(plaintext);
+
+        javax.crypto.Cipher dec = javax.crypto.Cipher.getInstance(
+            "Kuznyechik/CTR-ACPKM-OMAC/NoPadding", PROVIDER);
+        dec.init(javax.crypto.Cipher.DECRYPT_MODE, key, ivSpec);
+        byte[] recovered = dec.doFinal(ct);
+
+        assertArrayEquals(plaintext, recovered,
+            "CTR-ACPKM-OMAC roundtrip: расшифрованный текст должен совпадать с исходным");
+
+        // Повреждённый тег должен отклоняться
+        ct[ct.length - 1] ^= 0xFF;
+        dec.init(javax.crypto.Cipher.DECRYPT_MODE, key, ivSpec);
+        assertThrows(AEADBadTagException.class, () -> dec.doFinal(ct),
+            "CTR-ACPKM-OMAC: повреждённый тег должен вызывать AEADBadTagException");
     }
 
     // -----------------------------------------------------------------------

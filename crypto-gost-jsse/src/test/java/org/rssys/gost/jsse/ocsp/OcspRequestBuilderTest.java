@@ -23,17 +23,21 @@ class OcspRequestBuilderTest {
 
     private static TlsTestHelper.CertBundle root;
     private static TlsTestHelper.CertBundle server;
+    private static TlsTestHelper.CertBundle signKey256;
+    private static TlsTestHelper.CertBundle signKey512;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        ECParameters params = ECParameters.tc26a256();
-        root = TlsTestHelper.createRootCA(params);
-        server = TlsTestHelper.createCertSignedBy(params, root.priv,
+        ECParameters params256 = ECParameters.tc26a256();
+        root = TlsTestHelper.createRootCA(params256);
+        server = TlsTestHelper.createCertSignedBy(params256, root.priv,
                 root.cert.getPublicKey(), root.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"localhost"}, null, null,
                 false, null);
+        signKey256 = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        signKey512 = TlsTestHelper.createCertWithKey(ECParameters.tc26a512());
     }
 
     @Test
@@ -139,7 +143,7 @@ class OcspRequestBuilderTest {
     @Test
     @DisplayName("OCSPRequest: OID алгоритма хеширования в CertID = Streebog-256")
     void testCertIdHashAlgorithmOid() throws Exception {
-        // T-6: OID в CertID должен совпадать с STREEBOG256_OID_BYTES из TlsOcspVerifier,
+        // T-6: OID в CertID должен совпадать с STREEBOG256_OID_BYTES из TlsDerParser,
         // иначе OCSP-верификатор отклонит ответ
         byte[] request = OcspRequestBuilder.build(
                 server.cert.getEncoded(), root.cert.getEncoded());
@@ -155,8 +159,120 @@ class OcspRequestBuilderTest {
         int[] oidTlv = TlsDerParser.readTlv(request, haPos);
 
         assertTrue(TlsDerParser.matchesOid(request, oidTlv[0], oidTlv[1] - oidTlv[0],
-                org.rssys.gost.tls13.cert.TlsOcspVerifier.STREEBOG256_OID_BYTES),
+                org.rssys.gost.tls13.cert.TlsDerParser.STREEBOG256_OID_BYTES),
                 "OID алгоритма хеширования CertID должен быть Streebog-256");
+    }
+
+    // ---- Тесты buildSigned (RFC 9215 §4.2) ----
+
+    /**
+     * OID 1.2.643.7.1.1.3.2 (id-tc26-signwithdigest-gost3410-2012-256)
+     * в DER-кодировке: content байты без 06 LL
+     */
+    private static final byte[] SIGN_ALG_256_OID = {
+            (byte) 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x03, 0x02
+    };
+
+    /**
+     * OID 1.2.643.7.1.1.3.3 (id-tc26-signwithdigest-gost3410-2012-512)
+     * в DER-кодировке: content байты без 06 LL
+     */
+    private static final byte[] SIGN_ALG_512_OID = {
+            (byte) 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x03, 0x03
+    };
+
+    @Test
+    @DisplayName("OCSPRequest signed: AlgorithmIdentifier без параметров, 256 бит (RFC 9215 §4.2)")
+    void testBuildSignedAlgIdNoParams256() throws Exception {
+        byte[] request = OcspRequestBuilder.buildSigned(
+                server.cert.getEncoded(), root.cert.getEncoded(),
+                signKey256.priv, ECParameters.tc26a256()).der();
+
+        int[] ocspSeq = TlsDerParser.parseSequence(request, 0);
+        // TBSRequest + optionalSignature
+        int[] tbsTlv = TlsDerParser.readTlv(request, ocspSeq[0]);
+        int pos = tbsTlv[1];
+        assertEquals(0xA0, request[pos] & 0xFF,
+                "После TBSRequest должен быть [0] EXPLICIT optionalSignature");
+
+        int[] optSigTlv = TlsDerParser.readTlv(request, pos);
+        // Signature ::= SEQUENCE { signatureAlgorithm, signature, certs OPTIONAL }
+        int[] sigSeq = TlsDerParser.parseSequence(request, optSigTlv[0]);
+        int sigPos = sigSeq[0];
+
+        // AlgorithmIdentifier ::= SEQUENCE { algorithm OID, parameters OPTIONAL }
+        int[] algId = TlsDerParser.parseSequence(request, sigPos);
+        assertEquals(0x06, request[algId[0]] & 0xFF,
+                "AlgorithmIdentifier должен начинаться с OID");
+
+        int[] oidTlv = TlsDerParser.readTlv(request, algId[0]);
+        // По RFC 9215 §4.2: parameters MUST be absent
+        assertEquals(oidTlv[1], algId[1],
+                "AlgorithmIdentifier не должен содержать parameters (RFC 9215 §4.2)");
+
+        // OID должен быть SIGN_ALG_256 = 1.2.643.7.1.1.3.2
+        assertTrue(TlsDerParser.matchesOid(request, oidTlv[0], oidTlv[1] - oidTlv[0],
+                        SIGN_ALG_256_OID),
+                "OID должен быть id-tc26-signwithdigest-gost3410-2012-256");
+    }
+
+    @Test
+    @DisplayName("OCSPRequest signed: AlgorithmIdentifier без параметров, 512 бит (RFC 9215 §4.2)")
+    void testBuildSignedAlgIdNoParams512() throws Exception {
+        byte[] request = OcspRequestBuilder.buildSigned(
+                server.cert.getEncoded(), root.cert.getEncoded(),
+                signKey512.priv, ECParameters.tc26a512()).der();
+
+        int[] ocspSeq = TlsDerParser.parseSequence(request, 0);
+        int[] tbsTlv = TlsDerParser.readTlv(request, ocspSeq[0]);
+        int pos = tbsTlv[1];
+        assertEquals(0xA0, request[pos] & 0xFF,
+                "После TBSRequest должен быть [0] EXPLICIT optionalSignature");
+
+        int[] optSigTlv = TlsDerParser.readTlv(request, pos);
+        int[] sigSeq = TlsDerParser.parseSequence(request, optSigTlv[0]);
+        int sigPos = sigSeq[0];
+
+        int[] algId = TlsDerParser.parseSequence(request, sigPos);
+        assertEquals(0x06, request[algId[0]] & 0xFF,
+                "AlgorithmIdentifier должен начинаться с OID");
+
+        int[] oidTlv = TlsDerParser.readTlv(request, algId[0]);
+        assertEquals(oidTlv[1], algId[1],
+                "AlgorithmIdentifier не должен содержать parameters (RFC 9215 §4.2)");
+
+        // OID должен быть SIGN_ALG_512 = 1.2.643.7.1.1.3.3
+        assertTrue(TlsDerParser.matchesOid(request, oidTlv[0], oidTlv[1] - oidTlv[0],
+                        SIGN_ALG_512_OID),
+                "OID должен быть id-tc26-signwithdigest-gost3410-2012-512");
+    }
+
+    @Test
+    @DisplayName("OCSPRequest signed: signKey=null возвращает запрос без подписи")
+    void testBuildSignedNullKey() throws Exception {
+        byte[] withKey = OcspRequestBuilder.buildSigned(
+                server.cert.getEncoded(), root.cert.getEncoded(),
+                root.priv, ECParameters.tc26a256()).der();
+        byte[] withNull = OcspRequestBuilder.buildSigned(
+                server.cert.getEncoded(), root.cert.getEncoded(),
+                null, ECParameters.tc26a256()).der();
+
+        // С подписью длиннее — есть optionalSignature
+        assertTrue(withKey.length > withNull.length,
+                "Запрос с подписью должен быть длиннее запроса без подписи");
+
+        // Без подписи — проверяем, что нет [0] EXPLICIT после TBSRequest
+        int[] outerNull = TlsDerParser.readTlv(withNull, 0);
+        int[] tbsNull = TlsDerParser.readTlv(withNull, outerNull[0]);
+        // После TBSRequest конец данных (нет [0])
+        assertEquals(tbsNull[1], outerNull[1],
+                "Без подписи после TBSRequest не должно быть optionalSignature");
+
+        // С подписью — есть [0]
+        int[] outerKey = TlsDerParser.readTlv(withKey, 0);
+        int[] tbsKey = TlsDerParser.readTlv(withKey, outerKey[0]);
+        assertEquals(0xA0, withKey[tbsKey[1]] & 0xFF,
+                "С подписью после TBSRequest должен быть [0] EXPLICIT");
     }
 
     /** Извлекает BIT STRING value SubjectPublicKeyInfo — для проверки issuerKeyHash (RFC 6960 §4.1.1). */

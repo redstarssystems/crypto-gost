@@ -3,6 +3,7 @@ import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.bridge.KeyBridge;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 import org.rssys.gost.tls13.config.SniCertificateSelector;
 import org.rssys.gost.tls13.config.TlsServerCredentials;
@@ -215,7 +216,7 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
             if (entry.chain == null || entry.chain.length == 0) continue;
             TlsCertificate tlsCert = CertificateBridge.toTls(entry.chain[0]);
             int hlen = tlsCert.getPublicKey().getParams().hlen;
-            boolean is256 = hlen == 32;
+            boolean is256 = hlen == TlsConstants.STREEBOG_256_HASH_LEN;
             if (want256 != is256) continue;
             if (issuers != null && issuers.length > 0 && !issuerMatches(entry.chain[0], issuers)) continue;
             result.add(entry.alias);

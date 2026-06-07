@@ -26,7 +26,6 @@ MERGE_AWK_VERIFY = {printf "verify\t%s\t%s\t%s\t%s\n", $$1, $$2, $$3, $$4}
         bench-gost-256 bench-bc-256 bench-256 \
         bench-gost-512 bench-bc-512 bench-512 \
         bench-all \
-        cross-validate-256 cross-validate-512 cross-validate-all \
         plot plot-512 clean
 
 all: build bench-256 plot
@@ -176,39 +175,6 @@ bench-512: bench-gost-512 bench-bc-512
 # Все бенчмарки
 # ---------------------------------------------------------------
 bench-all: bench-256 bench-512
-
-# ---------------------------------------------------------------
-# Кросс-валидация: crypto-gost ↔ BouncyCastle
-# ---------------------------------------------------------------
-cross-validate-256: $(JAR)
-	@printf '\n\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	@printf '\033[1;36m  Кросс-валидация: crypto-gost v$(VERSION) ↔ BC 1.83\033[0m\n'
-	@printf '\033[1;36m  Подпись: ГОСТ Р 34.10-2012 (256-бит, все кривые)\033[0m\n'
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	cd $(BENCH_DIR) && $(JAVA) $(JAVA_OPTS) \
-	    -cp target/benchmarks.jar org.rssys.bench.CrossValidation --bits 256
-
-cross-validate-512: $(JAR)
-	@printf '\n\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	@printf '\033[1;36m  Кросс-валидация: crypto-gost v$(VERSION) ↔ BC 1.83\033[0m\n'
-	@printf '\033[1;36m  Подпись: ГОСТ Р 34.10-2012 (512-бит, все кривые)\033[0m\n'
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	cd $(BENCH_DIR) && $(JAVA) $(JAVA_OPTS) \
-	    -cp target/benchmarks.jar org.rssys.bench.CrossValidation --bits 512
-
-cross-validate-all: cross-validate-256 cross-validate-512 cross-validate-openssl
-
-# ---------------------------------------------------------------
-# Кросс-валидация: crypto-gost → OpenSSL gostprov
-# Только CryptoPro-A/B/C (256-бит) — OID совместимость подтверждена.
-# Требует: OpenSSL 3.x + gostprov.so в /usr/lib64/ossl-modules/
-# ---------------------------------------------------------------
-cross-validate-openssl: $(JAR)
-	@printf '\n\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	@printf '\033[1;36m  Кросс-валидация: crypto-gost v$(VERSION) → OpenSSL\033[0m\n'
-	@printf '\033[1;36m  Подпись: ГОСТ Р 34.10-2012 (CryptoPro-A/B/C)\033[0m\n'
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	cd $(BENCH_DIR) && ./cross-validate-openssl-sign.sh
 
 # ---------------------------------------------------------------
 # Графики 256-бит (gnuplot)

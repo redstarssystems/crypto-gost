@@ -1,16 +1,15 @@
 package org.rssys.gost.jsse.ocsp;
 
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Streebog512;
-import org.rssys.gost.digest.Digest;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.GostOids;
+import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.cert.OcspCertIdHasher;
 import org.rssys.gost.tls13.cert.TlsDerParser;
-
-import java.security.SecureRandom;
+import org.rssys.gost.util.CryptoRandom;
+import org.rssys.gost.util.DerCodec;
 
 /**
  * Построитель DER-закодированного OCSPRequest (RFC 6960 §4.1) с поддержкой nonce (RFC 8954).
@@ -60,35 +59,28 @@ public final class OcspRequestBuilder {
             byte[] der = base.der();
             int hlen = params.hlen;
 
-            Digest d = hlen == 64 ? new Streebog512() : new Streebog256();
-            d.update(der, 0, der.length);
-            byte[] hash = new byte[hlen];
-            d.doFinal(hash, 0);
+            byte[] hash;
+            String sigOid;
+            if (hlen == TlsConstants.STREEBOG_256_HASH_LEN) {
+                hash      = Digest.digest256(der);
+                sigOid    = GostOids.SIGN_ALG_256;
+            } else {
+                hash      = Digest.digest512(der);
+                sigOid    = GostOids.SIGN_ALG_512;
+            }
             byte[] sig = Signature.signHash(hash, signKey);
-            String sigOid = hlen == 32
-                    ? GostOids.SIGN_ALG_256 : GostOids.SIGN_ALG_512;
-            String digestOid = hlen == 32
-                    ? GostOids.DIGEST_256 : GostOids.DIGEST_512;
-            String curveOid = GostOids.CURVE_256A;
 
-            // AlgorithmIdentifier для GOST R 34.10-2012
-            byte[] sigAlgOid = encodeOid(sigOid);
-            byte[] paramsSeq = encodeTag(0x30, concat(encodeOid(curveOid), encodeOid(digestOid)));
-            byte[] sigAlg = encodeTag(0x30, concat(sigAlgOid, paramsSeq));
-
-            // BIT STRING подписи
-            byte[] sigWithPad = new byte[sig.length + 1];
-            System.arraycopy(sig, 0, sigWithPad, 1, sig.length);
-            byte[] sigBs = encodeTag(0x03, sigWithPad);
+            // AlgorithmIdentifier для GOST R 34.10-2012 — signwithdigest OID без параметров (RFC 9215 §4.2)
+            byte[] sigAlg = DerCodec.encodeSequence(DerCodec.encodeOid(sigOid));
 
             // Signature ::= SEQUENCE { signatureAlgorithm, signature, certs OPTIONAL }
-            byte[] signature = encodeTag(0x30, concat(sigAlg, sigBs));
+            byte[] signature = DerCodec.encodeSequence(sigAlg, DerCodec.encodeBitString(sig));
 
             // [0] EXPLICIT
-            byte[] optSig = encodeTag(0xA0, signature);
+            byte[] optSig = DerCodec.encodeContextConstructed(0, signature);
 
             // OCSPRequest ::= SEQUENCE { tbsRequest, optionalSignature }
-            byte[] requestDer = encodeTag(0x30, concat(der, optSig));
+            byte[] requestDer = DerCodec.encodeSequence(der, optSig);
             return new OcspRequest(requestDer, base.nonce());
         } catch (Exception e) {
             throw new RuntimeException("Failed to build signed OCSPRequest", e);
@@ -107,20 +99,19 @@ public final class OcspRequestBuilder {
      */
     public static OcspRequest buildWithNonce(byte[] certDer, byte[] issuerDer) {
         try {
-            SecureRandom random = new SecureRandom();
             byte[] nonce = new byte[16];
-            random.nextBytes(nonce);
+            CryptoRandom.INSTANCE.nextBytes(nonce);
 
             byte[] certId = buildCertId(certDer, issuerDer);
-            byte[] request = encodeTag(0x30, certId);
-            byte[] requestList = encodeTag(0x30, request);
+            byte[] request = DerCodec.encodeSequence(certId);
+            byte[] requestList = DerCodec.encodeSequence(request);
             byte[] nonceExt = buildNonceExtension(nonce);
-            byte[] extensions = encodeTag(0x30, nonceExt);
-            byte[] requestExtensions = encodeTag(TAG_CONTEXT_2, extensions);
+            byte[] extensions = DerCodec.encodeSequence(nonceExt);
+            byte[] requestExtensions = DerCodec.encodeContextConstructed(2, extensions);
 
-            byte[] tbsRequestContent = concat(requestList, requestExtensions);
-            byte[] tbsRequest = encodeTag(0x30, tbsRequestContent);
-            byte[] der = encodeTag(0x30, tbsRequest);
+            byte[] tbsRequestContent = DerCodec.concat(requestList, requestExtensions);
+            byte[] tbsRequest = DerCodec.encodeSequence(tbsRequestContent);
+            byte[] der = DerCodec.encodeSequence(tbsRequest);
             return new OcspRequest(der, nonce);
         } catch (Exception e) {
             throw new RuntimeException("Failed to build OCSPRequest with nonce", e);
@@ -135,8 +126,8 @@ public final class OcspRequestBuilder {
         byte[] oid = new byte[]{
                 0x06, 0x09, 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x02
         };
-        byte[] value = encodeTag(0x04, nonce);
-        return encodeTag(0x30, concat(oid, value));
+        byte[] value = DerCodec.encodeOctetString(nonce);
+        return DerCodec.encodeSequence(oid, value);
     }
 
     /**
@@ -151,13 +142,13 @@ public final class OcspRequestBuilder {
         byte[] issuerKeyHash = OcspCertIdHasher.hashIssuerPublicKey(issuerDer);
 
         byte[] hashAlg = buildStreebog256AlgorithmId();
-        byte[] nameHash = encodeTag(0x04, issuerNameHash);
-        byte[] keyHash = encodeTag(0x04, issuerKeyHash);
+        byte[] nameHash = DerCodec.encodeOctetString(issuerNameHash);
+        byte[] keyHash = DerCodec.encodeOctetString(issuerKeyHash);
         // serial: TLV as-is (bit-exact, RFC 6960 §4.1.1)
         // serial: копируем TLV как есть (bit-exact), чтобы не изменить семантику серийного номера — RFC 6960 §4.1.1
         byte[] serial = extractSerialTlv(certDer);
 
-        return encodeTag(0x30, concat(hashAlg, nameHash, keyHash, serial));
+        return DerCodec.encodeSequence(hashAlg, nameHash, keyHash, serial);
     }
 
     /**
@@ -186,67 +177,6 @@ public final class OcspRequestBuilder {
                 0x06, 0x08, 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02,
                 0x05, 0x00
         };
-        return encodeTag(0x30, oidContent);
-    }
-
-    private static byte[] encodeOid(String oid) {
-        String[] parts = oid.split("\\.");
-        int[] vals = new int[parts.length];
-        for (int i = 0; i < parts.length; i++) vals[i] = Integer.parseInt(parts[i]);
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        out.write(40 * vals[0] + vals[1]);
-        for (int i = 2; i < vals.length; i++) {
-            int v = vals[i];
-            if (v < 0x80) { out.write(v); continue; }
-            int bits = 32 - Integer.numberOfLeadingZeros(v);
-            int bytes = (bits + 6) / 7;
-            for (int j = bytes - 1; j >= 0; j--) {
-                int b = (v >>> (j * 7)) & 0x7F;
-                if (j > 0) b |= 0x80;
-                out.write(b);
-            }
-        }
-        byte[] oidBytes = out.toByteArray();
-        byte[] len = encodeLength(oidBytes.length);
-        byte[] result = new byte[1 + len.length + oidBytes.length];
-        result[0] = 0x06;
-        System.arraycopy(len, 0, result, 1, len.length);
-        System.arraycopy(oidBytes, 0, result, 1 + len.length, oidBytes.length);
-        return result;
-    }
-
-    private static byte[] encodeTag(int tag, byte[] content) {
-        byte[] len = encodeLength(content.length);
-        byte[] result = new byte[1 + len.length + content.length];
-        result[0] = (byte) tag;
-        System.arraycopy(len, 0, result, 1, len.length);
-        System.arraycopy(content, 0, result, 1 + len.length, content.length);
-        return result;
-    }
-
-    private static byte[] encodeLength(int length) {
-        if (length < 128) {
-            return new byte[]{(byte) length};
-        }
-        int numBytes = (Integer.SIZE - Integer.numberOfLeadingZeros(length) + 7) / 8;
-        byte[] result = new byte[1 + numBytes];
-        result[0] = (byte) (0x80 | numBytes);
-        for (int i = numBytes; i >= 1; i--) {
-            result[i] = (byte) (length & 0xFF);
-            length >>= 8;
-        }
-        return result;
-    }
-
-    private static byte[] concat(byte[]... parts) {
-        int total = 0;
-        for (byte[] p : parts) total += p.length;
-        byte[] result = new byte[total];
-        int off = 0;
-        for (byte[] p : parts) {
-            System.arraycopy(p, 0, result, off, p.length);
-            off += p.length;
-        }
-        return result;
+        return DerCodec.encodeSequence(oidContent);
     }
 }

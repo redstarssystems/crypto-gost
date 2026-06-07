@@ -1,0 +1,83 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.rssys</groupId>
+        <artifactId>crypto-gost</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>gost-crossval-kuznyechik</artifactId>
+    <packaging>jar</packaging>
+    <name>crypto-gost cross-validation kuznyechik tests</name>
+
+    <properties>
+        <skipTests>false</skipTests>
+        <previous.ver>0.3.4</previous.ver>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.84</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>gost-crossval-utils</artifactId>
+            <version>${project.version}</version>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-old-jar</id>
+                        <phase>generate-test-resources</phase>
+                        <goals><goal>copy</goal></goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+                                    <groupId>org.rssys</groupId>
+                                    <artifactId>crypto-gost-core</artifactId>
+                                    <version>${previous.ver}</version>
+                                    <type>jar</type>
+                                    <outputDirectory>${project.build.directory}/old-jar</outputDirectory>
+                                    <destFileName>crypto-gost-core-${previous.ver}.jar</destFileName>
+                                </artifactItem>
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <previous.ver>${project.build.directory}/old-jar/crypto-gost-core-${previous.ver}.jar</previous.ver>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

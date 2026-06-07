@@ -96,6 +96,9 @@ public final class Mgm {
 
     // Scratch-буфер для неполных блоков AAD/CT — выделяется один раз в конструкторе
     private final byte[] partial = new byte[BLOCK];
+    // Буфер неполного AAD-блока для поддержки множественных updateAAD()
+    private final byte[] aadBuf = new byte[BLOCK];
+    private int aadBufLen;
     // Batch-буфер для CTR-гаммы — BATCH блоков, выделяется один раз
     private final byte[] gammaBuf = new byte[BATCH * BLOCK];
 
@@ -225,23 +228,39 @@ public final class Mgm {
         }
         if (len == 0) return;
 
-        // Обрабатываем AAD блоками; неполный последний блок дополняется нулями
         int pos = 0;
-        while (pos < len) {
-            int blen = Math.min(BLOCK, len - pos);
-            long bhi, blo;
-            if (blen == BLOCK) {
-                bhi = (long) LONG_BE.get(aad, offset + pos);
-                blo = (long) LONG_BE.get(aad, offset + pos + 8);
-            } else {
-                Arrays.fill(partial, (byte) 0);
-                System.arraycopy(aad, offset + pos, partial, 0, blen);
-                bhi = (long) LONG_BE.get(partial, 0);
-                blo = (long) LONG_BE.get(partial, 8);
+
+        // Если есть неполный блок от предыдущего вызова — дополняем до полного
+        if (aadBufLen > 0) {
+            int fill = Math.min(BLOCK - aadBufLen, len);
+            System.arraycopy(aad, offset, aadBuf, aadBufLen, fill);
+            aadBufLen += fill;
+            pos += fill;
+            aadBitLen = Math.addExact(aadBitLen, (long) fill * 8);
+            if (aadBufLen == BLOCK) {
+                long bhi = (long) LONG_BE.get(aadBuf, 0);
+                long blo = (long) LONG_BE.get(aadBuf, 8);
+                macStep(bhi, blo);
+                aadBufLen = 0;
             }
+        }
+
+        // Полные блоки — хэшируем сразу
+        while (pos + BLOCK <= len) {
+            long bhi = (long) LONG_BE.get(aad, offset + pos);
+            long blo = (long) LONG_BE.get(aad, offset + pos + 8);
             macStep(bhi, blo);
-            aadBitLen = Math.addExact(aadBitLen, (long) blen * 8);
-            pos += blen;
+            aadBitLen = Math.addExact(aadBitLen, (long) BLOCK * 8);
+            pos += BLOCK;
+        }
+
+        // Неполный хвост — в буфер
+        int remaining = len - pos;
+        if (remaining > 0) {
+            System.arraycopy(aad, offset + pos, aadBuf, 0, remaining);
+            Arrays.fill(aadBuf, remaining, BLOCK, (byte) 0);
+            aadBufLen = remaining;
+            aadBitLen = Math.addExact(aadBitLen, (long) remaining * 8);
         }
     }
 
@@ -262,7 +281,7 @@ public final class Mgm {
     public int processBytes(byte[] input, int inOff, int len,
                             byte[] output, int outOff) {
         checkInitialized();
-        aadFinished = true;
+        ensureAadFinished();
         if (len == 0) return 0;
 
         int pos = 0;
@@ -275,7 +294,8 @@ public final class Mgm {
                 cipher.encryptToFields(yHi, yLo);
                 LONG_BE.set(gammaBuf, b * BLOCK,     cipher.getEncBufHi());
                 LONG_BE.set(gammaBuf, b * BLOCK + 8, cipher.getEncBufLo());
-                yLo++; // incr_r: инкремент правой половины (байты 8..15)
+                yLo++; // incr_r: wraparound недостижим — ctBitLen (Math.addExact) сработает
+                       // при 2^60 байт, что на 8 порядков меньше 2^68 байт до переполнения
             }
             for (int b = 0; b < BATCH; b++) {
                 int off = pos + b * BLOCK;
@@ -302,7 +322,8 @@ public final class Mgm {
             cipher.encryptToFields(yHi, yLo);
             long ghi = cipher.getEncBufHi();
             long glo = cipher.getEncBufLo();
-            yLo++; // incr_r
+            yLo++; // incr_r: wraparound недостижим — ctBitLen (Math.addExact) сработает
+                   // при 2^60 байт, что на 8 порядков меньше 2^68 байт до переполнения
 
             long dhi, dlo;
             if (blen == BLOCK) {
@@ -356,6 +377,7 @@ public final class Mgm {
         if (finished) throw new IllegalStateException("Already finished; call init() for new message");
         finished = true;
         checkInitialized();
+        ensureAadFinished();
         writeTag(output, outOff);
         return tagSize;
     }
@@ -374,6 +396,7 @@ public final class Mgm {
         if (finished) throw new IllegalStateException("Already finished; call init() for new message");
         finished = true;
         checkInitialized();
+        ensureAadFinished();
         byte[] computed = new byte[BLOCK];
         writeTag(computed, 0);
         byte[] received = Arrays.copyOfRange(tag, offset, offset + tagSize);
@@ -429,6 +452,25 @@ public final class Mgm {
         sumHi = 0L; sumLo = 0L;
         aadBitLen = 0L;
         ctBitLen  = 0L;
+        aadBufLen = 0;
+    }
+
+    /**
+     * Финализирует AAD: сбрасывает буфер неполного блока (с дополнением нулями)
+     * в macStep. Безопасно вызывать многократно — повторный вызов idempotent.
+     * Должен быть вызван до writeTag().
+     */
+    private void ensureAadFinished() {
+        if (aadFinished) return;
+        aadFinished = true;
+        if (aadBufLen > 0) {
+            // Дополняем нулями в aadBuf (последние BLOCK - aadBufLen байт уже 0 от предыдущего раза)
+            long bhi = (long) LONG_BE.get(aadBuf, 0);
+            long blo = (long) LONG_BE.get(aadBuf, 8);
+            macStep(bhi, blo);
+            Arrays.fill(aadBuf, (byte) 0);
+            aadBufLen = 0;
+        }
     }
 
     /**
@@ -448,7 +490,7 @@ public final class Mgm {
     private void macStep(long bhi, long blo) {
         // H_i = E(K, Z_i)
         cipher.encryptToFields(zHi, zLo);
-        zHi++; // incr_l: инкремент левой половины (байты 0..7 = hi в big-endian)
+        zHi++; // incr_l: аналогично yLo — защищён aadBitLen/ctBitLen рубежом
         gf128MulAccum(cipher.getEncBufHi(), cipher.getEncBufLo(), bhi, blo);
     }
 
@@ -667,6 +709,8 @@ public final class Mgm {
             icn = null;
         }
         Arrays.fill(partial, (byte) 0);
+        Arrays.fill(aadBuf, (byte) 0);
+        aadBufLen = 0;
         Arrays.fill(gammaBuf, (byte) 0);
         Arrays.fill(mulTabHi, 0L);
         Arrays.fill(mulTabLo, 0L);

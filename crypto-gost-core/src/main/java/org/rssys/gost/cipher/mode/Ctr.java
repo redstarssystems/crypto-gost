@@ -1,11 +1,10 @@
 package org.rssys.gost.cipher.mode;
 
-import org.rssys.gost.cipher.BlockCipher;
 import org.rssys.gost.cipher.CipherParameters;
+import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.StreamCipher;
 import org.rssys.gost.util.DataLengthException;
-import org.rssys.gost.util.OutputLengthException;
 
 /**
  * Режим гаммирования (CTR/GCTR — Gamma, Counter Mode) по ГОСТ Р 34.13-2015
@@ -25,10 +24,14 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
     /** Позиция внутри текущего буфера гаммы. */
     private int byteCount;
 
-    public Ctr(BlockCipher cipher) {
+    /** Прямая ссылка на Kuznyechik для zero-alloc encryptToFields. */
+    private final Kuznyechik kuz;
+
+    public Ctr(Kuznyechik cipher) {
         super(cipher);
-        this.CTR = new byte[blockSize];
-        this.buf = new byte[blockSize];
+        this.kuz  = cipher;
+        this.CTR  = new byte[blockSize];
+        this.buf  = new byte[blockSize];
     }
 
     @Override
@@ -69,6 +72,37 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
         checkOutputBounds(out, outOff, blockSize);
         processBytes(in, inOff, blockSize, out, outOff);
         return blockSize;
+    }
+
+    /**
+     * Пакетная обработка полных блоков.
+     *
+     * <p>В отличие от MGM, batch-разделение (4×encryptToFields → 4×XOR) не нужно:
+     * в CTR нет второго независимого потока вычислений (MAC/Galois-field), который
+     * batch разделял бы. Единственный конвейер — encryptToFields → XOR → counter++ —
+     * JIT разворачивает самостоятельно.
+     */
+    @Override
+    protected int processBlocks(byte[] in, int inOff, int len, byte[] out, int outOff) {
+        if (byteCount != 0) {
+            return 0;
+        }
+        int limit = len - (len % blockSize);
+        if (limit == 0) {
+            return 0;
+        }
+        long ctrHi = (long) LONG_BE.get(CTR, 0);
+        long ctrLo = (long) LONG_BE.get(CTR, 8);
+        for (int i = 0; i < limit; i += blockSize) {
+            kuz.encryptToFields(ctrHi, ctrLo);
+            long inHi = (long) LONG_BE.get(in, inOff + i);
+            long inLo = (long) LONG_BE.get(in, inOff + i + 8);
+            LONG_BE.set(out, outOff + i,     inHi ^ kuz.getEncBufHi());
+            LONG_BE.set(out, outOff + i + 8, inLo ^ kuz.getEncBufLo());
+            ctrLo++;
+        }
+        LONG_BE.set(CTR, 8, ctrLo);
+        return limit;
     }
 
     public byte returnByte(byte in) {

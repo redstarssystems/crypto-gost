@@ -13,7 +13,7 @@ JAVA_OPTS ?= --add-opens java.base/java.lang=ALL-UNNAMED \
 
 PARSE_AWK = size=$$NF;gsub(/\r/,"",size);gsub(/"/,"",size);score=$$5;gsub(/"/,"",score);err=$$6;gsub(/"/,"",err);b=size+0;printf "%d\t%.2f\t%.2f\n",b,score,err
 
-.PHONY: all build bench bench-gost bench-bc plot plot-cmac plot-hmac256 plot-hmac512 cross-validate cross-validate-openssl clean
+.PHONY: all build bench bench-gost bench-bc plot plot-cmac plot-hmac256 plot-hmac512 clean
 
 all: build bench plot
 
@@ -142,33 +142,6 @@ plot-hmac512:
 	else \
 	    printf '\033[1;31mgnuplot не установлен. Установи:  sudo apt install gnuplot\033[0m\n'; \
 	fi
-
-# ---------------------------------------------------------------
-# Кросс-валидация: crypto-gost ↔ BouncyCastle 1.83
-# ---------------------------------------------------------------
-cross-validate: $(JAR)
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	@printf '\033[1;36m  crypto-gost v$(VERSION) — CMAC, HMAC-256, HMAC-512\033[0m\n'
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	@printf '\033[1;36m  Кросс-валидация: crypto-gost ↔ BC 1.83\033[0m\n'
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	mkdir -p $(RES_DIR)
-	cd $(BENCH_DIR) && $(JAVA) $(JAVA_OPTS) \
-	    -cp target/benchmarks.jar org.rssys.bench.MacCrossValidation \
-	    | tee results/cross-validate-bc.log
-
-# ---------------------------------------------------------------
-# Кросс-валидация: crypto-gost ↔ OpenSSL 3.x (ГОСТ-провайдер)
-# ---------------------------------------------------------------
-cross-validate-openssl: $(JAR)
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	@printf '\033[1;36m  crypto-gost v$(VERSION) — CMAC, HMAC-256, HMAC-512\033[0m\n'
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	@printf '\033[1;36m  Кросс-валидация: crypto-gost ↔ OpenSSL\033[0m\n'
-	@printf '\033[1;36m══════════════════════════════════════════════════\033[0m\n'
-	mkdir -p $(RES_DIR)
-	cd $(BENCH_DIR) && bash cross-validate-openssl.sh \
-	    | tee results/cross-validate-openssl.log
 
 # ---------------------------------------------------------------
 # Очистка

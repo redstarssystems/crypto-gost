@@ -8,7 +8,7 @@ import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.ocsp.OcspPolicy;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.cert.Pkcs12Loader;
+import org.rssys.gost.tls13.cert.GostPkcs12Loader;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
 import javax.net.ssl.*;
@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * Поддерживаемые форматы входных данных:
  * <ul>
  *   <li>PKCS12 ({@code .p12}) + PEM/DER CA — самый удобный для пользователя
+ *   <li>PKCS12 + PKCS12 CA — через {@link #builder()}.{@link GostSslBuilder#trustCa(byte[], char[]) trustCa(pfx, pwd)}
  *   <li>PEM-строки (сертификаты и ключи) — openssl-совместимый
  *   <li>DER-байты (X.509 сертификаты, PKCS#8 PrivateKeyInfo)
  * </ul>
@@ -286,7 +287,7 @@ public final class GostSsl {
             if (certDer != null && keyDer != null) {
                 km = createKeyManager(certDer, keyDer);
             } else if (p12Data != null) {
-                Pkcs12Loader.Result result = Pkcs12Loader.load(p12Data, p12Password);
+                GostPkcs12Loader.Result result = GostPkcs12Loader.load(p12Data, p12Password);
                 km = new GostX509KeyManager();
                 X509Certificate[] chain = CertificateBridge.toJca(result.getCertificateChain());
                 km.addKeyEntry("default", chain, result.getPrivateKey());

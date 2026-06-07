@@ -24,7 +24,7 @@ class TlsOcspVerifierTest {
         root = TlsTestHelper.createRootCA(params);
         leaf = TlsTestHelper.createCertSignedBy(params, root.priv,
                 root.cert.getPublicKey(), root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"}, (byte[]) null, (String[]) null,
                 false, null);
     }
@@ -85,10 +85,10 @@ class TlsOcspVerifierTest {
                 leaf.cert.getSerialNumber(), root.priv,
                 root.cert.getPublicKey(), root.subjectDn);
         byte[] mutated = ocsp.clone();
-        // Ищем полный TLV UTCTime (0x17) со значением "250501120000Z"
-        // producedAt (0x18 GeneralizedTime) не содержит подстроку-совпадение с тегом 0x17
-        byte[] needle = {0x17, 0x0D, 0x32, 0x35, 0x30, 0x35, 0x30, 0x31, 0x31, 0x32, 0x30, 0x30, 0x30, 0x30, 0x5A};
-        byte[] replacement = {0x17, 0x0D, 0x34, 0x39, 0x30, 0x31, 0x30, 0x31, 0x31, 0x32, 0x30, 0x30, 0x30, 0x30, 0x5A};
+        // Ищем полный TLV GeneralizedTime (0x18) со значением "20250501120001Z"
+        // producedAt (0x18) отличается значением — thisUpdate на 1 сек позже
+  byte[] needle = {0x18, 0x0F, 0x32, 0x30, 0x32, 0x35, 0x30, 0x35, 0x30, 0x31, 0x31, 0x32, 0x30, 0x30, 0x30, 0x31, 0x5A};
+  byte[] replacement = {0x18, 0x0F, 0x32, 0x31, 0x30, 0x36, 0x30, 0x31, 0x30, 0x31, 0x31, 0x32, 0x30, 0x30, 0x30, 0x30, 0x5A};
         int idx = indexOf(mutated, needle);
         assertTrue(idx >= 0, "thisUpdate TLV должен быть найден в OCSP-ответе");
         System.arraycopy(replacement, 0, mutated, idx, replacement.length);

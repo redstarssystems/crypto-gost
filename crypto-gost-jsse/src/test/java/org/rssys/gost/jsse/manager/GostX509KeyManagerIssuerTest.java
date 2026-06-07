@@ -42,13 +42,13 @@ class GostX509KeyManagerIssuerTest {
 
         leafA = TlsTestHelper.createCertSignedBy(params, caA.priv,
                 caA.cert.getPublicKey(), caA.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"localhost"}, (String[]) null,
                 (byte[]) null, (String[]) null,
                 false, null);
         leafB = TlsTestHelper.createCertSignedBy(params, caB.priv,
                 caB.cert.getPublicKey(), caB.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"localhost"}, (String[]) null,
                 (byte[]) null, (String[]) null,
                 false, null);

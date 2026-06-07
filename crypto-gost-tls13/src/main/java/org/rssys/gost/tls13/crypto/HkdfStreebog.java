@@ -18,7 +18,7 @@ import java.nio.charset.StandardCharsets;
  * </pre>
  * Поддержка Streebog-256 (32-байтный хеш) и Streebog-512 (64-байтный).
  *
- * @see KdfGostR3411_2012_256 TLSTREE-специфичный KDF
+ * @see org.rssys.gost.kdf.KdfGostR3411_2012_256 TLSTREE-специфичный KDF
  */
 public final class HkdfStreebog {
 
@@ -62,7 +62,7 @@ public final class HkdfStreebog {
             throw new IllegalArgumentException("hashLen must be 32 or 64");
         }
         if (salt == null || salt.length == 0) {
-            salt = (hashLen == 64) ? ZERO_SALT_512 : ZERO_SALT_256;
+            salt = (hashLen == TlsConstants.STREEBOG_512_HASH_LEN) ? ZERO_SALT_512 : ZERO_SALT_256;
         }
         Hmac hmac = newHmac(hashLen);
         hmac.init(salt);
@@ -260,6 +260,27 @@ public final class HkdfStreebog {
         if (hashLen == TlsConstants.STREEBOG_256_HASH_LEN) {
             return new Hmac(new Streebog256());
         }
-        return new Hmac(new Streebog512());
+        if (hashLen == TlsConstants.STREEBOG_512_HASH_LEN) {
+            return new Hmac(new Streebog512());
+        }
+        throw new IllegalArgumentException("Unsupported hash length: " + hashLen);
+    }
+
+    /**
+     * Создаёт экземпляр Streebog нужной разрядности.
+     * hashLen=32 → Streebog-256, hashLen=64 → Streebog-512.
+     *
+     * @param hashLen длина хэша (32 или 64)
+     * @return дайджест Streebog
+     * @throws IllegalArgumentException если hashLen не равен 32 или 64
+     */
+    public static org.rssys.gost.digest.Digest newDigest(int hashLen) {
+        if (hashLen == TlsConstants.STREEBOG_256_HASH_LEN) {
+            return new Streebog256();
+        }
+        if (hashLen == TlsConstants.STREEBOG_512_HASH_LEN) {
+            return new Streebog512();
+        }
+        throw new IllegalArgumentException("Unsupported hash length: " + hashLen);
     }
 }

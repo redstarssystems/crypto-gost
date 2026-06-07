@@ -12,6 +12,7 @@ public final class TlsConstants {
     public static final byte CT_ALERT = 21;
     public static final byte CT_HANDSHAKE = 22;
     public static final byte CT_APPLICATION_DATA = 23;
+    public static final byte CT_CHANGE_CIPHER_SPEC = 20;
 
     // типы handshake-сообщений (RFC 8446 раздел 4)
     public static final byte HT_CLIENT_HELLO = 1;
@@ -121,11 +122,13 @@ public final class TlsConstants {
     public static final byte ALERT_BAD_CERTIFICATE = 42;
     public static final byte ALERT_HANDSHAKE_FAILURE = 40;
     public static final byte ALERT_ILLEGAL_PARAMETER = 47;
+    public static final byte ALERT_UNKNOWN_CA = 48;
     public static final byte ALERT_DECODE_ERROR = 50;
     public static final byte ALERT_DECRYPT_ERROR = 51;
     public static final byte ALERT_MISSING_EXTENSION = 109;
     public static final byte ALERT_RECORD_OVERFLOW = 22;
     public static final byte ALERT_CERTIFICATE_EXPIRED = 45;
+    public static final byte ALERT_CERTIFICATE_REVOKED = 44;
     public static final byte ALERT_CERTIFICATE_REQUIRED = 116;
     public static final byte ALERT_INTERNAL_ERROR = 80;
 
@@ -140,6 +143,7 @@ public final class TlsConstants {
     public static final int EXT_PSK_KEY_EXCHANGE_MODES = 45;
     public static final int EXT_CERTIFICATE_AUTHORITIES = 47;
     public static final int EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION = 16; // RFC 7301
+    public static final int EXT_COOKIE = 44;
 
     // коды алертов
     /** no_application_protocol (RFC 7301 §3.2): сервер не выбрал протокол ALPN */
@@ -167,6 +171,14 @@ public final class TlsConstants {
     // контекстные строки CertificateVerify (RFC 8446 раздел 4.4.3)
     public static final String SERVER_CERTIFICATE_VERIFY_CTX = "TLS 1.3, server CertificateVerify";
     public static final String CLIENT_CERTIFICATE_VERIFY_CTX = "TLS 1.3, client CertificateVerify";
+
+    // HelloRetryRequest random (RFC 8446 §4.1.3)
+    public static final byte[] HRR_RANDOM = new byte[]{
+            (byte) 0xCF, (byte) 0x21, (byte) 0xAD, (byte) 0x74, (byte) 0xE5, (byte) 0x9A, (byte) 0x61, (byte) 0x11,
+            (byte) 0xBE, (byte) 0x1D, (byte) 0x8C, (byte) 0x02, (byte) 0x1E, (byte) 0x65, (byte) 0xB8, (byte) 0x91,
+            (byte) 0xC2, (byte) 0xA2, (byte) 0x11, (byte) 0x16, (byte) 0x7A, (byte) 0xBB, (byte) 0x8C, (byte) 0x5E,
+            (byte) 0x07, (byte) 0x9E, (byte) 0x09, (byte) 0xE2, (byte) 0xC8, (byte) 0xA8, (byte) 0x33, (byte) 0x9C
+    };
 
     private TlsConstants() {}
 }

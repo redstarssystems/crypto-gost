@@ -20,7 +20,7 @@
     <url>https://gitflic.ru/project/red-stars-systems/crypto-gost</url>
 
     <properties>
-        <maven.compiler.release>11</maven.compiler.release>
+        <maven.compiler.release>21</maven.compiler.release>
     </properties>
 
     <dependencies>

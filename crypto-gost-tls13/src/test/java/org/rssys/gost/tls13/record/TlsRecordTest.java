@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.rssys.gost.util.AuthenticationException;
 
 import java.nio.ByteBuffer;
-import java.security.SecureRandom;
+import org.rssys.gost.util.CryptoRandom;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -20,21 +20,19 @@ import static org.rssys.gost.tls13.TlsTestHelper.hexStr;
 @DisplayName("TlsRecord — уровень записей TLS 1.3")
 class TlsRecordTest {
 
-    private static final SecureRandom RNG = new SecureRandom();
-
     // -----------------------------------------------------------------------
     // Вспомогательные методы
     // -----------------------------------------------------------------------
 
     private static byte[] randomKey() {
         byte[] key = new byte[32];
-        RNG.nextBytes(key);
+        CryptoRandom.INSTANCE.nextBytes(key);
         return key;
     }
 
     private static byte[] randomIv() {
         byte[] iv = new byte[16];
-        RNG.nextBytes(iv);
+        CryptoRandom.INSTANCE.nextBytes(iv);
         iv[0] &= 0x7F;
         return iv;
     }
@@ -116,7 +114,7 @@ class TlsRecordTest {
     void testProtectUnprotectApplicationData() throws Exception {
         RecordPair pair = newPair();
         byte[] appData = new byte[100];
-        RNG.nextBytes(appData);
+        CryptoRandom.INSTANCE.nextBytes(appData);
 
         byte[] protectedRecord = pair.protect(
                 TlsConstants.CT_APPLICATION_DATA, appData);
@@ -160,7 +158,7 @@ class TlsRecordTest {
         RecordPair pair = newPair();
         // max fragment that fits in TLSInnerPlaintext (2^14 - 1 for content_type)
         byte[] maxData = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH - 1];
-        RNG.nextBytes(maxData);
+        CryptoRandom.INSTANCE.nextBytes(maxData);
 
         byte[] protectedRecord = pair.protect(
                 TlsConstants.CT_APPLICATION_DATA, maxData);
@@ -546,7 +544,7 @@ class TlsRecordTest {
     void testRecordStructure() {
         TlsRecord writer = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] data = new byte[10];
-        RNG.nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
 
         byte[] protectedRecord = writer.protect(
                 TlsConstants.CT_APPLICATION_DATA, data);
@@ -635,7 +633,7 @@ class TlsRecordTest {
     @DisplayName("protect(ct, data) и protect(ct, data, 0, data.length) идентичны")
     void testProtectOverloadMatch() {
         byte[] data = new byte[100];
-        RNG.nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
 
         TlsRecord r1 = new TlsRecord(fixedKey(), fixedIv(), 16,
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
@@ -653,7 +651,7 @@ class TlsRecordTest {
     void testProtectSubarray() throws Exception {
         RecordPair pair = fixedPair();
         byte[] full = new byte[200];
-        RNG.nextBytes(full);
+        CryptoRandom.INSTANCE.nextBytes(full);
 
         byte[] subExpected = Arrays.copyOfRange(full, 50, 150);
         byte[] record = pair.writer.protect(TlsConstants.CT_APPLICATION_DATA, full, 50, 100);
@@ -736,7 +734,7 @@ class TlsRecordTest {
     void testByteBufferMaxSize() throws Exception {
         RecordPair pair = newPair();
         byte[] data = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH - 1];
-        RNG.nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
 
         ByteBuffer src = ByteBuffer.wrap(data);
         ByteBuffer dst = ByteBuffer.allocate(
@@ -812,7 +810,7 @@ class TlsRecordTest {
         TlsRecord rec = new TlsRecord(RECORD_FIXTURE_KEY, RECORD_FIXTURE_IV, 16,
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         byte[] data = new byte[50];
-        RNG.nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
 
         byte[] fromByteArray = rec.protect(TlsConstants.CT_APPLICATION_DATA, data);
 
@@ -887,7 +885,7 @@ class TlsRecordTest {
     void testByteBufferUnprotectOutputTooSmall() throws Exception {
         RecordPair pair = newPair();
         byte[] data = new byte[100];
-        RNG.nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
 
         ByteBuffer src = ByteBuffer.wrap(data);
         ByteBuffer dst = ByteBuffer.allocate(256);
@@ -948,7 +946,7 @@ class TlsRecordTest {
     void testByteBufferUnprotectRetryAfterOutputTooSmall() throws Exception {
         RecordPair pair = newPair();
         byte[] data = new byte[50];
-        RNG.nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
 
         ByteBuffer src = ByteBuffer.wrap(data);
         ByteBuffer dst = ByteBuffer.allocate(256);
@@ -981,9 +979,9 @@ class TlsRecordTest {
         // не оставляет stale tail от предыдущей записи в данных следующей.
         byte[] small = new byte[]{1, 2, 3};
         byte[] large = new byte[200];
-        RNG.nextBytes(large);
+        CryptoRandom.INSTANCE.nextBytes(large);
         byte[] medium = new byte[50];
-        RNG.nextBytes(medium);
+        CryptoRandom.INSTANCE.nextBytes(medium);
 
         RecordPair pair = newPair();
         for (byte[] data : new byte[][]{large, medium, small}) {

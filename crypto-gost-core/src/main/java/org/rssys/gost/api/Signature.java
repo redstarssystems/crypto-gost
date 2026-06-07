@@ -223,6 +223,6 @@ public final class Signature {
      * Соответствует требованию ГОСТ Р 34.10-2012 §5.
      */
     private static Supplier<Digest> digestFactory(ECParameters params) {
-        return (params.hlen == 32) ? Streebog256::new : Streebog512::new;
+        return (params.hlen == Streebog256.DIGEST_SIZE) ? Streebog256::new : Streebog512::new;
     }
 }

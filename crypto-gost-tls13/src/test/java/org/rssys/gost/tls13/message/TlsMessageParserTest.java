@@ -12,6 +12,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import org.rssys.gost.util.CryptoRandom;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("TlsMessageParser: парсинг handshake-сообщений")
@@ -763,6 +765,45 @@ class TlsMessageParserTest {
         List<String> protocols = TlsMessageParser.parseClientHelloAlpn(body);
         assertNotNull(protocols);
         assertTrue(protocols.isEmpty());
+    }
+
+    @Test
+    @DisplayName("ServerHello: legacy_session_id эхо-отражает ClientHello")
+    // WHY: RFC 8446 §4.1.3 требует, чтобы сервер эхо-отражал legacy_session_id
+    // клиента для middlebox-совместимости. OpenSSL 3.6.0 с патчем gost-engine
+    // отвергает ServerHello с несовпадающим session_id (SSL_R_INVALID_SESSION_ID).
+    void testServerHelloEchoesClientSessionId() throws Exception {
+        byte[] sid = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(sid);
+
+        byte[] ch = buildClientHelloBody(0x0303, sid,
+                csBytes(0xC103), new byte[]{0x00},
+                svExt(), saExt(), ksExt(TlsConstants.GRP_GC256A));
+
+        int sidLen = ch[34] & 0xFF;
+        byte[] extractedSid = new byte[sidLen];
+        System.arraycopy(ch, 35, extractedSid, 0, sidLen);
+        assertArrayEquals(sid, extractedSid, "session_id встроен в ClientHello");
+
+        ECParameters params = ECParameters.tc26a256();
+        var kp = KeyGenerator.generateKeyPair(params);
+        byte[] point = TlsEncoding.encodePoint(kp.getPublic());
+
+        TlsMessageBuilder builder = new TlsMessageBuilder(
+                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
+                TlsConstants.GRP_GC256A, TlsConstants.SIG_GOST_TC26_A_256,
+                kp.getPrivate(), Collections.emptyList(), 32);
+
+        builder.setClientSessionId(extractedSid);
+        byte[] sh = builder.buildServerHello(point);
+
+        // ServerHello: legacy_version(2) || random(32) || sid_len(1) || sid || ...
+        int shSidLen = sh[34] & 0xFF;
+        assertEquals(sid.length, shSidLen, "длина session_id в ServerHello");
+        byte[] echoedSid = new byte[shSidLen];
+        System.arraycopy(sh, 35, echoedSid, 0, shSidLen);
+        assertArrayEquals(sid, echoedSid, "ServerHello session_id совпадает с ClientHello");
     }
 
     private static byte[] encodeAlpnExt(List<String> protocols) throws Exception {

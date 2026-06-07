@@ -70,13 +70,13 @@ class JettyMtlsTest {
 
         serverCert = TlsTestHelper.createCertSignedBy(
                 params, rootCa.priv, caPub, rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
 
         clientCert = TlsTestHelper.createCertSignedBy(
                 params, rootCa.priv, caPub, rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 null, new byte[]{(byte) 0x80}, null,
                 false, null);
     }

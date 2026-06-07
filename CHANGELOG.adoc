@@ -1,5 +1,395 @@
 = История изменений
 
+== [0.4.0] - 07-06-2026
+
+Данный релиз в большей степени посвящен кросс-валидации с внешними средствами, такими как OpenSSL 3.6.0 (gost-engine + patch TLS 1.3) и Bouncycastle 1.84.
+
+Такая кросс-валидация позволила вскрыть большое количество ошибок, ранее не обнаруживаемых на self-interop тестах. Также в рамках данного релиза произведен большой рефакторниг кодовой базы. Детали всего этого описаны ниже.
+
+*Фактически это первый релиз, который совместим с внешним миром.* Поэтому я удалил все предыдущие релизы в виде jar-файлов.
+
+Crypto-gost как TLS 1.3 сервер успешно проходит полный handshake с независимым стеком (OpenSSL gostprov) и обменивается данными. Это означает: key schedule корректен, ECDHE работает, MGM-шифрование с правильными ключами, TLSTREE re-keying не ломает поток, wire-формат сертификата читается OpenSSL, подпись в CertificateVerify верифицируется.
+Crypto-gost как TLS 1.3 клиент успешно верифицирует сервер с ГОСТ-подписью и проходит handshake с OpenSSL s_server.
+Покрытые кривые: GC256B (CryptoPro-A), GC512A, GC512B. mTLS работает.
+
+Теперь серверы приложений (Jetty 12, Tomcat 11, Undertow 2), сконфигурированные с crypto-gost JSSE, корректно взаимодействуют с OpenSSL s_client на уровне TLS 1.3 + ГОСТ.
+
+В отличие от x-validation-tests/jsse (raw GostSSLEngine/GostSSLSocket ↔ OpenSSL), эти тесты проверяют HTTP-уровень через серверное middleware: SNI-обработку, session ticket passthrough, mTLS с внешним сертификатом, Tomcat SSLUtil-обёртку.
+
+Данный релиз содержит переход на публикацию артефактов в https://gitflic.ru/project/red-stars-systems/crypto-gost/package[maven-репозиторий].
+
+=== Модуль crypto-gost-core
+
+==== Исправлено
+
+* *Исправлены OID эллиптических кривых TC26 (баг в GostCurves.java, GostOids.java)*. +
+По RFC 7836 и OpenSSL ветка 1.2.643.7.1.2.1.1.x — 256-битные кривые, 1.2.643.7.1.2.1.2.x — 512-битные. В коде crypto-gost было наоборот. Математика кривых (ECParameters.java) верна — перепутаны только строковые идентификаторы OID. +
+*Следствие:*
+** Ключи TC26-A-256 кодировались в DER с OID от 512-битной кривой и наоборот;
+** Сертификаты Минцифры (512-бит, OID .1.2.1.2.1) читались только через fallback-костыль;
+** Кросс-валидация с engine-gost была сломана.
+** Удалён workaround FALLBACK_256_TO_512 в GostDerCodec.java — он маскировал собственный баг, а не реальную несовместимость. После фикса все тесты проходят.
+
+* *Исправлена кросс-совместимость ECDH для кривой TC26-C-512.* +
+KeyAgreement.computeSharedSecret теперь вычисляет скаляр (h·d) mod q вместо d, где h — кофактор кривой. TC26-C-512 — единственная стандартная ГОСТ-кривая с h=4. Остальные кривые имеют h=1 и поведение не изменилось. Поле cofactor добавлено в ECParameters.
+
+* *Hmac.init — снято избыточное ограничение на пустой ключ.* +
+По RFC 2104 §2 ключ HMAC может быть любой длины, включая нулевую: пустой ключ дополняется нулями до длины блока, результат математически определён. Проверка key.length == 0 была ограничением реализации, не стандарта. Оставлен только null-guard. +
+Следствие: Pbkdf2Streebog.generate() теперь корректно работает с пустым паролем.
+
+* *`Mgm.updateAAD()` — исправлен баг нарушения RFC 9058 при множественных вызовах*. +
+Несколько последовательных `updateAAD()` с некратными блоку данными давали другой
+тег аутентификации, чем один вызов с той же конкатенацией. Добавлен накопительный
+буфер `aadBuf`: неполный хвост хранится между вызовами и хэшируется только при
+наборе полного блока или финализации. Новый метод `ensureAadFinished()` вызывается
+из `processBytes`, `finishEncryption` и `finishDecryption` — корректно обрабатывает
+в том числе AAD-only сценарий (пустой plaintext).
+
+* Устранено дублирование в Digest: четыре статических метода (digest256, digest512, hmac256, hmac512) вместо повторяющегося кода теперь делегируют двум приватным методам, которые используют уже существующие фабрики.
+
+* *`AuthenticatedStream` — устранение четырёх уязвимостей*. +
+** *DoS через chunkLen (OOM)*: `OpeningStream` принимал `chunkLen` из wire без
+верхней границы — значение `0x7FFFFFFF` вызывало аллокацию ~2 ГБ до проверки CMAC.
+Исправлено: `chunkSize` из заголовка потока сохраняется в `OpeningStream`,
+`chunkLen > chunkSize` отклоняется с `AuthenticationException` до аллокации.
+Добавлена константа `MAX_CHUNK_SIZE = 1 МБ` — абсолютный лимит независимо
+от заголовка. +
+** *Reorder и duplicate чанков*: CMAC считался только от plaintext без привязки
+к позиции в потоке — перестановка или дублирование чанков проходило верификацию.
+Исправлено: в CMAC включён implicit AAD = `seqNo(8) || flags(1)`. Wire format
+не изменён — `seqNo` восстанавливается по позиции на обоих концах. +
+** *Подмена флага FLAG_LAST*: флаг последнего чанка не был аутентифицирован —
+замена `FLAG_NORMAL` на `FLAG_LAST` и обратно не обнаруживалась.
+Исправлено через включение `flags` в AAD (см. выше). +
+** *Plaintext в памяти после `close()`*: внутренний буфер `ByteArrayOutputStream`
+не затирался после закрытия потока. Заменён на `byte[]` с явным `Arrays.fill` в `finally`
+блоке `close()`. При `AuthenticationException` в `OpeningStream` устанавливается
+`streamEnded = true` и `plainBuf` затирается до выброса исключения. +
+
+
+==== Добавлено
+
+* link:x-validation-tests/kuznyechik/doc/kuznyechik-cross-validation.md[Методика кросс-валидации режимов блочного шифра Кузнечик] + тесты.
+Охват: CTR/CBC/CFB/OFB/MGM, 43 размера (0..1 МБ), сверка с BouncyCastle, OpenSSL и предыдущей версией. Границы блоков, переполнение счётчика CTR и 16-битного счётчика, CVE-2025-14813. CBC/NoPad отдельно.
+
+* link:x-validation-tests/digest-mac/doc/digest-mac-cross-validation.md[Методика кросс-валидации хэшей и MAC] + тесты.
+Охват: Streebog-256/512, HMAC-Streebog-256/512, CMAC-Kuznyechik; 17 размеров (0..4097); сверка с BouncyCastle и OpenSSL. Фиксированный ключ, границы блоков Streebog (64) и Kuznyechik (16).
+
+* link:x-validation-tests/keys/doc/keys-cross-validation.md[Методика кросс-валидации совместимости ключей ГОСТ Р 34.10-2012] + тесты.
+Охват: 7 кривых, DER encode/decode roundtrip, проверка Q = d×G, ASN.1-структура через BC, OpenSSL engine gost. 40 тестовых вызовов. Только DER-формат.
+
+* link:x-validation-tests/sign/doc/sign-cross-validation.md[Методика кросс-валидации подписи ГОСТ Р 34.10-2012] + тесты.
+Охват: 7 кривых, двунаправленная подпись/верификация (crypto-gost ↔ BC/OpenSSL), детерминированный k (RFC 6979), tamper detection. ~3000 проверок.
+
+* Тесты кросс-валидации PFX между crypto-gost и openssl в x-validation-tests/pkcs12.
+
+Тесты кросс-валидации помогли выявить ошибку в OID эллиптических кривых TC26 (см. Исправлено).
+
+* *PBKDF2-HMAC-Streebog (Pbkdf2Streebog.java)* -- RFC 9337.
+Выработка ключа из пароля по PBKDF2 с HMAC-Стрибог-256/512.
+Тест-векторы: RFC 9337 Appendix A (6 векторов).
+** *JCA-обёртка PBKDF2-HMAC-Streebog (GostPbkdf2SecretKeyFactorySpi.java)*.
+Доступна как `SecretKeyFactory("PBKDF2WithHmacStreebog512")`.
+Алиас `"PBKDF2WithHmacGOST3411-2012-512"` даёт тот же результат.
+
+* *KDF_TREE_GOSTR3411_2012_256 (KdfTreeGostR3411_2012_256.java)* -- RFC 7836 §4.5.
+Выработка ключей шифрования и подлинности для CTR-ACPKM-OMAC.
+
+* *Режим CTR-ACPKM (CtrAcpkmMode.java)* -- RFC 8645, RFC 9337 §5.
+Два варианта: CTR без кода подлинности и с CMAC (зашифровать-затем-подписать).
+
+* *Обёртка JCA для Кузнечик-CTR-ACPKM (GostCtrAcpkmCipherSpi.java)*.
+Два подкласса -- без OMAC и с OMAC. Доступны как `Cipher.Kuznyechik/CTR-ACPKM/NoPadding`
+и `Cipher.Kuznyechik/CTR-ACPKM-OMAC/NoPadding`.
+
+* *`KeyAgreement.computeSharedSecret()` — ECDH shared secret (ГОСТ Р 34.10-2012)*. +
+X-координата точки `d·Qpeer` в little-endian (RFC 9367 §8.5).
+Constant-time скалярное умножение, проверка совместимости кривых, защита от точки на бесконечности.
+Класс `org.rssys.gost.api.KeyAgreement`.
+
+* *`GostKeyAgreementSpi` — JCA `KeyAgreement.ECDHGOST2012`*. +
+Однофазный JCA-интерфейс поверх `KeyAgreement.computeSharedSecret`.
+`engineGenerateSecret(String)` поддерживает алгоритмы `"ECDHGOST2012"` и `"RAW"`.
+Временный буфер обнуляется в `finally`.
+
+* *`KeyAgreement.vkoGostR3410_2012_256()` — VKO_GOSTR3410_2012_256 (RFC 7836 §4.3.1)*. +
+Согласование 256-битного ключа с UKM и хэшированием Стрибог-256. Затирание промежуточных буферов.
+
+* *`GostVkoKeyAgreementSpi` — JCA `KeyAgreement.VKOGOST3410-2012-256`*. +
+JCA-обёртка над VKO. UKM обязателен через `GostUkmParameterSpec`. OID `1.2.643.7.1.1.6.1`.
+
+* *`GostUkmParameterSpec`* — `AlgorithmParameterSpec` для передачи UKM в VKO.
+
+* *`KeyExport` — экспорт/импорт ключей KExp15/KImp15 (RFC 9189 §8.2.1)*. +
+Аутентифицированное шифрование произвольного секрета парой ключей по схеме
+MAC-then-Encrypt: OMAC(K_MAC, IV || S), затем CTR-Encrypt(S || CEK_MAC).
+Константы и форматы по RFC 9189 §8.2.1 (Кузнечик: блок 16 байт, ключ 32 байта, IV 8 байт).
+Порядок параметров `kExp15`/`kImp15` соответствует RFC: K_MAC перед K_ENC.
+Затирание всех промежуточных буферов в `finally`, включая секрет при ошибке MAC.
+KAT: RFC 9189 Appendix A.1.3.2 (TLS_GOSTR341112_256_WITH_KUZNYECHIK_CTR_OMAC).
+
+* *`AuthenticatedCipher.computeCmac`*: добавлена перегрузка с AAD-параметром
+(`byte[] aad, byte[] data, SymmetricKey key`). Используется `AuthenticatedStream`.
+
+==== Изменено
+
+* *`KdfGostR3411_2012_256` перенесён из `crypto-gost-tls13` в `crypto-gost-core`*. +
+Алгоритм `KDF_GOSTR3411_2012_256` (RFC 7836 §4.4) не зависел от tls13-модуля.
+Новый пакет: `org.rssys.gost.kdf`. Поведение и тесты не изменились.
+
+* *Переработка режимов шифрования Кузнечик (CTR, CFB, OFB, CBC)* с целью повышения производительности. Во всех четырёх режимах побайтовая обработка и создание промежуточных байтовых массивов заменены на long-арифметику через прямой вызов encryptToFields базового шифра. В AbstractStreamMode добавлены общие поля VarHandle LONG_BE и gammaHi/gammaLo, а также метод processBlocks для пакетной обработки полных блоков.
+** CTR — пакетная обработка блоков через long-XOR вместо байтового цикла и generateBuf.
+** CFB — устранены три выделения памяти на сегмент (createGamma); гамма пишется напрямую через encryptToFields; для полных блоков — long-XOR.
+** OFB — убран generateY (байтовый обход через processBlock); прямой вызов encryptToFields + long-XOR.
+** CBC — убраны new byte[16] на каждом блоке при зашифровании; при расшифровании R больше не используется как временный буфер — добавлен отдельный scratchBuf.
+* Удален документ oid-reference.adoc(md), т.к. он дублировал данные из кода.
+
+=== Модуль crypto-gost-tls13
+
+==== Добавлено
+
+* *Создание PFX-контейнеров ГОСТ (GostPkcs12Builder.java, PfxDerWriter.java)* — RFC 7292, RFC 9337, RFC 9548. +
+Fluent Builder API для сборки PFX с нуля: ключ + leaf-сертификат + произвольная цепочка CA.
+Шифрование ключа: PBES2-ГОСТ, Кузнечик CTR-ACPKM-OMAC (по умолчанию) или CTR-ACPKM,
+PBKDF2-HMAC-Стрибог-512, 2000 итераций. Целостность: всегда HMAC-Стрибог-512 (RFC 9548 §7).
+Атрибуты SafeBag: `localKeyId` (20 байт, CryptoRandom), `friendlyName` (опционально).
+CA-сертификаты упаковываются без `localKeyId` — совместимо с фильтрацией `GostPkcs12Loader`.
+Атомарная запись в файл (`buildAndWriteTo(Path)` — temp + rename). +
+Созданные PFX совместимы с `GostPkcs12Loader.load()` и проходят структурную валидацию OpenSSL.
+
+* *Вычисление MAC PFX (`GostPkcs12Mac.compute()`)* — RFC 9548 §7. +
+Парная операция к существующему `verify()`: PBKDF2(96 байт) → последние 32 байта как ключ
+HMAC-Стрибог-512, вычисление от `authSafe.contents`. Затирание производных ключей в `finally`.
+
+* *Шифрование ключа по PBES2-ГОСТ (`GostPbes2.encryptKey()`)* — RFC 9337 §5. +
+Парная операция к существующему `decryptKey()`: генерация salt и UKM через CryptoRandom,
+PBKDF2 → DK, Кузнечик CTR-ACPKM-OMAC или CTR-ACPKM, сборка DER `EncryptedPrivateKeyInfo`.
+Затирание DK и `SymmetricKey` в `finally`.
+
+* *Расшифровка ключей по PBES2 (GostPbes2.java)* — RFC 9337. +
+Расшифровка PKCS8ShroudedKeyBag: PBKDF2-HMAC-Стрибог + Кузнечик CTR-ACPKM(-OMAC).
+
+* *Разбор PFX (GostPkcs12Parser.java)* — RFC 7292. +
+Полный разбор структуры PKCS#12 без участия JDK: PFX, AuthenticatedSafe, SafeBag,
+MacData, EncryptedPrivateKeyInfo, параметры PBES2.
+
+* *Загрузка PKCS12 (GostPkcs12Loader.java)* — RFC 9337/9548. +
+Если PFX содержит ГОСТ-шифрование — расшифровка собственными средствами,
+иначе прозрачная передача встроенному KeyStore JDK. +
+Фильтрация сертификатов по `localKeyId` (RFC 7292 §B.3): одноходовой обход bags
+с накоплением, пост-фильтрация после расшифровки ключа — корректно работает
+независимо от порядка bags в PFX. Сертификаты с `localKeyId`, отличным от ключевого,
+отбрасываются; сертификаты без `localKeyId` (CA) всегда включаются;
+если ключ не имеет `localKeyId` — все сертификаты проходят. +
+Цепочка упорядочивается leaf-first: leaf (`isCA == false`) на позиции 0,
+CA отсортированы топологически по `issuer→subject` DER-совпадению —
+корректно для `TlsCertificateValidator` и любого порядка bags в исходном PFX.
+
+* *Проверка целостности PFX (GostPkcs12Mac.java)* — RFC 9548 §7. +
+PBKDF2 из пароля даёт 96 байт, последние 32 — ключ HMAC-Стрибог-512 для проверки `authSafe.contents`.
+
+* Стресс-тест и методика пропускной способности TlsSession. Результат: ~47 МБ/с.
+
+* Правильные alert-коды при валидации сертификатов: `unknown_ca(48)` для корня без доверенного CA,
+`certificate_revoked(44)` для отозванных по CRL/OCSP.
+`TlsHandshakeEngine` — сохранение alert-кода при `acknowledgeCertificateValidation(false, code)`
+с дефолтом `handshake_failure(40)`. `TlsOcspVerifier` — совместимость с OCSP-респондерами,
+кодирующими статус «good» как `[0] IMPLICIT NULL` (`0x80 0x00`).
+
+* *HelloRetryRequest (HRR) — RFC 8446 §4.1.3, §4.2.8, §4.4.1*.
+Клиент и сервер теперь поддерживают смену ECDHE-группы через HRR.
+Клиент: при получении HRR заменяет транскрипт на `message_hash(CH1)`,
+генерирует новый ECDHE-ключ для запрошенной группы, отправляет второй
+ClientHello. При активном PSK binder пересчитывается от
+`Hash(message_hash + HRR + Truncated_CH2)`.
+Сервер: при несовпадении группы клиента отправляет HRR (ранее — silent
+accept первой группы из key_share клиента).
+Защита от цикла: второй HRR подряд → `ALERT_UNEXPECTED_MESSAGE` (клиент),
+повторный CH с неправильной группой после HRR → `ALERT_ILLEGAL_PARAMETER`
+(сервер).
+
+==== Исправлено
+
+* *Совместимость с TLS 1.3 через middlebox-прокси (RFC 8446 §D.4)*. +
+Добавлен пропуск записей ChangeCipherSpec (тип 20) в цикле приёма handshake-записей. Без этого при подключении к серверу, работающему в режиме совместимости с middlebox (OpenSSL по умолчанию), клиент падал с `IllegalArgumentException: Record payload too small for tag: 1`. +
+Добавлена константа `CT_CHANGE_CIPHER_SPEC = 20` в `TlsConstants`.
+** Добавлен проверочный тест `testSilentlyIgnoreChangeCipherSpec` — проверяет, что CCS-запись между ServerHello и EncryptedExtensions молча игнорируется и handshake завершается успешно.
+
+* *Уточнение порядка байт X-координаты ECDHE (RFC 9367 §6.1.1)*. +
+Переменная в `computeEcdheShared` переименована: `xBe` → `xRawBe`/`xRawLe`. Логика не изменилась — результат был и остаётся little-endian согласно RFC 9367. Прежнее имя `xBe` вводило в заблуждение и провоцировало лишние обсуждения на code review.
+
+* *Single key_share для предпочтительной группы; смена дефолта GC256A → GC256B*. +
+Клиент генерирует одну ECDHE-пару для выбранной группы. `supported_groups` в ClientHello перечисляет все 7 групп. При несовпадении группы клиента и сервера соединение завершается alert'ом — поддержка HRR не реализована. +
+Дефолт сменён с GC256A на GC256B (CryptoPro-A): GC256A несовместим
+с OpenSSL gostprov.
+** * *Метод `withSelectedNamedGroup(int)` в `TlsServerConfig`*. +
+Позволяет задать группу сервера, отличную от дефолтной. Используется для
+кросс-групповых сценариев (например, клиент GC256A — сервер GC512C).
+
+* *Порядок формирования транскрипта для application traffic secrets приведён к RFC 8446 §4.4.1*. +
+Ранее клиентский Finished добавлялся в транскрипт до выработки app traffic keys (SATS/CATS). По спецификации транскрипт для Derive-Secret на этом этапе должен включать ClientHello...server Finished, но не client Finished. Сервер OpenSSL/gost-engine формирует server_finished_hash до получения клиентского Finished — из-за расхождения транскрипта app traffic secrets не совпадали, и первая же зашифрованная запись отклонялась с «MGM authentication tag mismatch».
+** Клиентский Finished (`receiveFinished`) больше не добавляется в транскрипт до `finishHandshake()`, а сохраняется в отдельном поле.
+** `finishHandshake()` добавляет клиентский Finished в транскрипт после выработки app traffic keys.
+** На стороне сервера (`receiveClientFinished`) хеш транскрипта для SATS/CATS сохраняется до добавления клиентского Finished, а не после.
+** Все 589 тестов проходят, включая кросс-валидацию с OpenSSL gost-engine.
+
+* *Транскрипт для app traffic secrets при mTLS нарушал RFC 8446 §7.1 Table 2
+  (баг в TlsHandshakeEngine)*. +
+RFC 8446 §7.1 Table 2 явно определяет: оба секрета прикладного трафика
+(`client_application_traffic_secret_0`, `server_application_traffic_secret_0`)
+вырабатываются через `Derive-Secret(Master Secret, "c/s ap traffic",
+ClientHello...server Finished)` — транскрипт включает сообщения
+*только до server Finished включительно*, без клиентских Certificate,
+CertificateVerify и Finished. +
+В режиме взаимной аутентификации (mTLS) `receiveClientCertificate()` и
+`receiveCertificateVerify()` добавляли эти сообщения в `HandshakeContext`
+до выработки app keys. В результате `receiveClientFinished()` вычислял
+`ctx.transcriptHash()` включая client Certificate и CertificateVerify,
+тогда как OpenSSL/gost-engine корректно использовал hash(CH...server Finished).
+Расхождение `clientAppTrafficSecret` приводило к тому, что первая же
+зашифрованная app-запись отклонялась с «MGM authentication tag mismatch». +
+*В non-mTLS баг не проявлялся*: клиентских Certificate/CertificateVerify
+в транскрипте нет, оба стека вычисляли одинаковый hash. +
+*Исправление*: в `TlsHandshakeEngine` добавлено поле `appTranscriptHash` —
+hash транскрипта, захватываемый сразу после `ctx.addToTranscript(serverFinishedFrame)`
+до любых клиентских сообщений аутентификации. `receiveClientFinished()` (сервер)
+и `finishHandshake()` (клиент) используют `appTranscriptHash` вместо позднего
+`ctx.transcriptHash()`. Поле затирается через `TlsUtils.wipeArray` после
+использования и в `destroy()`. +
+** Кросс-валидационный тест `testServerMtls` (Java-сервер + OpenSSL s_client
+   с mTLS, кривая GC256B, suite L) теперь проходит.
+
+* *Эхо-отражение legacy_session_id в ServerHello (RFC 8446 §4.1.3)*. +
+Ранее сервер всегда отправлял `legacy_session_id` нулевой длины, хотя по спецификации необходимо повторять значение из ClientHello для совместимости с промежуточными устройствами (middlebox). OpenSSL 3.6.0 с патчем gost-engine проверяет совпадение session_id и при несовпадении отвечал отказом (illegal_parameter), не доходя до выработки ключей. +
+Исправлено: `TlsMessageBuilder` — добавлен `setClientSessionId()`, условная запись в `buildServerHello()`. `TlsHandshakeEngine` — извлечение session_id из тела ClientHello и передача в сборщик. +
+
+* *Сервер мог работать только с SUITE_L, игнорируя выбор клиента*. +
+JSSE-сервер рекламирует оба набора (L и S), но при handshake упорно
+использовал L — даже если клиент предлагал только S или явно его
+предпочитал. Причина: код не искал пересечение наборов, а проверял
+«есть ли в списке клиента наш L». Если нет — соединение обрывалось. +
+Теперь сервер выбирает набор по правилам RFC 8446: сначала свой
+предпочтительный, потом первое совпадение из предложенных клиентом.
+Добавлена защита от битых ClientHello (bounds-check).
+
+==== Изменено
+
+* *`KdfGostR3411_2012_256` перенесён из `crypto-gost-tls13` в `crypto-gost-core`*. +
+Алгоритм `KDF_GOSTR3411_2012_256` (RFC 7836 §4.4) не зависел от tls13-модуля.
+Новый пакет: `org.rssys.gost.kdf`. Поведение и тесты не изменились.
+
+* Конструктор `InMemoryTlsTransport(LinkedBlockingQueue)` стал публичным (`public`) для создания кастомных транспортов с переопределённым `sendRecord` из тестов в других пакетах.
+* *Переработка `TlsMessageBuilder` для key_share*. +
+`buildClientHello` и `buildClientHelloWithPsk` получили перегрузки, принимающие
+`Map<Integer, byte[]>` (группа → точка). Старые методы с одним `byte[] ecdhePoint`
+делегируют новым через `Map.of(selectedNamedGroup, ecdhePoint)`.
+Внутренний `buildCommonExtensions` строит key_share extension в цикле по entry map.
+
+* *Конструктор `TlsSession` — два поля потеряли `final`*. +
+`selectedEcParams` и `messageBuilder` теперь перезаписываются в `createServer()`, если в
+`TlsServerConfig` задана нестандартная группа. Оба поля читаются только через публичные
+геттеры — побочных эффектов нет.
+
+* *Логика выбора cipher suite убрана из публичного API `TlsMessageBuilder`*. +
+Метод согласования набора и его установка в билдере теперь полностью внутри
+класса — внешний код не может случайно перетереть согласованный набор.
+API свёлся к одному методу.
+
+=== Модуль crypto-gost-jsse
+
+==== Исправленно
+
+* GostSSLEngine — извлечение TlsException из cause CertificateException для сохранения alert-кода; маппинг новых алертов в SSLPeerUnverifiedException
+
+* *`GostSsl.buildContext()` — убрано обращение через устаревшую обёртку `Pkcs12Loader`*. +
+Внутренний вызов переведён напрямую на `GostPkcs12Loader.load()`.
+
+*  Исправлена ошибка в OcspRequestBuilder.buildSigned: структура AlgorithmIdentifier подписанного OCSP-запроса приведена в соответствие с RFC 9215 §4.2 — поле parameters убрано (ранее туда ошибочно помещались OID кривой и дайджеста). Одновременно устранено дублирование трёх тернарников по hlen.
+
+* *CT_CHANGE_CIPHER_SPEC не игнорировался в handleEncryptedRecord* — RFC 8446 §D.4 нарушен. OpenSSL отправляет legacy CCS для middlebox compatibility, engine падал с payload too small for tag: 1.
+
+* *JSSE-движок не подхватывал согласованный cipher suite после handshake*. +
+Даже когда `TlsHandshakeEngine` правильно выбирал S (или другой набор),
+`GostSSLEngine` продолжал работать с L по умолчанию. Из-за этого
+TLSTREE-ключи (зависящие от набора) не совпадали — расшифровка записей
+клиента падала. Исправлено: теперь `GostSSLEngine` читает согласованный
+набор из handshake-движка сразу после его выбора.
+
+==== Добавлено
+
+* *`GostSslBuilder.trustCa(byte[], char[])` — загрузка доверенных CA из PFX-контейнера*. +
+Симметричный overload к `certificate(byte[], char[])`. Извлекает все сертификаты
+с флагом CA из цепочки PFX и добавляет каждый в trust store через `trustCa(byte[])`.
+Необходим для сценария, когда CA-сертификат хранится в `.p12`, а не в отдельном DER/PEM-файле.
+
+* *`PfxExportExample`* — пример создания PFX с ГОСТ-сертификатом. +
+Генерирует CA и серверный ключ/сертификат, собирает PFX через `GostPkcs12Builder`,
+сохраняет на диск и верифицирует загрузку обратно. Makefile-таргет `pfx-export`.
+
+* *`PfxServerExample`* — пример JSSE-сервера из PFX-файлов. +
+Загружает серверный и CA-сертификаты из `.p12` через `GostSslBuilder`,
+поднимает echo-сервер. Makefile-таргет `pfx-server`.
+
+==== Кросс-валидационные тесты с серверами приложений
+
+* *Кросс-валидация серверов приложений ↔ OpenSSL: новый модуль `x-validation-tests/jsse-server`*. +
+Закрывает пробел между двумя существующими слоями проверки:
+`x-validation-tests/jsse` (GostSSLEngine/Socket ↔ OpenSSL на уровне raw TCP) и
+`examples/jsse` (серверы приложений ↔ внутренний GostSSLSocket).
+Новый модуль проверяет, что серверное middleware корректно пропускает ГОСТ TLS 1.3
+при подключении внешнего OpenSSL-клиента. +
++
+Запуск: `mvn test -Pcrossval` (вместе с остальными кросс-валидационными модулями). +
++
+*`ServerOpenSslCrossValTest`* — roundtrip: embedded-сервер + `openssl s_client` GET → `INTEROP_OK`. +
+Параметры: suite `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L`, кривая GC256B. +
+
+|===
+| Сервер | Обвязка | Тест
+
+| Tomcat 11
+| Кастомный `SSLImplementation` + `SSLUtil` → `SSLContextWrapper`
+| roundtrip
+
+| Jetty 12
+| `SslContextFactory.Server.setSslContext(ctx)`
+| roundtrip
+
+| Undertow 2.3
+| `addHttpsListener(port, host, ctx)`
+| roundtrip
+|===
+
+*`TomcatJettyMtlsCrossValTest`* — mTLS: сервер с `needClientAuth=true` + `openssl s_client -cert -key -sigalgs gostr34102012_256b` → `INTEROP_OK`. +
+
+|===
+| Сервер | Тест
+
+| Tomcat 11 | mTLS
+| Jetty 12  | mTLS
+|===
+
+Итого: 5 тестов. +
+
+Подтверждено три реальных факта, которые раньше были предположениями:
+
+* Tomcat с кастомным SSLImplementation + SSLUtil корректно принимает ГОСТ TLS 1.3 от внешнего клиента.
+* mTLS с внешним клиентом (OpenSSL s_client -cert) проходит через Jetty и Tomcat. Это покрывает реальный production-сценарий — машина-к-машине с ГОСТ-сертификатами.
+* Self-signed клиентский сертификат в mTLS — вынужденное ограничение: OpenSSL отказывается загружать ГОСТ-сертификат, подписанный CA, с ошибкой "ca md too weak". Это важное знание о поведении OpenSSL с ГОСТ PKI.
+
+
+
+=== Инфраструктура сборки
+
+==== Исправлено
+
+* *Fuzz-тесты падали при `mvn test` на JDK 21 с maven-surefire 3.2.x*. +
+Jazzer не совместим с дефолтным механизмом surefire (booter-jar): возникали
+`NoSuchFileException` и `NoClassDefFoundError: UnsafeProvider`. +
+Исправлено добавлением `SurefireForkNodeFactory` в `pluginManagement` корневого `pom.xml` —
+аналогично уже существующей конфигурации в модуле `crypto-gost-tls13`.
+
+
 == [0.3.4] - 28-05-2026
 
 Этот релиз целиком посвящён гигиене памяти, устранению аллокаций на горячих путях и нескольким реальным race conditions в TLS 1.3 и JSSE.

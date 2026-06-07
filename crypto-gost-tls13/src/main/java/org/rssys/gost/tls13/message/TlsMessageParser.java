@@ -63,12 +63,13 @@ public final class TlsMessageParser {
         public final String serverName;
         public final int actualGroup;
         public final int matchedSigScheme;
+        public final int[] supportedGroups;
 
         /**
          * @param ecdhePublicKeyRaw raw ECDHE public key (X||Y, little-endian)
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw) {
-            this(ecdhePublicKeyRaw, null, TlsConstants.GRP_GC256A, 0);
+            this(ecdhePublicKeyRaw, null, TlsConstants.GRP_GC256A, 0, new int[]{TlsConstants.GRP_GC256A});
         }
 
         /**
@@ -76,7 +77,7 @@ public final class TlsMessageParser {
          * @param serverName        запрошенное DNS-имя (SNI) или null
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName) {
-            this(ecdhePublicKeyRaw, serverName, TlsConstants.GRP_GC256A, 0);
+            this(ecdhePublicKeyRaw, serverName, TlsConstants.GRP_GC256A, 0, new int[]{TlsConstants.GRP_GC256A});
         }
 
         /**
@@ -85,7 +86,7 @@ public final class TlsMessageParser {
          * @param actualGroup       NamedGroup из key_share entry клиента
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup) {
-            this(ecdhePublicKeyRaw, serverName, actualGroup, 0);
+            this(ecdhePublicKeyRaw, serverName, actualGroup, 0, new int[]{actualGroup});
         }
 
         /**
@@ -93,41 +94,60 @@ public final class TlsMessageParser {
          * @param serverName        запрошенное DNS-имя (SNI) или null
          * @param actualGroup       NamedGroup из key_share entry клиента
          * @param matchedSigScheme  схема подписи, согласованная из signature_algorithms
+         * @param supportedGroups   список NamedGroup из supported_groups клиента
          */
-        ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup, int matchedSigScheme) {
+        ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup, int matchedSigScheme,
+                       int[] supportedGroups) {
             this.ecdhePublicKeyRaw = ecdhePublicKeyRaw;
             this.serverName = serverName;
             this.actualGroup = actualGroup;
             this.matchedSigScheme = matchedSigScheme;
+            this.supportedGroups = supportedGroups;
         }
     }
 
     /**
-     * Результат парсинга ServerHello: ECDHE key, cipher suite ID
-     * и фактическая NamedGroup из key_share entry.
+     * Результат парсинга ServerHello: ECDHE key, cipher suite ID,
+     * фактическая NamedGroup, random и группа HRR (requestedGroup).
+     * <p>
+     * Для HRR key_share содержит только группу без ключа — requestedGroup
+     * заполняется, ecdhePublicKeyRaw = пустой массив.
      */
     public static class ParsedServerHello {
         public final byte[] ecdhePublicKeyRaw;
         public final int cipherSuiteId;
         public final int actualGroup;
+        public final byte[] random;
+        /** Для HRR: группа, запрошенная сервером (== actualGroup).
+         *  Для обычного SH: совпадает с actualGroup. */
+        public final int requestedGroup;
+        /** Cookie из HRR (RFC 8446 §4.2.2), null если не было. */
+        public final byte[] cookie;
 
-        /**
-         * @param ecdhePublicKeyRaw raw ECDHE public key
-         * @param cipherSuiteId     ID выбранного cipher suite
-         */
         ParsedServerHello(byte[] ecdhePublicKeyRaw, int cipherSuiteId) {
-            this(ecdhePublicKeyRaw, cipherSuiteId, TlsConstants.GRP_GC256A);
+            this(ecdhePublicKeyRaw, cipherSuiteId, TlsConstants.GRP_GC256A,
+                    new byte[TlsConstants.RANDOM_LENGTH], TlsConstants.GRP_GC256A, null);
         }
 
-        /**
-         * @param ecdhePublicKeyRaw raw ECDHE public key
-         * @param cipherSuiteId     ID выбранного cipher suite
-         * @param actualGroup       NamedGroup из key_share entry сервера
-         */
         ParsedServerHello(byte[] ecdhePublicKeyRaw, int cipherSuiteId, int actualGroup) {
+            this(ecdhePublicKeyRaw, cipherSuiteId, actualGroup,
+                    new byte[TlsConstants.RANDOM_LENGTH], actualGroup, null);
+        }
+
+        ParsedServerHello(byte[] ecdhePublicKeyRaw, int cipherSuiteId,
+                          int actualGroup, byte[] random, int requestedGroup) {
+            this(ecdhePublicKeyRaw, cipherSuiteId, actualGroup, random, requestedGroup, null);
+        }
+
+        ParsedServerHello(byte[] ecdhePublicKeyRaw, int cipherSuiteId,
+                          int actualGroup, byte[] random, int requestedGroup,
+                          byte[] cookie) {
             this.ecdhePublicKeyRaw = ecdhePublicKeyRaw;
             this.cipherSuiteId = cipherSuiteId;
             this.actualGroup = actualGroup;
+            this.random = random;
+            this.requestedGroup = requestedGroup;
+            this.cookie = cookie;
         }
     }
 
@@ -343,6 +363,7 @@ public final class TlsMessageParser {
         int matchedSigScheme = 0;
         boolean needSigScheme = acceptableSchemes != null && acceptableSchemes.length > 0 && acceptableSchemes[0] != 0;
         String parsedServerName = null;
+        int[] supportedGroupsList = null;
 
         while (pos < extEnd) {
             checkBounds(body, pos, 4, ctx);
@@ -394,6 +415,7 @@ public final class TlsMessageParser {
                 }
             } else if (extType == TlsConstants.EXT_SUPPORTED_GROUPS && !hasSupportedGroups) {
                 hasSupportedGroups = true;
+                supportedGroupsList = parseSupportedGroupsList(body, pos, extDataLen);
             } else if (extType == TlsConstants.EXT_SERVER_NAME && parsedServerName == null) {
                 parsedServerName = parseServerNameExtension(body, pos, extDataLen);
             }
@@ -412,7 +434,10 @@ public final class TlsMessageParser {
             throw new TlsException(TlsConstants.ALERT_MISSING_EXTENSION,
                     "ClientHello: key_share extension required");
         }
-        return new ParsedKeyShare(ecdheKey, parsedServerName, parsedGroup, matchedSigScheme);
+        if (supportedGroupsList == null) {
+            supportedGroupsList = new int[]{parsedGroup};
+        }
+        return new ParsedKeyShare(ecdheKey, parsedServerName, parsedGroup, matchedSigScheme, supportedGroupsList);
     }
 
     /**
@@ -467,15 +492,21 @@ public final class TlsMessageParser {
 
     /**
      * Парсит ServerHello (RFC 8446 §4.1.3): извлекает ECDHE-ключ из key_share,
-     * идентификатор cipher suite и фактическую NamedGroup.
+     * идентификатор cipher suite, фактическую NamedGroup, random и requestedGroup.
+     * <p>
+     * Для HRR key_share entry содержит только группу (key_len=0) —
+     * ecdhePublicKeyRaw будет пустым массивом, requestedGroup == actualGroup.
      *
      * @param body тело ServerHello
      * @param expectedGroup (не используется — сохранён для совместимости)
-     * @return ParsedServerHello с ECDHE-ключом, cipher suite и actualGroup
+     * @return ParsedServerHello с ECDHE-ключом, cipher suite, actualGroup,
+     *         random и requestedGroup
      */
     public static ParsedServerHello parseServerHello(byte[] body, int expectedGroup) throws TlsException {
         String ctx = "ServerHello";
         checkBounds(body, 0, 2 + TlsConstants.RANDOM_LENGTH + 1, ctx);
+        byte[] random = new byte[TlsConstants.RANDOM_LENGTH];
+        System.arraycopy(body, 2, random, 0, TlsConstants.RANDOM_LENGTH);
         int pos = 2 + TlsConstants.RANDOM_LENGTH; // legacy_version + random
         int sessionIdLen = body[pos] & 0xFF;
         checkBounds(body, pos, 1 + sessionIdLen, ctx);
@@ -493,10 +524,32 @@ public final class TlsMessageParser {
 
         byte[][] ecdheKeyRef = new byte[1][];
         int[] actualGroupRef = new int[1];
+        byte[][] cookieRef = new byte[1][];
 
         forEachExtension(body, pos, extEnd, ctx, (extType, data, off, len) -> {
             if (extType == TlsConstants.EXT_KEY_SHARE) {
-                ecdheKeyRef[0] = parseKeyShareEntry(data, off, len, actualGroupRef);
+                if (len == 2) {
+                    // HRR (RFC 8446 §4.2.8): key_share содержит только NamedGroup,
+                    // без key_exchange. Парсить как KeyShareEntry нельзя — другая структура.
+                    int group = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
+                    actualGroupRef[0] = group;
+                    ecdheKeyRef[0] = new byte[0];
+                } else {
+                    ecdheKeyRef[0] = parseKeyShareEntry(data, off, len, actualGroupRef);
+                }
+            }
+            if (extType == TlsConstants.EXT_COOKIE) {
+                // opaque cookie<1..2^16-1> (RFC 8446 §4.2.2)
+                if (len < 3) {
+                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                            "HRR: cookie extension too short (" + len + ")");
+                }
+                int cookieLen = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
+                if (cookieLen < 1 || cookieLen > len - 2) {
+                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                            "HRR: cookie invalid length " + cookieLen);
+                }
+                cookieRef[0] = Arrays.copyOfRange(data, off + 2, off + 2 + cookieLen);
             }
         });
 
@@ -504,20 +557,36 @@ public final class TlsMessageParser {
             throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
                     "No key_share extension in ServerHello");
         }
-        return new ParsedServerHello(ecdheKeyRef[0], cipherSuiteId, actualGroupRef[0]);
+        int requestedGroup = actualGroupRef[0];
+        return new ParsedServerHello(ecdheKeyRef[0], cipherSuiteId, actualGroupRef[0],
+                random, requestedGroup, cookieRef[0]);
+    }
+
+    /**
+     * Проверяет, является ли ServerHello сообщением HelloRetryRequest (RFC 8446 §4.1.3).
+     * <p>
+     * HRR отличается от обычного ServerHello только значением random —
+     * {@link TlsConstants#HRR_RANDOM}.
+     *
+     * @param sh распарсенный ServerHello
+     * @return true если это HRR
+     */
+    public static boolean isHelloRetryRequest(ParsedServerHello sh) {
+        return java.util.Arrays.equals(sh.random, TlsConstants.HRR_RANDOM);
     }
 
     /**
      * Извлекает ECDHE-публичный ключ из key_share entry (RFC 8446 §4.2.8).
      * <p>
      * Формат entry: NamedGroup(2) || key_exchange_length(2) || key_exchange(N).
+     * Для HRR key_exchange_length = 0 — возвращает пустой массив.
      * Валидации группы нет — caller определяет, подходит ли она.
      *
      * @param data            массив с данными расширений
      * @param offset          смещение к началу entry
      * @param extDataLen      длина данных расширения (для проверки границ)
      * @param actualGroupOut  [1] для получения NamedGroup из entry; null если не нужна
-     * @return ECDHE-ключ (raw bytes X || Y, little-endian)
+     * @return ECDHE-ключ (raw bytes X || Y, little-endian), пустой массив для HRR
      */
     static byte[] parseKeyShareEntry(byte[] data, int offset, int extDataLen, int[] actualGroupOut)
             throws TlsException {
@@ -530,12 +599,14 @@ public final class TlsMessageParser {
             actualGroupOut[0] = group;
         }
         int keyLen = ((data[offset + 2] & 0xFF) << 8) | (data[offset + 3] & 0xFF);
-        if (keyLen < 1 || keyLen > extDataLen - 4) {
+        if (keyLen < 0 || keyLen > extDataLen - 4) {
             throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
                     "key_share: invalid key length " + keyLen + " (extDataLen=" + extDataLen + ")");
         }
         byte[] key = new byte[keyLen];
-        System.arraycopy(data, offset + 4, key, 0, keyLen);
+        if (keyLen > 0) {
+            System.arraycopy(data, offset + 4, key, 0, keyLen);
+        }
         return key;
     }
 
@@ -612,6 +683,26 @@ public final class TlsMessageParser {
         if (3 + nameLen > listLen || nameLen == 0) return null;
         String raw = new String(data, offset + 5, nameLen, java.nio.charset.StandardCharsets.US_ASCII);
         return TlsMessageBuilder.normalizeHostname(raw);
+    }
+
+    /**
+     * Извлекает список NamedGroup из supported_groups (RFC 8446 §4.2.7).
+     * <p>
+     * Формат: NamedGroupList groups<2..2^16-1> — каждая группа как uint16.
+     */
+    private static int[] parseSupportedGroupsList(byte[] data, int offset, int len) {
+        if (len < 2) return new int[0];
+        int listLen = ((data[offset] & 0xFF) << 8) | (data[offset + 1] & 0xFF);
+        if (listLen + 2 != len || listLen < 2 || (listLen & 1) != 0) {
+            return new int[0];
+        }
+        int count = listLen / 2;
+        int[] groups = new int[count];
+        for (int i = 0; i < count; i++) {
+            groups[i] = ((data[offset + 2 + i * 2] & 0xFF) << 8)
+                      | (data[offset + 2 + i * 2 + 1] & 0xFF);
+        }
+        return groups;
     }
 
     /**

@@ -47,12 +47,13 @@ class TlsOcspVerifierFuzzTest {
         byte[] serialNumber = data.consumeBytes(data.consumeInt(0, 32));
         byte[] issuerDn = data.consumeBytes(data.consumeInt(0, 256));
         byte[] issuerCert = data.consumeBytes(data.consumeInt(0, 4096));
+        if (ocspResponse.length == 0) return;
         try {
             TlsOcspVerifier.verify(ocspResponse, serialNumber, caKey, issuerDn, issuerCert);
         } catch (TlsException e) {
             // Ожидаемо: битый OCSP-ответ не проходит верификацию
         } catch (RuntimeException e) {
-            // Ожидаемо: TlsDerParser кидает AIOOBE/NPE на битом DER
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -72,13 +73,13 @@ class TlsOcspVerifierFuzzTest {
     void fuzzVerify(FuzzedDataProvider data) {
         byte[] ocspResponse = data.consumeBytes(data.consumeInt(0, 65536));
         byte[] serialNumber = data.consumeBytes(data.consumeInt(0, 32));
+        if (ocspResponse.length == 0) return;
         try {
             TlsOcspVerifier.verify(ocspResponse, serialNumber, caKey);
         } catch (TlsException e) {
             // Ожидаемо: битый OCSP-ответ не проходит верификацию
         } catch (RuntimeException e) {
-            // Ожидаемо: TlsDerParser кидает AIOOBE/NPE на битом DER
-            // или Signature при пустом/null хеше
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

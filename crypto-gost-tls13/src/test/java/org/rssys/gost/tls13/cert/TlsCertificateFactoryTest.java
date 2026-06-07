@@ -126,7 +126,7 @@ class TlsCertificateFactoryTest {
         CertBundle leafBundle = TlsTestHelper.createCertSignedBy(
                 params, rootPriv, rootPub,
                 rootBundle.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 null, null, null, false, null);
         String chainPem = leafBundle.cert.toPem() + rootBundle.cert.toPem();
         List<TlsCertificate> chain = TlsCertificate.listFromPem(
@@ -150,7 +150,7 @@ class TlsCertificateFactoryTest {
         CertBundle leafBundle = TlsTestHelper.createCertSignedBy(
                 params, rootPriv, rootPub,
                 rootBundle.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 null, null, null, false, null);
         List<TlsCertificate> original = Arrays.asList(leafBundle.cert, rootBundle.cert);
         String pem = TlsCertificate.chainToPem(original);

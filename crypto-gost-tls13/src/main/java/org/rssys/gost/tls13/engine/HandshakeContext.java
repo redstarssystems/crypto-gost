@@ -4,12 +4,16 @@ import org.rssys.gost.digest.Digest;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.crypto.TlsKeySchedule;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Эфемерное состояние handshake: ECDHE-ключи, transcript, key schedule.
@@ -28,15 +32,18 @@ import java.util.List;
 public final class HandshakeContext {
 
     private PrivateKeyParameters ecdhePrivateKey;
+    private final Map<Integer, PrivateKeyParameters> ecdheKeyMap = new LinkedHashMap<>();
     private PublicKeyParameters peerEcdhePublicKey;
     private byte[] transcriptBuf = new byte[8192];
     private int transcriptSize;
-    private Digest hsDigest256;
-    private Digest hsDigest512;
+    private Digest hsDigest;
     private TlsKeySchedule keySchedule;
     private List<byte[]> acceptedCaDns = Collections.emptyList();
 
-    public HandshakeContext() {
+    public HandshakeContext(int hashLen) {
+        this.hsDigest = hashLen == TlsConstants.STREEBOG_512_HASH_LEN
+                ? new Streebog512()
+                : new Streebog256();
     }
 
     public void setEcdhePrivateKey(PrivateKeyParameters key) {
@@ -45,6 +52,29 @@ public final class HandshakeContext {
 
     public PrivateKeyParameters getEcdhePrivateKey() {
         return ecdhePrivateKey;
+    }
+
+    /** Добавляет ECDHE-ключ для указанной группы (multi key_share, RFC 8446 §4.2.8). */
+    public void addEcdheKey(int namedGroup, PrivateKeyParameters key) {
+        ecdheKeyMap.put(namedGroup, key);
+    }
+
+    /** Возвращает ECDHE-ключ для указанной группы, null если не найден. */
+    public PrivateKeyParameters getEcdheKey(int namedGroup) {
+        return ecdheKeyMap.get(namedGroup);
+    }
+
+    /** Проверяет, есть ли ECDHE-ключ для указанной группы. */
+    public boolean hasEcdheKey(int namedGroup) {
+        return ecdheKeyMap.containsKey(namedGroup);
+    }
+
+    /** Затирает и удаляет все ECDHE-ключи из multi key_share. */
+    public void destroyEcdheKeys() {
+        for (PrivateKeyParameters key : ecdheKeyMap.values()) {
+            if (key != null) key.destroy();
+        }
+        ecdheKeyMap.clear();
     }
 
     public void setPeerEcdhePublicKey(PublicKeyParameters key) {
@@ -114,25 +144,40 @@ public final class HandshakeContext {
      *   <li>после Finished (вывод application traffic secrets)</li>
      * </ul>
      *
-     * @param hashLen 32 для Streebog-256, 64 для Streebog-512
      * @return дайджест транскрипта
      */
-    public byte[] transcriptHash(int hashLen) {
-        Digest d = hashLen == 64 ? hsDigest512 : hsDigest256;
-        if (d == null) {
-            d = hashLen == 64 ? new Streebog512() : new Streebog256();
-            if (hashLen == 64) {
-                hsDigest512 = d;
-            } else {
-                hsDigest256 = d;
-            }
-        } else {
-            d.reset();
-        }
-        d.update(transcriptBuf, 0, transcriptSize);
-        byte[] hash = new byte[hashLen];
-        d.doFinal(hash, 0);
+    public byte[] transcriptHash() {
+        hsDigest.reset();
+        hsDigest.update(transcriptBuf, 0, transcriptSize);
+        byte[] hash = new byte[hsDigest.getDigestSize()];
+        hsDigest.doFinal(hash, 0);
         return hash;
+    }
+
+    /**
+     * Заменяет текущий транскрипт на сообщение message_hash (RFC 8446 §4.4.1).
+     * <p>
+     * При HRR (HelloRetryRequest) первый ClientHello заменяется на
+     * handshake-сообщение с типом 254 (message_hash), содержащее
+     * Hash(CH1). Это гарантирует, что Transcript-Hash для handshake
+     * traffic secrets включает CH1 через дайджест фиксированной длины.
+     * <p>
+     * Предусловие: транскрипт содержит CH1 (и только CH1, без HRR).
+     */
+    public void replaceTranscriptWithMessageHash() {
+        byte[] ch1Hash = transcriptHash();
+        transcriptSize = 0;
+        // message_hash handshake-сообщение: type(254) || length(3) || hash(hashLen)
+        int hashLen = hsDigest.getDigestSize();
+        byte[] frame = new byte[4 + hashLen];
+        frame[0] = (byte) 254;
+        int len = hashLen;
+        frame[1] = (byte) (len >>> 16);
+        frame[2] = (byte) (len >>> 8);
+        frame[3] = (byte) len;
+        System.arraycopy(ch1Hash, 0, frame, 4, hashLen);
+        TlsUtils.wipeArray(ch1Hash);
+        addToTranscript(frame);
     }
 
     /**
@@ -165,13 +210,10 @@ public final class HandshakeContext {
             ecdhePrivateKey.destroy();
             ecdhePrivateKey = null;
         }
-        if (hsDigest256 != null) {
-            hsDigest256.reset();
-            hsDigest256 = null;
-        }
-        if (hsDigest512 != null) {
-            hsDigest512.reset();
-            hsDigest512 = null;
+        destroyEcdheKeys();
+        if (hsDigest != null) {
+            hsDigest.reset();
+            hsDigest = null;
         }
     }
 }

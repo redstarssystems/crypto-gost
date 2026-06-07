@@ -4,6 +4,7 @@ import org.rssys.gost.tls13.message.TlsMessageBuilder;
 import org.rssys.gost.tls13.message.TlsMessageParser;
 import org.rssys.gost.tls13.TlsTestHelper;
 import static org.rssys.gost.tls13.TlsTestHelper.*;
+import org.rssys.gost.util.CryptoRandom;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -728,6 +729,322 @@ class TlsHandshakeEngineTest {
         // Клиент проверяет: пустой Certificate от сервера = protocol violation = DECODE_ERROR
         TlsException ex = assertThrows(TlsException.class, () -> client.receive(emptyCertFrame));
         assertEquals(TlsConstants.ALERT_DECODE_ERROR, ex.getAlertCode());
+        assertTrue(client.isError());
+    }
+
+    // ===================================================================
+    // Invalid Finished: подмена verify_data
+    // ===================================================================
+
+    @Test
+    @DisplayName("неверный verify_data в ServerFinished → ALERT_HANDSHAKE_FAILURE")
+    void testInvalidServerFinished() throws Exception {
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        // Полный handshake до точки, где клиент ждёт ServerFinished
+        byte[] ch = client.start();
+        server.receive(ch);
+
+        byte[] sh = server.poll();
+        byte[] ee = server.poll();
+        byte[] cert = server.poll();
+        byte[] cv = server.poll();
+        byte[] sf = server.poll();
+        assertNotNull(sf);
+        assertNull(server.poll());
+
+        // Клиент: получает SH, EE, Cert, CV — переходит в CLIENT_WAIT_FINISHED
+        client.receive(sh);
+        client.acknowledgeKeyChange();
+        client.receive(ee);
+        client.receive(cert);
+        assertTrue(client.needsCertificateValidation());
+        client.acknowledgeCertificateValidation(true);
+        client.receive(cv);
+        assertEquals(TlsHandshakeEngine.State.CLIENT_WAIT_FINISHED, client.getState());
+
+        // Вместо правильного ServerFinished — фейковый с verify_data из нулей
+        byte[] fakeSf = new TlsHandshakeMessage(
+                TlsConstants.HT_FINISHED, new byte[HASH_LEN]).encode();
+        TlsException ex = assertThrows(TlsException.class, () -> client.receive(fakeSf));
+        assertEquals(TlsConstants.ALERT_HANDSHAKE_FAILURE, ex.getAlertCode());
+        assertTrue(client.isError(), "Engine должен перейти в ERROR");
+    }
+
+    @Test
+    @DisplayName("неверный verify_data в ClientFinished → ALERT_HANDSHAKE_FAILURE")
+    void testInvalidClientFinished() throws Exception {
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        // Полный handshake: клиент отправляет CH, сервер отвечает flight
+        byte[] ch = client.start();
+        server.receive(ch);
+
+        byte[] sh = server.poll();
+        byte[] ee = server.poll();
+        byte[] cert = server.poll();
+        byte[] cv = server.poll();
+        byte[] sf = server.poll();
+        assertNotNull(sf);
+        assertNull(server.poll());
+        assertEquals(TlsHandshakeEngine.State.SERVER_WAIT_CLIENT_FINISHED, server.getState());
+
+        // Клиент: принимает SH, EE, Cert, CV, правильный SF → генерирует CF
+        client.receive(sh);
+        client.acknowledgeKeyChange();
+        client.receive(ee);
+        client.receive(cert);
+        client.acknowledgeCertificateValidation(true);
+        client.receive(cv);
+        client.receive(sf);
+        byte[] cf = client.poll();
+        assertNotNull(cf, "Клиент должен сгенерировать Finished");
+        assertNull(client.poll());
+        // Сервер теперь в SERVER_WAIT_CLIENT_FINISHED — подаём фейковый CF
+        byte[] fakeCf = new TlsHandshakeMessage(
+                TlsConstants.HT_FINISHED, new byte[HASH_LEN]).encode();
+        TlsException ex = assertThrows(TlsException.class, () -> server.receive(fakeCf));
+        assertEquals(TlsConstants.ALERT_HANDSHAKE_FAILURE, ex.getAlertCode());
+        assertTrue(server.isError(), "Engine должен перейти в ERROR");
+    }
+
+    // ====================================================================
+    // HRR (HelloRetryRequest) тесты
+    // ====================================================================
+
+    @Test
+    @DisplayName("HRR: клиент GC256A → сервер ожидает GC256B → HRR с GC256B → CH2 → handshake")
+    void testHrrRoundTrip() throws Exception {
+        int clientGroup = TlsConstants.GRP_GC256A;
+        ECParameters clientParams = ECParameters.tc26a256();
+        int serverGroup = TlsConstants.GRP_GC256B;
+        ECParameters serverParams = ECParameters.cryptoProA();
+
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        clientGroup, SIG_SCHEME, null, null, HASH_LEN),
+                clientParams, clientGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        serverGroup, SIG_SCHEME, serverCert.priv,
+                        List.of(serverCert.cert), HASH_LEN),
+                serverParams, serverGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        // Клиент → CH1 (GC256A)
+        byte[] ch1 = client.start();
+        assertNotNull(ch1);
+
+        // Сервер: получает CH1 → HRR (GC256B)
+        server.receive(ch1);
+        byte[] hrr = server.poll();
+        assertNotNull(hrr, "Сервер должен вернуть HRR");
+        assertNull(server.poll(), "После HRR очередь пуста");
+        assertEquals(TlsHandshakeEngine.State.SERVER_WAIT_CLIENT_HELLO, server.getState(),
+                "Сервер ждёт второй CH");
+
+        // Проверяем что это HRR, а не SH
+        TlsHandshakeMessage hrrMsg = TlsHandshakeMessage.decode(hrr);
+        assertEquals(TlsConstants.HT_SERVER_HELLO, hrrMsg.getType());
+        TlsMessageParser.ParsedServerHello parsedHrr =
+                TlsMessageParser.parseServerHello(hrrMsg.getBody(), clientGroup);
+        assertTrue(TlsMessageParser.isHelloRetryRequest(parsedHrr),
+                "Сообщение должно определяться как HRR");
+        assertEquals(serverGroup, parsedHrr.requestedGroup,
+                "HRR должен запрашивать GC256B");
+
+        // Клиент: получает HRR → CH2 (GC256B)
+        client.receive(hrr);
+        byte[] ch2 = client.poll();
+        assertNotNull(ch2, "Клиент должен вернуть CH2 после HRR");
+        assertNull(client.poll(), "После CH2 очередь пуста");
+        assertEquals(TlsHandshakeEngine.State.CLIENT_WAIT_SERVER_HELLO, client.getState(),
+                "Клиент ждёт настоящий SH");
+
+        // Сервер: получает CH2 → полноценный flight
+        server.receive(ch2);
+        // После CH2 poll сразу возвращает SH (первый фрейм flight'а)
+        byte[] sh = server.poll();
+        assertNotNull(sh, "Сервер должен вернуть SH");
+        assertEquals(TlsHandshakeEngine.State.SERVER_SEND_FLIGHT, server.getState());
+        client.receive(sh);
+        client.acknowledgeKeyChange();
+
+        byte[] ee = server.poll();
+        byte[] cert = server.poll();
+        byte[] cv = server.poll();
+        byte[] sf = server.poll();
+        assertNotNull(sf);
+        assertNull(server.poll());
+
+        client.receive(ee);
+        client.receive(cert);
+        client.acknowledgeCertificateValidation(true);
+        client.receive(cv);
+        client.receive(sf);
+
+        byte[] cf = client.poll();
+        assertNotNull(cf, "Клиент должен сгенерировать Finished");
+        assertNull(client.poll());
+
+        server.receive(cf);
+        assertEquals(TlsHandshakeEngine.State.POST_HANDSHAKE, server.getState(),
+                "Сервер завершил handshake");
+        assertTrue(server.isDone());
+    }
+
+    @Test
+    @DisplayName("HRR + PSK: binder пересчитывается для CH2")
+    void testHrrWithPsk() throws Exception {
+        int clientGroup = TlsConstants.GRP_GC256A;
+        ECParameters clientParams = ECParameters.tc26a256();
+        int serverGroup = TlsConstants.GRP_GC256B;
+        ECParameters serverParams = ECParameters.cryptoProA();
+
+        byte[] psk = new byte[TlsConstants.STREEBOG_256_HASH_LEN];
+        CryptoRandom.INSTANCE.nextBytes(psk);
+        byte[] pskIdentity = "test-hrr-psk-identity".getBytes();
+
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        clientGroup, SIG_SCHEME, null, null, HASH_LEN),
+                clientParams, clientGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+        client.setPsk(psk, pskIdentity, 0);
+
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        serverGroup, SIG_SCHEME, serverCert.priv,
+                        List.of(serverCert.cert), HASH_LEN),
+                serverParams, serverGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+        server.setServerPsk(psk);
+
+        // Клиент → CH1 (с PSK binder)
+        byte[] ch1 = client.start();
+        assertNotNull(ch1);
+
+        // Сервер: CH1 → HRR (binder от CH1 не верифицируется при HRR)
+        server.receive(ch1);
+        byte[] hrr = server.poll();
+        assertNotNull(hrr);
+        assertNull(server.poll());
+
+        // Клиент → HRR → CH2 (PSK binder пересчитан)
+        client.receive(hrr);
+        byte[] ch2 = client.poll();
+        assertNotNull(ch2);
+
+        // Сервер: CH2 → PSK binder верифицирован → flight
+        server.receive(ch2);
+        assertTrue(server.isPskAccepted(), "PSK должен быть принят после CH2 с пересчитанным binder");
+
+        byte[] sh = server.poll();
+        assertNotNull(sh);
+        client.receive(sh);
+        client.acknowledgeKeyChange();
+        assertEquals(TlsHandshakeEngine.State.SERVER_SEND_FLIGHT, server.getState());
+
+        byte[] ee = server.poll();
+        byte[] sf = server.poll();
+        assertNotNull(sf);
+        assertNull(server.poll());
+        assertEquals(TlsHandshakeEngine.State.SERVER_WAIT_CLIENT_FINISHED, server.getState());
+
+        client.receive(ee);
+        // При PSK сертификаты не приходят — после EE сразу Finished
+        client.receive(sf);
+
+        byte[] cf = client.poll();
+        assertNotNull(cf);
+        assertNull(client.poll());
+
+        server.receive(cf);
+        assertEquals(TlsHandshakeEngine.State.POST_HANDSHAKE, server.getState());
+        assertTrue(server.isDone());
+    }
+
+    @Test
+    @DisplayName("HRR: двойной HRR вызывает ALERT_UNEXPECTED_MESSAGE")
+    void testHrrDoubleRejected() throws Exception {
+        int clientGroup = TlsConstants.GRP_GC256A;
+        ECParameters clientParams = ECParameters.tc26a256();
+        // Сервер использует группу, отличную от клиентской
+        int serverGroup = TlsConstants.GRP_GC256B;
+        ECParameters serverParams = ECParameters.cryptoProA();
+
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        clientGroup, SIG_SCHEME, null, null, HASH_LEN),
+                clientParams, clientGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        serverGroup, SIG_SCHEME, serverCert.priv,
+                        List.of(serverCert.cert), HASH_LEN),
+                serverParams, serverGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        byte[] ch1 = client.start();
+        assertNotNull(ch1);
+
+        // Сервер → HRR
+        server.receive(ch1);
+        byte[] hrr = server.poll();
+        assertNotNull(hrr);
+
+        // Эмулируем ситуацию: клиент не понял HRR и снова прислал CH1 с той же группой
+        // (вместо правильного CH2). Для чистоты теста используем второй
+        // экземпляр клиента, который НЕ обработал HRR.
+        TlsHandshakeEngine badClient = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        clientGroup, SIG_SCHEME, null, null, HASH_LEN),
+                clientParams, clientGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+        byte[] ch1Again = badClient.start();
+
+        // Сервер должен отклонить второй CH с неправильной группой после HRR
+        TlsException ex = assertThrows(TlsException.class, () -> server.receive(ch1Again));
+        assertEquals(TlsConstants.ALERT_ILLEGAL_PARAMETER, ex.getAlertCode(),
+                "Двойной HRR с неправильной группой должен вызывать ALERT_ILLEGAL_PARAMETER");
+        assertTrue(server.isError());
+    }
+
+    @Test
+    @DisplayName("HRR: неизвестная группа в HRR вызывает ALERT_ILLEGAL_PARAMETER")
+    void testHrrUnknownGroup() throws Exception {
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        NAMED_GROUP, SIG_SCHEME, null, null, HASH_LEN),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        byte[] ch1 = client.start();
+        assertNotNull(ch1);
+
+        // Строим HRR с несуществующей группой 0xFFFF
+        TlsMessageBuilder builder = new TlsMessageBuilder(
+                cs(), List.of(cs().getId()), NAMED_GROUP, SIG_SCHEME,
+                null, null, HASH_LEN);
+        byte[] fakeHrrBody = builder.buildHelloRetryRequest(
+                0xFFFF, cs().getId());
+        byte[] fakeHrr = new TlsHandshakeMessage(
+                TlsConstants.HT_SERVER_HELLO, fakeHrrBody).encode();
+
+        TlsException ex = assertThrows(TlsException.class, () -> client.receive(fakeHrr));
+        assertEquals(TlsConstants.ALERT_ILLEGAL_PARAMETER, ex.getAlertCode(),
+                "Неизвестная группа в HRR должна вызывать ALERT_ILLEGAL_PARAMETER");
         assertTrue(client.isError());
     }
 }

@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
+import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -332,6 +334,68 @@ class SignatureApiTest {
                 "verifyHash должен верифицировать подпись для 512-бит кривой");
         } finally {
             pair.getPrivate().destroy();
+        }
+    }
+
+    // ========================================================================
+    // Edge-case: граничные значения d
+    // ========================================================================
+
+    @Test
+    @DisplayName("d=1: sign/verify roundtrip (Q=G)")
+    void testSignVerifyEdgeD1() {
+        ECParameters params = ECParameters.cryptoProA();
+        PrivateKeyParameters priv = new PrivateKeyParameters(BigInteger.ONE, params);
+
+        // Q = 1·G = G
+        ECPoint g = ECPoint.affine(params.gx, params.gy, params);
+        ECPoint q = g.multiply(BigInteger.ONE).normalize();
+        PublicKeyParameters pub = new PublicKeyParameters(q, params);
+
+        try {
+            byte[] sig = Signature.sign(MSG, priv);
+            assertTrue(Signature.verify(MSG, sig, pub),
+                "d=1: подпись должна верифицироваться");
+        } finally {
+            priv.destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("d=n-1: sign/verify roundtrip (Q=-G)")
+    void testSignVerifyEdgeDNminus1() {
+        ECParameters params = ECParameters.cryptoProA();
+        BigInteger d = params.n.subtract(BigInteger.ONE);
+        PrivateKeyParameters priv = new PrivateKeyParameters(d, params);
+
+        // Q = (n-1)·G = -G
+        ECPoint g = ECPoint.affine(params.gx, params.gy, params);
+        ECPoint q = g.multiply(d).normalize();
+        PublicKeyParameters pub = new PublicKeyParameters(q, params);
+
+        try {
+            byte[] sig = Signature.sign(MSG, priv);
+            assertTrue(Signature.verify(MSG, sig, pub),
+                "d=n-1: подпись должна верифицироваться");
+        } finally {
+            priv.destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("d=1: подпись с другим ключом → false (чужой Q)")
+    void testSignVerifyEdgeD1WrongKey() {
+        ECParameters params = ECParameters.cryptoProA();
+        PrivateKeyParameters priv = new PrivateKeyParameters(BigInteger.ONE, params);
+
+        KeyPair other = KeyGenerator.generateKeyPair(params);
+        try {
+            byte[] sig = Signature.sign(MSG, priv);
+            assertFalse(Signature.verify(MSG, sig, other.getPublic()),
+                "d=1: чужой ключ должен отвергать подпись");
+        } finally {
+            priv.destroy();
+            other.getPrivate().destroy();
         }
     }
 }

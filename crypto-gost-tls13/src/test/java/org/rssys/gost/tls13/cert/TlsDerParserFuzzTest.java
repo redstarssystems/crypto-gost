@@ -34,10 +34,11 @@ class TlsDerParserFuzzTest {
     void fuzzReadTlv(FuzzedDataProvider data) {
         int offset = data.consumeInt(0, Integer.MAX_VALUE);
         byte[] input = data.consumeRemainingAsBytes();
-        if (offset >= input.length) return;
+        if (input.length == 0 || offset >= input.length) return;
         try {
             TlsDerParser.readTlv(input, offset);
         } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -45,10 +46,52 @@ class TlsDerParserFuzzTest {
     void fuzzParseSequence(FuzzedDataProvider data) {
         int offset = data.consumeInt(0, Integer.MAX_VALUE);
         byte[] input = data.consumeRemainingAsBytes();
-        if (offset >= input.length) return;
+        if (input.length == 0 || offset >= input.length) return;
         try {
             TlsDerParser.parseSequence(input, offset);
         } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * parseLength — парсит DER-длину (Length).
+     * В отличие от DerCodec.decodeLength (проверка offset >= data.length на входе),
+     * TlsDerParser.parseLength вызывает der[offset] без проверки границ.
+     * <p>
+     * Наиболее опасны ветки 0x81/0x82 (long form): доступ к der[offset + 1]
+     * и der[offset + 2] без каких-либо граничных проверок.
+     */
+    @FuzzTest
+    void fuzzParseLength(FuzzedDataProvider data) {
+        int offset = data.consumeInt(0, Integer.MAX_VALUE);
+        byte[] input = data.consumeRemainingAsBytes();
+        if (input.length == 0 || offset >= input.length) return;
+        try {
+            TlsDerParser.parseLength(input, offset);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * parseTime — парсит UTCTime / GeneralizedTime из DER.
+     * <p>
+     * Высокий риск: обращается к der[offset] без проверки границ до вызова
+     * parseLength. Если offset = data.length - 1, падает с AIOOBE в строке
+     * {@code int tag = der[offset] & 0xFF} до того, как parseLength успеет
+     * проверить длину. Дополнительно: SimpleDateFormat.parse() на произвольной
+     * строке — потенциально медленный, но безопасный.
+     */
+    @FuzzTest
+    void fuzzParseTime(FuzzedDataProvider data) {
+        int offset = data.consumeInt(0, Integer.MAX_VALUE);
+        byte[] input = data.consumeRemainingAsBytes();
+        if (input.length == 0 || offset >= input.length) return;
+        try {
+            TlsDerParser.parseTime(input, offset);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -71,9 +114,11 @@ class TlsDerParserFuzzTest {
     @FuzzTest
     void fuzzTlsCertificate(FuzzedDataProvider data) {
         byte[] input = data.consumeRemainingAsBytes();
+        if (input.length == 0) return;
         try {
             new TlsCertificate(input);
         } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

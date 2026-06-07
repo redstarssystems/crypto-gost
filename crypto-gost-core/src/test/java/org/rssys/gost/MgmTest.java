@@ -511,6 +511,49 @@ class MgmTest {
     }
 
     @Test
+    @DisplayName("reinitICN после failed decrypt: hot path TLS при повреждённой записи")
+    void reinitICN_afterFailedDecrypt() throws AuthenticationException {
+        // Hot path TLS: Mgm переиспользуется через reinitICN на каждую запись.
+        // Если запись повреждена (тег не совпал), следующий reinitICN должен
+        // восстановить состояние для корректной обработки следующей записи.
+        byte[] key  = new byte[32];
+        byte[] icn  = new byte[16];
+        byte[] data = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(key);
+        CryptoRandom.INSTANCE.nextBytes(icn);
+        icn[0] &= 0x7F;
+        CryptoRandom.INSTANCE.nextBytes(data);
+        SymmetricKey kp = new SymmetricKey(key);
+
+        // Шифруем — получаем эталонный CT+tag
+        Mgm enc = new Mgm(new Kuznyechik());
+        enc.init(true, new ParametersWithIV(kp, icn));
+        byte[] ct = new byte[data.length];
+        byte[] tag = new byte[16];
+        enc.processBytes(data, 0, data.length, ct, 0);
+        enc.finishEncryption(tag, 0);
+
+        // dec1 — первая запись, повреждённый тег → fail
+        Mgm dec = new Mgm(new Kuznyechik());
+        dec.init(false, new ParametersWithIV(kp, icn));
+        byte[] pt1 = new byte[ct.length];
+        dec.processBytes(ct, 0, ct.length, pt1, 0);
+        byte[] badTag = tag.clone();
+        badTag[0] ^= 0xFF;
+        assertThrows(AuthenticationException.class,
+                () -> dec.finishDecryption(badTag, 0),
+                "Повреждённый тег должен вызывать AuthenticationException");
+
+        // reinitICN с тем же ICN — эмуляция следующей записи в TLS
+        dec.reinitICN(icn);
+        byte[] pt2 = new byte[ct.length];
+        dec.processBytes(ct, 0, ct.length, pt2, 0);
+        dec.finishDecryption(tag, 0);
+        assertArrayEquals(data, pt2,
+                "После reinitICN после failed decrypt расшифрование должно работать");
+    }
+
+    @Test
     @DisplayName("reinitICN: множественные последовательные вызовы")
     void reinitICN_multipleCalls() throws AuthenticationException {
         byte[] key = new byte[32];
@@ -577,6 +620,156 @@ class MgmTest {
         assertThrows(IllegalArgumentException.class,
                 () -> mgm.reinitICN(badIcn),
                 "reinitICN с MSB=1 должен бросать IllegalArgumentException");
+    }
+
+    // -----------------------------------------------------------------------
+    // Множественные updateAAD()
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("updateAAD(5) + updateAAD(3) совпадает с updateAAD(8)")
+    void testMultipleUpdateAadMixed() throws AuthenticationException {
+        byte[] key  = new byte[32];
+        byte[] icn  = new byte[16];
+        byte[] aad  = new byte[8];
+        byte[] data = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(key);
+        CryptoRandom.INSTANCE.nextBytes(icn);
+        icn[0] &= 0x7F;
+        CryptoRandom.INSTANCE.nextBytes(aad);
+        CryptoRandom.INSTANCE.nextBytes(data);
+        SymmetricKey kp = new SymmetricKey(key);
+
+        // Один вызов updateAAD(8)
+        Mgm enc1 = new Mgm(new Kuznyechik());
+        enc1.init(true, new ParametersWithIV(kp, icn));
+        enc1.updateAAD(aad, 0, aad.length);
+        byte[] ct1 = new byte[data.length];
+        byte[] tag1 = new byte[16];
+        enc1.processBytes(data, 0, data.length, ct1, 0);
+        enc1.finishEncryption(tag1, 0);
+
+        // Два вызова: updateAAD(5) + updateAAD(3)
+        Mgm enc2 = new Mgm(new Kuznyechik());
+        enc2.init(true, new ParametersWithIV(kp, icn));
+        enc2.updateAAD(aad, 0, 5);
+        enc2.updateAAD(aad, 5, 3);
+        byte[] ct2 = new byte[data.length];
+        byte[] tag2 = new byte[16];
+        enc2.processBytes(data, 0, data.length, ct2, 0);
+        enc2.finishEncryption(tag2, 0);
+
+        assertArrayEquals(ct1, ct2, "CT должен совпасть при разбиении AAD");
+        assertArrayEquals(tag1, tag2, "Tag должен совпасть при разбиении AAD");
+    }
+
+    @Test
+    @DisplayName("updateAAD(16) + updateAAD(16) совпадает с updateAAD(32)")
+    void testMultipleUpdateAadBlockAligned() throws AuthenticationException {
+        byte[] key  = new byte[32];
+        byte[] icn  = new byte[16];
+        byte[] aad  = new byte[32];
+        byte[] data = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(key);
+        CryptoRandom.INSTANCE.nextBytes(icn);
+        icn[0] &= 0x7F;
+        CryptoRandom.INSTANCE.nextBytes(aad);
+        CryptoRandom.INSTANCE.nextBytes(data);
+        SymmetricKey kp = new SymmetricKey(key);
+
+        Mgm enc1 = new Mgm(new Kuznyechik());
+        enc1.init(true, new ParametersWithIV(kp, icn));
+        enc1.updateAAD(aad, 0, aad.length);
+        byte[] ct1 = new byte[data.length];
+        byte[] tag1 = new byte[16];
+        enc1.processBytes(data, 0, data.length, ct1, 0);
+        enc1.finishEncryption(tag1, 0);
+
+        Mgm enc2 = new Mgm(new Kuznyechik());
+        enc2.init(true, new ParametersWithIV(kp, icn));
+        enc2.updateAAD(aad, 0, 16);
+        enc2.updateAAD(aad, 16, 16);
+        byte[] ct2 = new byte[data.length];
+        byte[] tag2 = new byte[16];
+        enc2.processBytes(data, 0, data.length, ct2, 0);
+        enc2.finishEncryption(tag2, 0);
+
+        assertArrayEquals(ct1, ct2, "CT должен совпасть при поблочном разбиении AAD");
+        assertArrayEquals(tag1, tag2, "Tag должен совпасть при поблочном разбиении AAD");
+    }
+
+    @Test
+    @DisplayName("updateAAD(33) разбитый на 4 куска совпадает с одним вызовом")
+    void testMultipleUpdateAadManyChunks() throws AuthenticationException {
+        byte[] key  = new byte[32];
+        byte[] icn  = new byte[16];
+        byte[] aad  = new byte[33];
+        byte[] data = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(key);
+        CryptoRandom.INSTANCE.nextBytes(icn);
+        icn[0] &= 0x7F;
+        CryptoRandom.INSTANCE.nextBytes(aad);
+        CryptoRandom.INSTANCE.nextBytes(data);
+        SymmetricKey kp = new SymmetricKey(key);
+
+        Mgm enc1 = new Mgm(new Kuznyechik());
+        enc1.init(true, new ParametersWithIV(kp, icn));
+        enc1.updateAAD(aad, 0, aad.length);
+        byte[] ct1 = new byte[data.length];
+        byte[] tag1 = new byte[16];
+        enc1.processBytes(data, 0, data.length, ct1, 0);
+        enc1.finishEncryption(tag1, 0);
+
+        Mgm enc2 = new Mgm(new Kuznyechik());
+        enc2.init(true, new ParametersWithIV(kp, icn));
+        enc2.updateAAD(aad, 0, 7);
+        enc2.updateAAD(aad, 7, 7);
+        enc2.updateAAD(aad, 14, 7);
+        enc2.updateAAD(aad, 21, 12);
+        byte[] ct2 = new byte[data.length];
+        byte[] tag2 = new byte[16];
+        enc2.processBytes(data, 0, data.length, ct2, 0);
+        enc2.finishEncryption(tag2, 0);
+
+        assertArrayEquals(ct1, ct2, "CT должен совпасть при разбиении 33 байт AAD на 4 куска");
+        assertArrayEquals(tag1, tag2, "Tag должен совпасть при разбиении 33 байт AAD на 4 куска");
+    }
+
+    @Test
+    @DisplayName("updateAAD(5) + finishEncryption (AAD-only) корректен")
+    void testMultipleUpdateAadAadOnly() throws AuthenticationException {
+        byte[] key  = new byte[32];
+        byte[] icn  = new byte[16];
+        byte[] aad  = new byte[5];
+        CryptoRandom.INSTANCE.nextBytes(key);
+        CryptoRandom.INSTANCE.nextBytes(icn);
+        icn[0] &= 0x7F;
+        CryptoRandom.INSTANCE.nextBytes(aad);
+        SymmetricKey kp = new SymmetricKey(key);
+
+        // Один вызов updateAAD(5) — без processBytes
+        Mgm enc = new Mgm(new Kuznyechik());
+        enc.init(true, new ParametersWithIV(kp, icn));
+        enc.updateAAD(aad, 0, aad.length);
+        byte[] tag = new byte[16];
+        enc.finishEncryption(tag, 0);
+
+        // Верификация — должен расшифроваться с тем же AAD
+        Mgm dec = new Mgm(new Kuznyechik());
+        dec.init(false, new ParametersWithIV(kp, icn));
+        dec.updateAAD(aad, 0, aad.length);
+        dec.finishDecryption(tag, 0);
+    }
+
+    @Test
+    @DisplayName("updateAAD после processBytes: IllegalStateException")
+    void testUpdateAadAfterProcessBytes() {
+        Mgm mgm = new Mgm(new Kuznyechik());
+        mgm.init(true, new ParametersWithIV(new SymmetricKey(K1), ICN1));
+        mgm.processBytes(new byte[0], 0, 0, new byte[0], 0);
+        assertThrows(IllegalStateException.class,
+                () -> mgm.updateAAD(new byte[1], 0, 1),
+                "updateAAD после processBytes должен бросать IllegalStateException");
     }
 
     // -----------------------------------------------------------------------

@@ -1,11 +1,10 @@
 package org.rssys.gost.cipher.mode;
 
-import org.rssys.gost.cipher.BlockCipher;
 import org.rssys.gost.cipher.CipherParameters;
+import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.StreamCipher;
 import org.rssys.gost.util.DataLengthException;
-import org.rssys.gost.util.OutputLengthException;
 
 /**
  * Режим CFB (Cipher FeedBack) по ГОСТ Р 34.13-2015.
@@ -17,8 +16,8 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
     /** Размер сегмента в байтах (bitBlockSize / 8). */
     private final int s;
 
-    /** Текущий гамма-блок (ключевой поток). */
-    private byte[] gamma;
+    /** Scratch-буфер гаммы (blockSize байт, zero-alloc). */
+    private final byte[] gammaBuf;
 
     /** Буфер для s байт входных данных (шифртекст при шифровании, открытый — при расшифровании). */
     private final byte[] inBuf;
@@ -28,16 +27,21 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
 
     private boolean forEncryption;
 
+    /** Прямая ссылка на Kuznyechik для zero-alloc encryptToFields. */
+    private final Kuznyechik kuz;
+
     /** Полноблочный CFB (s == blockSize). */
-    public Cfb(BlockCipher cipher) {
+    public Cfb(Kuznyechik cipher) {
         this(cipher, cipher.getBlockSize() * 8);
     }
 
     /** CFB с размером сегмента bitBlockSize бит. */
-    public Cfb(BlockCipher cipher, int bitBlockSize) {
+    public Cfb(Kuznyechik cipher, int bitBlockSize) {
         super(cipher);
-        this.s     = bitBlockSize / 8;
-        this.inBuf = new byte[this.s];
+        this.kuz     = cipher;
+        this.s       = bitBlockSize / 8;
+        this.gammaBuf = new byte[blockSize];
+        this.inBuf   = new byte[this.s];
     }
 
     @Override
@@ -76,48 +80,71 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
         return s;
     }
 
+    @Override
+    protected int processBlocks(byte[] in, int inOff, int len, byte[] out, int outOff) {
+        if (byteCount != 0 || s != blockSize || m != blockSize) {
+            return 0;
+        }
+        int limit = len - (len % blockSize);
+        if (limit == 0) {
+            return 0;
+        }
+        for (int i = 0; i < limit; i += blockSize) {
+            long rHi = (long) LONG_BE.get(R, 0);
+            long rLo = (long) LONG_BE.get(R, 8);
+            kuz.encryptToFields(rHi, rLo);
+            long gHi = kuz.getEncBufHi();
+            long gLo = kuz.getEncBufLo();
+            long inHi = (long) LONG_BE.get(in, inOff + i);
+            long inLo = (long) LONG_BE.get(in, inOff + i + 8);
+            if (forEncryption) {
+                long oHi = inHi ^ gHi;
+                long oLo = inLo ^ gLo;
+                LONG_BE.set(R, 0, oHi);
+                LONG_BE.set(R, 8, oLo);
+                LONG_BE.set(out, outOff + i,     oHi);
+                LONG_BE.set(out, outOff + i + 8, oLo);
+            } else {
+                // Расшифрование: R = входной шифртекст (до XOR)
+                LONG_BE.set(R, 0, inHi);
+                LONG_BE.set(R, 8, inLo);
+                LONG_BE.set(out, outOff + i,     inHi ^ gHi);
+                LONG_BE.set(out, outOff + i + 8, inLo ^ gLo);
+            }
+        }
+        return limit;
+    }
+
     public byte returnByte(byte in) {
         return calculateByte(in);
     }
 
     /**
      * Основной метод обработки байта.
-     * Каждые s байт генерируется новый гамма-блок.
+     * Каждые s байт генерируется новый гамма-блок через encryptToFields (zero-alloc).
      */
     @Override
     protected byte calculateByte(byte in) {
         if (byteCount == 0) {
-            gamma = createGamma();
+            long rHi = (long) LONG_BE.get(R, 0);
+            long rLo = (long) LONG_BE.get(R, 8);
+            kuz.encryptToFields(rHi, rLo);
+            LONG_BE.set(gammaBuf, 0, kuz.getEncBufHi());
+            LONG_BE.set(gammaBuf, 8, kuz.getEncBufLo());
         }
-        byte out = (byte) (gamma[byteCount] ^ in);
+        byte out = (byte) (gammaBuf[byteCount] ^ in);
         inBuf[byteCount++] = forEncryption ? out : in;
         if (byteCount == s) {
             byteCount = 0;
-            // R = LSB(R, m - s) || inBuf — сдвиг с s байтами шифртекста
             shiftRegister(inBuf, 0, s);
         }
         return out;
     }
 
-    /**
-     * Генерация гаммы: зашифровать MSB(R, blockSize), взять MSB(..., s).
-     */
-    private byte[] createGamma() {
-        byte[] msb = new byte[blockSize];
-        System.arraycopy(R, 0, msb, 0, blockSize);
-        byte[] enc = new byte[blockSize];
-        cipher.processBlock(msb, 0, enc, 0);
-        byte[] result = new byte[s];
-        System.arraycopy(enc, 0, result, 0, s);
-        return result;
-    }
-
     @Override
     public void reset() {
         resetRegister();
-        if (gamma != null) {
-            java.util.Arrays.fill(gamma, (byte) 0);
-        }
+        java.util.Arrays.fill(gammaBuf, (byte) 0);
         java.util.Arrays.fill(inBuf, (byte) 0);
         byteCount = 0;
         cipher.reset();

@@ -54,8 +54,8 @@ public class Hmac implements Mac {
      * @param key ключевой материал (не копируется, используется напрямую)
      */
     public void init(byte[] key) {
-        if (key == null || key.length == 0) {
-            throw new IllegalArgumentException("HMAC key must not be null or empty");
+        if (key == null) {
+            throw new IllegalArgumentException("HMAC key must not be null");
         }
         initWithKeyBytes(key);
     }

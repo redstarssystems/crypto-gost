@@ -4,6 +4,7 @@ import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsSession;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.cert.GostPkcs12Loader;
 import org.rssys.gost.tls13.cert.Pkcs12Loader;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 import org.rssys.gost.tls13.config.TlsServerConfig;
@@ -88,7 +89,7 @@ public final class TlsEchoServer {
             System.exit(1);
         }
 
-        Pkcs12Loader.Result p12;
+        GostPkcs12Loader.Result p12;
         try (FileInputStream fis = new FileInputStream(p12Path)) {
             p12 = Pkcs12Loader.load(fis.readAllBytes(), password.toCharArray());
         }
@@ -99,8 +100,11 @@ public final class TlsEchoServer {
 
         if (mtls && caPath != null) {
             try (FileInputStream fis = new FileInputStream(caPath)) {
-                Pkcs12Loader.Result caP12 = Pkcs12Loader.load(fis.readAllBytes(), caPassword.toCharArray());
-                config.withCaPublicKey(caP12.getCertificateChain().get(0).getPublicKey());
+                GostPkcs12Loader.Result caP12 = Pkcs12Loader.load(fis.readAllBytes(), caPassword.toCharArray());
+                config.withCaPublicKey(caP12.getCertificateChain().stream()
+                    .filter(TlsCertificate::isCA)
+                    .findFirst().orElseThrow()
+                    .getPublicKey());
             }
         }
 

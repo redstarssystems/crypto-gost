@@ -64,6 +64,7 @@ public final class AuthenticatedCipher {
         // CMAC от открытого текста (ГОСТ Р 34.13-2015 §4.6)
         byte[] fullTag = computeCmac(plaintext, key);
         byte[] tag = Arrays.copyOf(fullTag, TAG_LEN);
+        Arrays.fill(fullTag, (byte) 0);
 
         byte[] ciphertext = ctrEncrypt(plaintext, key, iv);
 
@@ -138,8 +139,23 @@ public final class AuthenticatedCipher {
      * Вычисляет полный CMAC-16 от данных
      */
     static byte[] computeCmac(byte[] data, SymmetricKey key) {
+        return computeCmac(null, data, key);
+    }
+
+    /**
+     * Вычисляет CMAC от AAD || data.
+     *
+     * @param aad  дополнительные аутентифицированные данные (может быть null)
+     * @param data основные данные
+     * @param key  ключ Кузнечика (32 байта)
+     * @return полный CMAC (16 байт)
+     */
+    static byte[] computeCmac(byte[] aad, byte[] data, SymmetricKey key) {
         Cmac cmac = new Cmac(new Kuznyechik());
         cmac.init(key);
+        if (aad != null) {
+            cmac.update(aad, 0, aad.length);
+        }
         cmac.update(data, 0, data.length);
         byte[] tag = new byte[cmac.getMacSize()];
         cmac.doFinal(tag, 0);

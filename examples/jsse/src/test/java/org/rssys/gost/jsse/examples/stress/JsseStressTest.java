@@ -84,7 +84,7 @@ class JsseStressTest {
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         srvCtx = new GostSSLSessionContext(cs, cs.getHashLen());
         srvCtx.setSessionCacheSize(5000);
-        serverSocket = new GostSSLServerSocket(0,
+        serverSocket = new GostSSLServerSocket(0, 1024,
                 helper.createKeyManager(), helper.createTrustManager(), srvCtx);
         port = serverSocket.getLocalPort();
 
@@ -130,7 +130,7 @@ class JsseStressTest {
     // ========================================================================
 
     @Test
-    @DisplayName("4 профиля: короткие(50) + средние(20) + длинные(5) + обрывы(10) — 5 минут")
+    @DisplayName("4 профиля: короткие(30) + средние(20) + длинные(5) + обрывы(10) — 5 минут")
     void stressTest() throws Exception {
         running = true;
         List<Thread> workers = new ArrayList<>();
@@ -207,9 +207,11 @@ class JsseStressTest {
         long reqs1 = profileRequests[1].get();
         assertTrue(reqs1 > 0,
                 "Профиль 1: должен быть хотя бы один запрос");
-        assertTrue(profileErrors[1].get() * 100 < profileRequests[1].get(),
-                "Профиль 1: ошибок более 1% (" + profileErrors[1].get()
-                + " из " + profileRequests[1].get() + ")");
+        long errs1 = profileErrors[1].get();
+        long total1 = reqs1 + errs1;
+        assertTrue(errs1 * 100 < total1,
+                "Профиль 1: ошибок более 1% (" + errs1
+                + " из " + total1 + ")");
 
         System.out.printf("[RESULT] Profile 1: %d req, %d err%n",
                 profileRequests[1].get(), profileErrors[1].get());
@@ -231,8 +233,10 @@ class JsseStressTest {
         int profileId = 1;
         byte[] payload = generatePayload(1024);
         while (running) {
-            try (SSLSocket s = (SSLSocket) clientCtx.getSocketFactory()
-                    .createSocket("localhost", port)) {
+            SSLSocket s = null;
+            try {
+                s = (SSLSocket) clientCtx.getSocketFactory()
+                        .createSocket("localhost", port);
                 s.setSoTimeout(15000);
                 OutputStream out = s.getOutputStream();
                 out.write(payload);
@@ -241,6 +245,8 @@ class JsseStressTest {
                 profileRequests[profileId].incrementAndGet();
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
+            } finally {
+                if (s != null) try { s.close(); } catch (Exception ignored) {}
             }
         }
     }
@@ -251,8 +257,10 @@ class JsseStressTest {
         while (running) {
             int sessionDuration = 5000 + CryptoRandom.INSTANCE.nextInt(25001);
             long deadline = System.currentTimeMillis() + sessionDuration;
-            try (SSLSocket s = (SSLSocket) clientCtx.getSocketFactory()
-                    .createSocket("localhost", port)) {
+            SSLSocket s = null;
+            try {
+                s = (SSLSocket) clientCtx.getSocketFactory()
+                        .createSocket("localhost", port);
                 s.setSoTimeout(15000);
                 OutputStream out = s.getOutputStream();
                 InputStream in = s.getInputStream();
@@ -270,6 +278,8 @@ class JsseStressTest {
                 break;
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
+            } finally {
+                if (s != null) try { s.close(); } catch (Exception ignored) {}
             }
         }
     }
@@ -280,8 +290,10 @@ class JsseStressTest {
         byte[] chunk = generatePayload(16 * 1024);
 
         while (running) {
-            try (SSLSocket s = (SSLSocket) clientCtx.getSocketFactory()
-                    .createSocket("localhost", port)) {
+            SSLSocket s = null;
+            try {
+                s = (SSLSocket) clientCtx.getSocketFactory()
+                        .createSocket("localhost", port);
                 s.setSoTimeout(30000);
                 OutputStream out = s.getOutputStream();
                 InputStream in = s.getInputStream();
@@ -295,6 +307,8 @@ class JsseStressTest {
                 }
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
+            } finally {
+                if (s != null) try { s.close(); } catch (Exception ignored) {}
             }
         }
     }

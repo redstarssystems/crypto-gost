@@ -10,6 +10,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import org.rssys.gost.util.CryptoRandom;
 import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -73,7 +74,7 @@ class AuthenticatedStreamTest {
     @DisplayName("Roundtrip: ровно один полный чанк (64 КБ)")
     void testRoundtripExactlyOneChunk() throws Exception {
         byte[] data = new byte[AuthenticatedStream.DEFAULT_CHUNK_SIZE];
-        new java.security.SecureRandom().nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
         assertArrayEquals(data, roundtrip(data, newKey()));
     }
 
@@ -81,7 +82,7 @@ class AuthenticatedStreamTest {
     @DisplayName("Roundtrip: 100 КБ (один с половиной чанка)")
     void testRoundtrip100KB() throws Exception {
         byte[] data = new byte[100 * 1024];
-        new java.security.SecureRandom().nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
         assertArrayEquals(data, roundtrip(data, newKey()));
     }
 
@@ -89,7 +90,7 @@ class AuthenticatedStreamTest {
     @DisplayName("Roundtrip: 200 КБ (три чанка)")
     void testRoundtrip200KB() throws Exception {
         byte[] data = new byte[200 * 1024];
-        new java.security.SecureRandom().nextBytes(data);
+        CryptoRandom.INSTANCE.nextBytes(data);
         assertArrayEquals(data, roundtrip(data, newKey()));
     }
 
@@ -318,5 +319,201 @@ class AuthenticatedStreamTest {
                 while (open.read(buf) > 0) ;
             }
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // Защита от OOM через chunkLen
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("opening: chunkLen превышает chunkSize → AuthenticationException")
+    void testChunkLenExceedsChunkSize() throws Exception {
+        byte[] data = new byte[100];
+        SymmetricKey key = newKey();
+        ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
+        try (OutputStream seal = AuthenticatedStream.sealing(encBuf, key, 128)) {
+            seal.write(data);
+        }
+        byte[] packet = encBuf.toByteArray();
+
+        // chunkLen — первые 4 байта после заголовка потока (HEADER_SIZE = 13)
+        int chunkLenPos = AuthenticatedStream.HEADER_SIZE;
+        packet[chunkLenPos]     = (byte) 0x00;
+        packet[chunkLenPos + 1] = (byte) 0x00;
+        packet[chunkLenPos + 2] = (byte) 0x0F;
+        packet[chunkLenPos + 3] = (byte) 0xA0; // 4000 > 128
+
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (InputStream open = AuthenticatedStream.opening(
+                    new ByteArrayInputStream(packet), key)) {
+                byte[] buf = new byte[256];
+                //noinspection StatementWithEmptyBody
+                while (open.read(buf) > 0) ;
+            }
+        });
+        assertInstanceOf(AuthenticationException.class, ex.getCause(),
+            "chunkLen > chunkSize должен вызывать AuthenticationException");
+    }
+
+    @Test
+    @DisplayName("opening: chunkSize в заголовке > MAX_CHUNK_SIZE → AuthenticationException")
+    void testHeaderChunkSizeTooLarge() throws Exception {
+        byte[] data = new byte[16];
+        SymmetricKey key = newKey();
+        ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
+        try (OutputStream seal = AuthenticatedStream.sealing(encBuf, key, 256)) {
+            seal.write(data);
+        }
+        byte[] packet = encBuf.toByteArray();
+
+        // chunkSize — байты 5..8 (после MAGIC[4] + VERSION[1])
+        packet[5] = (byte) 0x7F;
+        packet[6] = (byte) 0xFF;
+        packet[7] = (byte) 0xFF;
+        packet[8] = (byte) 0xFF; // > MAX_CHUNK_SIZE (1_048_576)
+
+        AuthenticationException ex = assertThrows(AuthenticationException.class, () ->
+            AuthenticatedStream.opening(new ByteArrayInputStream(packet), key));
+        assertTrue(ex.getMessage().contains("Invalid chunk size"),
+            "Сообщение должно указывать на некорректный chunkSize");
+    }
+
+    // -----------------------------------------------------------------------
+    // Защита от reorder/duplicate через seqNo в AAD
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("opening: перестановка чанков → AuthenticationException")
+    void testChunkReorderDetected() throws Exception {
+        int chunkSize = 32;
+        byte[] data = new byte[chunkSize + 1]; // 33 байта — два чанка: 32 + 1
+        Arrays.fill(data, (byte) 0x42);
+        SymmetricKey key = newKey();
+
+        ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
+        try (OutputStream seal = AuthenticatedStream.sealing(encBuf, key, chunkSize)) {
+            seal.write(data);
+        }
+        byte[] packet = encBuf.toByteArray();
+
+        // Чанк 0: HEADER_SIZE..HEADER_SIZE+CHUNK_HEADER_SIZE+chunkSize-1
+        int hdr = AuthenticatedStream.HEADER_SIZE;
+        int chunk0total = AuthenticatedStream.CHUNK_HEADER_SIZE + chunkSize;
+
+        // Собираем пакет с перестановкой: Header + Chunk1 + Chunk0
+        ByteArrayOutputStream reordered = new ByteArrayOutputStream();
+        reordered.write(packet, 0, hdr);                                  // header
+        reordered.write(packet, hdr + chunk0total,                        // Chunk1
+            packet.length - hdr - chunk0total);
+        reordered.write(packet, hdr, chunk0total);                        // Chunk0
+
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (InputStream open = AuthenticatedStream.opening(
+                    new ByteArrayInputStream(reordered.toByteArray()), key)) {
+                byte[] buf = new byte[256];
+                //noinspection StatementWithEmptyBody
+                while (open.read(buf) > 0) ;
+            }
+        });
+        assertInstanceOf(AuthenticationException.class, ex.getCause(),
+            "Перестановка чанков должна обнаруживаться через seqNo в AAD");
+    }
+
+    @Test
+    @DisplayName("opening: дубликат чанка → AuthenticationException")
+    void testChunkDuplicateDetected() throws Exception {
+        int chunkSize = 32;
+        byte[] data = new byte[chunkSize + 1]; // 33 байта — два чанка: 32 + 1
+        Arrays.fill(data, (byte) 0x42);
+        SymmetricKey key = newKey();
+
+        ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
+        try (OutputStream seal = AuthenticatedStream.sealing(encBuf, key, chunkSize)) {
+            seal.write(data);
+        }
+        byte[] packet = encBuf.toByteArray();
+
+        int hdr = AuthenticatedStream.HEADER_SIZE;
+        int chunk0total = AuthenticatedStream.CHUNK_HEADER_SIZE + chunkSize;
+
+        // Собираем пакет с дубликатом: Header + Chunk0 + Chunk0_copy + Chunk1
+        ByteArrayOutputStream dup = new ByteArrayOutputStream();
+        dup.write(packet, 0, hdr);                                        // header
+        dup.write(packet, hdr, chunk0total);                              // Chunk0
+        dup.write(packet, hdr, chunk0total);                              // Chunk0 (дубликат)
+        dup.write(packet, hdr + chunk0total,                              // Chunk1
+            packet.length - hdr - chunk0total);
+
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (InputStream open = AuthenticatedStream.opening(
+                    new ByteArrayInputStream(dup.toByteArray()), key)) {
+                byte[] buf = new byte[256];
+                //noinspection StatementWithEmptyBody
+                while (open.read(buf) > 0) ;
+            }
+        });
+        assertInstanceOf(AuthenticationException.class, ex.getCause(),
+            "Дубликат чанка должен обнаруживаться через seqNo в AAD");
+    }
+
+    // -----------------------------------------------------------------------
+    // Защита от подмены флага через AAD
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("opening: FLAG_NORMAL → FLAG_LAST (раннее завершение) → AuthenticationException")
+    void testEarlyLastFlagDetected() throws Exception {
+        int chunkSize = 32;
+        byte[] data = new byte[chunkSize + 1]; // 33 байта — два чанка
+        SymmetricKey key = newKey();
+
+        ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
+        try (OutputStream seal = AuthenticatedStream.sealing(encBuf, key, chunkSize)) {
+            seal.write(data);
+        }
+        byte[] packet = encBuf.toByteArray();
+
+        // flags — 5-й байт заголовка первого чанка (HEADER_SIZE + chunkLen[4])
+        int flagPos = AuthenticatedStream.HEADER_SIZE + 4;
+        packet[flagPos] = AuthenticatedStream.FLAG_LAST;
+
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (InputStream open = AuthenticatedStream.opening(
+                    new ByteArrayInputStream(packet), key)) {
+                byte[] buf = new byte[256];
+                //noinspection StatementWithEmptyBody
+                while (open.read(buf) > 0) ;
+            }
+        });
+        assertInstanceOf(AuthenticationException.class, ex.getCause(),
+            "Подмена FLAG_NORMAL → FLAG_LAST должна обнаруживаться через AAD");
+    }
+
+    @Test
+    @DisplayName("opening: FLAG_LAST → FLAG_NORMAL (бесконечный поток) → AuthenticationException")
+    void testRemovedLastFlagDetected() throws Exception {
+        byte[] data = new byte[16];
+        SymmetricKey key = newKey();
+
+        ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
+        try (OutputStream seal = AuthenticatedStream.sealing(encBuf, key)) {
+            seal.write(data);
+        }
+        byte[] packet = encBuf.toByteArray();
+
+        // flags — 5-й байт заголовка первого (и единственного) чанка
+        int flagPos = AuthenticatedStream.HEADER_SIZE + 4;
+        packet[flagPos] = AuthenticatedStream.FLAG_NORMAL;
+
+        IOException ex = assertThrows(IOException.class, () -> {
+            try (InputStream open = AuthenticatedStream.opening(
+                    new ByteArrayInputStream(packet), key)) {
+                byte[] buf = new byte[256];
+                //noinspection StatementWithEmptyBody
+                while (open.read(buf) > 0) ;
+            }
+        });
+        assertInstanceOf(AuthenticationException.class, ex.getCause(),
+            "Удаление FLAG_LAST должно обнаруживаться через AAD");
     }
 }

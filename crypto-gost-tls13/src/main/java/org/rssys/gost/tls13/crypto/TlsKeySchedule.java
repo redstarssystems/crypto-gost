@@ -1,8 +1,6 @@
 package org.rssys.gost.tls13.crypto;
 
 import org.rssys.gost.digest.Digest;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
@@ -288,7 +286,7 @@ public final class TlsKeySchedule {
      */
     private byte[] computeEmptyHash() {
         if (emptyHash != null) return emptyHash;
-        Digest d = hashLen == 64 ? new Streebog512() : new Streebog256();
+        Digest d = HkdfStreebog.newDigest(hashLen);
         emptyHash = new byte[hashLen];
         d.doFinal(emptyHash, 0);
         return emptyHash;

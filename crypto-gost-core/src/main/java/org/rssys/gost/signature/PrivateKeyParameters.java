@@ -42,6 +42,11 @@ public final class PrivateKeyParameters implements CipherParameters, Destroyable
       // обрезаем ведущий 0x00
       System.arraycopy(raw, raw.length - rolen, this.dBytes, 0, rolen);
     }
+    // Fail-fast: проверяем 0 < d < n после нормализации byte[]
+    BigInteger dNorm = new BigInteger(1, this.dBytes);
+    if (dNorm.signum() == 0 || dNorm.compareTo(params.n) >= 0) {
+      throw new IllegalArgumentException("d must satisfy 0 < d < n");
+    }
     this.params = params;
   }
 

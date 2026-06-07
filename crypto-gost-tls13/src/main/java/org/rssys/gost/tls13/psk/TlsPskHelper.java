@@ -1,8 +1,6 @@
 package org.rssys.gost.tls13.psk;
 
 import org.rssys.gost.digest.Digest;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
@@ -25,7 +23,7 @@ public final class TlsPskHelper {
      * @param hashLen 32 → Streebog-256, 64 → Streebog-512
      */
     private static Digest newDigest(int hashLen) {
-        return hashLen == 64 ? new Streebog512() : new Streebog256();
+        return HkdfStreebog.newDigest(hashLen);
     }
 
     /**
@@ -67,6 +65,73 @@ public final class TlsPskHelper {
         TlsUtils.wipeArray(chHash);
 
         return binder;
+    }
+
+    /**
+     * Вычисляет PSK binder для второго ClientHello после HRR (RFC 8446 §4.2.11.2).
+     * <p>
+     * Отличие от {@link #computeBinder}: transcript_hash включает Hash(CH1 + HRR)
+     * через hrrPrefixHash = Hash(message_hash + HRR), за которым следует
+     * Truncated(CH2). binder_key без изменений (контекст Derive-Secret = "").
+     *
+     * @param hrrPrefixHash Hash(message_hash + HRR) — префикс транскрипта до CH2
+     * @param ch2Body       полное тело второго ClientHello (включая binders)
+     * @param psk           Pre-Shared Key
+     * @param hashLen       длина хэша (32 для Streebog256)
+     * @return binder (hashLen байт)
+     */
+    public static byte[] computeBinderForHrr(byte[] hrrPrefixHash, byte[] ch2Body,
+                                              byte[] psk, int hashLen) {
+        int bindersTotalLen = 3 + hashLen;
+        byte[] truncated = Arrays.copyOf(ch2Body, ch2Body.length - bindersTotalLen);
+
+        // fullTranscriptHash = Hash(hrrPrefixHash || Truncated_CH2)
+        Digest d = newDigest(hashLen);
+        d.update(hrrPrefixHash, 0, hrrPrefixHash.length);
+        d.update(truncated, 0, truncated.length);
+        byte[] fullTranscriptHash = new byte[hashLen];
+        d.doFinal(fullTranscriptHash, 0);
+
+        byte[] zero = new byte[hashLen];
+        byte[] earlySecret = HkdfStreebog.extract(zero, psk, hashLen);
+
+        byte[] emptyHash = new byte[hashLen];
+        d = newDigest(hashLen);
+        d.doFinal(emptyHash, 0);
+        byte[] binderKey = HkdfStreebog.deriveSecret(
+                earlySecret, HkdfStreebog.PREFIXED_RES_BINDER, emptyHash, hashLen);
+        TlsUtils.wipeArray(earlySecret);
+        TlsUtils.wipeArray(emptyHash);
+
+        Hmac hmac = HkdfStreebog.newHmac(hashLen);
+        hmac.init(binderKey);
+        hmac.update(fullTranscriptHash, 0, fullTranscriptHash.length);
+        byte[] binder = new byte[hashLen];
+        hmac.doFinal(binder, 0);
+        hmac.clear();
+        TlsUtils.wipeArray(binderKey);
+        TlsUtils.wipeArray(fullTranscriptHash);
+
+        return binder;
+    }
+
+    /**
+     * Проверяет PSK binder для второго ClientHello после HRR (серверная сторона).
+     *
+     * @param hrrPrefixHash Hash(message_hash + HRR)
+     * @param ch2Body       полное тело второго ClientHello
+     * @param psk           Pre-Shared Key
+     * @param hashLen       длина хэша
+     * @return true если binder совпадает
+     */
+    public static boolean verifyBinderForHrr(byte[] hrrPrefixHash, byte[] ch2Body,
+                                              byte[] psk, int hashLen) {
+        byte[] expected = computeBinderForHrr(hrrPrefixHash, ch2Body, psk, hashLen);
+        byte[] actual = Arrays.copyOfRange(ch2Body,
+                ch2Body.length - hashLen, ch2Body.length);
+        boolean result = java.security.MessageDigest.isEqual(expected, actual);
+        TlsUtils.wipeArray(expected);
+        return result;
     }
 
     /**

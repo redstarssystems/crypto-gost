@@ -123,9 +123,9 @@ public final class TlsCrlVerifier {
             byte[] sigBytes = Arrays.copyOfRange(crlDer, sigBitTlv[0] + 1, sigBitTlv[1]);
 
             int hlen = caKey.getParams().hlen;
-            Digest.Algorithm hashAlg = hlen == 64
-                    ? Digest.Algorithm.STREEBOG_512
-                    : Digest.Algorithm.STREEBOG_256;
+            Digest.Algorithm hashAlg = hlen == TlsConstants.STREEBOG_512_HASH_LEN
+                ? Digest.Algorithm.STREEBOG_512
+                : Digest.Algorithm.STREEBOG_256;
             Digest digest = new Digest(hashAlg);
             digest.update(crlDer, tbsStart, tbsEnd - tbsStart);
             byte[] hash = digest.digest();
@@ -174,7 +174,7 @@ public final class TlsCrlVerifier {
                 byte[] revokedSerial = Arrays.copyOfRange(crlDer, serialTlv[0], serialTlv[1]);
 
                 if (Arrays.equals(revokedSerial, certSerial)) {
-                    throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                    throw new TlsException(TlsConstants.ALERT_CERTIFICATE_REVOKED,
                             "Certificate is revoked per CRL");
                 }
 

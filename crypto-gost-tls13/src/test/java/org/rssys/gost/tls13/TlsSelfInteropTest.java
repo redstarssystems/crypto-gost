@@ -79,7 +79,7 @@ class TlsSelfInteropTest {
             byte[] caDn) throws Exception {
         TlsTestHelper.CertBundle entity = TlsTestHelper.createCertSignedBy(
                 params, caPriv, caPub, caDn,
-                "240501120000Z", "290501120000Z", null, null,
+                "20240501120000Z", "21060101120000Z", null, null,
                 null, false, null);
         return new MtlsCerts(entity.cert, entity.priv, caPub);
     }
@@ -95,6 +95,10 @@ class TlsSelfInteropTest {
     }
 
     private void runSelfInterop(TlsCiphersuite cs, boolean mTls) throws Exception {
+        runSelfInterop(cs, mTls, 0);
+    }
+
+    private void runSelfInterop(TlsCiphersuite cs, boolean mTls, int serverNamedGroup) throws Exception {
         PlainCerts plain = createPlainCerts();
         MtlsCertPair mtls = mTls ? createMtlsCertsPair() : null;
         MtlsCerts sCerts = mTls ? mtls.server : null;
@@ -118,6 +122,9 @@ class TlsSelfInteropTest {
                                 .withCaPublicKey(sCerts.caPub);
                     } else {
                         sc = new TlsServerConfig(cs, Collections.singletonList(plain.cert), plain.priv);
+                    }
+                    if (serverNamedGroup != 0) {
+                        sc = sc.withSelectedNamedGroup(serverNamedGroup);
                     }
                     TlsSession server = TlsSession.createServer(sc, st);
 
@@ -216,5 +223,14 @@ class TlsSelfInteropTest {
         TlsCiphersuite cs = TlsCiphersuite.byId(0xC105);
         assert cs != null : "S ciphersuite not found";
         runSelfInterop(cs, true);
+    }
+
+    @Test
+    @DisplayName("L + non-mTLS + cross-group: клиент GC256A / сервер GC512C")
+    void testL_NonMtls_CrossGroup() throws Exception {
+        TlsCiphersuite cs = TlsCiphersuite.byId(0xC103);
+        assert cs != null : "L ciphersuite not found";
+        // Сертификаты GC256A, а ECDHE — на GC512C (RFC 8446: независимы)
+        runSelfInterop(cs, false, TlsConstants.GRP_GC512C);
     }
 }

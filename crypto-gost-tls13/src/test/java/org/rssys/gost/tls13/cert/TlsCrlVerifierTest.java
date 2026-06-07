@@ -25,7 +25,7 @@ class TlsCrlVerifierTest {
         root = TlsTestHelper.createRootCA(params);
         leaf = TlsTestHelper.createCertSignedBy(params, root.priv,
                 root.cert.getPublicKey(), root.subjectDn,
-                "240501120000Z", "290501120000Z",
+                "20240501120000Z", "21060101120000Z",
                 new String[]{"gost.example.com"}, (byte[]) null, (String[]) null,
                 false, null);
     }
@@ -34,7 +34,7 @@ class TlsCrlVerifierTest {
     @DisplayName("CRL без отозванных → OK")
     void testEmptyCrl() throws Exception {
         byte[] crl = TlsTestHelper.buildCrl(null, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         assertDoesNotThrow(() ->
                 TlsCrlVerifier.verify(crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
     }
@@ -44,7 +44,7 @@ class TlsCrlVerifierTest {
     void testRevokedCert() throws Exception {
         byte[] crl = TlsTestHelper.buildCrl(
                 new byte[][]{leaf.cert.getSerialNumber()}, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         TlsException ex = assertThrows(TlsException.class, () ->
                 TlsCrlVerifier.verify(crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
         assertTrue(ex.getMessage().contains("revoked"),
@@ -57,7 +57,7 @@ class TlsCrlVerifierTest {
         byte[] otherSerial = new byte[]{0x01, 0x02, 0x03};
         byte[] crl = TlsTestHelper.buildCrl(
                 new byte[][]{otherSerial}, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         assertDoesNotThrow(() ->
                 TlsCrlVerifier.verify(crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
     }
@@ -66,7 +66,7 @@ class TlsCrlVerifierTest {
     @DisplayName("CRL с битой подписью → TlsException")
     void testBadSignature() throws Exception {
         byte[] crl = TlsTestHelper.buildCrl(null, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         // Мутируем подпись: проверяем fail-closed — битая подпись не должна пропустить
         crl[crl.length - 1] ^= 0xFF;
         TlsException ex = assertThrows(TlsException.class, () ->
@@ -90,7 +90,7 @@ class TlsCrlVerifierTest {
     @DisplayName("CRL с issuingDistributionPoint → TlsException")
     void testIdpExtension() throws Exception {
         byte[] crl = TlsTestHelper.buildCrl(null, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", true);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", true);
         TlsException ex = assertThrows(TlsException.class, () ->
                 TlsCrlVerifier.verify(crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
         assertTrue(ex.getMessage().contains("issuingDistributionPoint"),
@@ -110,7 +110,7 @@ class TlsCrlVerifierTest {
     @DisplayName("extractNextUpdate: nextUpdate есть → возвращает Date")
     void testExtractNextUpdatePresent() throws Exception {
         byte[] crl = TlsTestHelper.buildCrl(null, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         java.util.Date nu = TlsCrlVerifier.extractNextUpdate(crl);
         assertNotNull(nu, "nextUpdate должен быть распарсен");
     }
@@ -145,7 +145,7 @@ class TlsCrlVerifierTest {
     @DisplayName("verify: v2 CRL с голым INTEGER version (RFC 5280)")
     void testVerifyV2RfcVersion() throws Exception {
         byte[] crl = TlsTestHelper.buildCrl(null, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         assertDoesNotThrow(() ->
                 TlsCrlVerifier.verify(crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
     }
@@ -154,7 +154,7 @@ class TlsCrlVerifierTest {
     @DisplayName("verify: v2 CRL с [0] EXPLICIT version (legacy fallback)")
     void testVerifyV2LegacyVersion() throws Exception {
         byte[] crl = TlsTestHelper.buildCrlLegacyVersion(null, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         assertDoesNotThrow(() ->
                 TlsCrlVerifier.verify(crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
     }
@@ -163,7 +163,7 @@ class TlsCrlVerifierTest {
     @DisplayName("extractNextUpdate: v2 CRL с голым INTEGER version (RFC 5280)")
     void testExtractNextUpdateV2RfcVersion() throws Exception {
         byte[] crl = TlsTestHelper.buildCrl(null, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         assertNotNull(TlsCrlVerifier.extractNextUpdate(crl),
                 "nextUpdate должен быть распарсен с голым INTEGER version");
     }
@@ -172,7 +172,7 @@ class TlsCrlVerifierTest {
     @DisplayName("extractNextUpdate: v2 CRL с [0] EXPLICIT version (legacy fallback)")
     void testExtractNextUpdateV2LegacyVersion() throws Exception {
         byte[] crl = TlsTestHelper.buildCrlLegacyVersion(null, root.priv,
-                root.cert.getPublicKey(), root.subjectDn, "300101120000Z", false);
+                root.cert.getPublicKey(), root.subjectDn, "20300101120000Z", false);
         assertNotNull(TlsCrlVerifier.extractNextUpdate(crl),
                 "nextUpdate должен быть распарсен с [0] EXPLICIT version");
     }

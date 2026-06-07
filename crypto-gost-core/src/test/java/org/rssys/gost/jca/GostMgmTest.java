@@ -11,6 +11,7 @@ import org.rssys.gost.jca.key.GostSecretKey;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.util.CryptoRandom;
 import java.security.Security;
 import java.util.Arrays;
 
@@ -62,7 +63,7 @@ class GostMgmTest {
 
         // Генерируем ICN явно, чтобы сравнить результаты обоих способов получения шифра
         byte[] icn = new byte[16];
-        new java.security.SecureRandom().nextBytes(icn);
+        CryptoRandom.INSTANCE.nextBytes(icn);
         icn[0] &= 0x7F; // MSB=0 per RFC 9058
 
         // Шифрование через алиас Kuznyechik/MGM/NoPadding
@@ -222,7 +223,7 @@ class GostMgmTest {
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
 
         byte[] icn = new byte[16];
-        new java.security.SecureRandom().nextBytes(icn);
+        CryptoRandom.INSTANCE.nextBytes(icn);
         icn[0] &= 0x7F; // MSB=0 per RFC 9058
 
         // Шифруем через JCA с явным ICN
@@ -247,7 +248,7 @@ class GostMgmTest {
         SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
         byte[] icn = new byte[16];
-        new java.security.SecureRandom().nextBytes(icn);
+        CryptoRandom.INSTANCE.nextBytes(icn);
         icn[0] &= 0x7F; // MSB=0 per RFC 9058
 
         // Шифруем через MgmCipher API
@@ -276,7 +277,7 @@ class GostMgmTest {
         SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
         byte[] icn = new byte[16];
-        new java.security.SecureRandom().nextBytes(icn);
+        CryptoRandom.INSTANCE.nextBytes(icn);
         icn[0] &= 0x7F; // MSB=0 per RFC 9058
 
         // Однократный вызов
@@ -292,5 +293,42 @@ class GostMgmTest {
         byte[] ct2 = enc2.doFinal(DATA, half, DATA.length - half);
 
         assertArrayEquals(ct1, ct2, "Инкрементальный update должен дать тот же результат");
+    }
+
+    // -----------------------------------------------------------------------
+    // Восстановление после AEADBadTagException
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("engineInit после failed decrypt: recovery возможен")
+    void testInitAfterFailedDecrypt() throws Exception {
+        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
+        byte[] icn = new byte[16];
+        CryptoRandom.INSTANCE.nextBytes(icn);
+        icn[0] &= 0x7F;
+
+        // Шифруем
+        Cipher enc = Cipher.getInstance(ALGORITHM, PROVIDER);
+        enc.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(icn));
+        enc.updateAAD(AAD);
+        byte[] ctAndTag = enc.doFinal(DATA);
+
+        // Первая попытка расшифрования с порченным тегом — fail
+        ctAndTag[ctAndTag.length - 1] ^= 0xFF;
+        Cipher dec = Cipher.getInstance(ALGORITHM, PROVIDER);
+        dec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
+        dec.updateAAD(AAD);
+        assertThrows(AEADBadTagException.class,
+                () -> dec.doFinal(ctAndTag),
+                "Порченный тег должен вызывать AEADBadTagException");
+
+        // Восстанавливаем тег и пробуем снова с новым engineInit
+        ctAndTag[ctAndTag.length - 1] ^= 0xFF;
+        dec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
+        dec.updateAAD(AAD);
+        byte[] plaintext = dec.doFinal(ctAndTag);
+        assertArrayEquals(DATA, plaintext,
+                "После engineInit после failed decrypt расшифрование должно работать");
     }
 }

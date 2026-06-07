@@ -153,7 +153,8 @@ class TlsCiphersuiteTest {
     void testParamsToNamedGroupUnknownThrows() {
         ECParameters fake = new ECParameters(
                 "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
-                "1", "1", "1", "1", "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF01", 32);
+                "1", "1", "1", "1",
+                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF01", 32, 1);
         assertThrows(IllegalArgumentException.class,
                 () -> TlsCiphersuite.paramsToNamedGroup(fake));
     }

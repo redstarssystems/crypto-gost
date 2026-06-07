@@ -1,5 +1,6 @@
 package org.rssys.gost.tls13.crypto;
 
+import org.rssys.gost.kdf.KdfGostR3411_2012_256;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
 import java.util.Arrays;

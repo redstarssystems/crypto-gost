@@ -16,6 +16,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import org.rssys.gost.util.CryptoRandom;
 import java.security.Security;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
@@ -43,7 +44,7 @@ class GostKeyTest {
     @DisplayName("GostSecretKey: getAlgorithm, getFormat, getEncoded")
     void testGostSecretKeyBasics() {
         byte[] raw = new byte[32];
-        new java.security.SecureRandom().nextBytes(raw);
+        CryptoRandom.INSTANCE.nextBytes(raw);
         GostSecretKey key = new GostSecretKey("Kuznyechik", raw);
 
         assertEquals("Kuznyechik", key.getAlgorithm());
@@ -69,7 +70,7 @@ class GostKeyTest {
     @DisplayName("SecretKeyFactory.Kuznyechik: generateSecret из SecretKeySpec")
     void testSecretKeyFactoryFromSpec() throws Exception {
         byte[] raw = new byte[32];
-        new java.security.SecureRandom().nextBytes(raw);
+        CryptoRandom.INSTANCE.nextBytes(raw);
         SecretKeySpec spec = new SecretKeySpec(raw, "Kuznyechik");
 
         SecretKeyFactory skf = SecretKeyFactory.getInstance("Kuznyechik", PROVIDER);
@@ -84,7 +85,7 @@ class GostKeyTest {
     @DisplayName("SecretKeyFactory.Kuznyechik: getKeySpec возвращает SecretKeySpec")
     void testSecretKeyFactoryGetKeySpec() throws Exception {
         byte[] raw = new byte[32];
-        new java.security.SecureRandom().nextBytes(raw);
+        CryptoRandom.INSTANCE.nextBytes(raw);
         GostSecretKey gostKey = new GostSecretKey("Kuznyechik", raw);
 
         SecretKeyFactory skf = SecretKeyFactory.getInstance("Kuznyechik", PROVIDER);

@@ -39,7 +39,7 @@ public class InMemoryTlsTransport implements TlsTransport {
     }
 
     /** @param inbound готовая входящая очередь (для Pair). */
-    InMemoryTlsTransport(LinkedBlockingQueue<byte[]> inbound) {
+    public InMemoryTlsTransport(LinkedBlockingQueue<byte[]> inbound) {
         this.inbound = inbound;
     }
 

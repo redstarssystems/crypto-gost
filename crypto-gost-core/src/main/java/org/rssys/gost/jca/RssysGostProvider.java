@@ -7,8 +7,12 @@ import org.rssys.gost.jca.spi.GostKeyPairGeneratorSpi;
 import org.rssys.gost.jca.spi.GostMacSpi;
 import org.rssys.gost.jca.spi.GostMessageDigestSpi;
 import org.rssys.gost.jca.spi.GostMgmCipherSpi;
+import org.rssys.gost.jca.spi.GostPbkdf2SecretKeyFactorySpi;
 import org.rssys.gost.jca.spi.GostSecretKeyFactorySpi;
 import org.rssys.gost.jca.spi.GostSignatureSpi;
+import org.rssys.gost.jca.spi.GostCtrAcpkmCipherSpi;
+import org.rssys.gost.jca.spi.GostKeyAgreementSpi;
+import org.rssys.gost.jca.spi.GostVkoKeyAgreementSpi;
 
 import java.security.Provider;
 
@@ -101,6 +105,8 @@ public final class RssysGostProvider extends Provider {
         registerKeyPairGenerators();
         registerKeyFactories();
         registerSecretKeyFactories();
+        registerKeyAgreements();
+        registerVkoKeyAgreements();
         registerSignatures();
     }
 
@@ -171,6 +177,14 @@ public final class RssysGostProvider extends Provider {
         put("Alg.Alias.Cipher.1.2.643.7.1.1.5.1",               "Kuznyechik-MGM");
         // Алиас в стандартной JCA-нотации алгоритм/режим/padding
         put("Alg.Alias.Cipher.Kuznyechik/MGM/NoPadding",        "Kuznyechik-MGM");
+
+        // CTR-ACPKM (RFC 9337 §5) — два варианта, два отдельных SPI-подкласса
+        String withoutOmac = GostCtrAcpkmCipherSpi.WithoutOmac.class.getName();
+        String withOmac    = GostCtrAcpkmCipherSpi.WithOmac.class.getName();
+        put("Cipher.Kuznyechik/CTR-ACPKM/NoPadding",            withoutOmac);
+        put("Cipher.Kuznyechik/CTR-ACPKM-OMAC/NoPadding",       withOmac);
+        put("Alg.Alias.Cipher.1.2.643.7.1.1.5.2.1",            "Kuznyechik/CTR-ACPKM/NoPadding");
+        put("Alg.Alias.Cipher.1.2.643.7.1.1.5.2.2",            "Kuznyechik/CTR-ACPKM-OMAC/NoPadding");
     }
 
     /**
@@ -213,6 +227,36 @@ public final class RssysGostProvider extends Provider {
 
         put("SecretKeyFactory.Kuznyechik",                      spi);
         put("Alg.Alias.SecretKeyFactory.GOST3412-2015",         "Kuznyechik");
+
+        String pbkdf2Spi = GostPbkdf2SecretKeyFactorySpi.class.getName();
+        put("SecretKeyFactory.PBKDF2WithHmacStreebog512",       pbkdf2Spi);
+        put("Alg.Alias.SecretKeyFactory.PBKDF2WithHmacGOST3411-2012-512",
+                                                                 "PBKDF2WithHmacStreebog512");
+    }
+
+    /**
+     * Согласование ключей ECDH (ГОСТ Р 34.10-2012).
+     *
+     * <p>JCA-имя: {@code ECDHGOST2012}.
+     */
+    private void registerKeyAgreements() {
+        String spi = GostKeyAgreementSpi.class.getName();
+
+        put("KeyAgreement.ECDHGOST2012", spi);
+        put("Alg.Alias.KeyAgreement.1.2.643.7.1.1.6.2", "ECDHGOST2012");
+    }
+
+    /**
+     * Согласование ключей VKO_GOSTR3410_2012_256 (RFC 7836 §4.3.1).
+     *
+     * <p>JCA-имя: {@code VKOGOST3410-2012-256}.
+     * OID: 1.2.643.7.1.1.6.1 (перенесён с ECDHGOST2012).
+     */
+    private void registerVkoKeyAgreements() {
+        String vkoSpi = GostVkoKeyAgreementSpi.class.getName();
+
+        put("KeyAgreement.VKOGOST3410-2012-256", vkoSpi);
+        put("Alg.Alias.KeyAgreement.1.2.643.7.1.1.6.1", "VKOGOST3410-2012-256");
     }
 
     /**

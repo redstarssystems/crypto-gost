@@ -186,11 +186,7 @@ public final class Digest {
      * @return хэш, 32 байта, big-endian
      */
     public static byte[] digest256(byte[] data) {
-        Streebog256 d = new Streebog256();
-        d.update(data, 0, data.length);
-        byte[] out = new byte[d.getDigestSize()];
-        d.doFinal(out, 0);
-        return out;
+        return digest(data, Algorithm.STREEBOG_256);
     }
 
     /**
@@ -200,11 +196,7 @@ public final class Digest {
      * @return хэш, 64 байта, big-endian
      */
     public static byte[] digest512(byte[] data) {
-        Streebog512 d = new Streebog512();
-        d.update(data, 0, data.length);
-        byte[] out = new byte[d.getDigestSize()];
-        d.doFinal(out, 0);
-        return out;
+        return digest(data, Algorithm.STREEBOG_512);
     }
 
     /**
@@ -215,12 +207,7 @@ public final class Digest {
      * @return MAC, 32 байта
      */
     public static byte[] hmac256(byte[] data, SymmetricKey key) {
-        Hmac h = new Hmac(new Streebog256());
-        h.init(key);
-        h.update(data, 0, data.length);
-        byte[] out = new byte[h.getMacSize()];
-        h.doFinal(out, 0);
-        return out;
+        return hmac(data, key, Algorithm.HMAC_256);
     }
 
     /**
@@ -231,11 +218,26 @@ public final class Digest {
      * @return MAC, 64 байта
      */
     public static byte[] hmac512(byte[] data, SymmetricKey key) {
-        Hmac h = new Hmac(new Streebog512());
-        h.init(key);
-        h.update(data, 0, data.length);
-        byte[] out = new byte[h.getMacSize()];
-        h.doFinal(out, 0);
+        return hmac(data, key, Algorithm.HMAC_512);
+    }
+
+    // -----------------------------------------------------------------------
+    // Общие приватные методы (убирают дублирование из публичных статических)
+    // -----------------------------------------------------------------------
+
+    private static byte[] digest(byte[] data, Algorithm algorithm) {
+        org.rssys.gost.digest.Digest d = createDigestImpl(algorithm);
+        d.update(data, 0, data.length);
+        byte[] out = new byte[d.getDigestSize()];
+        d.doFinal(out, 0);
+        return out;
+    }
+
+    private static byte[] hmac(byte[] data, SymmetricKey key, Algorithm algorithm) {
+        Mac m = createHmac(algorithm, key);
+        m.update(data, 0, data.length);
+        byte[] out = new byte[m.getMacSize()];
+        m.doFinal(out, 0);
         return out;
     }
 

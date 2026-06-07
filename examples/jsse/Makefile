@@ -14,7 +14,7 @@ NATIVE ?= $(or \
 
 .PHONY: netty jetty undertow tomcat springboot test all compile compile-sb clean \
         test-integration test-concurrent test-stress test-undertow-stress test-keymanager test-int-all \
-        gost-curl gost-curl-jar gost-curl-native test-server
+        gost-curl gost-curl-jar gost-curl-native test-server pfx-server
 
 compile:
 	$(MVN) compile $(Q) -am
@@ -69,6 +69,11 @@ test-int-all:
 	cd ../../ && $(MVN) test $(Q) -pl crypto-gost-jsse,examples/jsse -am \
 		-Dgroups="integration" -Dsurefire.excludedGroups=
 
+pfx-server:
+	@$(MVN) install exec:java $(Q) -am $(SKIP) \
+		-Dexec.mainClass="$(CLS).PfxServerExample" \
+		-Dexec.args="$(ARGS)" $(FILTER)
+
 gost-curl:
 	@$(MVN) install exec:java $(Q) -am $(SKIP) \
 		-Dexec.mainClass="$(CLS).GostCurl" \
@@ -95,4 +100,4 @@ test-server:
 		-Dexec.mainClass="$(CLS).GostCurlTestServer" $(FILTER)
 
 clean:
-	$(MVN) clean $(Q)
+	rm -rf target

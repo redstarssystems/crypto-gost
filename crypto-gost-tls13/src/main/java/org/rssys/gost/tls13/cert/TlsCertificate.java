@@ -27,6 +27,13 @@ import java.util.Base64;
  */
 public final class TlsCertificate {
 
+    // Индексы SEQUENCE в TBSCertificate для навигации (RFC 5280 §4.1)
+    // SPKI — 5-я, Validity — 3-я SEQUENCE
+    private static final int TBS_VALIDITY_SEQUENCE_INDEX = 3;
+    private static final int TBS_SPKI_SEQUENCE_INDEX = 5;
+    private static final int ISSUER_DN_SKIP = 0;
+    private static final int SUBJECT_DN_SKIP = 2;
+
     private final byte[] certData;
     private final int tbsCertOff;
     private final int tbsCertLen;
@@ -133,11 +140,11 @@ public final class TlsCertificate {
         this.notAfter = validity[1];
 
         // Issuer DN (4-я SEQUENCE в TBS)
-        int[] issuerOffLen = parseIssuerDn(derEncoded, tbsTlv);
+        int[] issuerOffLen = parseDnByIndex(derEncoded, tbsTlv, ISSUER_DN_SKIP);
         this.issuerDnOff = issuerOffLen[0];
         this.issuerDnLen = issuerOffLen[1];
         // Subject DN (6-я SEQUENCE в TBS)
-        int[] subjectOffLen = parseSubjectDn(derEncoded, tbsTlv);
+        int[] subjectOffLen = parseDnByIndex(derEncoded, tbsTlv, SUBJECT_DN_SKIP);
         this.subjectDnOff = subjectOffLen[0];
         this.subjectDnLen = subjectOffLen[1];
 
@@ -242,7 +249,7 @@ public final class TlsCertificate {
      */
     public boolean verify(PublicKeyParameters caPublicKey) {
         int hlen = caPublicKey.getParams().hlen;
-        Digest.Algorithm hashAlg = hlen == 64
+        Digest.Algorithm hashAlg = hlen == TlsConstants.STREEBOG_512_HASH_LEN
                 ? Digest.Algorithm.STREEBOG_512
                 : Digest.Algorithm.STREEBOG_256;
         Digest digest = new Digest(hashAlg);
@@ -1106,6 +1113,48 @@ public final class TlsCertificate {
             this.cdpUris = cdpUris;
             this.certPolicyOids = certPolicyOids;
         }
+
+        /** @return пустой результат — расширения не найдены или не распарсены.
+         *         По RFC 5280 отсутствие расширений не является ошибкой: ключ
+         *         считается валидным для всех целей (permissive default). */
+        static ExtensionsResult empty() {
+            return new ExtensionsResult(
+                null,   // sanDnsNames
+                null,   // sanIpAddresses
+                true,   // keyUsageValid     — KU отсутствует, все uses разрешены (§4.2.1.3)
+                true,   // ekuValid          — EKU отсутствует, все purposes разрешены (§4.2.1.12)
+                true,   // ekuClientAuth     — следствие absent EKU
+                false,  // ekuOcspSigning    — OCSP-подпись не подразумевается
+                false,  // isCA              — BC отсутствует, не CA (§4.2.1.9)
+                -1,     // pathLen           — BC отсутствует, ограничения нет
+                false,  // keyCertSign       — KU отсутствует, keyCertSign не установлен
+                false,  // hasUnknownCritical— нечему быть unknown
+                null,   // skiBytes
+                null,   // akiBytes
+                null,   // aiaUris
+                null,   // ocspUris
+                null,   // caIssuersUris
+                null,   // cdpUris
+                null    // certPolicyOids
+            );
+        }
+    }
+
+    /**
+     * Пропускает version [0] EXPLICIT и serialNumber INTEGER в начале TBSCertificate.
+     *
+     * @param der    DER-поток сертификата
+     * @param tbsTlv [valueStart, valueEnd] TBSCertificate
+     * @return позиция после serialNumber или -1 при некорректной структуре
+     */
+    private static int skipVersionAndSerial(byte[] der, int[] tbsTlv) {
+        int pos = tbsTlv[0];
+        int end = tbsTlv[1];
+        if (pos < end && (der[pos] & 0xFF) == TAG_CTX_0) {
+            pos = readTlv(der, pos)[1];
+        }
+        if (pos >= end) return -1;
+        return readTlv(der, pos)[1];
     }
 
     /**
@@ -1118,16 +1167,9 @@ public final class TlsCertificate {
      * @return результат парсинга расширений
      */
     private static ExtensionsResult parseExtensions(byte[] der, int[] tbsTlv) {
-        int pos = tbsTlv[0];
         int end = tbsTlv[1];
-
-        // version [0] EXPLICIT (OPTIONAL)
-        if (pos < end && (der[pos] & 0xFF) == TAG_CTX_0) {
-            pos = readTlv(der, pos)[1];
-        }
-        // serialNumber (INTEGER)
-        if (pos >= end) return new ExtensionsResult(null, null, true, true, true, false, false, -1, false, false, null, null, null, null, null, null, null);
-        pos = readTlv(der, pos)[1];
+        int pos = skipVersionAndSerial(der, tbsTlv);
+        if (pos < 0) return ExtensionsResult.empty();
         // Сканируем до 5-й SEQUENCE (SPKI)
         int seqCount = 0;
         while (pos < end) {
@@ -1135,14 +1177,14 @@ public final class TlsCertificate {
             int[] tlv = readTlv(der, pos);
             if (tag == TAG_SEQUENCE) {
                 seqCount++;
-                if (seqCount == 5) {
+                if (seqCount == TBS_SPKI_SEQUENCE_INDEX) {
                     pos = tlv[1];
                     break;
                 }
             }
             pos = tlv[1];
         }
-        if (seqCount < 5) return new ExtensionsResult(null, null, true, true, true, false, false, -1, false, false, null, null, null, null, null, null, null);
+        if (seqCount < TBS_SPKI_SEQUENCE_INDEX) return ExtensionsResult.empty();
 
         // issuerUniqueID [1], subjectUniqueID [2], затем extensions [3]
         while (pos < end) {
@@ -1156,7 +1198,7 @@ public final class TlsCertificate {
             }
             break;
         }
-        return new ExtensionsResult(null, null, true, true, true, false, false, -1, false, false, null, null, null, null, null, null, null);
+        return ExtensionsResult.empty();
     }
 
     /**
@@ -1174,7 +1216,7 @@ public final class TlsCertificate {
         int end = extTlv[1];
 
         if (pos >= end || (der[pos] & 0xFF) != 0x30) {
-            return new ExtensionsResult(null, null, true, true, true, false, false, -1, false, false, null, null, null, null, null, null, null);
+            return ExtensionsResult.empty();
         }
         int[] seqTlv = readTlv(der, pos);
         pos = seqTlv[0];
@@ -1255,11 +1297,11 @@ public final class TlsCertificate {
                 ekuPresent = true;
                 if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
                     int[] octTlv = readTlv(der, afterOid);
-                    ekuServerAuth = hasEku(der, octTlv[0], octTlv[1], SERVER_AUTH_OID);
-                    ekuClientAuth = hasEku(der, octTlv[0], octTlv[1], CLIENT_AUTH_OID);
+                    ekuServerAuth = hasEku(der, octTlv[0], octTlv[1], TlsDerParser.SERVER_AUTH_OID_BYTES);
+                    ekuClientAuth = hasEku(der, octTlv[0], octTlv[1], TlsDerParser.CLIENT_AUTH_OID_BYTES);
                     // EKU id-kp-OCSPSigning (1.3.6.1.5.5.7.3.9)
-                    if (hasEku(der, octTlv[0], octTlv[1], OCSP_SIGNING_OID)
-                            || hasEku(der, octTlv[0], octTlv[1], ANY_EKU_OID)) {
+                    if (hasEku(der, octTlv[0], octTlv[1], TlsDerParser.OCSP_SIGNING_OID_BYTES)
+                            || hasEku(der, octTlv[0], octTlv[1], TlsDerParser.ANY_EKU_OID_BYTES)) {
                         ekuOcspSigning = true;
                     }
                 }
@@ -1409,15 +1451,8 @@ public final class TlsCertificate {
         }
     }
 
-    private static final byte[] SERVER_AUTH_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01};
-    private static final byte[] CLIENT_AUTH_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02};
-    private static final byte[] OCSP_SIGNING_OID = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09};
-    private static final byte[] ANY_EKU_OID = {0x55, 0x1D, 0x25, 0x00};
-    private static final byte[] DIGITAL_SIGNATURE_OID = {(byte) 0x80, 0x00};
-
     // id-ad-ocsp = 1.3.6.1.5.5.7.48.1, id-ad-caIssuers = 1.3.6.1.5.5.7.48.2
-    private static final byte[] OCSP_AIA_OID = TlsDerParser.AD_OCSP_OID_BYTES;
-    private static final byte[] CA_ISSUERS_AIA_OID = TlsDerParser.AD_CA_ISSUERS_OID_BYTES;
+    // (константы в TlsDerParser.AD_OCSP_OID_BYTES, TlsDerParser.AD_CA_ISSUERS_OID_BYTES)
 
     /**
      * Проверяет наличие указанного OID в ExtendedKeyUsage SEQUENCE.
@@ -1484,7 +1519,7 @@ public final class TlsCertificate {
                 continue;
             }
             int[] methodOidTlv = readTlv(der, adPos);
-            // rawOidTlv — для сравнения OID с OCSP_AIA_OID и CA_ISSUERS_AIA_OID
+            // rawOidTlv — для сравнения OID с AD_OCSP и AD_CA_ISSUERS
             int[] rawOidTlv = readTlv(der, adPos);
             int locPos = methodOidTlv[1];
             if (locPos < adEnd) {
@@ -1494,9 +1529,9 @@ public final class TlsCertificate {
                     String uri = new String(der, uriTlv[0], uriTlv[1] - uriTlv[0],
                             java.nio.charset.StandardCharsets.US_ASCII);
                     uriList.add(uri);
-                    if (matchesOid(der, rawOidTlv[0], rawOidTlv[1] - rawOidTlv[0], OCSP_AIA_OID)) {
+                    if (matchesOid(der, rawOidTlv[0], rawOidTlv[1] - rawOidTlv[0], TlsDerParser.AD_OCSP_OID_BYTES)) {
                         ocspList.add(uri);
-                    } else if (matchesOid(der, rawOidTlv[0], rawOidTlv[1] - rawOidTlv[0], CA_ISSUERS_AIA_OID)) {
+                    } else if (matchesOid(der, rawOidTlv[0], rawOidTlv[1] - rawOidTlv[0], TlsDerParser.AD_CA_ISSUERS_OID_BYTES)) {
                         caIssuersList.add(uri);
                     }
                 }
@@ -1611,23 +1646,24 @@ public final class TlsCertificate {
     // ========================================================================
 
     /**
-     * Парсит Issuer DN — 4-я SEQUENCE в TBSCertificate.
-     * Пропускает version, serialNumber, signature, затем ищет первую SEQUENCE.
+     * Парсит DN по индексу пропуска SEQUENCE после signature.
+     * Для issuer (4-я SEQUENCE) skipSeqs = 0, для subject (6-я SEQUENCE) skipSeqs = 2.
      *
-     * @param der    DER-поток сертификата
-     * @param tbsTlv [valueStart, valueEnd] TBSCertificate
-     * @return [offset, length] Issuer DN
+     * @param der      DER-поток сертификата
+     * @param tbsTlv   [valueStart, valueEnd] TBSCertificate
+     * @param skipSeqs количество SEQUENCE для пропуска после signature
+     * @return [offset, length] DN
      */
-    private static int[] parseIssuerDn(byte[] der, int[] tbsTlv) {
-        int pos = tbsTlv[0];
+    private static int[] parseDnByIndex(byte[] der, int[] tbsTlv, int skipSeqs) {
         int end = tbsTlv[1];
-        if (pos < end && (der[pos] & 0xFF) == 0xA0) {
-            pos = readTlv(der, pos)[1];
-        }
-        if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-        pos = readTlv(der, pos)[1]; // serialNumber
+        int pos = skipVersionAndSerial(der, tbsTlv);
+        if (pos < 0) throw new IllegalArgumentException("TBSCertificate too short");
         if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
         pos = readTlv(der, pos)[1]; // signature SEQUENCE
+        for (int i = 0; i < skipSeqs; i++) {
+            if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
+            pos = readTlv(der, pos)[1];
+        }
         while (pos < end) {
             int tag = der[pos] & 0xFF;
             int[] tlv = readTlv(der, pos);
@@ -1636,40 +1672,7 @@ public final class TlsCertificate {
             }
             pos = tlv[1];
         }
-        throw new IllegalArgumentException("Issuer DN not found in TBSCertificate");
-    }
-
-    /**
-     * Парсит Subject DN — 6-я SEQUENCE в TBSCertificate.
-     * Пропускает version, serialNumber, signature, issuer, validity, затем ищет первую SEQUENCE.
-     *
-     * @param der    DER-поток сертификата
-     * @param tbsTlv [valueStart, valueEnd] TBSCertificate
-     * @return [offset, length] Subject DN
-     */
-    private static int[] parseSubjectDn(byte[] der, int[] tbsTlv) {
-        int pos = tbsTlv[0];
-        int end = tbsTlv[1];
-        if (pos < end && (der[pos] & 0xFF) == 0xA0) {
-            pos = readTlv(der, pos)[1];
-        }
-        if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-        pos = readTlv(der, pos)[1]; // serialNumber
-        if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-        pos = readTlv(der, pos)[1]; // signature SEQUENCE
-        if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-        pos = readTlv(der, pos)[1]; // issuer SEQUENCE
-        if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-        pos = readTlv(der, pos)[1]; // validity SEQUENCE
-        while (pos < end) {
-            int tag = der[pos] & 0xFF;
-            int[] tlv = readTlv(der, pos);
-            if (tag == TAG_SEQUENCE) {
-                return new int[]{pos, tlv[1] - pos};
-            }
-            pos = tlv[1];
-        }
-        throw new IllegalArgumentException("Subject DN not found in TBSCertificate");
+        throw new IllegalArgumentException("DN not found in TBSCertificate (skipSeqs=" + skipSeqs + ")");
     }
 
     // ========================================================================
@@ -1685,16 +1688,9 @@ public final class TlsCertificate {
      * @return [notBefore, notAfter]
      */
     private static Date[] parseValidity(byte[] der, int[] tbsTlv) {
-        int pos = tbsTlv[0];
         int end = tbsTlv[1];
-
-        // version [0] EXPLICIT (OPTIONAL)
-        if (pos < end && (der[pos] & 0xFF) == 0xA0) {
-            pos = readTlv(der, pos)[1];
-        }
-        // serialNumber (INTEGER)
-        if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-        pos = readTlv(der, pos)[1];
+        int pos = skipVersionAndSerial(der, tbsTlv);
+        if (pos < 0) throw new IllegalArgumentException("TBSCertificate too short");
 
         // validity — 3-я SEQUENCE (1=signature, 2=issuer, 3=validity)
         int seqCount = 0;
@@ -1703,7 +1699,7 @@ public final class TlsCertificate {
             int[] tlv = readTlv(der, pos);
             if (tag == TAG_SEQUENCE) {
                 seqCount++;
-                if (seqCount == 3) {
+                if (seqCount == TBS_VALIDITY_SEQUENCE_INDEX) {
                     Date notBefore = parseTime(der, tlv[0]);
                     Date notAfter = parseTime(der, readTlv(der, tlv[0])[1]);
                     return new Date[]{notBefore, notAfter};
@@ -1742,45 +1738,7 @@ public final class TlsCertificate {
         }
     }
 
-    // ASN.1 string type tags для DN values (не все есть в TlsDerParser)
-    private static final int TAG_UTF8_STRING       = 0x0C;
-    private static final int TAG_NUMERIC_STRING    = 0x12;
-    private static final int TAG_PRINTABLE_STRING  = 0x13;
-    private static final int TAG_T61_STRING        = 0x14;
-    private static final int TAG_IA5_STRING        = 0x16;
-    private static final int TAG_BMP_STRING        = 0x1E;
-
-    // OID bytes для распространённых DN-атрибутов
-    private static final byte[] CN_OID    = {0x55, 0x04, 0x03}; // 2.5.4.3
-    private static final byte[] C_OID     = {0x55, 0x04, 0x06}; // 2.5.4.6
-    private static final byte[] L_OID     = {0x55, 0x04, 0x07}; // 2.5.4.7
-    private static final byte[] ST_OID    = {0x55, 0x04, 0x08}; // 2.5.4.8
-    private static final byte[] STREET_OID = {0x55, 0x04, 0x09}; // 2.5.4.9
-    private static final byte[] O_OID     = {0x55, 0x04, 0x0A}; // 2.5.4.10
-    private static final byte[] OU_OID    = {0x55, 0x04, 0x0B}; // 2.5.4.11
-    private static final byte[] T_OID     = {0x55, 0x04, 0x0C}; // 2.5.4.12
-    private static final byte[] SN_OID    = {0x55, 0x04, 0x04}; // 2.5.4.4
-    private static final byte[] GN_OID    = {0x55, 0x04, 0x2A}; // 2.5.4.42
-    private static final byte[] SERIALNUM_OID = {0x55, 0x04, 0x05}; // 2.5.4.5
-    private static final byte[] POSTAL_CODE_OID = {0x55, 0x04, 0x11}; // 2.5.4.17
-    private static final byte[] UNIQUE_ID_OID = {0x55, 0x04, 0x2D}; // 2.5.4.45
-    private static final byte[] PSEUDONYM_OID  = {0x55, 0x04, 0x41}; // 2.5.4.65
-    // emailAddress = 1.2.840.113549.1.9.1
-    private static final byte[] EMAIL_OID = {(byte)0x2A, (byte)0x86, 0x48, (byte)0x86, (byte)0xF7, 0x0D, 0x01, 0x09, 0x01};
-    // UID = 0.9.2342.19200300.100.1.1
-    private static final byte[] UID_OID   = {0x09, (byte)0x92, 0x26, (byte)0x89, (byte)0x93, (byte)0xF2, 0x2C, 0x64, 0x01, 0x01};
-    // INN = 1.2.643.3.131.1.1
-    private static final byte[] INN_OID   = {0x2A, (byte)0x85, 0x03, 0x03, (byte)0x83, 0x01, 0x01};
-    // OGRNIP = 1.2.643.3.131.1.2
-    private static final byte[] OGRNIP_OID = {0x2A, (byte)0x85, 0x03, 0x03, (byte)0x83, 0x01, 0x02};
-    // INNLE (OID для юрлиц) = 1.2.643.100.1
-    private static final byte[] INNLE_OID = {0x2A, (byte)0x85, 0x03, 0x64, 0x01};
-    // OGRN = 1.2.643.100.3
-    private static final byte[] OGRN_OID  = {0x2A, (byte)0x85, 0x03, 0x64, 0x03};
-    // SNILS = 1.2.643.100.5
-    private static final byte[] SNILS_OID = {0x2A, (byte)0x85, 0x03, 0x64, 0x05};
-    // organizationIdentifier = 2.5.4.97
-    private static final byte[] ORG_ID_OID = {0x55, 0x04, 0x61};
+    // OID DN-атрибутов — в TlsDerParser (CN_OID_BYTES, C_OID_BYTES и т.д.)
 
     /**
      * Парсит DN SEQUENCE в человеко-читаемый DN-формат и список полей.
@@ -1887,28 +1845,28 @@ public final class TlsCertificate {
      * Если OID неизвестен — возвращает точечную нотацию.
      */
     private static String lookupOidName(byte[] der, int start, int len) {
-        if (matchesOid(der, start, len, CN_OID)) return "CN";
-        if (matchesOid(der, start, len, C_OID)) return "C";
-        if (matchesOid(der, start, len, L_OID)) return "L";
-        if (matchesOid(der, start, len, ST_OID)) return "ST";
-        if (matchesOid(der, start, len, STREET_OID)) return "STREET";
-        if (matchesOid(der, start, len, O_OID)) return "O";
-        if (matchesOid(der, start, len, OU_OID)) return "OU";
-        if (matchesOid(der, start, len, T_OID)) return "T";
-        if (matchesOid(der, start, len, SN_OID)) return "SN";
-        if (matchesOid(der, start, len, GN_OID)) return "GN";
-        if (matchesOid(der, start, len, SERIALNUM_OID)) return "SERIALNUMBER";
-        if (matchesOid(der, start, len, POSTAL_CODE_OID)) return "postalCode";
-        if (matchesOid(der, start, len, UNIQUE_ID_OID)) return "UNIQUE_IDENTIFIER";
-        if (matchesOid(der, start, len, PSEUDONYM_OID)) return "pseudonym";
-        if (matchesOid(der, start, len, EMAIL_OID)) return "emailAddress";
-        if (matchesOid(der, start, len, UID_OID)) return "UID";
-        if (matchesOid(der, start, len, INN_OID)) return "INN";
-        if (matchesOid(der, start, len, OGRNIP_OID)) return "OGRNIP";
-        if (matchesOid(der, start, len, INNLE_OID)) return "INN";
-        if (matchesOid(der, start, len, OGRN_OID)) return "OGRN";
-        if (matchesOid(der, start, len, SNILS_OID)) return "SNILS";
-        if (matchesOid(der, start, len, ORG_ID_OID)) return "organizationIdentifier";
+        if (matchesOid(der, start, len, TlsDerParser.CN_OID_BYTES)) return "CN";
+        if (matchesOid(der, start, len, TlsDerParser.C_OID_BYTES)) return "C";
+        if (matchesOid(der, start, len, TlsDerParser.L_OID_BYTES)) return "L";
+        if (matchesOid(der, start, len, TlsDerParser.ST_OID_BYTES)) return "ST";
+        if (matchesOid(der, start, len, TlsDerParser.STREET_OID_BYTES)) return "STREET";
+        if (matchesOid(der, start, len, TlsDerParser.O_OID_BYTES)) return "O";
+        if (matchesOid(der, start, len, TlsDerParser.OU_OID_BYTES)) return "OU";
+        if (matchesOid(der, start, len, TlsDerParser.T_OID_BYTES)) return "T";
+        if (matchesOid(der, start, len, TlsDerParser.SN_OID_BYTES)) return "SN";
+        if (matchesOid(der, start, len, TlsDerParser.GN_OID_BYTES)) return "GN";
+        if (matchesOid(der, start, len, TlsDerParser.SERIALNUM_OID_BYTES)) return "SERIALNUMBER";
+        if (matchesOid(der, start, len, TlsDerParser.POSTAL_CODE_OID_BYTES)) return "postalCode";
+        if (matchesOid(der, start, len, TlsDerParser.UNIQUE_ID_OID_BYTES)) return "UNIQUE_IDENTIFIER";
+        if (matchesOid(der, start, len, TlsDerParser.PSEUDONYM_OID_BYTES)) return "pseudonym";
+        if (matchesOid(der, start, len, TlsDerParser.EMAIL_OID_BYTES)) return "emailAddress";
+        if (matchesOid(der, start, len, TlsDerParser.UID_OID_BYTES)) return "UID";
+        if (matchesOid(der, start, len, TlsDerParser.INN_OID_BYTES)) return "INN";
+        if (matchesOid(der, start, len, TlsDerParser.OGRNIP_OID_BYTES)) return "OGRNIP";
+        if (matchesOid(der, start, len, TlsDerParser.INNLE_OID_BYTES)) return "INN";
+        if (matchesOid(der, start, len, TlsDerParser.OGRN_OID_BYTES)) return "OGRN";
+        if (matchesOid(der, start, len, TlsDerParser.SNILS_OID_BYTES)) return "SNILS";
+        if (matchesOid(der, start, len, TlsDerParser.ORG_ID_OID_BYTES)) return "organizationIdentifier";
         return oidBytesToDottedString(der, start, len);
     }
 

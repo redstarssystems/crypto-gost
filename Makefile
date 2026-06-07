@@ -1,4 +1,4 @@
-.PHONY: clean doc test
+.PHONY: clean doc test test-stress-tlssession test-stress-tlssession-mixed
 
 ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -15,10 +15,31 @@ test:
 	fi; \
 	exit $$ret
 
+# Однопоточный throughput TlsSession (Kuznyechik-MGM-Streebog-256)
+# Длительность: 5 прогонов × ~20 с ≈ 100 с
+test-stress-tlssession:
+	mvn test -q -pl crypto-gost-tls13 -am \
+		-Dtest="org.rssys.gost.tls13.stress.TlsSessionStreamTest" \
+		-Dsurefire.excludedGroups= \
+		-Dsurefire.failIfNoSpecifiedTests=false $(ARGS)
+
+# Стресс-тест TlsSession: 4 профиля нагрузки, 5 минут
+test-stress-tlssession-mixed:
+	mvn test -q -pl crypto-gost-tls13 -am \
+		-Dtest="org.rssys.gost.tls13.stress.TlsSessionStressTest#stressTest" \
+		-Dsurefire.excludedGroups= \
+		-Dsurefire.failIfNoSpecifiedTests=false $(ARGS)
+
 clean:
 	cd $(ROOT) && mvn clean -q
 	$(MAKE) -s -C bench clean
 	$(MAKE) -s -C examples clean
+	$(MAKE) -s -C x-validation-tests clean
+	# Фаззинг-артефакты (cifuzz корпус, crash-файлы)
+	rm -rf $(ROOT)/crypto-gost-core/.cifuzz-corpus \
+	       $(ROOT)/crypto-gost-jsse/.cifuzz-corpus \
+	       $(ROOT)/crypto-gost-tls13/.cifuzz-corpus
+	find $(ROOT) -path '*/fuzz*/crash-*' -delete 2>/dev/null
 	@echo "All modules cleaned."
 
 doc:

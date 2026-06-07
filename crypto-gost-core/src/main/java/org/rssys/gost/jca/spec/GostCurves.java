@@ -16,10 +16,10 @@ import java.util.Map;
  */
 public final class GostCurves {
 
-    public static final String OID_TC26_A_256 = "1.2.643.7.1.2.1.2.1";
-    public static final String OID_TC26_A_512 = "1.2.643.7.1.2.1.1.1";
-    public static final String OID_TC26_B_512 = "1.2.643.7.1.2.1.1.2";
-    public static final String OID_TC26_C_512 = "1.2.643.7.1.2.1.1.3";
+    public static final String OID_TC26_A_256 = "1.2.643.7.1.2.1.1.1";
+    public static final String OID_TC26_A_512 = "1.2.643.7.1.2.1.2.1";
+    public static final String OID_TC26_B_512 = "1.2.643.7.1.2.1.2.2";
+    public static final String OID_TC26_C_512 = "1.2.643.7.1.2.1.2.3";
     public static final String OID_CRYPTOPRO_A = "1.2.643.2.2.35.1";
     public static final String OID_CRYPTOPRO_B = "1.2.643.2.2.35.2";
     public static final String OID_CRYPTOPRO_C = "1.2.643.2.2.35.3";

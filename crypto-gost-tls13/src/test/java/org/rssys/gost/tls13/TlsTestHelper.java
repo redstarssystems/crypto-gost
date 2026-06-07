@@ -1,15 +1,15 @@
 package org.rssys.gost.tls13;
 
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.Signature;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.GostOids;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 import org.rssys.gost.tls13.cert.TlsDerParser;
+import org.rssys.gost.util.DerCodec;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -20,13 +20,7 @@ import java.nio.charset.StandardCharsets;
  */
 public class TlsTestHelper {
 
-    public static final int TAG_SEQUENCE = 0x30;
-    public static final int TAG_SET = 0x31;
-    public static final int TAG_BIT_STRING = 0x03;
-    public static final int TAG_OCTET_STRING = 0x04;
-    public static final int TAG_OID = 0x06;
-    public static final int TAG_UTF8_STRING = 0x0C;
-    public static final int TAG_UTC_TIME = 0x17;
+    // Контекстно-зависимые теги (X.509 SAN, CTX) — нет в DerCodec
     public static final int TAG_CTX_0         = 0xA0;
     public static final int TAG_CTX_3         = 0xA3;
     public static final int TAG_DNS_NAME      = 0x82;
@@ -63,7 +57,7 @@ public class TlsTestHelper {
 
     /** Создаёт самоподписанный сертификат и возвращает его с ключом. */
     public static CertBundle createCertWithKey(ECParameters params) {
-        return createCertWithKey(params, "240501120000Z", "290501120000Z", null);
+        return createCertWithKey(params, "20240501120000Z", "21060101120000Z", null);
     }
 
     public static CertBundle createCertWithKey(ECParameters params, String notBefore, String notAfter) {
@@ -190,7 +184,7 @@ public class TlsTestHelper {
             out.write(derTlv(0x02, new byte[]{0x01}));
             out.write(buildAlgId(params));
             out.write(issuerDn != null ? issuerDn : derSequence(new byte[0]));
-            out.write(derSequence(derUtcTime(notBefore), derUtcTime(notAfter)));
+            out.write(derSequence(derTime(notBefore), derTime(notAfter)));
             out.write(subjectDn != null ? subjectDn : derSequence(new byte[0]));
             byte[] spki = org.rssys.gost.jca.spec.GostDerCodec.encodePublicKey(pub);
             out.write(spki, 0, spki.length);
@@ -213,18 +207,9 @@ public class TlsTestHelper {
     }
 
     public static byte[] doHash(byte[] data, int hlen) {
-        if (hlen == 32) {
-            Streebog256 d = new Streebog256();
-            d.update(data, 0, data.length);
-            byte[] h = new byte[32];
-            d.doFinal(h, 0);
-            return h;
-        }
-        Streebog512 d = new Streebog512();
-        d.update(data, 0, data.length);
-        byte[] h = new byte[64];
-        d.doFinal(h, 0);
-        return h;
+        if (hlen == TlsConstants.STREEBOG_256_HASH_LEN) return Digest.digest256(data);
+        if (hlen == TlsConstants.STREEBOG_512_HASH_LEN) return Digest.digest512(data);
+        throw new IllegalArgumentException("Unsupported hash length: " + hlen);
     }
 
     // ========================================================================
@@ -244,7 +229,7 @@ public class TlsTestHelper {
         ByteArrayOutputStream extBuf = new ByteArrayOutputStream();
         extBuf.write(bcExt);
         extBuf.write(kuExt);
-        byte[] tbs = buildTbs(pub, params, "240501120000Z", "290501120000Z",
+        byte[] tbs = buildTbs(pub, params, "20240501120000Z", "21060101120000Z",
                 null, null, extBuf.toByteArray(), subjectDn, subjectDn);
 
         byte[] hash = doHash(tbs, hlen);
@@ -358,11 +343,11 @@ public class TlsTestHelper {
     }
 
     public static byte[] buildAlgId(ECParameters params) {
-        String signOid = (params.hlen == 32)
+        String signOid = (params.hlen == TlsConstants.STREEBOG_256_HASH_LEN)
                 ? GostOids.SIG_WITH_DIGEST_256
                 : GostOids.SIG_WITH_DIGEST_512;
         String curveOid = curveOidOf(params);
-        String digestOid = (params.hlen == 32)
+        String digestOid = (params.hlen == TlsConstants.STREEBOG_256_HASH_LEN)
                 ? GostOids.DIGEST_256
                 : GostOids.DIGEST_512;
         byte[] paramsSeq = derSequence(derOid(curveOid), derOid(digestOid));
@@ -372,71 +357,47 @@ public class TlsTestHelper {
     // ---- DER ----
 
     public static byte[] derSequence(byte[]... elements) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        for (byte[] el : elements) out.write(el, 0, el.length);
-        return derTlv(TAG_SEQUENCE, out.toByteArray());
+        return DerCodec.encodeSequence(elements);
     }
 
     public static byte[] derBitString(byte[] content) {
-        byte[] withUnused = new byte[content.length + 1];
-        withUnused[0] = 0;
-        System.arraycopy(content, 0, withUnused, 1, content.length);
-        return derTlv(TAG_BIT_STRING, withUnused);
+        return DerCodec.encodeBitString(content);
     }
 
     public static byte[] derOctetString(byte[] data) {
-        return derTlv(TAG_OCTET_STRING, data);
+        return DerCodec.encodeOctetString(data);
     }
 
     public static byte[] derOid(String oidStr) {
-        String[] parts = oidStr.split("\\.");
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        int[] arcs = new int[parts.length];
-        for (int i = 0; i < parts.length; i++) arcs[i] = Integer.parseInt(parts[i]);
-        out.write(40 * arcs[0] + arcs[1]);
-        for (int i = 2; i < arcs.length; i++) {
-            if (arcs[i] < 128) {
-                out.write(arcs[i]);
-            } else {
-                out.write(0x80 | (arcs[i] >>> 7));
-                out.write(arcs[i] & 0x7F);
-            }
-        }
-        return derTlv(TAG_OID, out.toByteArray());
+        return DerCodec.encodeOid(oidStr);
     }
 
-    public static byte[] derUtcTime(String time) {
-        return derTlv(TAG_UTC_TIME, time.getBytes(StandardCharsets.US_ASCII));
+    /**
+     * Кодирует Time в DER: 13 символов (YYMMDDHHmmssZ) → UTCTime,
+     * 15 символов (YYYYMMDDHHmmssZ) → GeneralizedTime.
+     */
+    public static byte[] derTime(String time) {
+        int tag = time.length() == 13 ? DerCodec.TAG_UTC_TIME : DerCodec.TAG_GENERALIZED_TIME;
+        return DerCodec.encodeTlv(tag, time.getBytes(StandardCharsets.US_ASCII));
     }
 
     public static byte[] derTlv(int tag, byte[] content) {
-        byte[] lenBytes = buildLength(content.length);
-        byte[] result = new byte[1 + lenBytes.length + content.length];
-        result[0] = (byte) tag;
-        System.arraycopy(lenBytes, 0, result, 1, lenBytes.length);
-        System.arraycopy(content, 0, result, 1 + lenBytes.length, content.length);
-        return result;
+        return DerCodec.encodeTlv(tag, content);
     }
 
     public static byte[] Set(byte[] content) {
-        return derTlv(TAG_SET, content);
+        return DerCodec.encodeSet(content);
     }
 
     public static byte[] buildDN(String cn) {
         // RDN = SET { SEQUENCE { OID (CN=2.5.4.3), UTF8String cn } }
-        byte[] attr = derSequence(derOid("2.5.4.3"), derTlv(TAG_UTF8_STRING,
+        byte[] attr = derSequence(derOid("2.5.4.3"), derTlv(DerCodec.TAG_UTF8_STRING,
                 cn.getBytes(StandardCharsets.UTF_8)));
         return derSequence(derSet(attr));
     }
 
     private static byte[] derSet(byte[] item) {
-        return derTlv(TAG_SET, item);
-    }
-
-    private static byte[] buildLength(int len) {
-        if (len < 128) return new byte[]{(byte) len};
-        if (len < 256) return new byte[]{(byte) 0x81, (byte) len};
-        return new byte[]{(byte) 0x82, (byte) (len >>> 8), (byte) len};
+        return DerCodec.encodeSet(item);
     }
 
     private static String curveOidOf(ECParameters params) {
@@ -539,7 +500,7 @@ public class TlsTestHelper {
         byte[] certId = derSequence(hashAlg, derOctetString(issuerNameHash),
                 derOctetString(issuerKeyHash), derTlv(0x02, serialNumber));
         byte[] goodStatus = derTlv(0xA0, derTlv(0x05, new byte[0]));
-        byte[] thisUpdate = derUtcTime("250501120000Z");
+        byte[] thisUpdate = derTime("20250501120001Z");
         ByteArrayOutputStream srOut = new ByteArrayOutputStream();
         srOut.write(certId);
         srOut.write(goodStatus);
@@ -659,10 +620,10 @@ public class TlsTestHelper {
         // issuer Name
         tbsOut.write(derSequence(issuerDnDer));
         // thisUpdate
-        tbsOut.write(derUtcTime("250501120000Z"));
-        // nextUpdate (optional) — используем UTCTime для совместимости с parseTime
+        tbsOut.write(derTime("20250501120000Z"));
+        // nextUpdate (optional) — используем GeneralizedTime для дат > 2049
         if (nextUpdateGeneralizedTime != null) {
-            tbsOut.write(derUtcTime(nextUpdateGeneralizedTime));
+            tbsOut.write(derTime(nextUpdateGeneralizedTime));
         }
         // revokedCertificates (optional)
         if (serialNumbers != null && serialNumbers.length > 0) {
@@ -670,7 +631,7 @@ public class TlsTestHelper {
             for (byte[] serial : serialNumbers) {
                 byte[] revokedEntry = derSequence(
                         derTlv(0x02, serial),               // serialNumber INTEGER
-                        derUtcTime("250601120000Z"));       // revocationDate
+                        derTime("20250601120000Z"));        // revocationDate
                 rvOut.write(revokedEntry);
             }
             tbsOut.write(derSequence(rvOut.toByteArray()));

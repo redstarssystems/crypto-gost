@@ -1,0 +1,215 @@
+= Кросс-валидация ключей ГОСТ Р 34.10-2012
+:toc:
+:toc-title: Содержание
+:sectnums:
+:revdate: 2026-06-02
+:revnumber: 1.2
+:lang: ru
+
+== Цели
+
+Кросс-валидация ключей проверяет, что crypto-gost производит те же математические
+результаты и те же DER-структуры, что и две широко признанные эталонные реализации:
+BouncyCastle (Java) и OpenSSL с gostprov/engine gost.
+
+Проверяется:
+
+. *DER roundtrip* — сериализация ключа в DER и обратное чтение через crypto-gost
+(целостность `GostDerCodec`).
+. *Параметры crypto-gost → BC* — конвертация кривых параметров из crypto-gost
+в BouncyCastle и обратно, сравнение d и Q.
+. *Параметры BC → crypto-gost + Q = d·G* — BC генерирует ключи, crypto-gost
+принимает, плюс верификация через скалярное умножение (`ECPoint.multiply`).
+. *ASN.1 DER структура* — OID алгоритма подписи (256/512 бит) и OID кривой
+в DER-представлении ключа, проверенные через BC ASN.1 парсер.
+. *ECDH симметричность* — `KeyAgreement.computeSharedSecret(A.priv, B.pub)` ==
+`KeyAgreement.computeSharedSecret(B.priv, A.pub)` для crypto-gost и BC независимо.
+. *ECDH межреализационная совместимость* — shared secret совпадает между
+crypto-gost, BC и OpenSSL gostprov для всех поддерживаемых кривых.
+
+== Кривые
+
+[cols="2,1,1,1,1", options="header"]
+|===
+|Кривая |Разрядность |BC |OpenSSL |ECDH (OpenSSL)
+
+|TC26-A-256
+|256 бит |✓ |— |—
+|CryptoPro-A
+|256 бит |✓ |✓ |✓
+|CryptoPro-B
+|256 бит |✓ |✓ |✓
+|CryptoPro-C
+|256 бит |✓ |✓ |✓
+|TC26-A-512
+|512 бит |✓ |✓ |✓
+|TC26-B-512
+|512 бит |✓ |✓ |✓
+|TC26-C-512
+|512 бит |✓ |✓ |✓
+|===
+
+TC26-A-256 не поддерживается OpenSSL gostprov — нет paramset:D для 256-бит кривых.
+
+== Что и как проверяется
+
+Для каждой кривой генерируется случайная ключевая пара — свежая на каждый тест.
+
+=== BC-тесты (4 проверки × 7 кривых = 28 проверок)
+
+. **DER roundtrip** — ключ → DER-кодирование (`GostDerCodec`) → DER-декодирование →
+сравнение Q (x, y) и d.
+. **crypto-gost → BC** — ключи crypto-gost → BouncyCastle `ECDomainParameters`,
+сравнение d и Q.
+. **BC → crypto-gost** — ключи BC → crypto-gost + верификация `G * d == Q`
+через `ECPoint.multiply(d)`.
+. **ASN.1 DER структура** — парсинг DER через `SubjectPublicKeyInfo` / `PrivateKeyInfo`
+BC, сравнение OID алгоритма и OID кривой.
+
+=== OpenSSL-тесты (2 проверки × 6 кривых = 12 проверок)
+
+Для каждой openssl-совместимой кривой (CryptoPro-A/B/C, TC26-A/B/C-512):
+
+. **OpenSSL genpkey → crypto-gost** — gostprov генерирует ключ через
+`openssl genpkey`, DER читается через `GostDerCodec.decodePrivateKey`,
+затем проверяется Q = d·G.
+. **crypto-gost → OpenSSL pkey** — crypto-gost генерирует ключ,
+DER читается через `openssl pkey`.
+
+=== ECDH BC-тесты (3 сценария × 7 кривых = 21 проверка)
+
+Все семь кривых, precondition не требуется.
+
+. **crypto-gost обе стороны** —
+`computeSharedSecret(A.priv, B.pub)` == `computeSharedSecret(B.priv, A.pub)`.
+Проверяет симметричность и математическую корректность реализации.
+. **BC обе стороны** —
+`ECDHBasicAgreement(A.priv, B.pub)` == `ECDHBasicAgreement(B.priv, A.pub)`.
+Независимая проверка симметричности на стороне BC.
+. **crypto-gost × BC** — crypto-gost вычисляет shared secret с BC-публичным ключом,
+BC вычисляет shared secret с crypto-gost-публичным ключом, результаты сравниваются.
+Проверяет совместимость представления ключей и идентичность алгоритма d·Q.
+
+=== ECDH OpenSSL-тесты (3 сценария × 6 кривых = 18 проверок)
+
+Для каждой openssl-совместимой кривой (CryptoPro-A/B/C, TC26-A/B/C-512).
+Precondition: OpenSSL + gostprov доступны, `pkeyutl -derive` работает.
+
+. **crypto-gost обе стороны vs OpenSSL** —
+crypto-gost вычисляет shared secret, OpenSSL `pkeyutl -derive` вычисляет тот же
+secret с теми же DER-ключами. Проверяет wire-формат ключей и алгоритм.
+. **OpenSSL обе стороны vs crypto-gost** —
+OpenSSL генерирует оба ключа, `pkeyutl -derive` вычисляет shared secret,
+crypto-gost читает DER-ключи и вычисляет тот же результат.
+. **Смешанный (crypto-gost A × OpenSSL B)** —
+crypto-gost генерирует ключ A, OpenSSL генерирует ключ B.
+crypto-gost вычисляет `A.priv × B.pub`, OpenSSL вычисляет `A.priv × B.pub`.
+Дополнительно проверяется симметричность: `B.priv × A.pub` (crypto-gost) ==
+`A.priv × B.pub`.
+
+== Структура модуля
+
+....
+x-validation-tests/keys/
+  src/test/java/.../crossval/keys/
+    TestData.java                         — кривые, флаги совместимости
+    BcKeyHelper.java                      — обёртка над BC: domain, конвертация, ASN.1
+    BcKeyCrossValidationTest.java         — JUnit 5: crypto-gost vs BC (ключи)
+    BcEcdhCrossValidationTest.java        — JUnit 5: crypto-gost vs BC (ECDH)
+    OpenSslKeysCrossValidationTest.java   — JUnit 5: crypto-gost vs OpenSSL (ключи)
+    OpenSslEcdhCrossValidationTest.java   — JUnit 5: crypto-gost vs OpenSSL (ECDH)
+....
+
+=== Технические решения
+
+*Graceful skip.* `@BeforeAll` в OpenSSL-тестах проверяет доступность бинарника
+и gostprov. При недоступности тесты пропускаются через `Assumptions.assumeTrue`.
+
+*`assumeGostDerive`.* Отдельная probe-проверка `OpenSslChecker.assumeGostDerive()`:
+запускает `pkeyutl -derive` с временными ключами. Некоторые конфигурации OpenSSL
+поддерживают genpkey, но не pkeyutl -derive для ГОСТ.
+
+*Путь к бинарнику.* `OpenSslChecker.resolveOpenSslBinary()` читает системное
+свойство `openssl.binary`, затем переменную окружения `OPENSSL_BIN`,
+иначе — `openssl` из `$PATH`.
+
+*Фильтрация кривых.* `TestData.CurveSpec` содержит три флага:
+`opensslGenSupported`, `opensslReadSupported`, `ecdhSupported` —
+каждый тест перебирает только совместимые кривые.
+
+*OID-совместимость 512-бит кривых.* OpenSSL использует OID `1.2.643.7.1.2.1.2.x`
+для TC26-A/B/C-512. После исправления в `GostCurves` эти OID совпадают,
+и crypto-gost читает OpenSSL-ключи без ошибок.
+
+*Конвертация LE → BE для BC.* `ECDHBasicAgreement.calculateAgreement` возвращает
+X-координату как `BigInteger` (big-endian). Утилита `toLeBytes` конвертирует
+в little-endian фиксированной длины `hlen` — формат совпадает с
+`KeyAgreement.computeSharedSecret`.
+
+== Покрытие
+
+[cols="3,1,1,1,1", options="header"]
+|===
+|Что проверяется |BC ключи |BC ECDH |OpenSSL ключи |OpenSSL ECDH
+
+|DER roundtrip: encode → decode, Q и d совпадают
+|✓ (7) |— |— |—
+
+|crypto-gost → BC: d и Q передаются без потерь
+|✓ (7) |— |— |—
+
+|BC → crypto-gost: Q = d·G
+|✓ (7) |— |— |—
+
+|ASN.1: OID алгоритма и кривой в DER верны
+|✓ (7) |— |— |—
+
+|ECDH симметричность crypto-gost: A·B == B·A
+|— |✓ (7) |— |—
+
+|ECDH симметричность BC: A·B == B·A
+|— |✓ (7) |— |—
+
+|ECDH crypto-gost × BC: shared secret совпадает
+|— |✓ (7) |— |—
+
+|OpenSSL genpkey → crypto-gost: читает ключ, Q = d·G
+|— |— |✓ (6) |—
+
+|crypto-gost → OpenSSL pkey: OpenSSL читает DER
+|— |— |✓ (6) |—
+
+|crypto-gost ключи → pkeyutl -derive совпадает
+|— |— |— |✓ (6)
+
+|OpenSSL ключи → KeyAgreement совпадает
+|— |— |— |✓ (6)
+
+|Смешанный + симметричность (A·B == B·A)
+|— |— |— |✓ (6)
+
+|Итого проверок
+|28 |21 |12 |18
+|===
+
+Итого: **79 проверок** (28 + 21 + 12 + 18).
+
+== Запуск
+
+[source,bash]
+----
+# Все тесты модуля (79 проверок)
+mvn -Pcrossval -pl x-validation-tests/keys -am test -Dexec.skip=true
+
+# Только ECDH-тесты
+mvn -Pcrossval -pl x-validation-tests/keys -am test -Dexec.skip=true \
+    -Dtest="BcEcdhCrossValidationTest,OpenSslEcdhCrossValidationTest"
+
+# С кастомным OpenSSL
+mvn -Pcrossval -pl x-validation-tests/keys -am test -Dexec.skip=true \
+    -Dopenssl.binary=/path/to/openssl
+
+# Без OpenSSL (только BC, 49 проверок — всегда зелёные)
+mvn -Pcrossval -pl x-validation-tests/keys -am test -Dexec.skip=true \
+    -Dtest="BcKeyCrossValidationTest,BcEcdhCrossValidationTest"
+----
