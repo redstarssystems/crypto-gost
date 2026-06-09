@@ -2,8 +2,10 @@ package org.rssys.gost.jca.spi;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.jca.RssysGostProvider;
 
 import java.security.KeyFactory;
+import java.security.Security;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
@@ -29,6 +31,9 @@ class GostKeyFactorySpiFuzzTest {
     private static final KeyFactory KEY_FACTORY;
 
     static {
+        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
+            Security.addProvider(new RssysGostProvider());
+        }
         try {
             KEY_FACTORY = KeyFactory.getInstance("ECGOST3410-2012");
         } catch (Exception e) {

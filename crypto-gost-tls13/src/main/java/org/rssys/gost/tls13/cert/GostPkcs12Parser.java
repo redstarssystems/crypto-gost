@@ -234,7 +234,13 @@ public final class GostPkcs12Parser {
 
         // DigestInfo: SEQUENCE { AlgorithmIdentifier, OCTET STRING }
         byte[][] di = parseSequence(seq[0], new int[]{0});
+        if (di.length < 2) {
+            throw new IllegalArgumentException("MacData: DigestInfo must contain AlgorithmIdentifier and digest value");
+        }
         byte[][] diAlgId = parseSequence(di[0], new int[]{0});
+        if (diAlgId.length < 1) {
+            throw new IllegalArgumentException("MacData: missing AlgorithmIdentifier in DigestInfo");
+        }
         String digestAlgorithm = parseOid(diAlgId[0], new int[]{0});
         byte[] digestValue = parseOctetString(di[1], new int[]{0});
 
@@ -315,6 +321,9 @@ public final class GostPkcs12Parser {
 
         // EncryptionAlgorithmIdentifier ::= AlgorithmIdentifier
         byte[][] algId = parseSequence(seq[0], new int[]{0});
+        if (algId.length < 1) {
+            throw new IllegalArgumentException("EncryptedPrivateKeyInfo: AlgorithmIdentifier missing OID");
+        }
         String encAlgOid = parseOid(algId[0], new int[]{0});
         byte[] encParams = null;
         if (algId.length > 1) {
@@ -341,6 +350,9 @@ public final class GostPkcs12Parser {
 
         // keyDerivationFunc ::= AlgorithmIdentifier (PBKDF2)
         byte[][] kdfAlgId = parseSequence(seq[0], new int[]{0});
+        if (kdfAlgId.length < 1) {
+            throw new IllegalArgumentException("PBES2-params: keyDerivationFunc missing OID");
+        }
         String kdfOid = parseOid(kdfAlgId[0], new int[]{0});
         if (!GostOids.PBKDF2.equals(kdfOid)) {
             throw new IllegalArgumentException("PBES2: expected PBKDF2, got " + kdfOid);
@@ -349,6 +361,9 @@ public final class GostPkcs12Parser {
 
         // encryptionScheme ::= AlgorithmIdentifier
         byte[][] encAlgId = parseSequence(seq[1], new int[]{0});
+        if (encAlgId.length < 1) {
+            throw new IllegalArgumentException("PBES2-params: encryptionScheme missing OID");
+        }
         String encOid = parseOid(encAlgId[0], new int[]{0});
         byte[] encParams = encAlgId.length > 1 ? encAlgId[1] : null;
 
@@ -443,6 +458,9 @@ public final class GostPkcs12Parser {
         checkTag(data, pos, expectedTag);
         int contentLen = decodeLength(data, pos);
         int end = pos[0] + contentLen;
+        if (end > data.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + pos[0]);
+        }
         List<byte[]> elements = new ArrayList<>();
         while (pos[0] < end) {
             int elemStart = pos[0];
@@ -477,6 +495,13 @@ public final class GostPkcs12Parser {
         int len = decodeLength(data, pos);
         int start = pos[0];
         int end = start + len;
+
+        if (end > data.length) {
+            throw new IllegalArgumentException("Truncated DER encoding in OID at offset " + start);
+        }
+        if (len == 0) {
+            throw new IllegalArgumentException("Invalid OID: zero length at offset " + start);
+        }
 
         StringBuilder sb = new StringBuilder();
         int first = data[start] & 0xFF;
@@ -556,10 +581,21 @@ public final class GostPkcs12Parser {
     }
 
     private static int[] peekLength(byte[] data, int offset) {
+        if (offset >= data.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+        }
         int first = data[offset] & 0xFF;
         if (first <= 0x7F) return new int[]{first, 1};
-        if (first == 0x81) return new int[]{data[offset + 1] & 0xFF, 2};
+        if (first == 0x81) {
+            if (offset + 1 >= data.length) {
+                throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+            }
+            return new int[]{data[offset + 1] & 0xFF, 2};
+        }
         if (first == 0x82) {
+            if (offset + 2 >= data.length) {
+                throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+            }
             int len = ((data[offset + 1] & 0xFF) << 8) | (data[offset + 2] & 0xFF);
             return new int[]{len, 3};
         }
@@ -567,11 +603,22 @@ public final class GostPkcs12Parser {
     }
 
     private static int decodeLength(byte[] data, int[] pos) {
+        if (pos[0] >= data.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + pos[0]);
+        }
         int first = data[pos[0]] & 0xFF;
         pos[0]++;
         if (first <= 0x7F) return first;
-        if (first == 0x81) return data[pos[0]++] & 0xFF;
+        if (first == 0x81) {
+            if (pos[0] >= data.length) {
+                throw new IllegalArgumentException("Truncated DER encoding at offset " + (pos[0] - 1));
+            }
+            return data[pos[0]++] & 0xFF;
+        }
         if (first == 0x82) {
+            if (pos[0] + 1 >= data.length) {
+                throw new IllegalArgumentException("Truncated DER encoding at offset " + (pos[0] - 1));
+            }
             int len = ((data[pos[0]] & 0xFF) << 8) | (data[pos[0] + 1] & 0xFF);
             pos[0] += 2;
             return len;
@@ -580,6 +627,9 @@ public final class GostPkcs12Parser {
     }
 
     private static void checkTag(byte[] data, int[] pos, int expectedTag) {
+        if (pos[0] >= data.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + pos[0]);
+        }
         int tag = data[pos[0]] & 0xFF;
         if (tag != expectedTag) {
             throw new IllegalArgumentException(

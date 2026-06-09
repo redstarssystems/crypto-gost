@@ -9,7 +9,7 @@ package org.rssys.gost.util;
  * Правильный паттерн — перебрасывать опасные исключения, а ожидаемые
  * (IllegalArgumentException, IllegalStateException) — проглатывать.
  */
-final class FuzzTestUtils {
+public final class FuzzTestUtils {
 
     private FuzzTestUtils() {
     }
@@ -19,7 +19,7 @@ final class FuzzTestUtils {
      * NegativeArraySizeException). Иначе — проглатывает (ожидаемо
      * для DER-парсинга на битом входе).
      */
-    static void rethrowIfBug(RuntimeException e) {
+    public static void rethrowIfBug(RuntimeException e) {
         if (e instanceof ArrayIndexOutOfBoundsException
                 || e instanceof NegativeArraySizeException
                 || e instanceof NullPointerException) {

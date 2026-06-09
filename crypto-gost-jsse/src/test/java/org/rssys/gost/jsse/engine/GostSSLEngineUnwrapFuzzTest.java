@@ -2,6 +2,7 @@ package org.rssys.gost.jsse.engine;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
@@ -45,7 +46,9 @@ class GostSSLEngineUnwrapFuzzTest {
 
     @BeforeAll
     static void setUp() throws Exception {
-        Security.addProvider(new RssysGostJsseProvider());
+        if (Security.getProvider(GostJsseConstants.PROVIDER_NAME) == null) {
+            Security.addProvider(new RssysGostJsseProvider());
+        }
         ECParameters params = ECParameters.tc26a256();
 
         rootCa = TlsTestHelper.createRootCA(params);

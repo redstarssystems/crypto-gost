@@ -1143,27 +1143,19 @@ Jetty 12 с `GostSSLSocket` при keep-alive соединениях под на
 Netty. Баг воспроизводится в Jetty 12.0.19, корень проблемы — в
 `SslConnection.flush()`.
 
-## Запуск фаззинг-тестов
+## Запуск фаззинг-тестов для всех модулей
 
-Фаззинг-тесты используют Jazzer (libFuzzer + JUnit) для поиска багов в
-уровне записей и JSSE-обёртки. Каждый `@FuzzTest` содержит seed-файлы
-(corpus) и при обычном запуске Maven прогоняет только их:
+Фаззинг-тесты используют Jazzer (libFuzzer + JUnit) для поиска багов.
+Каждый `@FuzzTest` содержит seed-файлы (corpus) и при обычном запуске
+Maven прогоняет только их — автоматически для всех `@FuzzTest` в модуле:
 
-    # Seed-only (быстрый прогон, ~1-2 сек):
-    mvn test -pl crypto-gost-tls13 -Dtest=TlsRecordUnprotectFuzzTest
-    mvn test -pl crypto-gost-jsse -Dtest=GostSSLEngineUnwrapFuzzTest
+Для удобства есть Makefile-цели:
 
-Для полноценного coverage-guided фаззинга (может выполняться часами)
-добавьте `-DJAZZER_FUZZ=1`:
+    # Один модуль, 30 минут (DUR в секундах). Можно указывать модули: core, tls13, jsse :
+    make fuzz MODULE=tls13 DUR=1800 JOBS=4
 
-    # Coverage-guided фаззинг (рекомендуется 1+ час):
-    mvn test -pl crypto-gost-tls13 -Dtest=TlsRecordUnprotectFuzzTest -DJAZZER_FUZZ=1
-    mvn test -pl crypto-gost-jsse -Dtest=GostSSLEngineUnwrapFuzzTest -DJAZZER_FUZZ=1
-
-В режиме `JAZZER_FUZZ=1` фаззер генерирует десятки тысяч вариантов
-входных данных. На слабом оборудовании это может занять длительное
-время. Прервать можно через Ctrl+C — seed-файлы сохраняются и будут
-использованы при следующем запуске.
+    # Все три модуля параллельно, логи в fuzz-*.log, 1 час:
+    make fuzz-all DUR=3600 JOBS=4
 
 ## Поддержать проект
 

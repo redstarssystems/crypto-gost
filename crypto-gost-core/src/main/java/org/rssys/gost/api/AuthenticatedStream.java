@@ -1,11 +1,13 @@
 package org.rssys.gost.api;
 
 import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
 import org.rssys.gost.util.AuthenticationException;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.rssys.gost.util.CryptoRandom;
 
@@ -14,25 +16,24 @@ import org.rssys.gost.util.CryptoRandom;
  * с chunking по ГОСТ Р 34.13-2015 §4.6.
  *
  * <h3>Зачем chunking?</h3>
- * CMAC вычисляется от открытого текста и требует знания всех данных перед
+ * CMAC вычисляется от шифртекста и требует знания всех данных перед
  * шифрованием. Для потока произвольного размера данные разбиваются на
  * независимые чанки фиксированного размера. Каждый чанк имеет собственный IV
  * и CMAC — обрабатывается и верифицируется независимо. Память потребляется
  * O(chunkSize), а не O(totalData).
  *
- * <h3>Формат потока:</h3>
+ * <h3>Формат потока (Encrypt-then-MAC):</h3>
  * <pre>
  * Заголовок (13 байт):
- *   magic[4]     = 0x47 0x4F 0x53 0x54  ("GOST")
- *   version[1]   = 0x01
- *   chunkSize[4] = размер чанка в байтах (big-endian int)
- *   reserved[4]  = 0x00000000
+ *   streamNonce[8] = случайные байты (CryptoRandom, per-stream)
+ *   version[1]     = 0x02
+ *   chunkSize[4]   = размер чанка в байтах (big-endian int)
  *
- * Каждый чанк (21 + N байт):
+ * Каждый чанк (29 + N байт):
  *   chunkLen[4]  = длина ciphertext (≤ chunkSize), big-endian int
  *   flags[1]     = 0x00 обычный / 0x01 последний чанк
  *   IV[8]        = случайный IV для CTR
- *   CMAC[8]      = CMAC(plaintext чанка), первые 8 байт
+ *   CMAC[16]     = CMAC(ciphertext чанка), полный тег 128 бит
  *   ciphertext[N]
  * </pre>
  *
@@ -68,11 +69,8 @@ public final class AuthenticatedStream {
     /** Размер чанка по умолчанию: 64 КБ. */
     public static final int DEFAULT_CHUNK_SIZE = 65536;
 
-    /** Магическое число заголовка: "GOST". */
-    static final byte[] MAGIC = {0x47, 0x4F, 0x53, 0x54};
-
     /** Версия формата. */
-    static final byte VERSION = 0x01;
+    static final byte VERSION = 0x02;
 
     /** Флаг: обычный чанк. */
     static final byte FLAG_NORMAL = 0x00;
@@ -83,11 +81,45 @@ public final class AuthenticatedStream {
     /** Максимальный размер чанка, допускаемый при открытии. */
     static final int MAX_CHUNK_SIZE = 1_048_576; // 1 МБ
 
-    /** Размер заголовка потока в байтах. */
-    static final int HEADER_SIZE = 13; // magic(4) + version(1) + chunkSize(4) + reserved(4)
+    /** Размер заголовка потока в байтах: nonce(8) + version(1) + chunkSize(4). */
+    static final int HEADER_SIZE = 13;
 
-    /** Размер заголовка чанка: chunkLen(4) + flags(1) + IV(8) + CMAC(8). */
-    static final int CHUNK_HEADER_SIZE = 21;
+    /** Размер заголовка чанка: chunkLen(4) + flags(1) + IV(8) + CMAC(16). */
+    static final int CHUNK_HEADER_SIZE = 29;
+
+    /** Длина ключа Кузнечика (256 бит) в байтах. */
+    private static final int KEY_LEN = 32;
+
+    /** Метка для KDF: генерация per-stream ключей. */
+    private static final byte[] KDF_LABEL = "auth-stream".getBytes(StandardCharsets.US_ASCII);
+
+    /**
+     * Выводит per-stream ключи cmacKey и ctrKey из мастер-ключа и streamNonce.
+     * Промежуточные byte[] затираются через try/finally.
+     */
+    private static void deriveStreamKeys(SymmetricKey masterKey, byte[] streamNonce,
+                                          SymmetricKey[] outKeys) {
+        byte[] masterBytes = masterKey.getKey();
+        try {
+            byte[] keyMaterial = KdfTreeGostR3411_2012_256.generate(
+                masterBytes, KDF_LABEL, streamNonce, 2, KEY_LEN);
+            try {
+                byte[] cmacKeyBytes = Arrays.copyOf(keyMaterial, KEY_LEN);
+                byte[] ctrKeyBytes = Arrays.copyOfRange(keyMaterial, KEY_LEN, 2 * KEY_LEN);
+                try {
+                    outKeys[0] = new SymmetricKey(cmacKeyBytes);
+                    outKeys[1] = new SymmetricKey(ctrKeyBytes);
+                } finally {
+                    Arrays.fill(cmacKeyBytes, (byte) 0);
+                    Arrays.fill(ctrKeyBytes, (byte) 0);
+                }
+            } finally {
+                Arrays.fill(keyMaterial, (byte) 0);
+            }
+        } finally {
+            Arrays.fill(masterBytes, (byte) 0);
+        }
+    }
 
     private AuthenticatedStream() {}
 
@@ -156,6 +188,15 @@ public final class AuthenticatedStream {
         private final byte[] chunkBuf;
         private int chunkCount;
 
+        /** Заголовок потока (nonce[8] + version[1] + chunkSize[4]), нужен для AAD при seqNo=0. */
+        private byte[] firstHeader;
+
+        /** Per-stream ключ для CMAC, выведенный через KDF из мастер-ключа. */
+        private SymmetricKey cmacKey;
+
+        /** Per-stream ключ для CTR, выведенный через KDF из мастер-ключа. */
+        private SymmetricKey ctrKey;
+
         /** Порядковый номер чанка (неявная защита от reorder/duplicate). */
         private long seqNo = 0;
 
@@ -172,12 +213,28 @@ public final class AuthenticatedStream {
             writeStreamHeader();
         }
 
-        /** Записывает заголовок потока. */
+        /** Записывает заголовок потока: streamNonce[8] + version[1] + chunkSize[4]. */
         private void writeStreamHeader() throws IOException {
-            out.write(MAGIC);
+            byte[] streamNonce = new byte[8];
+            CryptoRandom.INSTANCE.nextBytes(streamNonce);
+
+            // KDF: из мастер-ключа и streamNonce выводим per-stream ключи для CMAC и CTR
+            SymmetricKey[] keys = new SymmetricKey[2];
+            AuthenticatedStream.deriveStreamKeys(key, streamNonce, keys);
+            this.cmacKey = keys[0];
+            this.ctrKey = keys[1];
+
+            out.write(streamNonce);
             out.write(VERSION);
             writeInt(out, chunkSize);
-            writeInt(out, 0); // reserved
+            // Сохраняем полный заголовок для аутентификации через AAD seqNo=0
+            firstHeader = new byte[HEADER_SIZE];
+            System.arraycopy(streamNonce, 0, firstHeader, 0, 8);
+            firstHeader[8] = VERSION;
+            firstHeader[9] = (byte) (chunkSize >> 24);
+            firstHeader[10] = (byte) (chunkSize >> 16);
+            firstHeader[11] = (byte) (chunkSize >> 8);
+            firstHeader[12] = (byte) chunkSize;
         }
 
         @Override
@@ -208,35 +265,39 @@ public final class AuthenticatedStream {
         }
 
         /**
-         * Шифрует и записывает один чанк.
+         * Шифрует и записывает один чанк (Encrypt-then-MAC).
          * @param isLast true для последнего чанка
          */
         private void flushChunk(boolean isLast) throws IOException {
             byte[] plaintext = Arrays.copyOf(chunkBuf, chunkCount);
             chunkCount = 0;
 
-            // Генерируем случайный IV для CTR
             byte[] iv = new byte[AuthenticatedCipher.IV_LEN];
             CryptoRandom.INSTANCE.nextBytes(iv);
 
-            // CMAC от AAD(seqNo || flags) || открытого текста
-            byte[] aad = buildAad(seqNo, isLast ? FLAG_LAST : FLAG_NORMAL);
-            byte[] fullCmac = AuthenticatedCipher.computeCmac(aad, plaintext, key);
-            byte[] tag = Arrays.copyOf(fullCmac, AuthenticatedCipher.TAG_LEN);
-            Arrays.fill(fullCmac, (byte) 0);
-            seqNo++;
+            // AAD: seqNo(8) || flags(1) || IV(8), для первого чанка (seqNo=0) с заголовком потока
+            byte[] aad = buildAad(seqNo == 0 ? firstHeader : null, seqNo,
+                    isLast ? FLAG_LAST : FLAG_NORMAL, iv);
+            if (firstHeader != null) {
+                Arrays.fill(firstHeader, (byte) 0);
+                firstHeader = null;
+            }
 
             // CTR шифрование
-            byte[] ciphertext = AuthenticatedCipher.ctrEncrypt(plaintext, key, iv);
+            byte[] ciphertext = AuthenticatedCipher.ctrEncrypt(plaintext, ctrKey, iv);
+            seqNo++;
 
-            // Заголовок чанка: chunkLen(4) + flags(1) + IV(8) + CMAC(8)
+            // CMAC от AAD || ciphertext (Encrypt-then-MAC)
+            byte[] fullCmac = AuthenticatedCipher.computeCmac(aad, ciphertext, cmacKey);
+
+            // Заголовок чанка: chunkLen(4) + flags(1) + IV(8) + CMAC(16)
             writeInt(out, ciphertext.length);
             out.write(isLast ? FLAG_LAST : FLAG_NORMAL);
             out.write(iv);
-            out.write(tag);
+            out.write(fullCmac);
+            Arrays.fill(fullCmac, (byte) 0);
             out.write(ciphertext);
 
-            Arrays.fill(tag, (byte) 0);
             Arrays.fill(plaintext, (byte) 0);
         }
 
@@ -249,6 +310,9 @@ public final class AuthenticatedStream {
                 out.flush();
             } finally {
                 Arrays.fill(chunkBuf, (byte) 0);
+                if (firstHeader != null) Arrays.fill(firstHeader, (byte) 0);
+                if (cmacKey != null) cmacKey.destroy();
+                if (ctrKey != null) ctrKey.destroy();
             }
         }
 
@@ -266,6 +330,15 @@ public final class AuthenticatedStream {
         private final InputStream in;
         private final SymmetricKey key;
         private final int chunkSize;
+
+        /** Заголовок потока (13 байт), прочитанный из входного потока. */
+        private byte[] firstHeader;
+
+        /** Per-stream ключ для CMAC, выведенный через KDF из мастер-ключа. */
+        private SymmetricKey cmacKey;
+
+        /** Per-stream ключ для CTR, выведенный через KDF из мастер-ключа. */
+        private SymmetricKey ctrKey;
 
         /** Буфер расшифрованных данных текущего чанка. */
         private byte[] plainBuf = new byte[0];
@@ -289,34 +362,44 @@ public final class AuthenticatedStream {
         private int readAndVerifyStreamHeader()
                 throws IOException, AuthenticationException {
             byte[] header = readExactly(HEADER_SIZE);
-            // Проверяем magic
-            if (header[0] != MAGIC[0] || header[1] != MAGIC[1] ||
-                header[2] != MAGIC[2] || header[3] != MAGIC[3]) {
+            // Включим заголовок в AAD первого чанка для защиты целостности.
+            // Nonce (8 байт) на позициях 0..7 — аутентифицируется только через CMAC.
+            if (header[8] != VERSION) {
                 throw new AuthenticationException(
-                    "Invalid stream header: GOST signature not found");
+                    "Unsupported format version: " + (header[8] & 0xFF)
+                    + " (expected " + VERSION + ")");
             }
-            if (header[4] != VERSION) {
-                throw new AuthenticationException(
-                    "Unsupported format version: " + (header[4] & 0xFF));
-            }
-            int declaredChunkSize = readIntFromBytes(header, 5);
+            int declaredChunkSize = readIntFromBytes(header, 9);
             if (declaredChunkSize < 16 || declaredChunkSize > MAX_CHUNK_SIZE) {
                 throw new AuthenticationException(
                     "Invalid chunk size in header: " + declaredChunkSize);
             }
+            this.firstHeader = header;
+
+            // KDF: из мастер-ключа и streamNonce (header[0..7]) выводим per-stream ключи
+            SymmetricKey[] keys = new SymmetricKey[2];
+            byte[] streamNonce = Arrays.copyOf(header, 8);
+            try {
+                AuthenticatedStream.deriveStreamKeys(key, streamNonce, keys);
+            } finally {
+                Arrays.fill(streamNonce, (byte) 0);
+            }
+            this.cmacKey = keys[0];
+            this.ctrKey = keys[1];
+
             return declaredChunkSize;
         }
 
         /**
          * Читает и расшифровывает следующий чанк из потока.
-         * После CMAC-проверки данные помещаются в plainBuf.
+         * CMAC проверяется от шифртекста ДО расшифрования (Encrypt-then-MAC).
          *
          * @return false если поток исчерпан
          */
         private boolean readNextChunk() throws IOException, AuthenticationException {
             if (lastChunkSeen) return false;
 
-            // Читаем заголовок чанка: chunkLen(4) + flags(1) + IV(8) + CMAC(8)
+            // Читаем заголовок чанка: chunkLen(4) + flags(1) + IV(8) + CMAC(16)
             byte[] chunkHeader;
             try {
                 chunkHeader = readExactly(CHUNK_HEADER_SIZE);
@@ -329,7 +412,7 @@ public final class AuthenticatedStream {
             int chunkLen = readIntFromBytes(chunkHeader, 0);
             byte flags   = chunkHeader[4];
             byte[] iv    = Arrays.copyOfRange(chunkHeader, 5,  13);
-            byte[] tag   = Arrays.copyOfRange(chunkHeader, 13, 21);
+            byte[] tag   = Arrays.copyOfRange(chunkHeader, 13, 13 + AuthenticatedCipher.TAG_LEN);
 
             if (chunkLen < 0 || chunkLen > chunkSize) {
                 throw new AuthenticationException(
@@ -339,24 +422,34 @@ public final class AuthenticatedStream {
             // Читаем шифртекст чанка
             byte[] ciphertext = (chunkLen > 0) ? readExactly(chunkLen) : new byte[0];
 
-            // CTR расшифрование
-            byte[] plaintext = AuthenticatedCipher.ctrEncrypt(ciphertext, key, iv);
-
-            // Проверяем CMAC от AAD(seqNo || flags) || открытого текста
-            byte[] aad      = buildAad(seqNo, flags);
-            byte[] fullCmac = AuthenticatedCipher.computeCmac(aad, plaintext, key);
-            byte[] expected = Arrays.copyOf(fullCmac, AuthenticatedCipher.TAG_LEN);
-            Arrays.fill(fullCmac, (byte) 0);
+            // Проверяем CMAC от AAD(seqNo || flags || IV) || шифртекста ДО расшифрования
+            byte[] aad      = buildAad(seqNo == 0 ? firstHeader : null, seqNo, flags, iv);
+            byte[] fullCmac = AuthenticatedCipher.computeCmac(aad, ciphertext, cmacKey);
             seqNo++;
 
-            boolean valid = java.security.MessageDigest.isEqual(expected, tag);
-            Arrays.fill(expected, (byte) 0);
+            boolean valid = java.security.MessageDigest.isEqual(fullCmac, tag);
+            Arrays.fill(fullCmac, (byte) 0);
 
             if (!valid) {
-                Arrays.fill(plaintext, (byte) 0);
+                Arrays.fill(ciphertext, (byte) 0);
+                Arrays.fill(tag, (byte) 0);
+                Arrays.fill(iv, (byte) 0);
                 throw new AuthenticationException(
                     "Chunk integrity violation: CMAC mismatch. " +
                     "Stream is corrupted or tampered.");
+            }
+
+            // Только после успешной верификации — расшифрование
+            byte[] plaintext = AuthenticatedCipher.ctrEncrypt(ciphertext, ctrKey, iv);
+
+            Arrays.fill(ciphertext, (byte) 0);
+            Arrays.fill(tag, (byte) 0);
+            Arrays.fill(iv, (byte) 0);
+
+            // После успешной верификации первого чанка заголовок больше не нужен
+            if (firstHeader != null) {
+                Arrays.fill(firstHeader, (byte) 0);
+                firstHeader = null;
             }
 
             plainBuf = plaintext;
@@ -412,8 +505,12 @@ public final class AuthenticatedStream {
 
         @Override
         public void close() throws IOException {
-            // Ключи принадлежат вызывающему — не уничтожаем их здесь
+            // Мастер-ключ принадлежит вызывающему — не уничтожаем его.
+            // Per-stream ключи — наши, уничтожаем.
             Arrays.fill(plainBuf, (byte) 0);
+            if (firstHeader != null) Arrays.fill(firstHeader, (byte) 0);
+            if (cmacKey != null) cmacKey.destroy();
+            if (ctrKey != null) ctrKey.destroy();
         }
 
         // -----------------------------------------------------------------------
@@ -446,18 +543,30 @@ public final class AuthenticatedStream {
     // Утилиты
     // -----------------------------------------------------------------------
 
-    /** Строит AAD = seqNo(8) || flags(1) для аутентификации порядка чанков. */
-    private static byte[] buildAad(long seqNo, byte flags) {
-        byte[] aad = new byte[9];
-        aad[0] = (byte)(seqNo >> 56);
-        aad[1] = (byte)(seqNo >> 48);
-        aad[2] = (byte)(seqNo >> 40);
-        aad[3] = (byte)(seqNo >> 32);
-        aad[4] = (byte)(seqNo >> 24);
-        aad[5] = (byte)(seqNo >> 16);
-        aad[6] = (byte)(seqNo >>  8);
-        aad[7] = (byte)(seqNo);
-        aad[8] = flags;
+    /**
+     * Строит AAD для CMAC.
+     * Для первого чанка (firstHeader != null): header(13) || seqNo(8) || flags(1) || IV(8).
+     * Для остальных чанков (firstHeader == null): seqNo(8) || flags(1) || IV(8).
+     * IV включён в AAD — подмена IV в заголовке чанка обнаруживается.
+     */
+    private static byte[] buildAad(byte[] firstHeader, long seqNo, byte flags, byte[] iv) {
+        int hdrLen = (firstHeader != null) ? firstHeader.length : 0;
+        byte[] aad = new byte[hdrLen + 9 + iv.length];
+        int off = 0;
+        if (firstHeader != null) {
+            System.arraycopy(firstHeader, 0, aad, 0, hdrLen);
+            off = hdrLen;
+        }
+        aad[off]     = (byte)(seqNo >> 56);
+        aad[off + 1] = (byte)(seqNo >> 48);
+        aad[off + 2] = (byte)(seqNo >> 40);
+        aad[off + 3] = (byte)(seqNo >> 32);
+        aad[off + 4] = (byte)(seqNo >> 24);
+        aad[off + 5] = (byte)(seqNo >> 16);
+        aad[off + 6] = (byte)(seqNo >>  8);
+        aad[off + 7] = (byte) seqNo;
+        aad[off + 8] = flags;
+        System.arraycopy(iv, 0, aad, off + 9, iv.length);
         return aad;
     }
 

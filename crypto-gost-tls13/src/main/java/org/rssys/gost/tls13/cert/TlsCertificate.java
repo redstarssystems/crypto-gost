@@ -111,6 +111,9 @@ public final class TlsCertificate {
 
         int[] outer = parseSequence(derEncoded, 0);
         int certContentStart = outer[0];
+        if (certContentStart >= outer[1]) {
+            throw new IllegalArgumentException("Truncated DER encoding: empty certificate SEQUENCE");
+        }
 
         // Три потомка верхнего уровня: TBSCertificate, SignatureAlgorithm, SignatureValue
         int[] tbsTlv = readTlv(derEncoded, certContentStart);
@@ -127,7 +130,10 @@ public final class TlsCertificate {
                 // verTagTlv[0] — начало INTEGER внутри [0] EXPLICIT
                 if (verTagTlv[0] < verTagTlv[1] && (derEncoded[verTagTlv[0]] & 0xFF) == TAG_INTEGER) {
                     int[] verIntTlv = readTlv(derEncoded, verTagTlv[0]);
-                    // verIntTlv[0] — начало value INTEGER
+                    if (verIntTlv[0] >= verIntTlv[1]) {
+                        throw new IllegalArgumentException(
+                                "Truncated DER encoding: empty INTEGER in version field");
+                    }
                     v = (derEncoded[verIntTlv[0]] & 0xFF) + 1;
                 }
             }
@@ -168,10 +174,18 @@ public final class TlsCertificate {
 
         // SignatureValue (BIT STRING)
         int sigTagOffset = sigAlgTlv[1];
+        if (sigTagOffset >= derEncoded.length) {
+            throw new IllegalArgumentException(
+                    "Truncated DER encoding: missing signature at offset " + sigTagOffset);
+        }
         if ((derEncoded[sigTagOffset] & 0x1F) != TAG_BIT_STRING) {
             throw new IllegalArgumentException("Expected BIT STRING for signature");
         }
         int[] sigValTlv = readTlv(derEncoded, sigTagOffset);
+        if (sigValTlv[1] <= sigValTlv[0]) {
+            throw new IllegalArgumentException(
+                    "Truncated DER encoding: empty BIT STRING for signature at offset " + sigTagOffset);
+        }
         int unusedBits = derEncoded[sigValTlv[0]] & 0xFF;
         if (unusedBits != 0) {
             throw new IllegalArgumentException("Unsupported BIT STRING with unused bits");

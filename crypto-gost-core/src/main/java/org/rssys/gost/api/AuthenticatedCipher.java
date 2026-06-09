@@ -15,15 +15,15 @@ import org.rssys.gost.util.CryptoRandom;
 /**
  * API для аутентифицированного шифрования по ГОСТ Р 34.13-2015
  *
- * <p>Реализует схему: шифрование Кузнечиком в режиме CTR (гамма) с контролем
- * целостности через имитовставку CMAC.
+ * <p>Реализует схему Encrypt-then-MAC (EtM): сначала шифрование Кузнечиком
+ * в режиме CTR, затем имитовставка CMAC от шифртекста. Верификация
+ * выполняется до расшифрования — неверный тег не даёт oracle на plaintext.
  *
  * <h3>Формат пакета:</h3>
  * <pre>
- *   [IV (8 байт)] [CMAC(plaintext) (8 байт)] [ciphertext (N байт)]
+ *   [IV (8 байт)] [CMAC(ciphertext) (16 байт)] [ciphertext (N байт)]
  * </pre>
- * Overhead: 16 байт на сообщение.
- *
+ * Overhead: 24 байта на сообщение.
  *
  * <p>Все методы потокобезопасны.
  */
@@ -35,9 +35,9 @@ public final class AuthenticatedCipher {
     static final int IV_LEN = 8;
 
     /**
-     * Длина усечённого CMAC-тега в пакете (64 бит).
+     * Длина полного CMAC-тега в пакете (128 бит = размер блока Кузнечика).
      */
-    static final int TAG_LEN = 8;
+    static final int TAG_LEN = 16;
 
     /**
      * Минимальная длина пакета: IV + TAG.
@@ -48,40 +48,41 @@ public final class AuthenticatedCipher {
     }
 
     /**
-     * Шифрует данные с аутентификацией.
+     * Шифрует данные с аутентификацией (Encrypt-then-MAC).
      *
-     * <p>CMAC вычисляется от открытого текста согласно ГОСТ Р 34.13-2015 §4.6.
+     * <p>Порядок: CTR-шифрование, затем CMAC от шифртекста.
      * IV генерируется случайно при каждом вызове.
      *
      * @param plaintext открытые данные
      * @param key       ключ Кузнечика (32 байта)
-     * @return буфер зашифрованных данных вида {@code [IV(8)] [CMAC(8)] [ciphertext(N)]}
+     * @return буфер зашифрованных данных вида {@code [IV(8)] [CMAC(16)] [ciphertext(N)]}
      */
     public static byte[] seal(byte[] plaintext, SymmetricKey key) {
         byte[] iv = new byte[IV_LEN];
         CryptoRandom.INSTANCE.nextBytes(iv);
 
-        // CMAC от открытого текста (ГОСТ Р 34.13-2015 §4.6)
-        byte[] fullTag = computeCmac(plaintext, key);
-        byte[] tag = Arrays.copyOf(fullTag, TAG_LEN);
-        Arrays.fill(fullTag, (byte) 0);
-
         byte[] ciphertext = ctrEncrypt(plaintext, key, iv);
 
-        // Сборка пакета: [IV(8)] [TAG(8)] [ciphertext(N)]
+        // CMAC(IV || ciphertext) — IV тоже аутентифицируется
+        byte[] fullTag = computeCmac(iv, ciphertext, key);
+
+        // Сборка пакета: [IV(8)] [TAG(16)] [ciphertext(N)]
         byte[] encryptedData = new byte[IV_LEN + TAG_LEN + ciphertext.length];
         System.arraycopy(iv, 0, encryptedData, 0, IV_LEN);
-        System.arraycopy(tag, 0, encryptedData, IV_LEN, TAG_LEN);
+        System.arraycopy(fullTag, 0, encryptedData, IV_LEN, TAG_LEN);
         System.arraycopy(ciphertext, 0, encryptedData, IV_LEN + TAG_LEN, ciphertext.length);
 
-        Arrays.fill(tag, (byte) 0);
+        Arrays.fill(fullTag, (byte) 0);
         return encryptedData;
     }
 
     /**
      * Расшифровывает блок данных и проверяет целостность.
      *
-     * @param encryptedData пакет вида {@code [IV(8)] [CMAC(8)] [ciphertext(N)]}
+     * <p>Верификация CMAC от шифртекста выполняется до расшифрования —
+     * неверный тег не даёт oracle на plaintext.
+     *
+     * @param encryptedData пакет вида {@code [IV(8)] [CMAC(16)] [ciphertext(N)]}
      * @param key           ключ Кузнечика (32 байта) — тот же что при {@link #seal}
      * @return открытые данные
      * @throws AuthenticationException если CMAC не совпал (данные повреждены или подменены)
@@ -98,23 +99,28 @@ public final class AuthenticatedCipher {
         byte[] tag = Arrays.copyOfRange(encryptedData, IV_LEN, IV_LEN + TAG_LEN);
         byte[] ciphertext = Arrays.copyOfRange(encryptedData, IV_LEN + TAG_LEN, encryptedData.length);
 
-        byte[] plaintext = ctrEncrypt(ciphertext, key, iv); // CTR симметричен
+        // CMAC(IV || ciphertext) — верификация ДО расшифрования
+        byte[] expected = computeCmac(iv, ciphertext, key);
 
-        // CMAC от расшифрованного открытого текста
-        byte[] expected = Arrays.copyOf(computeCmac(plaintext, key), TAG_LEN);
-
-        // Constant-time сравнение (защита от timing-атак)
         boolean valid = MessageDigest.isEqual(expected, tag);
 
         Arrays.fill(expected, (byte) 0);
-        Arrays.fill(iv, (byte) 0);
 
         if (!valid) {
-            Arrays.fill(plaintext, (byte) 0);
+            Arrays.fill(ciphertext, (byte) 0);
+            Arrays.fill(tag, (byte) 0);
+            Arrays.fill(iv, (byte) 0);
             throw new AuthenticationException(
                     "Integrity violation: CMAC mismatch. " +
                             "Data corrupted, tampered, or wrong key used.");
         }
+
+        // Только после успешной верификации — расшифрование
+        byte[] plaintext = ctrEncrypt(ciphertext, key, iv);
+
+        Arrays.fill(ciphertext, (byte) 0);
+        Arrays.fill(tag, (byte) 0);
+        Arrays.fill(iv, (byte) 0);
 
         return plaintext;
     }

@@ -135,10 +135,10 @@ class TlsCertificateTest {
     }
 
     @Test
-    @DisplayName("parseLength: обрезанная длинная форма (нет байт длины) → IndexOutOfBoundsException")
+    @DisplayName("parseLength: обрезанная длинная форма (нет байт длины) → IllegalArgumentException")
     void testparseLengthTruncatedLongForm() {
         byte[] data = new byte[]{(byte) 0x82};
-        assertThrows(IndexOutOfBoundsException.class,
+        assertThrows(IllegalArgumentException.class,
                 () -> TlsDerParser.parseLength(data, 0));
     }
 

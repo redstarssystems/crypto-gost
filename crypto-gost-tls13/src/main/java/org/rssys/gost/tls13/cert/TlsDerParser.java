@@ -149,6 +149,9 @@ public final class TlsDerParser {
      * @return [valueStart, valueEnd]
      */
     public static int[] parseSequence(byte[] der, int offset) {
+        if (offset >= der.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+        }
         if ((der[offset] & 0xFF) != TAG_SEQUENCE) {
             throw new IllegalArgumentException("Expected SEQUENCE at offset " + offset);
         }
@@ -164,12 +167,18 @@ public final class TlsDerParser {
      *         valueEnd — смещение за последний байт Value (т.е. начало следующего TLV).
      */
     public static int[] readTlv(byte[] der, int offset) {
+        if (offset >= der.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+        }
         int tag = der[offset] & 0xFF;
         int[] lenResult = parseLength(der, offset + 1);
         int lenBytes = lenResult[0];
         int contentLen = lenResult[1];
         int valueStart = offset + 1 + lenBytes;
         int valueEnd = valueStart + contentLen;
+        if (valueEnd > der.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+        }
         return new int[]{valueStart, valueEnd};
     }
 
@@ -181,6 +190,9 @@ public final class TlsDerParser {
      * @return int[2] {bytesUsedForLength, contentLength}
      */
     public static int[] parseLength(byte[] der, int offset) {
+        if (offset >= der.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+        }
         int first = der[offset] & 0xFF;
         if (first < 0x80) {
             return new int[]{1, first};
@@ -188,6 +200,9 @@ public final class TlsDerParser {
         int numBytes = first & 0x7F;
         if (numBytes == 0 || numBytes > 3) {
             throw new IllegalArgumentException("Unsupported DER length encoding at offset " + offset);
+        }
+        if (offset + numBytes >= der.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
         }
         int len = 0;
         for (int i = 1; i <= numBytes; i++) {
@@ -237,6 +252,9 @@ public final class TlsDerParser {
      * @return распарсенная дата
      */
     public static Date parseTime(byte[] der, int offset) {
+        if (offset >= der.length) {
+            throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+        }
         int tag = der[offset] & 0xFF;
         int[] lenRes = parseLength(der, offset + 1);
         int contentStart = offset + 1 + lenRes[0];

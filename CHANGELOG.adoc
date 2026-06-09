@@ -1,5 +1,77 @@
 = История изменений
 
+== [0.5.0] - 09-06-2026
+
+=== Общее
+
+* Добавлены make-цели fuzz и fuzz-all для запуска фаззинг-тестов по отдельному модулю и по всем трём параллельно.
+* В Makefile добавлен `SHELL := /bin/bash` — `PIPESTATUS` и `pipefail` требуют bash, не работают с dash (Debian/Ubuntu по умолчанию).
+
+=== Модуль crypto-gost-core
+
+==== Добавлено
+
+* *`AuthenticatedStream` — KDF key separation*. +
+Вместо прямого использования одного мастер-ключа для шифрования
+(CTR, ключ `ctrKey`) и имитозащиты (CMAC, ключ `cmacKey`) каждый новый поток выводит два независимых ключа через KDF (`KDF_TREE_GOSTR3411_2012_256`). Начальное заполнение для KDF — случайный `streamNonce` (8 байт),  который генерируется автоматически при создании потока и записывается в заголовок. Это гарантирует, что от одного и того же мастер-ключа, производные ключи для шифрования и имитозащиты будут разными.
++
+При расшифровании `streamNonce` читается из заголовка и KDF воспроизводит те же
+ключи. Ключи `cmacKey` и `ctrKey` вычислительно независимы друг от друга и от
+производных ключей других потоков. Мастер-ключ не модифицируется;
+производные ключи затираются при закрытии потока.
+
+* Добавлены fuzzing-тесты для четырёх security-критичных точек, не покрытых ранее: верификация подписи ГОСТ Р 34.10 (GostSignatureSpiFuzzTest, SignatureCodecFuzzTest), AEAD-теги MGM и CTR-ACPKM (GostMgmCipherSpiFuzzTest, GostCtrAcpkmCipherSpiFuzzTest), прямой парсинг DER-ключей без SPI-обёртки (GostDerCodecFuzzTest).
+** FuzzTestUtils переведён в public для использования из других пакетов. Исправлена регистрация провайдера в GostKeyFactorySpiFuzzTest (добавлен idempotent guard).
+
+==== Изменено
+
+* *`AuthenticatedStream` — новый формат VERSION=0x02 (ломающее изменение)*. +
+Заголовок потока изменён: вместо фиксированной ASCII-сигнатуры «GOST» и четырёх
+нулевых байт — 8 случайных байт на поток (`nonce`). Каждый поток теперь
+начинается с уникальных байт, что исключает массовое обнаружение потоков по
+фиксированной сигнатуре. Весь заголовок включён в код аутентификации первого
+чанка — подмена любого байта заголовка обнаруживается при расшифровании.
+Потоки VERSION=0x01 не читаются — при попытке открытия возвращается сообщение
+о неподдерживаемой версии формата.
+* *`AuthenticatedCipher` — EtM (Encrypt-then-MAC) + полный тег 128 бит
+(ломающее изменение)*. +
+`CMAC(IV || ciphertext)`, верификация до расшифрования — неверный тег не даёт
+oracle на plaintext. Длина тега увеличена с 64
+до 128 бит, overhead — с 16 до 24 байт.
+
+* *`AuthenticatedStream` — EtM (Encrypt-then-MAC) + полный тег 128 бит
+(ломающее изменение)*. +
+`CMAC(firstHeader || seqNo || flags || IV || ciphertext)` для первого чанка
+(seqNo=0), `CMAC(seqNo || flags || IV || ciphertext)` для остальных — IV
+и заголовок потока включены в аутентификацию, подмена любого байта заголовка
+или IV обнаруживается. Длина тега увеличена с 64 до 128 бит,
+`CHUNK_HEADER_SIZE` — с 21 до 29 байт. Формат заголовка потока не изменился.
+
+==== Исправлено
+
+* GostKeyFactorySpiFuzzTest: добавлена регистрация RssysGostProvider в static-инициализаторе (исправление NoSuchAlgorithmException при запуске через -Dtest=).
+
+=== Модуль crypto-gost-tls13
+
+==== Исправлено
+
+* *Устранены выходы за границы массива в DER-парсерах* при усечённом или искажённом вводе (обнаружено фаззинг-тестами (Jazzer)):
+** TlsDerParser: parseLength, readTlv, parseSequence, parseTime — проверка границ перед обращением к массиву.
+** GostPkcs12Parser: peekLength, decodeLength, checkTag, parseConstructed — проверка границ; parseOid — проверка пустого и усечённого OID; parseEncryptedPrivateKeyInfo, parsePbes2Params, parseMacData — проверка полноты результатов разбора вложенных структур.
+** TlsCertificate: проверка непустоты внешней SEQUENCE сертификата и ненулевой длины поля версии; проверка наличия подписи и непустоты BIT STRING.
++
+Все нарушения структуры бросают IllegalArgumentException с указанием смещения.
+
+=== Модуль crypto-gost-jsse
+
+==== Добавлено
+
+* Добавлен fuzzing-тест клиентского unwrap (GostSSLEngineUnwrapClientFuzzTest). Исправлена регистрация провайдера в GostSSLEngineUnwrapFuzzTest.
+
+==== Изменено
+
+* Удалён мёртвый код из GostSSLEngine: getReaderRecordForTest, getIncomingAppBufForTest, clearIncomingAppBufForTest.
+
 == [0.4.0] - 07-06-2026
 
 Данный релиз в большей степени посвящен кросс-валидации с внешними средствами, такими как OpenSSL 3.6.0 (gost-engine + patch TLS 1.3) и Bouncycastle 1.84.

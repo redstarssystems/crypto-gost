@@ -67,19 +67,19 @@ class AuthenticatedCipherTest {
     }
 
     @Test
-    @DisplayName("seal: длина пакета = 16 + длина plaintext")
+    @DisplayName("seal: длина пакета = 24 + длина plaintext")
     void testPacketLength() {
         byte[] plaintext = new byte[43];
         SymmetricKey key = testKey();
         byte[] packet = AuthenticatedCipher.seal(plaintext, key);
-        assertEquals(16 + 43, packet.length, "overhead = IV(8) + TAG(8) = 16 байт");
+        assertEquals(24 + 43, packet.length, "overhead = IV(8) + TAG(16) = 24 байта");
     }
 
     @Test
     @DisplayName("seal/open: пустые данные")
     void testEmptyPlaintext() throws Exception {
         byte[] packet   = AuthenticatedCipher.seal(new byte[0], testKey());
-        assertEquals(16, packet.length);
+        assertEquals(24, packet.length);
         byte[] restored = AuthenticatedCipher.open(packet, testKey());
         assertArrayEquals(new byte[0], restored);
     }
@@ -108,12 +108,12 @@ class AuthenticatedCipherTest {
         byte[] plaintext = "integrity test".getBytes();
         byte[] packet = AuthenticatedCipher.seal(plaintext, testKey());
 
-        // Портим шифртекст (байт после IV+TAG)
-        packet[16] ^= 0x42;
+        // Портим шифртекст (байт после IV(8)+TAG(16))
+        packet[24] ^= 0x42;
 
         assertThrows(AuthenticationException.class,
             () -> AuthenticatedCipher.open(packet, testKey()),
-            "Подмена шифртекста изменит расшифрованный plaintext → CMAC не совпадёт");
+            "Подмена шифртекста → CMAC(IV || ciphertext) ≠ tag, расшифрование не выполняется");
     }
 
     @Test
@@ -123,11 +123,12 @@ class AuthenticatedCipherTest {
         byte[] packet = AuthenticatedCipher.seal(plaintext, testKey());
 
         // Портим IV (первые 8 байт)
+        // Подмена IV → CMAC(IV || ciphertext) ≠ tag, расшифрование не выполняется
         packet[0] ^= 0x01;
 
         assertThrows(AuthenticationException.class,
             () -> AuthenticatedCipher.open(packet, testKey()),
-            "Подмена IV изменит расшифр��ванный plaintext → CMAC не совпадёт");
+            "Подмена IV → CMAC не совпадёт");
     }
 
     @Test
@@ -146,7 +147,7 @@ class AuthenticatedCipherTest {
     @Test
     @DisplayName("open: пакет слишком короткий → AuthenticationException")
     void testPacketTooShort() {
-        byte[] shortPacket = new byte[15]; // меньше MIN_PACKET_LEN = 16
+        byte[] shortPacket = new byte[23]; // меньше MIN_PACKET_LEN = 24
         assertThrows(AuthenticationException.class,
             () -> AuthenticatedCipher.open(shortPacket, testKey()));
     }
@@ -174,27 +175,31 @@ class AuthenticatedCipherTest {
         byte[] expectedCt   = fromHex("7169cd162a3c2f04a8fe48df31958f6b9803dd");
         // Ожидаемый CMAC (верифицирован через openssl dgst -mac cmac -macopt cipher:kuznyechik-cbc -macopt hexkey:<key>)
         byte[] expectedCmac = fromHex("89425a02b25cf9a380b22b89ed1e74de");
-        byte[] expectedTag  = Arrays.copyOf(expectedCmac, 8);
 
         // Проверяем CTR шифрование
         byte[] actualCt = AuthenticatedCipher.ctrEncrypt(plaintext, key, iv);
         assertArrayEquals(expectedCt, actualCt,
             "CTR шифртекст должен совпасть с openssl enc -kuznyechik-ctr");
 
-        // Проверяем CMAC
+        // Проверяем CMAC от plaintext (примитив CMAC, не зависит от EtM/MtE)
         byte[] actualCmac = AuthenticatedCipher.computeCmac(plaintext, key);
         assertArrayEquals(expectedCmac, actualCmac,
             "CMAC должен совпасть с openssl dgst -mac cmac -macopt cipher:kuznyechik-cbc");
 
-        // Собираем пакет вручную и проверяем open()
-        byte[] packet = new byte[8 + 8 + expectedCt.length];
-        System.arraycopy(iv,          0, packet, 0,  8);
-        System.arraycopy(expectedTag, 0, packet, 8,  8);
-        System.arraycopy(expectedCt,  0, packet, 16, expectedCt.length);
+        // Собираем EtM-пакет: CMAC от IV || ciphertext
+        byte[] packet = new byte[8 + AuthenticatedCipher.TAG_LEN + expectedCt.length];
+        byte[] etmTag = AuthenticatedCipher.computeCmac(iv, expectedCt, key);
+        try {
+            System.arraycopy(iv,          0, packet, 0,                            8);
+            System.arraycopy(etmTag,      0, packet, 8,                            AuthenticatedCipher.TAG_LEN);
+            System.arraycopy(expectedCt,  0, packet, 8 + AuthenticatedCipher.TAG_LEN, expectedCt.length);
+        } finally {
+            Arrays.fill(etmTag, (byte) 0);
+        }
 
         byte[] restored = AuthenticatedCipher.open(packet, key);
         assertArrayEquals(plaintext, restored,
-            "Пакет с golden vector должен расшифровываться корректно");
+            "EtM-пакет должен расшифровываться корректно");
 
         key.destroy();
     }

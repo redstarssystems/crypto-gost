@@ -386,21 +386,6 @@ public final class GostSSLEngine extends SSLEngine {
         return writerRecord;
     }
 
-    /** Для тестов (package-private): readerRecord key epoch (null если не создан) */
-    org.rssys.gost.tls13.record.TlsRecord getReaderRecordForTest() {
-        return readerRecord;
-    }
-
-    /** Для тестов (package-private): содержимое буфера incomingAppBuf */
-    byte[] getIncomingAppBufForTest() {
-        return incomingAppBuf.toByteArray();
-    }
-
-    /** Для тестов (package-private): очистить буфер incomingAppBuf */
-    void clearIncomingAppBufForTest() {
-        incomingAppBuf.reset();
-    }
-
     /**
      * Устанавливает ECDHE-группу для key_share (RFC 8446 §4.2.8).
      * По умолчанию — GC256B. Должен быть вызван до {@link #beginHandshake()}.
