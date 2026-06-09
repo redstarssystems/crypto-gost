@@ -2,6 +2,7 @@ package org.rssys.gost.crossval.jsseserver;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.rssys.gost.crossval.util.OpenSslChecker;
@@ -66,6 +67,42 @@ class ServerOpenSslCrossValTest {
                     "GC256B");
             assertTrue(clientOutput.contains("INTEROP_OK"),
                     "s_client должен получить INTEROP_OK от " + serverType);
+        } finally {
+            stop.countDown();
+        }
+    }
+
+    @Test
+    @DisplayName("Сервер + s_client -maxfraglen 512 → INTEROP_OK")
+    void testServerWithMaxFragLength() throws Exception {
+        ECParameters params = ECParameters.cryptoProA();
+        ServerOpenSslHelper.ServerPkiBundle pki =
+                ServerOpenSslHelper.createServerPki(params);
+        GostX509KeyManager km = ServerOpenSslHelper.createKeyManager(
+                pki.cert(), pki.caCert(), pki.priv());
+        GostX509TrustManager tm = new GostX509TrustManager(pki.caPub(), false);
+        SSLContext sslContext = ServerOpenSslHelper.createSslContext(km, tm);
+
+        int port = ServerOpenSslHelper.findFreePort();
+        CountDownLatch ready = new CountDownLatch(1);
+        CountDownLatch stop = new CountDownLatch(1);
+        AtomicReference<Throwable> serverError = new AtomicReference<>();
+
+        ServerOpenSslHelper.startUndertow(port, sslContext, ready, stop, serverError);
+
+        assertTrue(ready.await(15, TimeUnit.SECONDS),
+                "Сервер Undertow не запущен за 15с");
+        assertNull(serverError.get(),
+                "Ошибка сервера: " + serverError.get());
+
+        try {
+            String clientOutput = ServerOpenSslHelper.runHttpGetWithMaxFragLen(
+                    port,
+                    "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L",
+                    "GC256B",
+                    512);
+            assertTrue(clientOutput.contains("INTEROP_OK"),
+                    "s_client -maxfraglen 512 должен получить INTEROP_OK. Output:\n" + clientOutput);
         } finally {
             stop.countDown();
         }

@@ -3373,4 +3373,182 @@ class TlsSessionTest {
         assertTrue(server.isHandshakeDone(), "Сервер: handshake завершён");
     }
 
+    @Test
+    @DisplayName("max_fragment_length=512: handshake, передача >512 байт, проверка фрагментов")
+    void testMaxFragmentLengthHandshakeAndFragmentation() throws Exception {
+        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
+
+        var c2s = new LinkedBlockingQueue<byte[]>();
+        var s2c = new LinkedBlockingQueue<byte[]>();
+        var appDataRecords = new CopyOnWriteArrayList<byte[]>();
+        var allDataReceived = new CountDownLatch(1);
+
+        InMemoryTlsTransport clientTransport = new InMemoryTlsTransport(s2c) {
+            @Override
+            public void sendRecord(byte[] record) throws IOException {
+                int ct = record[0] & 0xFF;
+                c2s.add(record.clone());
+                if (ct == TlsConstants.CT_APPLICATION_DATA) {
+                    appDataRecords.add(record.clone());
+                }
+            }
+        };
+        InMemoryTlsTransport serverTransport = new InMemoryTlsTransport(c2s) {
+            @Override
+            public void sendRecord(byte[] record) throws IOException {
+                int ct = record[0] & 0xFF;
+                s2c.add(record.clone());
+                if (ct == TlsConstants.CT_APPLICATION_DATA) {
+                    appDataRecords.add(record.clone());
+                }
+            }
+        };
+
+        TlsSession server = TlsSession.createServer(serverTransport, cs, bundle.cert, bundle.priv);
+        TlsSession client = TlsSession.createClient(clientTransport, cs, null, null);
+        client.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512);
+
+        Phaser phaser = new Phaser(3);
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+
+        Future<Void> cf = exec.submit(() -> {
+            phaser.arriveAndAwaitAdvance();
+            client.handshakeAsClient();
+            return null;
+        });
+        Future<Void> sf = exec.submit(() -> {
+            phaser.arriveAndAwaitAdvance();
+            server.handshakeAsServer();
+            return null;
+        });
+        phaser.arriveAndAwaitAdvance();
+        cf.get(15, TimeUnit.SECONDS);
+        sf.get(15, TimeUnit.SECONDS);
+        exec.shutdown();
+
+        assertTrue(client.isHandshakeDone(), "Клиент: handshake завершён");
+        assertTrue(server.isHandshakeDone(), "Сервер: handshake завершён");
+        assertEquals(TlsConstants.MAX_FRAG_LEN_512, client.getMaxFragmentLength(),
+                "Клиент: согласован max_fragment_length=512");
+        assertEquals(TlsConstants.MAX_FRAG_LEN_512, server.getMaxFragmentLength(),
+                "Сервер: согласован max_fragment_length=512");
+
+        // Отправляем 2000 байт от клиента, читаем на сервере
+        int dataLen = 2000;
+        byte[] sent = new byte[dataLen];
+        CryptoRandom.INSTANCE.nextBytes(sent);
+        client.write(sent);
+        byte[] received = new byte[dataLen];
+        int totalRead = 0;
+        while (totalRead < dataLen) {
+            byte[] chunk = server.read();
+            System.arraycopy(chunk, 0, received, totalRead, chunk.length);
+            totalRead += chunk.length;
+        }
+        assertArrayEquals(sent, received, "Переданные данные совпадают");
+
+        // Проверяем размер каждого прикладного фрагмента
+        int maxAllowedCiphertext = TlsConstants.MAX_FRAG_LEN_VALUES[TlsConstants.MAX_FRAG_LEN_512]
+                + 1 + 16; // plaintext + inner_type + tag
+        assertFalse(appDataRecords.isEmpty(), "Были отправлены app_data записи");
+        for (byte[] rec : appDataRecords) {
+            int bodyLen = ((rec[3] & 0xFF) << 8) | (rec[4] & 0xFF);
+            assertTrue(bodyLen <= maxAllowedCiphertext,
+                    "Фрагмент app_data не превышает лимит: " + bodyLen + " ≤ " + maxAllowedCiphertext);
+        }
+        assertTrue(appDataRecords.size() > 1,
+                "2000 байт при limit=512 должны быть фрагментированы на несколько записей");
+    }
+
+    @Test
+    @DisplayName("max_fragment_length=512: ровно 511 байт — одна запись")
+    void testMaxFragmentLengthExact511() throws Exception {
+        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
+
+        var c2s = new LinkedBlockingQueue<byte[]>();
+        var s2c = new LinkedBlockingQueue<byte[]>();
+
+        InMemoryTlsTransport clientTransport = new InMemoryTlsTransport(s2c) {
+            @Override public void sendRecord(byte[] record) { c2s.add(record.clone()); }
+        };
+        InMemoryTlsTransport serverTransport = new InMemoryTlsTransport(c2s) {
+            @Override public void sendRecord(byte[] record) { s2c.add(record.clone()); }
+        };
+
+        TlsSession server = TlsSession.createServer(serverTransport, cs, bundle.cert, bundle.priv);
+        TlsSession client = TlsSession.createClient(clientTransport, cs, null, null);
+        client.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512);
+
+        Phaser phaser = new Phaser(3);
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+        Future<Void> cf = exec.submit(() -> { phaser.arriveAndAwaitAdvance(); client.handshakeAsClient(); return null; });
+        Future<Void> sf = exec.submit(() -> { phaser.arriveAndAwaitAdvance(); server.handshakeAsServer(); return null; });
+        phaser.arriveAndAwaitAdvance();
+        cf.get(15, TimeUnit.SECONDS);
+        sf.get(15, TimeUnit.SECONDS);
+        exec.shutdown();
+
+        byte[] sent = new byte[511];
+        CryptoRandom.INSTANCE.nextBytes(sent);
+        client.write(sent);
+        byte[] received = new byte[511];
+        int off = 0;
+        while (off < 511) {
+            byte[] chunk = server.read();
+            System.arraycopy(chunk, 0, received, off, chunk.length);
+            off += chunk.length;
+        }
+        assertArrayEquals(sent, received, "511 байт переданы корректно одной записью");
+    }
+
+    @Test
+    @DisplayName("max_fragment_length=512: 512 байт — две записи (511+1)")
+    void testMaxFragmentLength512Bytes() throws Exception {
+        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
+
+        var c2s = new LinkedBlockingQueue<byte[]>();
+        var s2c = new LinkedBlockingQueue<byte[]>();
+        var appDataRecords = new CopyOnWriteArrayList<byte[]>();
+
+        InMemoryTlsTransport clientTransport = new InMemoryTlsTransport(s2c) {
+            @Override public void sendRecord(byte[] record) {
+                if ((record[0] & 0xFF) == TlsConstants.CT_APPLICATION_DATA)
+                    appDataRecords.add(record.clone());
+                c2s.add(record.clone());
+            }
+        };
+        InMemoryTlsTransport serverTransport = new InMemoryTlsTransport(c2s) {
+            @Override public void sendRecord(byte[] record) { s2c.add(record.clone()); }
+        };
+
+        TlsSession server = TlsSession.createServer(serverTransport, cs, bundle.cert, bundle.priv);
+        TlsSession client = TlsSession.createClient(clientTransport, cs, null, null);
+        client.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512);
+
+        Phaser phaser = new Phaser(3);
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+        Future<Void> cf = exec.submit(() -> { phaser.arriveAndAwaitAdvance(); client.handshakeAsClient(); return null; });
+        Future<Void> sf = exec.submit(() -> { phaser.arriveAndAwaitAdvance(); server.handshakeAsServer(); return null; });
+        phaser.arriveAndAwaitAdvance();
+        cf.get(15, TimeUnit.SECONDS);
+        sf.get(15, TimeUnit.SECONDS);
+        exec.shutdown();
+
+        byte[] sent = new byte[512];
+        CryptoRandom.INSTANCE.nextBytes(sent);
+        client.write(sent);
+        byte[] received = new byte[512];
+        int off = 0;
+        while (off < 512) {
+            byte[] chunk = server.read();
+            System.arraycopy(chunk, 0, received, off, chunk.length);
+            off += chunk.length;
+        }
+        assertArrayEquals(sent, received, "512 байт переданы корректно (2 записи)");
+        assertTrue(appDataRecords.size() >= 2,
+                "512 байт при limit=512 → минимум 2 записи, было " + appDataRecords.size());
+    }
 }

@@ -90,4 +90,14 @@ class TlsMessageParserFuzzTest {
         } catch (TlsException | IllegalArgumentException e) {
         }
     }
+
+    @FuzzTest
+    void fuzzParseEncryptedExtensions(FuzzedDataProvider data) {
+        byte[] input = data.consumeRemainingAsBytes();
+        if (input.length == 0) return;
+        try {
+            TlsMessageParser.parseEncryptedExtensions(input);
+        } catch (TlsException | IllegalArgumentException e) {
+        }
+    }
 }

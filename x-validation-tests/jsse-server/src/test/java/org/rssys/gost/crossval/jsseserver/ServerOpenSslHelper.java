@@ -439,6 +439,13 @@ final class ServerOpenSslHelper {
         return runSClient(port, suiteName, curveName);
     }
 
+    static String runHttpGetWithMaxFragLen(int port, String suiteName,
+                                            String curveName,
+                                            int maxFragLen) throws Exception {
+        return runSClient(port, suiteName, curveName,
+                "-maxfraglen", Integer.toString(maxFragLen));
+    }
+
     static String runMtlsHttpGet(int port, String suiteName,
                                   String curveName,
                                   String clientCertPem,

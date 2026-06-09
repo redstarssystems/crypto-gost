@@ -6,6 +6,7 @@ import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.tls13.config.OIDFilter;
 import org.rssys.gost.tls13.crypto.HkdfStreebog;
 import org.rssys.gost.tls13.crypto.TlsKeySchedule;
 import org.rssys.gost.tls13.crypto.TlsSignatureCodec;
@@ -35,12 +36,15 @@ public final class TlsMessageBuilder {
     private final List<Integer> offeredCipherSuiteIds;
     private final int selectedNamedGroup;
     private int selectedSigScheme;
-    private final PrivateKeyParameters ourPrivateKey;
-    private final List<TlsCertificate> ourCertificateChain;
+    private PrivateKeyParameters ourPrivateKey;
+    private List<TlsCertificate> ourCertificateChain;
     private int hashLen;
 
     // ALPN (RFC 7301): список протоколов клиента для включения в ClientHello
     private List<String> clientAlpnProtocols;
+
+    // max_fragment_length (RFC 6066 §4): 0 = не отправлять, 1..4 = код лимита
+    private int clientMaxFragLen;
 
     /** legacy_session_id из ClientHello для эхо-отражения (RFC 8446 §4.1.3). Null если пусто. */
     private byte[] clientSessionId;
@@ -198,6 +202,22 @@ public final class TlsMessageBuilder {
     }
 
     /**
+     * Заменяет цепочку сертификатов для Certificate.
+     * Используется при выборе клиентского сертификата по oid_filters.
+     */
+    public void setCertificateChain(List<TlsCertificate> chain) {
+        this.ourCertificateChain = chain;
+    }
+
+    /**
+     * Заменяет закрытый ключ для CertificateVerify.
+     * Используется при выборе клиентского сертификата по oid_filters.
+     */
+    public void setPrivateKey(PrivateKeyParameters key) {
+        this.ourPrivateKey = key;
+    }
+
+    /**
      * Устанавливает протоколы ALPN для включения в ClientHello (RFC 7301).
      * Вызывать до buildClientHello / buildClientHelloWithPsk — протоколы будут
      * добавлены как отдельное расширение после общих расширений, но до PSK
@@ -217,6 +237,14 @@ public final class TlsMessageBuilder {
      */
     public void setClientSessionId(byte[] sessionId) {
         this.clientSessionId = (sessionId != null && sessionId.length > 0) ? sessionId : null;
+    }
+
+    /**
+     * Устанавливает код max_fragment_length для включения в ClientHello (RFC 6066 §4).
+     * 0 = не отправлять расширение, 1=512, 2=1024, 3=2048, 4=4096 байт.
+     */
+    public void setClientMaxFragLen(int maxFragLen) {
+        this.clientMaxFragLen = maxFragLen;
     }
 
     /**
@@ -589,11 +617,9 @@ public final class TlsMessageBuilder {
 
     /**
      * EncryptedExtensions — пустой список расширений (RFC 9367 §6.1.2).
-     * В ГОСТ-профиле TLS 1.3 не требуется никаких дополнительных расширений
-     * на этом этапе, поэтому тело — всегда {@code 0x00 0x00}.
      */
     public static byte[] buildEncryptedExtensions() {
-        return new byte[]{0x00, 0x00};
+        return buildEncryptedExtensions(null, 0);
     }
 
     /**
@@ -699,7 +725,14 @@ public final class TlsMessageBuilder {
             ksPos += entry.length;
         }
         TlsEncoding.encodeExtension(ext, TlsConstants.EXT_KEY_SHARE, ks);
+        addMaxFragmentLengthExtension(ext);
         ext.write(STATUS_REQUEST_EXT, 0, STATUS_REQUEST_EXT.length);
+    }
+
+    private void addMaxFragmentLengthExtension(ByteArrayOutputStream ext) {
+        if (clientMaxFragLen < 1 || clientMaxFragLen > 4) return;
+        byte[] body = new byte[]{(byte) clientMaxFragLen};
+        TlsEncoding.encodeExtension(ext, TlsConstants.EXT_MAX_FRAGMENT_LENGTH, body);
     }
 
     private void buildCommonExtensions(ByteArrayOutputStream ext, byte[] ecdhePoint, String serverName) {
@@ -784,25 +817,37 @@ public final class TlsMessageBuilder {
 
     /**
      * Собирает EncryptedExtensions с опциональным ALPN (RFC 7301, RFC 8446 §4.3.1).
-     * <p>
-     * Если selectedAlpnProtocol == null, возвращает пустые расширения {0x00, 0x00}
-     * для обратной совместимости (сервер без ALPN).
-     * Формат ответа: ProtocolName = len(1) || name(N) — только один протокол, выбранный сервером.
-     *
-     * @param selectedAlpnProtocol выбранный сервером протокол, или null
-     * @return тело EncryptedExtensions
+     * Делегирует полной перегрузке для избежания дублирования.
      */
     public static byte[] buildEncryptedExtensions(String selectedAlpnProtocol) {
-        if (selectedAlpnProtocol == null || selectedAlpnProtocol.isEmpty()) {
+        return buildEncryptedExtensions(selectedAlpnProtocol, 0);
+    }
+
+    /**
+     * Собирает EncryptedExtensions с опциональным ALPN и max_fragment_length (RFC 6066 §4).
+     *
+     * @param selectedAlpnProtocol выбранный сервером протокол, или null
+     * @param maxFragLen           код max_fragment_length (1..4), или 0
+     * @return тело EncryptedExtensions
+     */
+    public static byte[] buildEncryptedExtensions(String selectedAlpnProtocol, int maxFragLen) {
+        boolean hasAlpn = selectedAlpnProtocol != null && !selectedAlpnProtocol.isEmpty();
+        boolean hasMaxFrag = maxFragLen >= 1 && maxFragLen <= 4;
+        if (!hasAlpn && !hasMaxFrag) {
             return new byte[]{0x00, 0x00};
         }
-        byte[] nameBytes = selectedAlpnProtocol.getBytes(StandardCharsets.US_ASCII);
-        byte[] alpnBody = new byte[1 + nameBytes.length];
-        alpnBody[0] = (byte) nameBytes.length;
-        System.arraycopy(nameBytes, 0, alpnBody, 1, nameBytes.length);
-
         ByteArrayOutputStream extBody = new ByteArrayOutputStream();
-        TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION, alpnBody);
+        if (hasAlpn) {
+            byte[] nameBytes = selectedAlpnProtocol.getBytes(StandardCharsets.US_ASCII);
+            byte[] alpnBody = new byte[1 + nameBytes.length];
+            alpnBody[0] = (byte) nameBytes.length;
+            System.arraycopy(nameBytes, 0, alpnBody, 1, nameBytes.length);
+            TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION, alpnBody);
+        }
+        if (hasMaxFrag) {
+            byte[] body = new byte[]{(byte) maxFragLen};
+            TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_MAX_FRAGMENT_LENGTH, body);
+        }
         byte[] extBodyBytes = extBody.toByteArray();
         byte[] out = new byte[2 + extBodyBytes.length];
         out[0] = (byte) (extBodyBytes.length >>> 8);
@@ -848,6 +893,53 @@ public final class TlsMessageBuilder {
         out[1] = 0; out[2] = 20;  // extensions length (SIG_ALG_EXT size)
         System.arraycopy(SIG_ALG_EXT, 0, out, 3, SIG_ALG_EXT.length);
         return out;
+    }
+
+    /**
+     * Собирает CertificateRequest с OID-фильтрами (RFC 8446 §4.2.5).
+     * <p>
+     * Формат: certificate_request_context(0) || extensions.
+     * Расширения: signature_algorithms + oid_filters.
+     * <p>
+     * OIDFilter wire: { oid_len(1) || oid_bytes || values_len(2) || values_bytes }.
+     * OIDFilterExtension: opaque filters<0..2^16-1>.
+     *
+     * @param oidFilters список OID-фильтров для выбора сертификата клиента
+     * @return тело CertificateRequest
+     */
+    public static byte[] buildCertificateRequest(List<OIDFilter> oidFilters) {
+        if (oidFilters == null || oidFilters.isEmpty()) {
+            return buildCertificateRequest();
+        }
+        ByteArrayOutputStream extBody = new ByteArrayOutputStream();
+        // signature_algorithms (всегда)
+        TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_SIGNATURE_ALGORITHMS, SIG_ALG_BODY);
+        // oid_filters
+        ByteArrayOutputStream filterData = new ByteArrayOutputStream();
+        for (OIDFilter filter : oidFilters) {
+            byte[] oid = filter.extensionOid();
+            byte[] values = filter.extensionValues();
+            // RFC 8446 §4.2.5: opaque certificate_extension_oid<1..2^8-1>
+            filterData.write(oid.length);
+            filterData.write(oid, 0, oid.length);
+            // opaque certificate_extension_values<0..2^16-1>
+            filterData.write((values.length >>> 8) & 0xFF);
+            filterData.write(values.length & 0xFF);
+            filterData.write(values, 0, values.length);
+        }
+        byte[] filterBytes = filterData.toByteArray();
+        ByteArrayOutputStream oidFilterExtData = new ByteArrayOutputStream();
+        // RFC 8446 §4.2.5: OIDFilter filters<0..2^16-1> — двухбайтовая длина списка
+        TlsEncoding.encodeUint16(oidFilterExtData, filterBytes.length);
+        oidFilterExtData.write(filterBytes, 0, filterBytes.length);
+        TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_OID_FILTERS, oidFilterExtData.toByteArray());
+        // Собираем CertificateRequest: context_byte(1) || extensions_len(2) || extensions
+        byte[] extBytes = extBody.toByteArray();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0); // certificate_request_context
+        TlsEncoding.encodeUint16(out, extBytes.length);
+        out.write(extBytes, 0, extBytes.length);
+        return out.toByteArray();
     }
 
     /**

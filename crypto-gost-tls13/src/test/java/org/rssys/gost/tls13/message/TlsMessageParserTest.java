@@ -682,7 +682,7 @@ class TlsMessageParserTest {
     }
 
     @Test
-    @DisplayName("parseEncryptedExtensionsAlpn: находит ALPN в EE")
+    @DisplayName("parseEncryptedExtensions: находит ALPN в EE")
     // WHY: EncryptedExtensions содержит выбранный сервером ALPN-протокол.
     // Клиент должен извлечь его, чтобы узнать, какой протокол согласован.
     void testParseEncryptedExtensionsAlpnValid() throws Exception {
@@ -694,19 +694,22 @@ class TlsMessageParserTest {
         eeBody[0] = (byte) (extBytes.length >>> 8);
         eeBody[1] = (byte) extBytes.length;
         System.arraycopy(extBytes, 0, eeBody, 2, extBytes.length);
-        assertEquals("h2", TlsMessageParser.parseEncryptedExtensionsAlpn(eeBody));
+        assertEquals("h2", TlsMessageParser.parseEncryptedExtensions(eeBody).alpn);
     }
 
     @Test
-    @DisplayName("parseEncryptedExtensionsAlpn: пустые EE → null")
+    @DisplayName("parseEncryptedExtensions: пустые EE → alpn=null, maxFragLen=0")
     // WHY: Если сервер не выбрал ALPN (не поддерживает или клиент не предложил),
     // EncryptedExtensions не содержит ALPN-расширения. Парсер возвращает null.
-    void testParseEncryptedExtensionsAlpnEmpty() throws Exception {
-        assertNull(TlsMessageParser.parseEncryptedExtensionsAlpn(new byte[]{0x00, 0x00}));
+    void testParseEncryptedExtensionsEmpty() throws Exception {
+        TlsMessageParser.ParsedEncryptedExtensions parsed =
+                TlsMessageParser.parseEncryptedExtensions(new byte[]{0x00, 0x00});
+        assertNull(parsed.alpn);
+        assertEquals(0, parsed.maxFragLen);
     }
 
     @Test
-    @DisplayName("parseEncryptedExtensionsAlpn: длинный протокол (>1 байт)")
+    @DisplayName("parseEncryptedExtensions: длинный протокол (>1 байт)")
     // WHY: Протоколы могут быть многосимвольными ("http/1.1" — 8 байт).
     // Парсер должен корректно читать length-prefixed строки любой длины.
     void testParseEncryptedExtensionsAlpnLonger() throws Exception {
@@ -721,7 +724,7 @@ class TlsMessageParserTest {
         eeBody[0] = (byte) (extBytes.length >>> 8);
         eeBody[1] = (byte) extBytes.length;
         System.arraycopy(extBytes, 0, eeBody, 2, extBytes.length);
-        assertEquals("http/1.1", TlsMessageParser.parseEncryptedExtensionsAlpn(eeBody));
+        assertEquals("http/1.1", TlsMessageParser.parseEncryptedExtensions(eeBody).alpn);
     }
 
     @Test

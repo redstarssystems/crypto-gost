@@ -74,6 +74,10 @@ public final class TlsDerParser {
     public static final byte[] OCSP_SIGNING_OID_BYTES = {0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x09};
     // OID: anyExtendedKeyUsage 2.5.29.37.0
     public static final byte[] ANY_EKU_OID_BYTES = {0x55, 0x1D, 0x25, 0x00};
+    // OID: УКЭП 1.2.643.100.113.1 (усиленная квалифицированная электронная подпись)
+    public static final byte[] UKEP_OID_BYTES    = {0x2A, (byte)0x85, 0x03, 0x64, 0x71, 0x01};
+    // OID: УНЭП 1.2.643.100.113.2 (усиленная неквалифицированная электронная подпись)
+    public static final byte[] UNEP_OID_BYTES    = {0x2A, (byte)0x85, 0x03, 0x64, 0x71, 0x02};
     // ========================================================================
     // OID Distinguished Name атрибутов (RFC 4519, ГОСТ Р 34.10)
     // ========================================================================

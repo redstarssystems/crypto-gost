@@ -144,6 +144,15 @@ public final class TlsConstants {
     public static final int EXT_CERTIFICATE_AUTHORITIES = 47;
     public static final int EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION = 16; // RFC 7301
     public static final int EXT_COOKIE = 44;
+    // oid_filters (RFC 8446 §4.2.5)
+    public static final int EXT_OID_FILTERS = 48;
+    // max_fragment_length (RFC 6066 §4)
+    public static final int EXT_MAX_FRAGMENT_LENGTH = 1;
+    public static final int MAX_FRAG_LEN_512  = 1;
+    public static final int MAX_FRAG_LEN_1024 = 2;
+    public static final int MAX_FRAG_LEN_2048 = 3;
+    public static final int MAX_FRAG_LEN_4096 = 4;
+    public static final int[] MAX_FRAG_LEN_VALUES = {0, 512, 1024, 2048, 4096};
 
     // коды алертов
     /** no_application_protocol (RFC 7301 §3.2): сервер не выбрал протокол ALPN */

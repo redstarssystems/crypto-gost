@@ -27,6 +27,7 @@ public final class TlsClientConfig {
     private String serverHostname;
     private boolean requireOcspStapling;
     private List<String> alpnProtocols;
+    private ClientCertificateSelector clientCertificateSelector;
 
     /**
      * Создаёт конфигурацию клиента без транспорта.
@@ -134,4 +135,21 @@ public final class TlsClientConfig {
     }
     public String getServerHostname() { return serverHostname; }
     public List<String> getAlpnProtocols() { return alpnProtocols; }
+
+    /**
+     * Устанавливает селектор сертификата клиента для mTLS.
+     * Вызывается при получении CertificateRequest с oid_filters или
+     * certificate_authorities для выбора подходящего сертификата.
+     *
+     * @param selector селектор, может быть null
+     * @return this
+     */
+    public TlsClientConfig withClientCertificateSelector(ClientCertificateSelector selector) {
+        this.clientCertificateSelector = selector;
+        return this;
+    }
+
+    public ClientCertificateSelector getClientCertificateSelector() {
+        return clientCertificateSelector;
+    }
 }

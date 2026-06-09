@@ -126,6 +126,37 @@ public final class GostSSLEngine extends SSLEngine {
     private boolean enableSessionCreation = true;
     private String endpointIdentificationAlgorithm;
 
+    // max_fragment_length (RFC 6066 §4): 0 = default (16384)
+    private int maxFragmentLength;
+    // Запрос клиента (1..4): 0 = не запрашивать. Устанавливается до beginHandshake.
+    private int clientMaxFragLenRequest;
+    // Промежуточный буфер для фрагментации handshake-сообщений (Variant A)
+    private byte[] pendingHsFragment;
+    private int pendingHsOffset;
+
+    /** @return код max_fragment_length, согласованный при handshake (0 = default) */
+    public int getMaxFragmentLength() { return maxFragmentLength; }
+
+    /** Максимальный размер данных (без inner_type) для одного TLS-рекорда при handshake */
+    private int hsChunkSize() {
+        int mfl = handshakeEngine != null ? handshakeEngine.getMaxFragmentLength() : maxFragmentLength;
+        return (mfl >= 1 && mfl <= 4)
+                ? TlsConstants.MAX_FRAG_LEN_VALUES[mfl] - 1
+                : TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
+    }
+
+    /**
+     * Устанавливает запрос max_fragment_length для ClientHello (RFC 6066 §4).
+     * @param code 0 = не запрашивать, 1=512, 2=1024, 3=2048, 4=4096 байт
+     */
+    public void setClientMaxFragLenRequest(int code) {
+        if (engineState != EngineState.INITIAL) {
+            throw new IllegalStateException(
+                    "Cannot set max_fragment_length request after handshake started");
+        }
+        this.clientMaxFragLenRequest = (code >= 1 && code <= 4) ? code : 0;
+    }
+
     // ALPN: протоколы прикладного уровня (RFC 7301)
     private String[] applicationProtocols;
     private String selectedAlpnProtocol;
@@ -281,6 +312,10 @@ public final class GostSSLEngine extends SSLEngine {
             }
             if (applicationProtocols != null && applicationProtocols.length > 0) {
                 handshakeEngine.setClientAlpnProtocols(java.util.Arrays.asList(applicationProtocols));
+            }
+            if (clientMaxFragLenRequest != 0) {
+                messageBuilder.setClientMaxFragLen(clientMaxFragLenRequest);
+                handshakeEngine.setClientMaxFragLenRequest(clientMaxFragLenRequest);
             }
 
             // PSK resumption: ищем тикет для этого сервера
@@ -455,50 +490,85 @@ public final class GostSSLEngine extends SSLEngine {
             int bytesProduced = 0;
 
             if (engineState == EngineState.HANDSHAKE) {
-                // Отправляем handshake-фреймы из очереди
-                byte[] frame = outgoingQueue.poll();
+                // Отправляем handshake-фреймы из очереди (с фрагментацией при max_fragment_length)
+                applyDeferredWriterDestroy();
+                byte[] frame;
+                int frameOffset;
+                if (pendingHsFragment != null) {
+                    frame = pendingHsFragment;
+                    frameOffset = pendingHsOffset;
+                } else {
+                    frame = outgoingQueue.poll();
+                    frameOffset = 0;
+                }
                 if (frame != null) {
+                    int chunkSize = hsChunkSize();
+                    int remaining = frame.length - frameOffset;
+                    int sendLen = Math.min(remaining, chunkSize);
+
+
                     byte[] record;
-                    // WHY: deferredWriterDestroy мог быть установлен из handleEngineKeyChanges
-                    // под inboundLock. Уничтожаем под outboundLock перед любым protect().
-                    applyDeferredWriterDestroy();
                     if (writerRecord != null) {
-                        record = writerRecord.protect(TlsConstants.CT_HANDSHAKE, frame);
+                        record = writerRecord.protect(TlsConstants.CT_HANDSHAKE,
+                                frame, frameOffset, sendLen);
                     } else if (pendingWriteKeysExist) {
                         // RFC 8446 §4.1.3: ServerHello должен быть отправлен
                         // plaintext, хотя handshake-ключи уже выработаны.
                         // SH идёт без защиты, затем создаём writerRecord
                         // для оставшихся фреймов (EE, Cert, CV, Fin).
-                        record = buildPlaintextRecord(TlsConstants.CT_HANDSHAKE, frame);
+                        byte[] chunk = new byte[sendLen];
+                        System.arraycopy(frame, frameOffset, chunk, 0, sendLen);
+                        record = buildPlaintextRecord(TlsConstants.CT_HANDSHAKE, chunk);
                         writerRecord = new TlsRecord(
                                 pendingWriteKey, pendingWriteIv,
                                 pendingWriteTagLen, ciphersuite);
                         pendingWriteKeysExist = false;
                         pendingWriteKey = null;
                         pendingWriteIv = null;
+                        // writerRecord создан — применяем лимит из handshakeEngine
+                        int hsMfl = handshakeEngine != null
+                                ? handshakeEngine.getMaxFragmentLength() : 0;
+                        if (hsMfl >= 1 && hsMfl <= 4) {
+                            writerRecord.setMaxFragmentLength(hsMfl);
+                        }
                     } else {
                         // Клиентский ClientHello или серверный HelloRetryRequest
                         // отправляются plaintext — handshake-ключи ещё не выработаны.
-                        // RFC 8446 §4.1.3: HRR предшествует выработке ключей, поэтому
-                        // pendingWriteKeysExist == false — корректное состояние.
-                        record = buildPlaintextRecord(TlsConstants.CT_HANDSHAKE, frame);
+                        byte[] chunk = new byte[sendLen];
+                        System.arraycopy(frame, frameOffset, chunk, 0, sendLen);
+                        record = buildPlaintextRecord(TlsConstants.CT_HANDSHAKE, chunk);
                     }
+
                     if (dst.remaining() < record.length) {
-                        // Недостаточно места — возвращаем фрейм обратно в очередь
-                        outgoingQueue.addFirst(frame);
+                        // Недостаточно места — возвращаем фрейм в очередь или сбрасываем pending
+                        if (pendingHsFragment != null) {
+                            // Откатываем offset — повторная попытка в следующем wrap()
+                            pendingHsOffset = frameOffset;
+                        } else {
+                            outgoingQueue.addFirst(frame);
+                        }
                         return new SSLEngineResult(
                                 SSLEngineResult.Status.BUFFER_OVERFLOW,
                                 getHandshakeStatus(), 0, 0);
                     }
                     dst.put(record);
                     bytesProduced = record.length;
+
+                    // Фрагментация: если не всё отправлено — буферизируем остаток
+                    if (sendLen < remaining) {
+                        pendingHsFragment = frame;
+                        pendingHsOffset = frameOffset + sendLen;
+                    } else {
+                        pendingHsFragment = null;
+                        pendingHsOffset = 0;
+                    }
                 }
 
                 // Данные рукопожатия отправлены, но app-ключи ещё не применены
                 // (handleEngineKeyChanges не вызывался в finishHandshake,
                 // чтобы клиентский Finished был отправлен с handshake-ключами).
                 // Теперь переключаем writerRecord на app-ключи.
-                if (outgoingQueue.isEmpty() && handshakeDone) {
+                if (outgoingQueue.isEmpty() && pendingHsFragment == null && handshakeDone) {
                     handleEngineKeyChanges();
                     // WHY: для клиента app-ключи отложены в pendingWriteKeysExist —
                     // применяем здесь, после отправки Finished (handshake-ключами).
@@ -509,6 +579,9 @@ public final class GostSSLEngine extends SSLEngine {
                         writerRecord = new TlsRecord(
                                 pendingWriteKey, pendingWriteIv,
                                 pendingWriteTagLen, ciphersuite);
+                        if (maxFragmentLength >= 1 && maxFragmentLength <= 4) {
+                            writerRecord.setMaxFragmentLength(maxFragmentLength);
+                        }
                         pendingWriteKeysExist = false;
                         pendingWriteKey = null;
                         pendingWriteIv = null;
@@ -572,8 +645,10 @@ public final class GostSSLEngine extends SSLEngine {
 
                 applyDeferredWriterDestroy();
 
-                // Фрагментируем по MAX_PLAINTEXT_LENGTH - 1 (1 байт на inner content type)
-                int maxFragment = TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
+                // Фрагментируем по согласованному max_fragment_length (RFC 6066 §4)
+                int maxFragment = (maxFragmentLength >= 1 && maxFragmentLength <= 4)
+                        ? TlsConstants.MAX_FRAG_LEN_VALUES[maxFragmentLength] - 1
+                        : TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
 
                 for (int i = offset; i < offset + length && i < srcs.length; i++) {
                     ByteBuffer src = srcs[i];
@@ -1242,6 +1317,9 @@ public final class GostSSLEngine extends SSLEngine {
         }
 
         currentPskTicketIdentity = null;
+
+        // Сохраняем согласованный max_fragment_length до destroy handshakeEngine
+        this.maxFragmentLength = handshakeEngine.getMaxFragmentLength();
 
         handshakeDone = true;
 

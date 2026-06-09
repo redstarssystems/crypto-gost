@@ -47,6 +47,9 @@ public final class GostSSLSocket extends SSLSocket {
     private static final int RECORD_HEADER = TlsConstants.RECORD_HEADER_SIZE;
     private static final ByteBuffer EMPTY = ByteBuffer.allocate(0);
 
+    // max_fragment_length (RFC 6066 §4): negotiated limit для приёма
+    private volatile int maxFragmentLength;
+
     // ========================================================================
     // Transport
     // ========================================================================
@@ -180,6 +183,16 @@ public final class GostSSLSocket extends SSLSocket {
 
     // ========================================================================
     // startHandshake
+    /**
+     * Запрашивает уменьшение максимального размера фрагмента (RFC 6066 §4).
+     * Должно быть вызвано ДО startHandshake().
+     *
+     * @param maxFragLenCode 0 = дефолт (16384), 1=512, 2=1024, 3=2048, 4=4096
+     */
+    public void setMaxFragmentLengthRequest(int maxFragLenCode) {
+        engine.setClientMaxFragLenRequest(maxFragLenCode);
+    }
+
     // ========================================================================
 
     @Override
@@ -221,6 +234,7 @@ public final class GostSSLSocket extends SSLSocket {
                     case FINISHED:
                     case NOT_HANDSHAKING:
                         handshakeDone = true;
+                        maxFragmentLength = engine.getMaxFragmentLength();
                         fireHandshakeCompleted();
                         return;
                 }
@@ -767,6 +781,14 @@ public final class GostSSLSocket extends SSLSocket {
         int bodyLen = ((hdr[3] & 0xFF) << 8) | (hdr[4] & 0xFF);
         if (bodyLen > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
             throw new IOException("TLS record too large: " + bodyLen);
+        }
+        if (maxFragmentLength > 0) {
+            int maxCipher = TlsConstants.MAX_FRAG_LEN_VALUES[maxFragmentLength]
+                    + 1 + 255 + TlsConstants.MGM_TAG_SIZE; // plaintext + inner_type + max_padding(255) + tag
+            if (bodyLen > maxCipher) {
+                throw new IOException("TLS record exceeds max_fragment_length negotiated limit: "
+                        + bodyLen + " > " + maxCipher);
+            }
         }
         byte[] record = new byte[RECORD_HEADER + bodyLen];
         System.arraycopy(hdr, 0, record, 0, RECORD_HEADER);

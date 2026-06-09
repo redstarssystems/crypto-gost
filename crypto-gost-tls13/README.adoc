@@ -342,6 +342,76 @@ try {
 NOTE: Для цепочки из нескольких сертификатов (leaf + промежуточные CA)
 используйте `withClientCertificateChain(List.of(leaf, intermediate, root))`.
 
+
+=== Выбор клиентского сертификата по OID-фильтрам (oid_filters)
+
+Сервер может включить в `CertificateRequest` расширение `oid_filters` (RFC 8446 §4.2.5) —
+список OID-критериев для выбора подходящего клиентского сертификата.
+Типичный ГОСТ-сценарий: сервер требует сертификат с EKU УКЭП (`1.2.643.100.113.1`)
+или УНЭП (`1.2.643.100.113.2`).
+
+.Сервер — передать фильтры через `withOidFilters()`:
+[source,java]
+----
+import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.config.OIDFilter;
+import org.rssys.gost.tls13.cert.TlsDerParser;
+
+// Фильтр: клиент должен предъявить сертификат с EKU УКЭП
+// filterOid = OID расширения EKU (2.5.29.37), filterValues = DER SEQUENCE { OID УКЭП }
+byte[] oidTlv = new byte[2 + TlsDerParser.UKEP_OID_BYTES.length];
+oidTlv[0] = 0x06; // TAG_OID
+oidTlv[1] = (byte) TlsDerParser.UKEP_OID_BYTES.length;
+System.arraycopy(TlsDerParser.UKEP_OID_BYTES, 0, oidTlv, 2, TlsDerParser.UKEP_OID_BYTES.length);
+byte[] filterValues = new byte[2 + oidTlv.length];
+filterValues[0] = 0x30; // TAG_SEQUENCE
+filterValues[1] = (byte) oidTlv.length;
+System.arraycopy(oidTlv, 0, filterValues, 2, oidTlv.length);
+
+OIDFilter ukepFilter = new OIDFilter(TlsDerParser.EKU_OID_BYTES, filterValues);
+
+TlsSession server = TlsSession.createServer(
+        new TlsServerConfig(ciphersuite, chain, priv)
+                .withCaPublicKey(caKey)
+                .withOidFilters(List.of(ukepFilter)),
+        transport);
+server.handshakeAsServer();
+----
+
+.Клиент — передать `ClientCertificateSelector` через `withClientCertificateSelector()`:
+[source,java]
+----
+import org.rssys.gost.tls13.config.TlsClientConfig;
+import org.rssys.gost.tls13.config.ClientCertificateSelector;
+import org.rssys.gost.tls13.config.TlsClientCredentials;
+
+// Два сертификата: УКЭП (clientAuth + УКЭП EKU) и обычный (clientAuth)
+ClientCertificateSelector selector = (caDns, oidFilters) -> {
+    for (var entry : List.of(
+            Map.entry(ukepCert, ukepKey),
+            Map.entry(simpleCert, simpleKey))) {
+        TlsCertificate cert = entry.getKey();
+        boolean ok = oidFilters.stream().allMatch(cert::matchesOidFilter);
+        if (ok) return new TlsClientCredentials(List.of(cert), entry.getValue());
+    }
+    return null; // нет подходящего → отправляется пустой certificate_list
+};
+
+TlsSession client = TlsSession.createClient(
+        new TlsClientConfig(ciphersuite)
+                .withClientCertificateSelector(selector),
+        transport);
+client.handshakeAsClient();
+----
+
+NOTE: Если `selector` возвращает `null` — клиент отправляет пустой `certificate_list`
+(RFC 8446 §4.4.2). Сервер сам решает, прерывать ли handshake.
+
+NOTE: Встроенные константы OID: `GostOids.EKU_UKEP` = `1.2.643.100.113.1`,
+`GostOids.EKU_UNEP` = `1.2.643.100.113.2`. Байтовые константы:
+`TlsDerParser.UKEP_OID_BYTES`, `TlsDerParser.UNEP_OID_BYTES`,
+`TlsDerParser.EKU_OID_BYTES`.
+
 === Возобновление сессии по предварительно согласованному ключу (PSK session resumption)
 
 После полного _handshake_ сервер автоматически отправляет клиенту PSK-билет (сообщение `NewSessionTicket`) При следующем подключении клиент может использовать этот билет для сокращённого _handshake_ — без _ECDHE_ и проверки сертификатов. Это заменяет дорогую асимметричную криптографию на симметричную HMAC-операцию, что значительно ускоряет повторные подключения и снижает нагрузку на ЦП.

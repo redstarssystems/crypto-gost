@@ -9,7 +9,10 @@ import org.rssys.gost.util.CryptoRandom;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.tls13.message.TlsEncoding;
 
 import java.util.List;
 
@@ -454,7 +457,7 @@ class TlsHandshakeEngineTest {
 
         // Проверяем ALPN в EE
         byte[] eeBody = TlsHandshakeMessage.decode(ee).getBody();
-        assertEquals("http/1.1", TlsMessageParser.parseEncryptedExtensionsAlpn(eeBody));
+        assertEquals("http/1.1", TlsMessageParser.parseEncryptedExtensions(eeBody).alpn);
 
         client.receive(sh);
         client.acknowledgeKeyChange();
@@ -518,7 +521,7 @@ class TlsHandshakeEngineTest {
 
         // EE без ALPN
         byte[] eeBody = TlsHandshakeMessage.decode(ee).getBody();
-        assertNull(TlsMessageParser.parseEncryptedExtensionsAlpn(eeBody));
+        assertNull(TlsMessageParser.parseEncryptedExtensions(eeBody).alpn);
 
         client.receive(sh);
         client.acknowledgeKeyChange();
@@ -598,7 +601,7 @@ class TlsHandshakeEngineTest {
         assertNull(server.poll());
 
         byte[] eeBody = TlsHandshakeMessage.decode(ee).getBody();
-        assertEquals("h2", TlsMessageParser.parseEncryptedExtensionsAlpn(eeBody));
+        assertEquals("h2", TlsMessageParser.parseEncryptedExtensions(eeBody).alpn);
 
         client.receive(sh);
         client.acknowledgeKeyChange();
@@ -1045,6 +1048,132 @@ class TlsHandshakeEngineTest {
         TlsException ex = assertThrows(TlsException.class, () -> client.receive(fakeHrr));
         assertEquals(TlsConstants.ALERT_ILLEGAL_PARAMETER, ex.getAlertCode(),
                 "Неизвестная группа в HRR должна вызывать ALERT_ILLEGAL_PARAMETER");
+        assertTrue(client.isError());
+    }
+
+    @Test
+    @DisplayName("handshake с max_fragment_length=1 (512 байт): согласование и фрагментация")
+    void testHandshakeWithMaxFragmentLength() throws Exception {
+        // Клиент запрашивает max_fragment_length=512 байт
+        TlsMessageBuilder clientMb = clientBuilder(false);
+        clientMb.setClientMaxFragLen(TlsConstants.MAX_FRAG_LEN_512);
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(), clientMb,
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+        client.setClientMaxFragLenRequest(TlsConstants.MAX_FRAG_LEN_512);
+
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(), serverBuilder(),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        // ClientHello
+        byte[] ch = client.start();
+        assertNotNull(ch);
+        byte[] chBody = TlsHandshakeMessage.decode(ch).getBody();
+        assertEquals(TlsConstants.MAX_FRAG_LEN_512,
+                TlsMessageParser.parseClientHello(chBody, NAMED_GROUP).clientMaxFragLen);
+
+        // Сервер принимает
+        server.receive(ch);
+        assertEquals(TlsConstants.MAX_FRAG_LEN_512, server.getMaxFragmentLength());
+        assertEquals(TlsHandshakeEngine.State.SERVER_SEND_FLIGHT, server.getState());
+
+        byte[] sh = server.poll();
+        byte[] ee = server.poll();
+        assertNotNull(ee);
+
+        // Проверяем EE: сервер подтвердил max_fragment_length
+        byte[] eeBody = TlsHandshakeMessage.decode(ee).getBody();
+        TlsMessageParser.ParsedEncryptedExtensions parsedEE =
+                TlsMessageParser.parseEncryptedExtensions(eeBody);
+        assertEquals(TlsConstants.MAX_FRAG_LEN_512, parsedEE.maxFragLen);
+
+        byte[] cert = server.poll();
+        byte[] cv = server.poll();
+        byte[] sf = server.poll();
+        assertNotNull(sf);
+        assertNull(server.poll());
+        assertEquals(TlsHandshakeEngine.State.SERVER_WAIT_CLIENT_FINISHED, server.getState());
+
+        // Клиент: ServerHello → EncryptedExtensions → ...
+        client.receive(sh);
+        client.acknowledgeKeyChange();
+        client.receive(ee);
+        assertEquals(TlsConstants.MAX_FRAG_LEN_512, client.getMaxFragmentLength());
+        assertEquals(TlsHandshakeEngine.State.CLIENT_WAIT_CERTIFICATE_OR_CR, client.getState());
+
+        client.receive(cert);
+        client.acknowledgeCertificateValidation(true);
+        client.receive(cv);
+        client.receive(sf);
+        byte[] cf = client.poll();
+        assertNotNull(cf);
+        assertNull(client.poll());
+        server.receive(cf);
+        assertTrue(client.isDone());
+        assertTrue(server.isDone());
+    }
+
+    @Test
+    @DisplayName("max_fragment_length: сервер вернул другое значение → ALERT_ILLEGAL_PARAMETER")
+    void testMaxFragmentLengthMismatchServerResponse() throws Exception {
+        TlsMessageBuilder clientMb = clientBuilder(false);
+        clientMb.setClientMaxFragLen(TlsConstants.MAX_FRAG_LEN_512);
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(), clientMb,
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+        client.setClientMaxFragLenRequest(TlsConstants.MAX_FRAG_LEN_512);
+
+        byte[] ch = client.start();
+        assertNotNull(ch);
+
+        // Сервер подтверждает ДРУГОЕ значение (1024 вместо 512)
+        byte[] eeBody = TlsMessageBuilder.buildEncryptedExtensions(null, TlsConstants.MAX_FRAG_LEN_1024);
+        byte[] eeFrame = new TlsHandshakeMessage(TlsConstants.HT_ENCRYPTED_EXTENSIONS, eeBody).encode();
+
+        // Генерируем валидный ServerHello с ECDHE для продвижения state machine
+        KeyPair ecdheKp = KeyGenerator.generateKeyPair(EC_PARAMS);
+        byte[] ecdhePoint = TlsEncoding.encodePoint(ecdheKp.getPublic());
+        TlsMessageBuilder serverMb = serverBuilder();
+        byte[] shBody = serverMb.buildServerHello(ecdhePoint, false, NAMED_GROUP);
+        byte[] shFrame = new TlsHandshakeMessage(TlsConstants.HT_SERVER_HELLO, shBody).encode();
+
+        client.receive(shFrame);
+        client.acknowledgeKeyChange();
+
+        TlsException ex = assertThrows(TlsException.class, () -> client.receive(eeFrame));
+        assertEquals(TlsConstants.ALERT_ILLEGAL_PARAMETER, ex.getAlertCode(),
+                "Сервер вернул другое max_fragment_length → ALERT_ILLEGAL_PARAMETER");
+        assertTrue(client.isError());
+    }
+
+    @Test
+    @DisplayName("max_fragment_length: сервер вернул незапрошенное расширение → ALERT_ILLEGAL_PARAMETER")
+    void testMaxFragmentLengthUnsolicited() throws Exception {
+        // Клиент НЕ запрашивает max_fragment_length
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(), clientBuilder(false),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        byte[] ch = client.start();
+        assertNotNull(ch);
+
+        // Сервер включает max_fragment_length в EE без запроса
+        byte[] eeBody = TlsMessageBuilder.buildEncryptedExtensions(null, TlsConstants.MAX_FRAG_LEN_512);
+        byte[] eeFrame = new TlsHandshakeMessage(TlsConstants.HT_ENCRYPTED_EXTENSIONS, eeBody).encode();
+
+        KeyPair ecdheKp = KeyGenerator.generateKeyPair(EC_PARAMS);
+        byte[] ecdhePoint = TlsEncoding.encodePoint(ecdheKp.getPublic());
+        TlsMessageBuilder serverMb = serverBuilder();
+        byte[] shBody = serverMb.buildServerHello(ecdhePoint, false, NAMED_GROUP);
+        byte[] shFrame = new TlsHandshakeMessage(TlsConstants.HT_SERVER_HELLO, shBody).encode();
+
+        client.receive(shFrame);
+        client.acknowledgeKeyChange();
+
+        TlsException ex = assertThrows(TlsException.class, () -> client.receive(eeFrame));
+        assertEquals(TlsConstants.ALERT_ILLEGAL_PARAMETER, ex.getAlertCode(),
+                "Незапрошенное max_fragment_length от сервера → ALERT_ILLEGAL_PARAMETER");
         assertTrue(client.isError());
     }
 }

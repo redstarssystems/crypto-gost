@@ -17,6 +17,9 @@ import org.rssys.gost.tls13.crypto.TlsKeySchedule;
 import org.rssys.gost.tls13.message.TlsEncoding;
 import org.rssys.gost.tls13.config.SniCertificateSelector;
 import org.rssys.gost.tls13.config.TlsServerCredentials;
+import org.rssys.gost.tls13.config.OIDFilter;
+import org.rssys.gost.tls13.config.ClientCertificateSelector;
+import org.rssys.gost.tls13.config.TlsClientCredentials;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
 import org.rssys.gost.tls13.message.TlsMessageParser;
 import org.rssys.gost.tls13.psk.PskEntry;
@@ -222,10 +225,19 @@ public final class TlsHandshakeEngine {
     private List<String> clientAlpnProtocols;
     private List<String> serverAlpnProtocols;
     private String selectedAlpnProtocol;
+
+    // max_fragment_length (RFC 6066 §4): 0 = default (16384)
+    private int maxFragmentLength;
+    // Запрос клиента (1..4), 0 если не запрашивал — для проверки ответа сервера
+    private int clientMaxFragLenRequest;
     private java.util.function.Function<java.util.List<String>, String> alpnSelector;
 
     // SNI certificate selection (RFC 6066 §3, RFC 8446 §4.4.2)
     private final SniCertificateSelector sniSelector;
+    // OID-фильтры для CertificateRequest (сервер, RFC 8446 §4.2.5)
+    private List<OIDFilter> oidFilters;
+    // Селектор сертификата клиента по OID-фильтрам (клиент)
+    private ClientCertificateSelector clientCertificateSelector;
 
     // Post-handshake (KeyUpdate)
     // Флаги и ключи для двухфазного подтверждения KeyUpdate:
@@ -333,6 +345,24 @@ public final class TlsHandshakeEngine {
      */
     public void setOcspResponse(byte[] response) {
         this.ocspResponse = response;
+    }
+
+    /**
+     * Устанавливает OID-фильтры для CertificateRequest (сервер).
+     * @param filters список OID-фильтров, null = extension не отправляется
+     */
+    public void setOidFilters(List<OIDFilter> filters) {
+        this.oidFilters = filters;
+    }
+
+    /**
+     * Устанавливает селектор сертификата клиента (клиент).
+     * Вызывается при получении CertificateRequest с oid_filters или
+     * certificate_authorities для выбора подходящего сертификата.
+     * @param selector селектор, null = используется дефолтный сертификат
+     */
+    public void setClientCertificateSelector(ClientCertificateSelector selector) {
+        this.clientCertificateSelector = selector;
     }
 
     // ========================================================================
@@ -1042,18 +1072,29 @@ public final class TlsHandshakeEngine {
         }
         ctx.addToTranscript(frame);
 
+        // Парсим ALPN и max_fragment_length из EncryptedExtensions
+        TlsMessageParser.ParsedEncryptedExtensions parsedEE =
+                TlsMessageParser.parseEncryptedExtensions(eeMsg.getBody());
+
         // ALPN: RFC 7301 §3.2 — клиент обязан проверить, что сервер выбрал протокол из нашего списка.
-        // Если сервер отвечает неожиданным протоколом — это либо баг, либо атака (ILOGICAL_PARAMETER).
-        if (clientAlpnProtocols != null) {
-            String serverSelected = TlsMessageParser.parseEncryptedExtensionsAlpn(eeMsg.getBody());
-            if (serverSelected != null) {
-                if (!clientAlpnProtocols.contains(serverSelected)) {
-                    throw new TlsException(TlsConstants.ALERT_ILLEGAL_PARAMETER,
-                            "Server selected ALPN protocol not offered: " + serverSelected);
-                }
-                this.selectedAlpnProtocol = serverSelected;
+        if (parsedEE.alpn != null) {
+            if (clientAlpnProtocols != null && !clientAlpnProtocols.contains(parsedEE.alpn)) {
+                throw new TlsException(TlsConstants.ALERT_ILLEGAL_PARAMETER,
+                        "Server selected ALPN protocol not offered: " + parsedEE.alpn);
             }
-            // Сервер может не поддерживать ALPN — это штатный сценарий, протокол не назначается.
+            this.selectedAlpnProtocol = parsedEE.alpn;
+        }
+
+        // max_fragment_length: RFC 6066 §4 + RFC 8446 §4.2
+        // Если сервер вернул расширение, клиент не запрашивал — abort (RFC 8446 §4.2).
+        // Если сервер вернул другое значение — abort (RFC 6066 §4.1).
+        if (parsedEE.maxFragLen != 0) {
+            if (clientMaxFragLenRequest == 0 || parsedEE.maxFragLen != clientMaxFragLenRequest) {
+                throw new TlsException(TlsConstants.ALERT_ILLEGAL_PARAMETER,
+                        "Server returned unexpected max_fragment_length: requested "
+                        + clientMaxFragLenRequest + ", got " + parsedEE.maxFragLen);
+            }
+            this.maxFragmentLength = parsedEE.maxFragLen;
         }
 
         state = pskAccepted ? State.CLIENT_WAIT_FINISHED : State.CLIENT_WAIT_CERTIFICATE_OR_CR;
@@ -1074,9 +1115,36 @@ public final class TlsHandshakeEngine {
         TlsHandshakeMessage msg = TlsHandshakeMessage.decode(frame);
         if (msg.getType() == TlsConstants.HT_CERTIFICATE_REQUEST) {
             ctx.addToTranscript(frame);
-            List<byte[]> caDns = TlsMessageParser.parseCertificateRequest(msg.getBody());
-            ctx.setAcceptedCaDns(caDns);
+            TlsMessageParser.CertificateRequestInfo cri =
+                    TlsMessageParser.parseCertificateRequest(msg.getBody());
+            ctx.setAcceptedCaDns(cri.caDns());
+            ctx.setOidFilters(cri.oidFilters());
             clientAuthRequested = true;
+
+            // Выбираем сертификат клиента по фильтрам, если задан селектор
+            if (clientCertificateSelector != null
+                    && (!cri.oidFilters().isEmpty() || !cri.caDns().isEmpty())) {
+                TlsClientCredentials selected = clientCertificateSelector.select(
+                        cri.caDns(), cri.oidFilters());
+                if (selected != null) {
+                    if (selected.chain().isEmpty()
+                            || selected.chain().get(0).getPublicKey() == null) {
+                        throw new IllegalArgumentException(
+                                "Selected client certificate chain leaf has no public key");
+                    }
+                    messageBuilder.setCertificateChain(selected.chain());
+                    messageBuilder.setPrivateKey(selected.privateKey());
+                    int newScheme = TlsCiphersuite.namedGroupToSignatureScheme(
+                            TlsCiphersuite.paramsToNamedGroup(
+                                    selected.chain().get(0).getPublicKey().getParams()));
+                    messageBuilder.updateSigScheme(newScheme);
+                } else {
+                    // Ни один сертификат не подошёл → пустой certificate_list
+                    messageBuilder.setCertificateChain(null);
+                    messageBuilder.setPrivateKey(null);
+                }
+            }
+            // Если селектор не задан или фильтров нет — используем дефолтный сертификат
             state = State.CLIENT_WAIT_CERTIFICATE;
             return;
         }
@@ -1447,7 +1515,11 @@ public final class TlsHandshakeEngine {
 
         // Определяем согласованный ciphersuite по пересечению списков
         TlsCiphersuite matchedSuite = messageBuilder.negotiateCiphersuite(chBody, this.ciphersuite);
-        if (matchedSuite != null && matchedSuite != this.ciphersuite) {
+        if (matchedSuite == null) {
+            throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
+                    "No common cipher suite: client did not offer any GOST suite");
+        }
+        if (matchedSuite != this.ciphersuite) {
             this.ciphersuite = matchedSuite;
             this.negotiatedCiphersuite = matchedSuite;
         }
@@ -1455,6 +1527,7 @@ public final class TlsHandshakeEngine {
             messageBuilder.updateSigScheme(parsedCH.matchedSigScheme);
         }
         this.requestedServerName = parsedCH.serverName;
+        this.maxFragmentLength = parsedCH.clientMaxFragLen;
 
         // Определяем ECParams по фактической группе клиента
         int actualGroup = parsedCH.actualGroup;
@@ -1581,8 +1654,8 @@ public final class TlsHandshakeEngine {
             }
         }
 
-        // EncryptedExtensions — с опциональным ALPN (RFC 7301 §3.2)
-        byte[] eeBody = TlsMessageBuilder.buildEncryptedExtensions(selectedAlpnProtocol);
+        // EncryptedExtensions — с опциональным ALPN и max_fragment_length (RFC 6066 §4)
+        byte[] eeBody = TlsMessageBuilder.buildEncryptedExtensions(selectedAlpnProtocol, maxFragmentLength);
         byte[] eeFrame = new TlsHandshakeMessage(
                 TlsConstants.HT_ENCRYPTED_EXTENSIONS, eeBody).encode();
         ctx.addToTranscript(eeFrame);
@@ -1591,7 +1664,9 @@ public final class TlsHandshakeEngine {
         if (!pskAccepted) {
             // CertificateRequest (если требуется mTLS)
             if (requestClientAuth) {
-                byte[] crBody = TlsMessageBuilder.buildCertificateRequest();
+                byte[] crBody = oidFilters != null && !oidFilters.isEmpty()
+                        ? TlsMessageBuilder.buildCertificateRequest(oidFilters)
+                        : TlsMessageBuilder.buildCertificateRequest();
                 byte[] crFrame = new TlsHandshakeMessage(
                         TlsConstants.HT_CERTIFICATE_REQUEST, crBody).encode();
                 ctx.addToTranscript(crFrame);
@@ -1860,6 +1935,17 @@ public final class TlsHandshakeEngine {
 
     /** @return true если PSK был принят */
     public boolean isPskAccepted() { return pskAccepted; }
+
+    /**
+     * @return код max_fragment_length (1..4) согласованный с пиром, или 0 если не согласован
+     */
+    public int getMaxFragmentLength() { return maxFragmentLength; }
+
+    /**
+     * Устанавливает код max_fragment_length, который клиент отправил в ClientHello
+     * (для последующей верификации ответа сервера, RFC 6066 §4.1).
+     */
+    public void setClientMaxFragLenRequest(int code) { this.clientMaxFragLenRequest = code; }
 
     /**
      * Зачищает ключевой материал.

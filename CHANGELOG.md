@@ -1,3 +1,59 @@
+# \[0.5.1\] - 10-06-2026
+
+## Модуль crypto-gost-tls13
+
+### Исправлено
+
+- **Исправлено нарушение RFC 8446 §5.2:** библиотека отклоняла TLS 1.3
+  записи с padding с ошибкой ALERT\_RECORD\_OVERFLOW. По спецификации
+  TLSInnerPlaintext может содержать до 255 байт padding после inner
+  content type, что даёт максимум 16640 байт до тега — любой корректный
+  TLS 1.3 стек вправе это использовать. Буфер plaintext в TlsRecord и
+  граница проверки в doDecrypt расширены с
+  MAX\_PLAINTEXT\_LENGTH (16384) до MAX\_CIPHERTEXT\_LENGTH − tagLen
+  (16624). Написаны тесты.
+
+- **Исправлено нарушение RFC 8446 §4.1.3**: при отсутствии пересечения
+  cipher suites между клиентом и сервером теперь отправляется
+  handshake\_failure вместо продолжения handshake с дефолтным
+  ГОСТ-suite.
+
+### Добавлено
+
+- **oid\_filters (RFC 8446 §4.2.5)**. Сервер включает в
+  CertificateRequest фильтры по OID расширений сертификата клиента.
+  Клиент выбирает сертификат, удовлетворяющий фильтрам, или отправляет
+  пустой certificate\_list.
+
+  - Сервер:: `TlsServerConfig.withOidFilters(List<OIDFilter>)` — задаёт
+    фильтры; engine автоматически включает их в CertificateRequest.
+
+  - Клиент:: `ClientCertificateSelector` — функциональный интерфейс для
+    выбора сертификата по `acceptedCaDns` и `OIDFilter`;
+    `TlsClientConfig.withClientCertificateSelector(selector)` —
+    установка.
+
+  - Matching:: `TlsCertificate.matchesOidFilter(OIDFilter)` — реализует
+    правила RFC 8446 §4.2.5:
+
+    - **KU** (2.5.29.15): все биты фильтра — подмножество KU сертификата
+
+    - **EKU** (2.5.29.37): все OID фильтра присутствуют в EKU;
+      `anyExtendedKeyUsage` запрещён
+
+    - **Известные расширения**: проверка наличия и (при непустых values)
+      сравнение DER-значения
+
+    - **Неизвестные OID**: игнорируются (per RFC)
+
+  - Новые OID:: `GostOids.EKU_UKEP` = `"1.2.643.100.113.1"` (УКЭП),
+    `GostOids.EKU_UNEP` = `"1.2.643.100.113.2"` (УНЭП); соответствующие
+    `UKEP_OID_BYTES` / `UNEP_OID_BYTES` в `TlsDerParser`.
+
+  - Кросс-валидация:: `testServerOidFilters` — проверка wire-формата
+    oid\_filters с OpenSSL s\_client; `testServerMtls` расширен
+    assert-ом `matchesOidFilter(УКЭП)` на peer-сертификате.
+
 # \[0.5.0\] - 09-06-2026
 
 ## Общее
@@ -95,6 +151,16 @@
     Все нарушения структуры бросают IllegalArgumentException с указанием
     смещения.
 
+### Добавлено
+
+- **Реализована поддержка расширения max\_fragment\_length (RFC 6066
+  §4)**: клиент может запросить уменьшение максимального размера
+  TLS-фрагмента до 512, 1024, 2048 или 4096 байт; сервер подтверждает
+  запрошенное значение в EncryptedExtensions; после handshake оба
+  направления передачи фрагментируются по согласованному лимиту. Клиент
+  отклоняет незапрошенное или изменённое значение от сервера с
+  ALERT\_ILLEGAL\_PARAMETER.
+
 ## Модуль crypto-gost-jsse
 
 ### Добавлено
@@ -102,6 +168,14 @@
 - Добавлен fuzzing-тест клиентского unwrap
   (GostSSLEngineUnwrapClientFuzzTest). Исправлена регистрация провайдера
   в GostSSLEngineUnwrapFuzzTest.
+
+- **Реализована поддержка расширения max\_fragment\_length (RFC 6066
+  §4)**: клиент может запросить уменьшение максимального размера
+  TLS-фрагмента до 512, 1024, 2048 или 4096 байт; сервер подтверждает
+  запрошенное значение в EncryptedExtensions; после handshake оба
+  направления передачи фрагментируются по согласованному лимиту. Клиент
+  отклоняет незапрошенное или изменённое значение от сервера с
+  ALERT\_ILLEGAL\_PARAMETER.
 
 ### Изменено
 

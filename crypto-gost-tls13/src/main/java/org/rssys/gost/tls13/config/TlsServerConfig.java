@@ -29,6 +29,7 @@ public final class TlsServerConfig {
     private SniCertificateSelector sniSelector;
     private int ticketsToSend = 1;
     private int selectedNamedGroup;
+    private List<OIDFilter> oidFilters;
 
     /**
      * @param ciphersuite             cipher suite (не null)
@@ -132,6 +133,21 @@ public final class TlsServerConfig {
     public SniCertificateSelector getSniSelector() { return sniSelector; }
     public int getTicketsToSend() { return ticketsToSend; }
     public int getSelectedNamedGroup() { return selectedNamedGroup; }
+    public List<OIDFilter> getOidFilters() { return oidFilters; }
+
+    /**
+     * Устанавливает OID-фильтры для включения в CertificateRequest
+     * (RFC 8446 §4.2.5). Сервер передаёт эти фильтры клиенту, чтобы
+     * тот выбрал сертификат, удовлетворяющий требованиям (УКЭП/УНЭП,
+     * keyUsage и т.д.).
+     *
+     * @param filters список OID-фильтров, может быть null (extension не отправляется)
+     * @return this
+     */
+    public TlsServerConfig withOidFilters(List<OIDFilter> filters) {
+        this.oidFilters = filters;
+        return this;
+    }
 
     /**
      * Устанавливает количество NewSessionTicket, отправляемых клиенту

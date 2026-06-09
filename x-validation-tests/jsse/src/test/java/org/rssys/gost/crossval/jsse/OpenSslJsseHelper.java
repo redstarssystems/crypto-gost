@@ -14,6 +14,7 @@ import org.rssys.gost.tls13.cert.TlsCertificate;
 
 import javax.net.ssl.SSLEngineResult;
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.InputStreamReader;
 import java.io.InputStream;
@@ -256,32 +257,55 @@ final class OpenSslJsseHelper {
     }
 
     static byte[] sendAppDataAndReceiveOverTcp(GostSSLEngine engine,
-                                                 byte[] dataToSend,
-                                                 Socket socket) throws Exception {
+                                                  byte[] dataToSend,
+                                                  Socket socket) throws Exception {
+        return sendAppDataAndReceiveOverTcp(engine, dataToSend, socket, 0);
+    }
+
+    static byte[] sendAppDataAndReceiveOverTcp(GostSSLEngine engine,
+                                                  byte[] dataToSend,
+                                                  Socket socket,
+                                                  int expectedResponseLength) throws Exception {
         InputStream sockIn = socket.getInputStream();
         OutputStream sockOut = socket.getOutputStream();
         ByteBuffer appBuf = ByteBuffer.allocate(MAX_PLAINTEXT);
-
         ByteBuffer net = ByteBuffer.allocate(MAX_CIPHERTEXT + 64);
-        engine.wrap(ByteBuffer.wrap(dataToSend), net);
-        net.flip();
-        byte[] sendData = new byte[net.remaining()];
-        net.get(sendData);
-        sockOut.write(sendData);
+
+        // Отправляем фрагментами — одна TLS-запись на вызов wrap()
+        ByteBuffer src = ByteBuffer.wrap(dataToSend);
+        while (src.hasRemaining()) {
+            net.clear();
+            SSLEngineResult result = engine.wrap(src, net);
+            if (result.getStatus() == SSLEngineResult.Status.BUFFER_OVERFLOW) {
+                throw new RuntimeException("Net buffer too small for wrap");
+            }
+            net.flip();
+            byte[] chunk = new byte[net.remaining()];
+            net.get(chunk);
+            sockOut.write(chunk);
+        }
         sockOut.flush();
 
+        // Принимаем данные от пира
+        ByteArrayOutputStream accum = new ByteArrayOutputStream(dataToSend.length);
         for (int i = 0; i < HANDSHAKE_MAX_ITERATIONS; i++) {
             ByteBuffer record = readTlsRecord(sockIn);
             appBuf.clear();
             SSLEngineResult result = engine.unwrap(record, appBuf);
             if (result.bytesProduced() > 0) {
                 appBuf.flip();
-                byte[] response = new byte[appBuf.remaining()];
-                appBuf.get(response);
-                return response;
+                byte[] chunk = new byte[appBuf.remaining()];
+                appBuf.get(chunk);
+                accum.write(chunk);
+            }
+            // Выходим когда получили нужный объём или хоть что-то (если длина не задана)
+            if (expectedResponseLength > 0) {
+                if (accum.size() >= expectedResponseLength) break;
+            } else {
+                if (accum.size() > 0) break;
             }
         }
-        throw new RuntimeException("Нет данных от пира после отправки");
+        return accum.toByteArray();
     }
 
     /* ========================================================================

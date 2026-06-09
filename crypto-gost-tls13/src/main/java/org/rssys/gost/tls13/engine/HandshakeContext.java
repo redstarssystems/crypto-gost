@@ -8,6 +8,7 @@ import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.crypto.TlsKeySchedule;
+import org.rssys.gost.tls13.config.OIDFilter;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -39,6 +40,7 @@ public final class HandshakeContext {
     private Digest hsDigest;
     private TlsKeySchedule keySchedule;
     private List<byte[]> acceptedCaDns = Collections.emptyList();
+    private List<OIDFilter> oidFilters = Collections.emptyList();
 
     public HandshakeContext(int hashLen) {
         this.hsDigest = hashLen == TlsConstants.STREEBOG_512_HASH_LEN
@@ -102,6 +104,14 @@ public final class HandshakeContext {
      *  Пустой список если extension отсутствует — семантика "сервер не указал предпочтений". */
     public List<byte[]> getAcceptedCaDns() {
         return acceptedCaDns;
+    }
+
+    public void setOidFilters(List<OIDFilter> filters) {
+        this.oidFilters = filters != null ? filters : Collections.emptyList();
+    }
+
+    public List<OIDFilter> getOidFilters() {
+        return oidFilters;
     }
 
     /**

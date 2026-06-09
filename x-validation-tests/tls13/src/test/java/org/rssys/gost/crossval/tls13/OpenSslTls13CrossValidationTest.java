@@ -19,8 +19,10 @@ import org.rssys.gost.tls13.TlsSession;
 import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.cert.GostPkcs12Loader;
 import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.tls13.cert.TlsDerParser;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.config.OIDFilter;
 import org.rssys.gost.tls13.transport.SocketTlsTransport;
 
 import java.io.ByteArrayOutputStream;
@@ -91,13 +93,66 @@ class OpenSslTls13CrossValidationTest {
     }
 
     @Test
+    @DisplayName("сервер crypto-gost + s_client: oid_filters (wire-формат)")
+    void testServerOidFilters() throws Exception {
+        CurveSpec curve = findCurve("GC256B");
+        int port = OpenSslTls13Helper.findFreePort();
+
+        TempDirUtils.withTempDir("tls13-oidf-", tmpDir -> {
+            TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(curve.params);
+
+            // Клиентский сертификат Java API с УКЭП EKU
+            TlsTestHelper.CertBundle clientBundle = TlsTestHelper.createCertWithKey(
+                    curve.params, "20240101120000Z", "21060101120000Z",
+                    null, new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_CLIENT_AUTH, GostOids.EKU_UKEP});
+            Path clientCertPem = tmpDir.resolve("client-cert.pem");
+            Path clientKeyPem = tmpDir.resolve("client-key.pem");
+            Files.writeString(clientCertPem, clientBundle.cert.toPem());
+            Files.writeString(clientKeyPem,
+                    OpenSslTls13Helper.privateKeyToPem(
+                            GostDerCodec.encodePrivateKey(clientBundle.priv)));
+
+            // OID filter: УКЭП (filterOid = EKU 2.5.29.37, value = { 1.2.643.100.113.1 })
+            byte[] ukepFilterValues = buildEkuFilterValues(TlsDerParser.UKEP_OID_BYTES);
+            OIDFilter ukepFilter = new OIDFilter(TlsDerParser.EKU_OID_BYTES, ukepFilterValues);
+            List<OIDFilter> filters = Collections.singletonList(ukepFilter);
+
+            startJavaServerWithOidFilters(port, SUITE_L_ID, curve, bundle.cert, bundle.priv,
+                    filters, clientBundle.cert.getPublicKey());
+
+            Thread.sleep(200);
+
+            List<String> clientExtraArgs = List.of(
+                    "-cert", clientCertPem.toString(),
+                    "-key", clientKeyPem.toString(),
+                    "-sigalgs", curve.sigalgsName);
+            String clientOutput = OpenSslTls13Helper.runSClientWithHttpGet(port,
+                    SUITE_L, curve.ianaName, TIMEOUT_MS,
+                    clientExtraArgs.toArray(new String[0]));
+
+            assertTrue(clientOutput.contains("INTEROP_OK"),
+                    "s_client output должен содержать INTEROP_OK: " + clientOutput);
+            return null;
+        });
+    }
+
+    @Test
     @DisplayName("сервер crypto-gost + s_client: mTLS (взаимная аутентификация)")
     void testServerMtls() throws Exception {
-        runServerTest(SUITE_L, SUITE_L_ID, "GC256B", true, 0);
+        AtomicReference<List<TlsCertificate>> peerCerts = new AtomicReference<>();
+        runServerTest(SUITE_L, SUITE_L_ID, "GC256B", true, 0, peerCerts);
+        // Проверяем что сертификат клиента удовлетворяет УКЭП фильтру
+        List<TlsCertificate> certs = peerCerts.get();
+        assertNotNull(certs, "Должен быть peer-сертификат");
+        assertFalse(certs.isEmpty(), "Peer-сертификаты не пусты");
+        byte[] ukepFilterValues = buildEkuFilterValues(TlsDerParser.UKEP_OID_BYTES);
+        OIDFilter ukepFilter = new OIDFilter(TlsDerParser.EKU_OID_BYTES, ukepFilterValues);
+        assertTrue(certs.get(0).matchesOidFilter(ukepFilter),
+                "Клиентский сертификат должен удовлетворять УКЭП фильтру");
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {1, 15, 16, 1024, 12_000})
+    @ValueSource(ints = {1, 15, 16, 1024, 12_000, 16_383, 16_384, 16_385, 32_768})
     @DisplayName("сервер crypto-gost + s_client: размеры payload (TLSTREE re-keying)")
     void testServerPayload(int size) throws Exception {
         runServerPayloadTest(SUITE_L, SUITE_L_ID, "GC256B", size);
@@ -127,8 +182,14 @@ class OpenSslTls13CrossValidationTest {
         runClientTest(SUITE_L, SUITE_L_ID, curveName);
     }
 
-private void runServerTest(String suiteName, int suiteId, String curveName,
+    private void runServerTest(String suiteName, int suiteId, String curveName,
                                boolean mTls, int serverGroup) throws Exception {
+        runServerTest(suiteName, suiteId, curveName, mTls, serverGroup, null);
+    }
+
+    private void runServerTest(String suiteName, int suiteId, String curveName,
+                               boolean mTls, int serverGroup,
+                               AtomicReference<List<TlsCertificate>> peerCerts) throws Exception {
         CurveSpec curve = findCurve(curveName);
         int port = OpenSslTls13Helper.findFreePort();
 
@@ -144,7 +205,7 @@ private void runServerTest(String suiteName, int suiteId, String curveName,
                 byte[] cliKu = new byte[]{(byte) 0x80}; // digitalSignature
                 TlsTestHelper.CertBundle clientBundle = TlsTestHelper.createCertWithKey(
                         curve.params, "20240101120000Z", "21060101120000Z",
-                        null, cliKu, new String[]{GostOids.EXT_CLIENT_AUTH});
+                        null, cliKu, new String[]{GostOids.EXT_CLIENT_AUTH, GostOids.EKU_UKEP});
                 Path clientCertPem = tmpDir.resolve("client-cert.pem");
                 Path clientKeyPem = tmpDir.resolve("client-key.pem");
                 Files.writeString(clientCertPem, clientBundle.cert.toPem());
@@ -159,25 +220,34 @@ private void runServerTest(String suiteName, int suiteId, String curveName,
 
                 // Сервер доверяет клиентскому сертификату напрямую (самоподписанный)
                 runServerTestInner(port, suiteId, curve, chain.get(0), r.getPrivateKey(),
-                        clientBundle.cert.getPublicKey(), serverGroup, clientExtraArgs);
+                        clientBundle.cert.getPublicKey(), serverGroup, clientExtraArgs, peerCerts);
                 return null;
             });
         } else {
             TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(curve.params);
             runServerTestInner(port, suiteId, curve, bundle.cert, bundle.priv,
-                    null, serverGroup, List.of());
+                    null, serverGroup, List.of(), peerCerts);
         }
     }
 
     private void runServerTestInner(int port, int suiteId, CurveSpec curve,
-                                    TlsCertificate serverCert, PrivateKeyParameters serverPriv,
-                                    PublicKeyParameters caPub, int serverGroup,
-                                    List<String> clientExtraArgs) throws Exception {
+                                     TlsCertificate serverCert, PrivateKeyParameters serverPriv,
+                                     PublicKeyParameters caPub, int serverGroup,
+                                     List<String> clientExtraArgs) throws Exception {
+        runServerTestInner(port, suiteId, curve, serverCert, serverPriv, caPub,
+                serverGroup, clientExtraArgs, null);
+    }
+
+    private void runServerTestInner(int port, int suiteId, CurveSpec curve,
+                                     TlsCertificate serverCert, PrivateKeyParameters serverPriv,
+                                     PublicKeyParameters caPub, int serverGroup,
+                                     List<String> clientExtraArgs,
+                                     AtomicReference<List<TlsCertificate>> peerCerts) throws Exception {
         AtomicReference<Throwable> serverError = new AtomicReference<>();
         CountDownLatch handshakeDone = new CountDownLatch(1);
 
         Thread serverThread = startJavaServer(port, suiteId, curve, serverCert, serverPriv,
-                caPub, serverGroup, serverError, handshakeDone);
+                caPub, serverGroup, serverError, handshakeDone, peerCerts);
 
         Thread.sleep(200);
 
@@ -212,7 +282,8 @@ private void runServerTest(String suiteName, int suiteId, String curveName,
                     session.handshakeAsServer();
                     // Читаем все данные (могут быть фрагментированы в несколько TLS-записей)
                     ByteArrayOutputStream acc = new ByteArrayOutputStream(size);
-                    long deadline = System.currentTimeMillis() + 10_000;
+                    long deadline = System.currentTimeMillis() +
+                            (size >= 16_384 ? 60_000 : 10_000);
                     while (acc.size() < size && System.currentTimeMillis() < deadline) {
                         byte[] chunk = session.read();
                         if (chunk.length > 0) {
@@ -235,8 +306,10 @@ private void runServerTest(String suiteName, int suiteId, String curveName,
             payload[i] = (byte) i;
         }
 
+        // Для больших payload даём больше времени на передачу по TLS + echo.
+        long timeout = size >= 16_384 ? 120_000 : TIMEOUT_MS;
         String clientOutput = OpenSslTls13Helper.runSClientWithData(port,
-                suiteIdToName(suiteId), curve.ianaName, payload, TIMEOUT_MS);
+                suiteIdToName(suiteId), curve.ianaName, payload, timeout);
 
         serverThread.join(5000);
 
@@ -300,10 +373,20 @@ private void runServerTest(String suiteName, int suiteId, String curveName,
     }
 
     private static Thread startJavaServer(int port, int suiteId, CurveSpec curve,
-                                           TlsCertificate cert, PrivateKeyParameters priv,
-                                           PublicKeyParameters caPub, int serverGroup,
-                                           AtomicReference<Throwable> errorRef,
-                                           CountDownLatch handshakeDone) {
+                                            TlsCertificate cert, PrivateKeyParameters priv,
+                                            PublicKeyParameters caPub, int serverGroup,
+                                            AtomicReference<Throwable> errorRef,
+                                            CountDownLatch handshakeDone) {
+        return startJavaServer(port, suiteId, curve, cert, priv, caPub, serverGroup,
+                errorRef, handshakeDone, null);
+    }
+
+    private static Thread startJavaServer(int port, int suiteId, CurveSpec curve,
+                                            TlsCertificate cert, PrivateKeyParameters priv,
+                                            PublicKeyParameters caPub, int serverGroup,
+                                            AtomicReference<Throwable> errorRef,
+                                            CountDownLatch handshakeDone,
+                                            AtomicReference<List<TlsCertificate>> peerCerts) {
         Thread t = new Thread(() -> {
             try (ServerSocket ss = new ServerSocket(port)) {
                 ss.setSoTimeout(15000);
@@ -323,6 +406,10 @@ private void runServerTest(String suiteName, int suiteId, String curveName,
                     try (TlsSession session = TlsSession.createServer(config, tp)) {
                         session.handshakeAsServer();
                         handshakeDone.countDown();
+
+                        if (peerCerts != null) {
+                            peerCerts.set(session.getPeerCertificates());
+                        }
 
                         byte[] req = session.read();
                         String reqStr = new String(req, StandardCharsets.UTF_8);
@@ -344,5 +431,63 @@ private void runServerTest(String suiteName, int suiteId, String curveName,
         t.setDaemon(true);
         t.start();
         return t;
+    }
+
+    /**
+     * Запускает Java-сервер с OID-фильтрами для проверки wire-формата oid_filters.
+     */
+    private static void startJavaServerWithOidFilters(int port, int suiteId, CurveSpec curve,
+                                                       TlsCertificate cert, PrivateKeyParameters priv,
+                                                       List<OIDFilter> oidFilters,
+                                                       PublicKeyParameters caPubKey) {
+        new Thread(() -> {
+            try (ServerSocket ss = new ServerSocket(port)) {
+                ss.setSoTimeout(15000);
+                try (Socket s = ss.accept();
+                     SocketTlsTransport tp = new SocketTlsTransport(s)) {
+
+                    TlsServerConfig config = new TlsServerConfig(
+                            TlsCiphersuite.byId(suiteId),
+                            Collections.singletonList(cert), priv);
+                    // Включаем mTLS (иначе CertificateRequest не отправляется)
+                    config.withCaPublicKey(caPubKey);
+                    // Добавляем OID-фильтры для отправки в CertificateRequest
+                    config.withOidFilters(oidFilters);
+
+                    try (TlsSession session = TlsSession.createServer(config, tp)) {
+                        session.handshakeAsServer();
+                        byte[] req = session.read();
+                        String reqStr = new String(req, StandardCharsets.UTF_8);
+                        if (reqStr.contains("GET")) {
+                            String resp = "HTTP/1.1 200 OK\r\n"
+                                    + "Content-Type: text/plain\r\n"
+                                    + "Content-Length: 10\r\n"
+                                    + "Connection: close\r\n"
+                                    + "\r\n"
+                                    + "INTEROP_OK";
+                            session.write(resp.getBytes(StandardCharsets.UTF_8));
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, "java-server-oidf").start();
+    }
+
+    /**
+     * Строит DER-кодированное значение для EKU фильтра: SEQUENCE { OID }.
+     * oidBytes — OID value (без тега/длины), например UKEP_OID_BYTES.
+     */
+    private static byte[] buildEkuFilterValues(byte[] oidBytes) {
+        byte[] oidTlv = new byte[2 + oidBytes.length];
+        oidTlv[0] = 0x06; // TAG_OID
+        oidTlv[1] = (byte) oidBytes.length;
+        System.arraycopy(oidBytes, 0, oidTlv, 2, oidBytes.length);
+        byte[] seq = new byte[2 + oidTlv.length];
+        seq[0] = 0x30; // TAG_SEQUENCE
+        seq[1] = (byte) oidTlv.length;
+        System.arraycopy(oidTlv, 0, seq, 2, oidTlv.length);
+        return seq;
     }
 }

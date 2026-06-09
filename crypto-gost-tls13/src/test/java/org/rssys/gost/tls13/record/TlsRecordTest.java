@@ -3,6 +3,13 @@ import org.rssys.gost.tls13.*;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.cipher.mode.Mgm;
+import org.rssys.gost.tls13.crypto.TlsTree;
 import org.rssys.gost.util.AuthenticationException;
 
 import java.nio.ByteBuffer;
@@ -1011,5 +1018,169 @@ class TlsRecordTest {
                 () -> reader.unprotect(null, buf));
         assertThrows(IllegalArgumentException.class,
                 () -> reader.unprotect(buf, null));
+    }
+
+    @Test
+    @DisplayName("padding: TLSInnerPlaintext на границе maxInnerPlaintext(16624) проходит")
+    void testPaddingAtBoundaryAccepted() throws Exception {
+        int tagLen = 16;
+        int dataLen = 16383;
+        int paddingLen = 240;
+        int innerLen = dataLen + paddingLen + 1; // data + zeros + content_type
+        int payloadLen = innerLen + tagLen;
+
+        TlsCiphersuite suite = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
+        byte[] key = fixedKey();
+        byte[] iv = fixedIv();
+
+        // Создаём reader для проверки расшифровки
+        TlsRecord reader = new TlsRecord(key, iv, tagLen, suite);
+
+        // Nonce при seqNum=0 = IV с очищенным MSB (у fixedIv уже MSB=0)
+        byte[] nonce = iv.clone();
+        nonce[0] &= 0x7F;
+
+        // Per-record ключ через TLSTREE для seqNum=0
+        byte[] perRecordKey = TlsTree.tlstree(key, 0,
+                suite.getC1(), suite.getC2(), suite.getC3());
+
+        // Собираем TLSInnerPlaintext по RFC 8446 §5.2: данные || content_type || padding_zeros
+        byte[] innerPlaintext = new byte[innerLen];
+        byte[] data = new byte[dataLen];
+        CryptoRandom.INSTANCE.nextBytes(data);
+        System.arraycopy(data, 0, innerPlaintext, 0, dataLen);
+        innerPlaintext[dataLen] = TlsConstants.CT_APPLICATION_DATA;
+
+        // AAD: outer_content_type || legacy_version || payload_length
+        byte[] aad = new byte[5];
+        aad[0] = TlsConstants.CT_APPLICATION_DATA;
+        aad[1] = TlsConstants.LEGACY_VERSION_MAJOR;
+        aad[2] = TlsConstants.LEGACY_VERSION_MINOR;
+        aad[3] = (byte) (payloadLen >>> 8);
+        aad[4] = (byte) payloadLen;
+
+        // Шифруем через MGM
+        Kuznyechik kuz = new Kuznyechik();
+        Mgm mgm = new Mgm(kuz, tagLen);
+        SymmetricKey symKey = new SymmetricKey(perRecordKey);
+        mgm.init(true, new ParametersWithIV(symKey, nonce));
+        symKey.destroy();
+
+        mgm.updateAAD(aad, 0, aad.length);
+        byte[] ciphertext = new byte[innerLen];
+        mgm.processBytes(innerPlaintext, 0, innerLen, ciphertext, 0);
+        byte[] tag = new byte[tagLen];
+        mgm.finishEncryption(tag, 0);
+
+        // Собираем TLS-запись: header || ciphertext || tag
+        int recordLen = TlsConstants.RECORD_HEADER_SIZE + payloadLen;
+        byte[] record = new byte[recordLen];
+        record[0] = TlsConstants.CT_APPLICATION_DATA;
+        record[1] = TlsConstants.LEGACY_VERSION_MAJOR;
+        record[2] = TlsConstants.LEGACY_VERSION_MINOR;
+        record[3] = (byte) (payloadLen >>> 8);
+        record[4] = (byte) payloadLen;
+        System.arraycopy(ciphertext, 0, record, TlsConstants.RECORD_HEADER_SIZE, innerLen);
+        System.arraycopy(tag, 0, record, TlsConstants.RECORD_HEADER_SIZE + innerLen, tagLen);
+
+        // Расшифровка — должна пройти без ALERT_RECORD_OVERFLOW
+        TlsParsedRecord parsed = reader.unprotect(record);
+        assertEquals(TlsConstants.CT_APPLICATION_DATA, parsed.getContentType(),
+                "Тип содержимого должен совпадать");
+        assertArrayEquals(data, parsed.getData(),
+                "Расшифрованные данные должны совпадать с исходными");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 240, 255})
+    @DisplayName("ByteBuffer unprotect: padding на границе maxInnerPlaintext")
+    void testPaddingBoundaryByteBuffer(int paddingLen) throws Exception {
+        int tagLen = 16;
+        int maxInnerPlaintext = TlsConstants.MAX_CIPHERTEXT_LENGTH - tagLen;
+        int dataLen = maxInnerPlaintext - paddingLen - 1;
+        int innerLen = dataLen + paddingLen + 1;
+        int payloadLen = innerLen + tagLen;
+
+        TlsCiphersuite suite = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
+        byte[] key = fixedKey();
+        byte[] iv = fixedIv();
+
+        TlsRecord reader = new TlsRecord(key, iv, tagLen, suite);
+
+        byte[] nonce = iv.clone();
+        nonce[0] &= 0x7F;
+
+        byte[] perRecordKey = TlsTree.tlstree(key, 0,
+                suite.getC1(), suite.getC2(), suite.getC3());
+
+        byte[] innerPlaintext = new byte[innerLen];
+        byte[] data = new byte[dataLen];
+        CryptoRandom.INSTANCE.nextBytes(data);
+        System.arraycopy(data, 0, innerPlaintext, 0, dataLen);
+        innerPlaintext[dataLen] = TlsConstants.CT_APPLICATION_DATA;
+
+        byte[] aad = new byte[5];
+        aad[0] = TlsConstants.CT_APPLICATION_DATA;
+        aad[1] = TlsConstants.LEGACY_VERSION_MAJOR;
+        aad[2] = TlsConstants.LEGACY_VERSION_MINOR;
+        aad[3] = (byte) (payloadLen >>> 8);
+        aad[4] = (byte) payloadLen;
+
+        Kuznyechik kuz = new Kuznyechik();
+        Mgm mgm = new Mgm(kuz, tagLen);
+        SymmetricKey symKey = new SymmetricKey(perRecordKey);
+        mgm.init(true, new ParametersWithIV(symKey, nonce));
+        symKey.destroy();
+
+        mgm.updateAAD(aad, 0, aad.length);
+        byte[] ciphertext = new byte[innerLen];
+        mgm.processBytes(innerPlaintext, 0, innerLen, ciphertext, 0);
+        byte[] tag = new byte[tagLen];
+        mgm.finishEncryption(tag, 0);
+
+        int recordLen = TlsConstants.RECORD_HEADER_SIZE + payloadLen;
+        byte[] record = new byte[recordLen];
+        record[0] = TlsConstants.CT_APPLICATION_DATA;
+        record[1] = TlsConstants.LEGACY_VERSION_MAJOR;
+        record[2] = TlsConstants.LEGACY_VERSION_MINOR;
+        record[3] = (byte) (payloadLen >>> 8);
+        record[4] = (byte) payloadLen;
+        System.arraycopy(ciphertext, 0, record, TlsConstants.RECORD_HEADER_SIZE, innerLen);
+        System.arraycopy(tag, 0, record, TlsConstants.RECORD_HEADER_SIZE + innerLen, tagLen);
+
+        ByteBuffer recordBuf = ByteBuffer.wrap(record);
+        ByteBuffer plainBuf = ByteBuffer.allocate(dataLen + 64);
+        UnprotectResult r = reader.unprotect(recordBuf, plainBuf);
+
+        assertSame(UnprotectResult.Status.OK, r.status);
+        assertEquals(TlsConstants.CT_APPLICATION_DATA, r.contentType);
+        plainBuf.flip();
+        byte[] result = new byte[plainBuf.remaining()];
+        plainBuf.get(result);
+        assertArrayEquals(data, result);
+    }
+
+    @Test
+    @DisplayName("payloadLen > MAX_CIPHERTEXT_LENGTH → ALERT_RECORD_OVERFLOW")
+    void testOuterPayloadTooLongRejected() {
+        TlsCiphersuite suite = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
+        TlsRecord reader = new TlsRecord(fixedKey(), fixedIv(), 16, suite);
+
+        int payloadLen = TlsConstants.MAX_CIPHERTEXT_LENGTH + 1; // 16641
+        // doDecrypt проверяет payloadLen > MAX_CIPHERTEXT_LENGTH первой из двух
+        // overflow-проверок. Вторая (ciphertextLen > maxInnerPlaintext) физически
+        // недостижима: ciphertextLen > maxInnerPlaintext ⇒ payloadLen > MAX_CIPHERTEXT_LENGTH
+        // из-за ciphertextLen = payloadLen − tagLen, поэтому всегда срабатывает первая.
+        byte[] record = new byte[TlsConstants.RECORD_HEADER_SIZE + payloadLen];
+        record[0] = TlsConstants.CT_APPLICATION_DATA;
+        record[1] = TlsConstants.LEGACY_VERSION_MAJOR;
+        record[2] = TlsConstants.LEGACY_VERSION_MINOR;
+        record[3] = (byte) (payloadLen >>> 8);
+        record[4] = (byte) payloadLen;
+
+        TlsException ex = assertThrows(TlsException.class,
+                () -> reader.unprotect(record));
+        assertTrue(ex.getMessage().contains("Record too long"),
+                "Сообщение должно указывать на превышение длины");
     }
 }

@@ -348,6 +348,30 @@ CA-ключ.
 `GostX509TrustManager` проверит dNSName/iPAddress сертификата по RFC
 6125.
 
+### Выбор клиентского сертификата по OID-фильтрам (oid\_filters)
+
+Если сервер включил `oid_filters` (RFC 8446 §4.2.5) в
+`CertificateRequest`, `GostX509KeyManager.asClientCertificateSelector()`
+автоматически выбирает подходящий сертификат из KeyStore:
+
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
+    import org.rssys.gost.tls13.config.ClientCertificateSelector;
+
+    // KeyManager с несколькими сертификатами
+    GostX509KeyManager km = new GostX509KeyManager();
+    km.addKeyEntry("ukep",   ukepChain,   ukepKey);   // EKU: clientAuth + УКЭП
+    km.addKeyEntry("simple", simpleChain, simpleKey); // EKU: clientAuth
+
+    ClientCertificateSelector selector = km.asClientCertificateSelector();
+
+    // Передать selector в GostSSLEngine
+    GostSSLEngine engine = GostSSLEngine.createForClient(km, tm, "host", 8443, sessionCtx);
+    // При получении CertificateRequest с oid_filters selector вызывается автоматически
+
+Записи перебираются в порядке добавления через `addKeyEntry()`.
+Возвращается первая, удовлетворяющая **всем** фильтрам одновременно.
+Фильтрация по `certificate_authorities` (DN эмитента) не реализована.
+
 ## GostSSLEngine (низкоуровневый API)
 
 `GostSSLEngine` предназначен для неблокирующих интеграций (NIO, Netty,

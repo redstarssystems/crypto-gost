@@ -252,6 +252,10 @@ final class OpenSslTls13Helper {
     }
 
     static void generateGostCert(Path tmpDir, String algo, String paramset) throws Exception {
+        generateGostCert(tmpDir, algo, paramset, (String) null);
+    }
+
+    static void generateGostCert(Path tmpDir, String algo, String paramset, String ekuOid) throws Exception {
         Path keyDer = tmpDir.resolve("key.der");
         Path keyPem = tmpDir.resolve("key.pem");
         Path certPem = tmpDir.resolve("cert.pem");
@@ -271,6 +275,9 @@ final class OpenSslTls13Helper {
                 new String[]{"-in", keyDer.toString(), "-inform", "DER",
                         "-out", keyPem.toString()}));
 
+        String[] reqArgs = ekuOid != null
+                ? new String[]{"-addext", "extendedKeyUsage=OID:" + ekuOid}
+                : new String[0];
         exec(CrossValUtils.concat(
                 new String[]{OpenSslChecker.resolveOpenSslBinary(), "req", "-new", "-x509"},
                 flags,
@@ -278,7 +285,8 @@ final class OpenSslTls13Helper {
                         "-out", certPem.toString(),
                         "-subj", "/CN=TestServer",
                         "-days", "365",
-                        "-config", "/dev/null"}));
+                        "-config", "/dev/null"},
+                reqArgs));
     }
 
     /**

@@ -7,6 +7,9 @@ import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 import org.rssys.gost.tls13.config.SniCertificateSelector;
 import org.rssys.gost.tls13.config.TlsServerCredentials;
+import org.rssys.gost.tls13.config.ClientCertificateSelector;
+import org.rssys.gost.tls13.config.TlsClientCredentials;
+import org.rssys.gost.tls13.config.OIDFilter;
 
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.X509ExtendedKeyManager;
@@ -196,6 +199,38 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
             PrivateKeyParameters key = getPrivateKeyParams(alias);
             if (chain == null || key == null) return null;
             return new TlsServerCredentials(chain, key, null);
+        };
+    }
+
+    /**
+     * Создаёт ClientCertificateSelector на основе этого KeyManager.
+     * Вызывается клиентом для выбора сертификата по oid_filters
+     * из CertificateRequest (RFC 8446 §4.2.5).
+     * <p>
+     * Перебирает все записи, отбирает первую, удовлетворяющую всем OID-фильтрам.
+     * Фильтрация по acceptedCaDns (issuer DN) не реализована.
+     */
+    public ClientCertificateSelector asClientCertificateSelector() {
+        return (acceptedCaDns, oidFilters) -> {
+            if (entries.isEmpty()) return null;
+            for (KeyEntry entry : entries) {
+                if (entry.chain == null || entry.chain.length == 0) continue;
+                List<TlsCertificate> chain = getCertificateChainTls(entry.alias);
+                PrivateKeyParameters key = getPrivateKeyParams(entry.alias);
+                if (chain == null || chain.isEmpty() || key == null) continue;
+                TlsCertificate leaf = chain.get(0);
+                // Проверка OID-фильтров
+                boolean matches = true;
+                for (OIDFilter filter : oidFilters) {
+                    if (!leaf.matchesOidFilter(filter)) {
+                        matches = false;
+                        break;
+                    }
+                }
+                if (!matches) continue;
+                return new TlsClientCredentials(chain, key);
+            }
+            return null;
         };
     }
 

@@ -80,19 +80,19 @@ WARNING: *Данная библиотека не является сертифи
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-core</artifactId>
-    <version>0.5.0</version>
+    <version>0.5.1</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-tls13</artifactId>
-    <version>0.5.0</version>
+    <version>0.5.1</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-jsse</artifactId>
-    <version>0.5.0</version>
+    <version>0.5.1</version>
 </dependency>
 ----
 
@@ -108,7 +108,7 @@ WARNING: *Данная библиотека не является сертифи
 [source,bash]
 ----
 gpg --import KEYS
-gpg -v v0.5.0
+gpg -v v0.5.1
 ----
 
 == Методики кросс-валидации

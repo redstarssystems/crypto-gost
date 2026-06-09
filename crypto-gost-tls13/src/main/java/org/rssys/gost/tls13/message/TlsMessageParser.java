@@ -3,6 +3,7 @@ package org.rssys.gost.tls13.message;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.tls13.config.OIDFilter;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -64,12 +65,13 @@ public final class TlsMessageParser {
         public final int actualGroup;
         public final int matchedSigScheme;
         public final int[] supportedGroups;
+        public final int clientMaxFragLen;
 
         /**
          * @param ecdhePublicKeyRaw raw ECDHE public key (X||Y, little-endian)
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw) {
-            this(ecdhePublicKeyRaw, null, TlsConstants.GRP_GC256A, 0, new int[]{TlsConstants.GRP_GC256A});
+            this(ecdhePublicKeyRaw, null, TlsConstants.GRP_GC256A, 0, new int[]{TlsConstants.GRP_GC256A}, 0);
         }
 
         /**
@@ -77,7 +79,7 @@ public final class TlsMessageParser {
          * @param serverName        запрошенное DNS-имя (SNI) или null
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName) {
-            this(ecdhePublicKeyRaw, serverName, TlsConstants.GRP_GC256A, 0, new int[]{TlsConstants.GRP_GC256A});
+            this(ecdhePublicKeyRaw, serverName, TlsConstants.GRP_GC256A, 0, new int[]{TlsConstants.GRP_GC256A}, 0);
         }
 
         /**
@@ -86,7 +88,7 @@ public final class TlsMessageParser {
          * @param actualGroup       NamedGroup из key_share entry клиента
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup) {
-            this(ecdhePublicKeyRaw, serverName, actualGroup, 0, new int[]{actualGroup});
+            this(ecdhePublicKeyRaw, serverName, actualGroup, 0, new int[]{actualGroup}, 0);
         }
 
         /**
@@ -98,11 +100,17 @@ public final class TlsMessageParser {
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup, int matchedSigScheme,
                        int[] supportedGroups) {
+            this(ecdhePublicKeyRaw, serverName, actualGroup, matchedSigScheme, supportedGroups, 0);
+        }
+
+        ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup, int matchedSigScheme,
+                       int[] supportedGroups, int clientMaxFragLen) {
             this.ecdhePublicKeyRaw = ecdhePublicKeyRaw;
             this.serverName = serverName;
             this.actualGroup = actualGroup;
             this.matchedSigScheme = matchedSigScheme;
             this.supportedGroups = supportedGroups;
+            this.clientMaxFragLen = clientMaxFragLen;
         }
     }
 
@@ -239,26 +247,37 @@ public final class TlsMessageParser {
     }
 
     /**
-     * Извлекает выбранный сервером протокол ALPN из EncryptedExtensions (RFC 7301 §3.2).
-     * <p>
-     * В TLS 1.3 сервер передаёт выбранный протокол в EncryptedExtensions (RFC 8446 §4.2.1),
-     * не в ServerHello. Формат: ProtocolName = len(1) || name(N).
-     * Возвращает null если ALPN-расширение отсутствует.
+     * Результат парсинга EncryptedExtensions: ALPN-протокол и max_fragment_length.
+     */
+    public static class ParsedEncryptedExtensions {
+        public final String alpn;
+        public final int maxFragLen;
+
+        ParsedEncryptedExtensions(String alpn, int maxFragLen) {
+            this.alpn = alpn;
+            this.maxFragLen = maxFragLen;
+        }
+    }
+
+    /**
+     * Парсит EncryptedExtensions: извлекает ALPN (RFC 7301 §3.2) и
+     * max_fragment_length (RFC 6066 §4).
      *
      * @param eeBody тело EncryptedExtensions
-     * @return выбранный сервером протокол, или null
-     * @throws TlsException при нарушении wire-формата (некорректная длина)
+     * @return распарсенные расширения (поля null/0 если отсутствуют)
+     * @throws TlsException при нарушении wire-формата
      */
-    public static String parseEncryptedExtensionsAlpn(byte[] eeBody) throws TlsException {
-        if (eeBody.length < 2) return null;
+    public static ParsedEncryptedExtensions parseEncryptedExtensions(byte[] eeBody) throws TlsException {
+        if (eeBody.length < 2) return new ParsedEncryptedExtensions(null, 0);
         int extLen = ((eeBody[0] & 0xFF) << 8) | (eeBody[1] & 0xFF);
         if (extLen + 2 != eeBody.length) {
             throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "EncryptedExtensions: length mismatch");
         }
-        if (extLen == 0) return null;
-        String[] resultRef = new String[1];
+        if (extLen == 0) return new ParsedEncryptedExtensions(null, 0);
+        String[] alpnRef = new String[1];
+        int[] maxFragRef = new int[1];
         forEachExtension(eeBody, 2, 2 + extLen, "EncryptedExtensions", (extType, data, off, len) -> {
-            if (extType == TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION) {
+            if (extType == TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION && alpnRef[0] == null) {
                 if (len < 1) {
                     throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: empty protocol name");
                 }
@@ -266,10 +285,16 @@ public final class TlsMessageParser {
                 if (nameLen < 1 || nameLen > len - 1) {
                     throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: invalid name length");
                 }
-                resultRef[0] = new String(data, off + 1, nameLen, StandardCharsets.US_ASCII);
+                alpnRef[0] = new String(data, off + 1, nameLen, StandardCharsets.US_ASCII);
+            } else if (extType == TlsConstants.EXT_MAX_FRAGMENT_LENGTH && maxFragRef[0] == 0) {
+                if (len != 1 || (data[off] & 0xFF) < 1 || (data[off] & 0xFF) > 4) {
+                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                            "EncryptedExtensions: invalid max_fragment_length");
+                }
+                maxFragRef[0] = data[off] & 0xFF;
             }
         });
-        return resultRef[0];
+        return new ParsedEncryptedExtensions(alpnRef[0], maxFragRef[0]);
     }
 
     /**
@@ -364,6 +389,7 @@ public final class TlsMessageParser {
         boolean needSigScheme = acceptableSchemes != null && acceptableSchemes.length > 0 && acceptableSchemes[0] != 0;
         String parsedServerName = null;
         int[] supportedGroupsList = null;
+        int clientMaxFragLen = 0;
 
         while (pos < extEnd) {
             checkBounds(body, pos, 4, ctx);
@@ -418,6 +444,12 @@ public final class TlsMessageParser {
                 supportedGroupsList = parseSupportedGroupsList(body, pos, extDataLen);
             } else if (extType == TlsConstants.EXT_SERVER_NAME && parsedServerName == null) {
                 parsedServerName = parseServerNameExtension(body, pos, extDataLen);
+            } else if (extType == TlsConstants.EXT_MAX_FRAGMENT_LENGTH && clientMaxFragLen == 0) {
+                if (extDataLen != 1 || (body[pos] & 0xFF) < 1 || (body[pos] & 0xFF) > 4) {
+                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                            "ClientHello: invalid max_fragment_length");
+                }
+                clientMaxFragLen = body[pos] & 0xFF;
             }
             pos += extDataLen;
         }
@@ -437,7 +469,7 @@ public final class TlsMessageParser {
         if (supportedGroupsList == null) {
             supportedGroupsList = new int[]{parsedGroup};
         }
-        return new ParsedKeyShare(ecdheKey, parsedServerName, parsedGroup, matchedSigScheme, supportedGroupsList);
+        return new ParsedKeyShare(ecdheKey, parsedServerName, parsedGroup, matchedSigScheme, supportedGroupsList, clientMaxFragLen);
     }
 
     /**
@@ -784,18 +816,25 @@ public final class TlsMessageParser {
     }
 
     /**
+     * Результат парсинга CertificateRequest: CA DistinguishedNames + OID-фильтры.
+     *
+     * @param caDns      список DistinguishedName из certificate_authorities (может быть пустым)
+     * @param oidFilters список OID-фильтров из oid_filters (может быть пустым)
+     */
+    public record CertificateRequestInfo(List<byte[]> caDns, List<OIDFilter> oidFilters) {}
+
+    /**
      * Парсит CertificateRequest (RFC 8446 §4.3.2).
      * Валидирует, что signature_algorithms extension присутствует
      * и содержит хотя бы одну из поддерживаемых GOST-схем.
-     * Извлекает certificate_authorities extension (RFC 8446 §4.2.4),
-     * если присутствует.
+     * Извлекает certificate_authorities (RFC 8446 §4.2.4) и
+     * oid_filters (RFC 8446 §4.2.5) расширения, если присутствуют.
      *
      * @param body тело CertificateRequest
-     * @return список DistinguishedName в DER-кодировке,
-     *         пустой список если extension отсутствует
+     * @return результат парсинга (CA DNs + OID-фильтры)
      * @throws TlsException при нарушении протокола
      */
-    public static List<byte[]> parseCertificateRequest(byte[] body) throws TlsException {
+    public static CertificateRequestInfo parseCertificateRequest(byte[] body) throws TlsException {
         String ctx = "CertificateRequest";
         checkBounds(body, 0, 4, ctx);
         int contextLen = body[0] & 0xFF;
@@ -807,6 +846,7 @@ public final class TlsMessageParser {
         int extEnd = pos + extLen;
         boolean hasSigAlgs = false;
         List<byte[]> acceptedCaDns = Collections.emptyList();
+        List<OIDFilter> oidFilters = Collections.emptyList();
         while (pos < extEnd) {
             checkBounds(body, pos, 4, ctx);
             int extType = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
@@ -844,6 +884,8 @@ public final class TlsMessageParser {
                 }
             } else if (extType == TlsConstants.EXT_CERTIFICATE_AUTHORITIES) {
                 acceptedCaDns = parseCertificateAuthorities(body, pos, extDataLen, ctx);
+            } else if (extType == TlsConstants.EXT_OID_FILTERS) {
+                oidFilters = parseOidFilters(body, pos, extDataLen);
             }
             pos += extDataLen;
         }
@@ -851,7 +893,40 @@ public final class TlsMessageParser {
             throw new TlsException(TlsConstants.ALERT_MISSING_EXTENSION,
                     "CertificateRequest: signature_algorithms extension is mandatory");
         }
-        return acceptedCaDns;
+        return new CertificateRequestInfo(acceptedCaDns, oidFilters);
+    }
+
+    /**
+     * Парсит oid_filters extension (RFC 8446 §4.2.5).
+     * <p>
+     * Формат: opaque filters<0..2^16-1>, где каждый filter:
+     *   certificate_extension_oid<1..2^8-1> || certificate_extension_values<0..2^16-1>
+     */
+    private static List<OIDFilter> parseOidFilters(byte[] body, int pos, int extDataLen) {
+        if (extDataLen < 2) return Collections.emptyList();
+        int filtersLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
+        if (filtersLen + 2 != extDataLen) return Collections.emptyList();
+        pos += 2;
+        if (filtersLen == 0) return Collections.emptyList();
+        List<OIDFilter> filters = new ArrayList<>();
+        int end = pos + filtersLen;
+        while (pos < end) {
+            // certificate_extension_oid<1..2^8-1>: 1 байт длины
+            int oidLen = body[pos] & 0xFF;
+            if (oidLen < 1 || pos + 1 + oidLen > end) break;
+            byte[] oid = Arrays.copyOfRange(body, pos + 1, pos + 1 + oidLen);
+            pos += 1 + oidLen;
+            // certificate_extension_values<0..2^16-1>: 2 байта длины
+            if (pos + 2 > end) break;
+            int valLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
+            if (pos + 2 + valLen > end) break;
+            byte[] values = valLen > 0
+                    ? Arrays.copyOfRange(body, pos + 2, pos + 2 + valLen)
+                    : new byte[0];
+            pos += 2 + valLen;
+            filters.add(new OIDFilter(oid, values));
+        }
+        return filters;
     }
 
     /**

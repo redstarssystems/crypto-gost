@@ -9,12 +9,15 @@ import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
+import org.rssys.gost.tls13.config.OIDFilter;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
@@ -33,6 +36,21 @@ public final class TlsCertificate {
     private static final int TBS_SPKI_SEQUENCE_INDEX = 5;
     private static final int ISSUER_DN_SKIP = 0;
     private static final int SUBJECT_DN_SKIP = 2;
+
+    // OID известных X.509v3 расширений (dot-notation) для oid_filters matching.
+    // Если сервер запросил фильтр с таким OID, а в сертификате расширения нет,
+    // фильтр НЕ проходит (return false), даже если values пусты.
+    private static final Set<String> KNOWN_EXTENSION_OIDS = Set.of(
+            "2.5.29.14",  // SubjectKeyIdentifier
+            "2.5.29.15",  // KeyUsage
+            "2.5.29.17",  // SubjectAltName
+            "2.5.29.19",  // BasicConstraints
+            "2.5.29.31",  // CRLDistributionPoints
+            "2.5.29.32",  // CertificatePolicies
+            "2.5.29.35",  // AuthorityKeyIdentifier
+            "2.5.29.37",  // ExtendedKeyUsage
+            "1.3.6.1.5.5.7.1.1"   // AuthorityInfoAccess
+    );
 
     private final byte[] certData;
     private final int tbsCertOff;
@@ -83,6 +101,12 @@ public final class TlsCertificate {
     private final String[] cdpUris;
     // OID политик сертификата (2.5.29.32) — идентификаторы политик
     private final String[] certPolicyOids;
+    // Маска KeyUsage (2.5.29.15): 16-bit raw битовая маска
+    private final int keyUsageBits;
+    // Все OID ExtendedKeyUsage (2.5.29.37) — не только известные, но и УКЭП/УНЭП
+    private final byte[][] ekuOids;
+    // Множество всех OID расширений, присутствующих в сертификате (dot-нотация)
+    private final Set<String> presentExtensionOids;
 
     /**
      * Парсит DER-закодированный X.509 сертификат.
@@ -215,6 +239,9 @@ public final class TlsCertificate {
         this.caIssuersUris = ext.caIssuersUris;
         this.cdpUris = ext.cdpUris;
         this.certPolicyOids = ext.certPolicyOids;
+        this.keyUsageBits = ext.keyUsageBits;
+        this.ekuOids = ext.ekuOids;
+        this.presentExtensionOids = ext.presentExtensionOids;
 
         // Проверка согласованности алгоритма (RFC 5280 §4.1.1.2):
         // signatureAlgorithm (вне TBS) должен совпадать с TBSCertificate.signature
@@ -1104,11 +1131,15 @@ public final class TlsCertificate {
         final String[] caIssuersUris;
         final String[] cdpUris;
         final String[] certPolicyOids;
+        final int keyUsageBits;
+        final byte[][] ekuOids;
+        final Set<String> presentExtensionOids;
         ExtensionsResult(String[] sanDnsNames, byte[][] sanIpAddresses, boolean keyUsageValid, boolean ekuValid, boolean ekuClientAuth,
                           boolean ekuOcspSigning, boolean isCA, int pathLen, boolean keyCertSign, boolean hasUnknownCritical,
                           byte[] skiBytes, byte[] akiBytes, String[] aiaUris,
                           String[] ocspUris, String[] caIssuersUris,
-                          String[] cdpUris, String[] certPolicyOids) {
+                          String[] cdpUris, String[] certPolicyOids,
+                          int keyUsageBits, byte[][] ekuOids, Set<String> presentExtensionOids) {
             this.sanDnsNames = sanDnsNames;
             this.sanIpAddresses = sanIpAddresses;
             this.keyUsageValid = keyUsageValid;
@@ -1126,6 +1157,9 @@ public final class TlsCertificate {
             this.caIssuersUris = caIssuersUris;
             this.cdpUris = cdpUris;
             this.certPolicyOids = certPolicyOids;
+            this.keyUsageBits = keyUsageBits;
+            this.ekuOids = ekuOids;
+            this.presentExtensionOids = presentExtensionOids;
         }
 
         /** @return пустой результат — расширения не найдены или не распарсены.
@@ -1149,7 +1183,10 @@ public final class TlsCertificate {
                 null,   // ocspUris
                 null,   // caIssuersUris
                 null,   // cdpUris
-                null    // certPolicyOids
+                null,   // certPolicyOids
+                0,      // keyUsageBits      — KU отсутствует, маска пуста
+                null,   // ekuOids           — EKU отсутствует
+                Collections.emptySet()  // presentExtensionOids — ни одного OID
             );
         }
     }
@@ -1258,6 +1295,10 @@ public final class TlsCertificate {
         // CRLDistributionPoints и CertificatePolicies
         ArrayList<String> cdpList = new ArrayList<>();
         ArrayList<String> certPolicyList = new ArrayList<>();
+        // Для oid_filters matching (RFC 8446 §4.2.5)
+        Set<String> presentOids = new HashSet<>();
+        int keyUsageBitsLocal = 0;
+        ArrayList<byte[]> ekuOidList = new ArrayList<>();
 
         while (pos < end) {
             if ((der[pos] & 0xFF) != TAG_SEQUENCE) {
@@ -1277,6 +1318,9 @@ public final class TlsCertificate {
             int oidLen = oidTlv[1] - oidTlv[0];
 
             int afterOid = oidTlv[1];
+            // Сохраняем OID в set для oid_filters matching
+            String oidDot = oidBytesToDottedString(der, oidStart, oidLen);
+            presentOids.add(oidDot);
             // Optional BOOLEAN (critical) — запоминаем значение
             boolean critical = false;
             if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_BOOLEAN) {
@@ -1304,6 +1348,10 @@ public final class TlsCertificate {
                             kuDigitalSignature = (der[valueStart] & 0x80) != 0;
                             // keyCertSign — бит 5 = 0x04 в первом байте (KU не определяет биты ≥ 9)
                             if (valueLen > 0) kuKeyCertSign = (der[valueStart] & 0x04) != 0;
+                            // Собираем raw KU-маску для oid_filters matching
+                            for (int k = 0; k < valueLen && k < 2; k++) {
+                                keyUsageBitsLocal |= (der[valueStart + k] & 0xFF) << (8 * k);
+                            }
                         }
                     }
                 }
@@ -1318,6 +1366,8 @@ public final class TlsCertificate {
                             || hasEku(der, octTlv[0], octTlv[1], TlsDerParser.ANY_EKU_OID_BYTES)) {
                         ekuOcspSigning = true;
                     }
+                    // Собираем ВСЕ EKU OID для oid_filters matching (в т.ч. УКЭП/УНЭП)
+                    collectAllEkuOids(der, octTlv[0], octTlv[1], ekuOidList);
                 }
             } else if (matchesOid(der, oidStart, oidLen, BC_OID_BYTES)) {
                 // BasicConstraints: SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLen INTEGER OPTIONAL }
@@ -1414,6 +1464,7 @@ public final class TlsCertificate {
         boolean kuValid = !kuPresent || kuDigitalSignature;
         boolean ekuValid = !ekuPresent || ekuServerAuth;
         boolean ekuClientAuthValid = !ekuPresent || ekuClientAuth;
+        byte[][] ekuOidsResult = ekuOidList.isEmpty() ? null : ekuOidList.toArray(new byte[0][]);
         return new ExtensionsResult(sanResult, ipResult, kuValid, ekuValid, ekuClientAuthValid,
                 !ekuPresent || ekuOcspSigning, isCA, pathLen, keyCertSignOk, hasUnknownCritical,
                 skiBytesLocal, akiBytesLocal,
@@ -1421,7 +1472,8 @@ public final class TlsCertificate {
                 ocspList.isEmpty() ? null : ocspList.toArray(new String[0]),
                 caIssuersList.isEmpty() ? null : caIssuersList.toArray(new String[0]),
                 cdpList.isEmpty() ? null : cdpList.toArray(new String[0]),
-                certPolicyList.isEmpty() ? null : certPolicyList.toArray(new String[0]));
+                certPolicyList.isEmpty() ? null : certPolicyList.toArray(new String[0]),
+                keyUsageBitsLocal, ekuOidsResult, presentOids);
     }
 
     // ========================================================================
@@ -1493,6 +1545,214 @@ public final class TlsCertificate {
                 return true;
             }
             pos = oidTlv[1];
+        }
+        return false;
+    }
+
+    /**
+     * Собирает все OID из SEQUENCE ExtendedKeyUsage.
+     * oid_filters matching для УКЭП/УНЭП (1.2.643.100.113.1/2) требует знать
+     * все EKU OID сертификата, а не только три хардкоженных (serverAuth, clientAuth, ocspSigning).
+     */
+    private static void collectAllEkuOids(byte[] der, int seqOuter, int seqEnd,
+                                           ArrayList<byte[]> ekuOidList) {
+        int pos = seqOuter;
+        if (pos >= seqEnd || (der[pos] & 0xFF) != TAG_SEQUENCE) return;
+        int[] seqTlv = readTlv(der, pos);
+        pos = seqTlv[0];
+        int end = seqTlv[1];
+        while (pos < end) {
+            if ((der[pos] & 0xFF) != TAG_OID) {
+                pos = readTlv(der, pos)[1];
+                continue;
+            }
+            int[] oidTlv = readTlv(der, pos);
+            ekuOidList.add(Arrays.copyOfRange(der, oidTlv[0], oidTlv[1]));
+            pos = oidTlv[1];
+        }
+    }
+
+    /**
+     * Проверяет, удовлетворяет ли сертификат OID-фильтру из oid_filters
+     * (RFC 8446 §4.2.5).
+     * <p>
+     * Правила matching:
+     * <ul>
+     *   <li>Неизвестный OID → игнорируется (возвращает true)</li>
+     *   <li>KU (2.5.29.15): все биты фильтра должны быть установлены в keyUsage</li>
+     *   <li>EKU (2.5.29.37): все OID фильтра должны присутствовать; anyExtendedKeyUsage запрещён</li>
+     *   <li>Известный OID, пустые values: достаточно присутствия расширения</li>
+     *   <li>Известный OID, непустые values: DER-значение должно совпадать</li>
+     * </ul>
+     *
+     * @param filter OID-фильтр из CertificateRequest
+     * @return true если сертификат удовлетворяет фильтру
+     */
+    public boolean matchesOidFilter(OIDFilter filter) {
+        byte[] filterOid = filter.extensionOid();
+        byte[] filterValues = filter.extensionValues();
+
+        // KU (2.5.29.15)
+        if (Arrays.equals(filterOid, KU_OID_BYTES)) {
+            int filterBits = 0;
+            // DER BIT STRING: первый байт — unused bits, затем собственно биты
+            if (filterValues.length > 0) {
+                int unused = filterValues[0] & 0xFF;
+                for (int i = 1; i < filterValues.length && i - 1 < 2; i++) {
+                    filterBits |= (filterValues[i] & 0xFF) << (8 * (i - 1));
+                }
+                if (unused > 0 && filterValues.length > 1) {
+                    filterBits = (filterBits >> unused) << unused;
+                }
+            }
+            return (keyUsageBits & filterBits) == filterBits;
+        }
+
+        // EKU (2.5.29.37)
+        if (Arrays.equals(filterOid, EKU_OID_BYTES)) {
+            if (ekuOids == null && filterValues.length > 0) {
+                return false;
+            }
+            // anyExtendedKeyUsage запрещён (RFC 8446 §4.2.5)
+            if (ekuOids != null) {
+                for (byte[] ekuOid : ekuOids) {
+                    if (matchesOid(ekuOid, 0, ekuOid.length, ANY_EKU_OID_BYTES)) {
+                        return false;
+                    }
+                }
+            }
+            // Пустые values — достаточно присутствия EKU
+            if (filterValues.length == 0) {
+                return ekuOids != null;
+            }
+            // Разбираем filterValues как DER SEQUENCE of OID
+            if (filterValues.length < 2 || filterValues[0] != TAG_SEQUENCE) {
+                return false;
+            }
+            int[] seqTlv = readTlv(filterValues, 0);
+            int pos = seqTlv[0];
+            int end = seqTlv[1];
+            while (pos < end) {
+                if ((filterValues[pos] & 0xFF) != TAG_OID) {
+                    pos = readTlv(filterValues, pos)[1];
+                    continue;
+                }
+                int[] oidTlv = readTlv(filterValues, pos);
+                boolean found = false;
+                if (ekuOids != null) {
+                    for (byte[] ekuOid : ekuOids) {
+                        if (matchesOid(ekuOid, 0, ekuOid.length,
+                                Arrays.copyOfRange(filterValues, oidTlv[0], oidTlv[1]))) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (!found) return false;
+                pos = oidTlv[1];
+            }
+            return true;
+        }
+
+        // Другие известные OID: проверяем наличие по presentExtensionOids
+        String oidDot = oidBytesToDottedString(filterOid, 0, filterOid.length);
+        if (presentExtensionOids.contains(oidDot)) {
+            if (filterValues.length > 0) {
+                return matchesExtensionValue(filterOid, filterValues);
+            }
+            return true;
+        }
+
+        // Известное расширение отсутствует в сертификате — фильтр не проходит,
+        // даже если values пусты (RFC 5280: absent extension = не удовлетворяет требованию)
+        if (KNOWN_EXTENSION_OIDS.contains(oidDot)) {
+            return false;
+        }
+
+        // Неизвестный OID → игнорируем (RFC 8446 §4.2.5)
+        return true;
+    }
+
+    /**
+     * Сканирует raw DER сертификата для поиска extension с указанным OID
+     * и сравнивает его значение с expectedValue побайтово.
+     * <p>
+     * Почему не через pre-parsed поля: для произвольных OID (не KU/EKU/BC и т.д.)
+     * у нас нет отдельного поля в ExtensionsResult. Единственный способ проверить
+     * значение — просканировать extensions блок заново. Это O(n) по числу extensions,
+     * но вызывается только для oid_filters с непустыми values — редкий случай.
+     */
+    private boolean matchesExtensionValue(byte[] filterOid, byte[] expectedValue) {
+        // Сканируем extensions в raw DER сертификата
+        int[] tbsTlv = parseSequence(certData, tbsCertOff);
+        int end = tbsTlv[1];
+        int pos = skipVersionAndSerial(certData, tbsTlv);
+        if (pos < 0) return false;
+        // Сканируем до 5-й SEQUENCE (SPKI)
+        int seqCount = 0;
+        while (pos < end) {
+            int tag = certData[pos] & 0xFF;
+            int[] tlv = readTlv(certData, pos);
+            if (tag == TAG_SEQUENCE) {
+                seqCount++;
+                if (seqCount == TBS_SPKI_SEQUENCE_INDEX) {
+                    pos = tlv[1];
+                    break;
+                }
+            }
+            pos = tlv[1];
+        }
+        if (seqCount < TBS_SPKI_SEQUENCE_INDEX) return false;
+        // issuerUniqueID [1], subjectUniqueID [2], extensions [3]
+        while (pos < end) {
+            if (pos >= end) return false;
+            int tag = certData[pos] & 0xFF;
+            if (tag == TAG_CTX_1 || tag == TAG_CTX_2) {
+                pos = readTlv(certData, pos)[1];
+                continue;
+            }
+            if (tag == TAG_CTX_3) {
+                int[] extTlv = readTlv(certData, pos);
+                int epos = extTlv[0];
+                int eend = extTlv[1];
+                if (epos >= eend || (certData[epos] & 0xFF) != 0x30) return false;
+                int[] seqTlv2 = readTlv(certData, epos);
+                epos = seqTlv2[0];
+                eend = seqTlv2[1];
+                while (epos < eend) {
+                    if ((certData[epos] & 0xFF) != TAG_SEQUENCE) {
+                        epos = readTlv(certData, epos)[1];
+                        continue;
+                    }
+                    int[] extSeqTlv = readTlv(certData, epos);
+                    int extContent2 = extSeqTlv[0];
+                    int extContentEnd2 = extSeqTlv[1];
+                    if (extContent2 >= extContentEnd2 || (certData[extContent2] & 0xFF) != TAG_OID) {
+                        epos = extSeqTlv[1];
+                        continue;
+                    }
+                    int[] oidTlv = readTlv(certData, extContent2);
+                    if (!matchesOid(certData, oidTlv[0], oidTlv[1] - oidTlv[0], filterOid)) {
+                        epos = extSeqTlv[1];
+                        continue;
+                    }
+                    // Нашли extension — извлекаем значение (после OID и optional BOOLEAN)
+                    int afterOid = oidTlv[1];
+                    if (afterOid < extContentEnd2 && (certData[afterOid] & 0xFF) == TAG_BOOLEAN) {
+                        afterOid = readTlv(certData, afterOid)[1];
+                    }
+                    if (afterOid >= extContentEnd2) return false;
+                    if ((certData[afterOid] & 0xFF) == TAG_OCTET_STRING) {
+                        int[] octTlv = readTlv(certData, afterOid);
+                        return octTlv[1] - octTlv[0] == expectedValue.length
+                                && arrayRangeEquals(certData, octTlv[0], octTlv[1],
+                                expectedValue, 0, expectedValue.length);
+                    }
+                    return false;
+                }
+                return false;
+            }
+            break;
         }
         return false;
     }

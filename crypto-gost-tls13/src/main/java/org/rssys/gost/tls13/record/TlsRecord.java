@@ -34,7 +34,8 @@ public final class TlsRecord {
     // Non thread-safe — TlsRecord используется из одного потока.
     private final byte[] innerPlaintext = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH];
     private final byte[] ciphertext = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH];
-    private final byte[] plaintext = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH];
+    private final int maxInnerPlaintext;
+    private final byte[] plaintext;
     private final byte[] currentKeyBuf = new byte[TlsConstants.KUZNYECHIK_KEY_SIZE];
     // Буфер для входящей зашифрованной TLS-записи + заголовок.
     // Переиспользуется между вызовами unprotect — не аллоцируем byte[] на каждый decrypt.
@@ -54,6 +55,9 @@ public final class TlsRecord {
     private final long c2;
     private final long c3;
     private final TlsTreeCache treeCache;
+
+    // max_fragment_length (RFC 6066 §4): лимит на отправку и приём (plaintext, без inner_type)
+    private int maxFragmentLength = TlsConstants.MAX_PLAINTEXT_LENGTH;
 
     /**
      * @param key         начальный ключевой материал K_start_key (32 байта);
@@ -80,6 +84,8 @@ public final class TlsRecord {
         this.startIv = iv;
         this.tagLen = tagLen;
         this.tagBuf = new byte[tagLen];
+        this.maxInnerPlaintext = TlsConstants.MAX_CIPHERTEXT_LENGTH - tagLen;
+        this.plaintext = new byte[maxInnerPlaintext];
         this.seqNum = 0;
         this.mgm = new Mgm(new Kuznyechik());
         this.snmax = ciphersuite.getSnmax();
@@ -87,6 +93,18 @@ public final class TlsRecord {
         this.c2 = ciphersuite.getC2();
         this.c3 = ciphersuite.getC3();
         this.treeCache = new TlsTreeCache(startKey, c1, c2, c3);
+    }
+
+    /**
+     * Устанавливает max_fragment_length для отправки и приёма (RFC 6066 §4).
+     *
+     * @param maxFragLenCode код расширения (1=512, 2=1024, 3=2048, 4=4096),
+     *                        0 = сброс на дефолт (16384)
+     */
+    public void setMaxFragmentLength(int maxFragLenCode) {
+        this.maxFragmentLength = (maxFragLenCode >= 1 && maxFragLenCode <= 4)
+                ? TlsConstants.MAX_FRAG_LEN_VALUES[maxFragLenCode]
+                : TlsConstants.MAX_PLAINTEXT_LENGTH;
     }
 
     /** Обнуляет ключи, IV, scratch-буферы и сбрасывает seqNum. */
@@ -171,7 +189,7 @@ public final class TlsRecord {
         if (offset < 0 || len < 0 || offset + len > data.length) {
             throw new IllegalArgumentException("Invalid offset/length");
         }
-        if (len + 1 > TlsConstants.MAX_PLAINTEXT_LENGTH) {
+        if (len + 1 > maxFragmentLength) {
             throw new IllegalArgumentException("Data exceeds maximum fragment size");
         }
         ByteBuffer src = ByteBuffer.wrap(data, offset, len);
@@ -260,7 +278,7 @@ public final class TlsRecord {
      * @param src         буфер с открытыми данными (position будет сдвинут на len)
      * @param dst         буфер для TLS-записи (position будет сдвинут на totalSize)
      * @return количество байт, записанных в dst
-     * @throws IllegalArgumentException если src == null || dst == null, или dst недостаточен, или данные превышают MAX_PLAINTEXT_LENGTH
+     * @throws IllegalArgumentException если src == null || dst == null, или dst недостаточен, или данные превышают maxFragmentLength
      * @throws IllegalStateException    при переполнении порядкового номера
      */
     public int protect(byte contentType, ByteBuffer src, ByteBuffer dst) {
@@ -268,7 +286,7 @@ public final class TlsRecord {
             throw new IllegalArgumentException("Buffers must not be null");
         }
         int len = src.remaining();
-        if (len + 1 > TlsConstants.MAX_PLAINTEXT_LENGTH) {
+        if (len + 1 > maxFragmentLength) {
             throw new IllegalArgumentException(
                     "Data exceeds maximum fragment size: " + len);
         }
@@ -488,9 +506,9 @@ public final class TlsRecord {
         if (ciphertextLen < 0) {
             throw new IllegalArgumentException("Record payload too small for tag");
         }
-        if (ciphertextLen > TlsConstants.MAX_PLAINTEXT_LENGTH) {
+        if (ciphertextLen > maxInnerPlaintext) {
             throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
-                    "Decrypted payload too long: " + ciphertextLen + " > " + TlsConstants.MAX_PLAINTEXT_LENGTH);
+                    "Decrypted payload too long: " + ciphertextLen + " > " + maxInnerPlaintext);
         }
 
         // Per-record TLSTREE в переиспользуемый буфер (RFC 9367 §4.1)
@@ -537,6 +555,14 @@ public final class TlsRecord {
         }
         if (lastNonZero < 0) {
             throw new AuthenticationException("Decrypted record has no content type");
+        }
+        // Проверка против явно согласованного max_fragment_length (RFC 6066 §4).
+        // При дефолтном значении (MAX_PLAINTEXT_LENGTH) проверка не применяется —
+        // защита от запредельно больших записей обеспечивается maxInnerPlaintext выше.
+        if (maxFragmentLength < TlsConstants.MAX_PLAINTEXT_LENGTH && lastNonZero > maxFragmentLength) {
+            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+                    "Decrypted record exceeds negotiated max fragment length: "
+                    + lastNonZero + " > " + maxFragmentLength);
         }
 
         byte innerContentType = plaintext[lastNonZero];

@@ -10,6 +10,8 @@ import org.rssys.gost.tls13.cert.TlsCertificateValidator;
 import org.rssys.gost.tls13.config.SniCertificateSelector;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.config.OIDFilter;
+import org.rssys.gost.tls13.config.ClientCertificateSelector;
 import org.rssys.gost.tls13.engine.HandshakeContext;
 import org.rssys.gost.tls13.engine.TlsHandshakeEngine;
 import org.rssys.gost.tls13.engine.TlsHandshakeMessage;
@@ -88,8 +90,17 @@ public final class TlsSession implements AutoCloseable {
     // ALPN (RFC 7301)
     private List<String> alpnProtocols;
 
+    // max_fragment_length (RFC 6066 §4): лимит на фрагментацию отправки
+    private int maxPayload = TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
+    // Запрос клиента (1..4) для включения в ClientHello, 0 = не запрашивать
+    private int maxFragLenRequest;
+
     // SNI certificate selection (сервер, RFC 6066 §3)
     private SniCertificateSelector sniSelector;
+    // OID-фильтры для CertificateRequest (сервер, RFC 8446 §4.2.5)
+    private List<OIDFilter> oidFilters;
+    // Селектор сертификата клиента по oid_filters (клиент)
+    private ClientCertificateSelector clientCertSelector;
     private int ticketsToSend = 1;
 
     // Engine остается жив после handshake для post-handshake сообщений
@@ -120,6 +131,7 @@ public final class TlsSession implements AutoCloseable {
                 config.getCaPublicKeys(), config.getServerHostname(),
                 config.isOcspRequired(), null);
         session.alpnProtocols = config.getAlpnProtocols();
+        session.clientCertSelector = config.getClientCertificateSelector();
         return session;
     }
 
@@ -158,6 +170,7 @@ public final class TlsSession implements AutoCloseable {
                 config.getServerCertificateChain(), config.getServerPrivateKey(),
                 config.getCaPublicKeys(), null, false, config.getOcspStaplingResponse());
         session.sniSelector = config.getSniSelector();
+        session.oidFilters = config.getOidFilters();
         session.alpnProtocols = config.getAlpnProtocols();
         session.ticketsToSend = config.getTicketsToSend();
         int configNamedGroup = config.getSelectedNamedGroup();
@@ -271,6 +284,19 @@ public final class TlsSession implements AutoCloseable {
                 } else {
                     engine.setServerAlpnProtocols(alpnProtocols);
                 }
+            }
+            // max_fragment_length: передаём запрос клиента в engine
+            if (maxFragLenRequest != 0) {
+                engine.setClientMaxFragLenRequest(maxFragLenRequest);
+            }
+
+            // OID-фильтры для CertificateRequest (сервер)
+            if (role == TlsHandshakeEngine.Role.SERVER && oidFilters != null && !oidFilters.isEmpty()) {
+                engine.setOidFilters(oidFilters);
+            }
+            // Селектор сертификата клиента по oid_filters (клиент)
+            if (role == TlsHandshakeEngine.Role.CLIENT && clientCertSelector != null) {
+                engine.setClientCertificateSelector(clientCertSelector);
             }
 
             // Поиск PSK на стороне клиента
@@ -427,6 +453,8 @@ public final class TlsSession implements AutoCloseable {
             if (engine.hasReadKeysChanged() || engine.hasWriteKeysChanged()) {
                 engine.acknowledgeKeyChange();
             }
+            // После финальной смены ключей применяем согласованный max_fragment_length
+            applyMaxFragmentLength();
 
             this.ciphersuite = engine.getNegotiatedCiphersuite();
             handshakeDone = true;
@@ -543,6 +571,41 @@ public final class TlsSession implements AutoCloseable {
     // ========================================================================
 
     /**
+     * Устанавливает лимит фрагментации отправки (RFC 6066 §4).
+     *
+     * @param maxFragLenCode код max_fragment_length (1=512, 2=1024, 3=2048, 4=4096), 0 = дефолт
+     */
+    public void setMaxSendFragment(int maxFragLenCode) {
+        this.maxPayload = (maxFragLenCode >= 1 && maxFragLenCode <= 4)
+                ? TlsConstants.MAX_FRAG_LEN_VALUES[maxFragLenCode] - 1
+                : TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
+    }
+
+    /**
+     * Запрашивает уменьшение max_fragment_length при handshake (RFC 6066 §4).
+     * Вызывать до handshakeAsClient(). 0 = не запрашивать.
+     */
+    public void setMaxFragmentLengthRequest(int code) {
+        if (handshakeDone) {
+            throw new IllegalStateException("Cannot set max_fragment_length request after handshake completed");
+        }
+        this.maxFragLenRequest = (code >= 1 && code <= 4) ? code : 0;
+        if (messageBuilder != null) {
+            messageBuilder.setClientMaxFragLen(this.maxFragLenRequest);
+        }
+    }
+
+    private void applyMaxFragmentLength() {
+        int mfl = engine != null ? engine.getMaxFragmentLength() : 0;
+        if (mfl >= 1 && mfl <= 4) {
+            int actualLen = TlsConstants.MAX_FRAG_LEN_VALUES[mfl];
+            if (writerRecord != null) writerRecord.setMaxFragmentLength(mfl);
+            if (readerRecord != null) readerRecord.setMaxFragmentLength(mfl);
+            setMaxSendFragment(mfl);
+        }
+    }
+
+    /**
      * Отправляет данные приложения.
      *
      * @param data открытые данные для отправки
@@ -550,7 +613,6 @@ public final class TlsSession implements AutoCloseable {
      */
     public void write(byte[] data) throws IOException {
         checkConnected();
-        int maxPayload = TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
         int offset = 0;
         while (offset < data.length) {
             int chunkLen = Math.min(data.length - offset, maxPayload);
@@ -922,6 +984,13 @@ public final class TlsSession implements AutoCloseable {
     }
 
     /**
+     * @return код max_fragment_length (1..4), согласованный при handshake, или 0
+     */
+    public int getMaxFragmentLength() {
+        return engine != null ? engine.getMaxFragmentLength() : 0;
+    }
+
+    /**
      * @return {@code true} если handshake выполнен через PSK resumption (без ECDHE),
      *         {@code false} если полный handshake. После {@link #close()} всегда
      *         возвращает {@code false}.
@@ -1069,14 +1138,13 @@ public final class TlsSession implements AutoCloseable {
 
     /**
      * Отправляет зашифрованную TLS-запись через writerRecord.
-     * Фрагментирует данные по MAX_PLAINTEXT_LENGTH в случае превышения (RFC 8446 §5.1).
+     * Фрагментирует данные по maxPayload в случае превышения (RFC 8446 §5.1, RFC 6066 §4).
      *
      * @param contentType тип содержимого записи
      * @param data        тело записи
      * @throws IOException при ошибке отправки
      */
     private void sendEncryptedRecord(byte contentType, byte[] data) throws IOException {
-        int maxPayload = TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
         int offset = 0;
         while (offset < data.length) {
             int chunkLen = Math.min(data.length - offset, maxPayload);

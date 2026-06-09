@@ -108,7 +108,7 @@ class OpenSslJsseCrossValidationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {1, 15, 16, 1024, 12_000})
+    @ValueSource(ints = {1, 15, 16, 1024, 12_000, 16_383, 16_384, 16_385, 32_768})
     @DisplayName("Engine-сервер + s_client: размеры payload")
     void testEngineServerPayload(int size) throws Exception {
         runEngineServerPayloadTest(SUITE_L_ID, "GC256B", size);
@@ -322,7 +322,7 @@ class OpenSslJsseCrossValidationTest {
                     OpenSslJsseHelper.doEngineHandshakeOverTcp(engine, s);
 
                     byte[] received = OpenSslJsseHelper.sendAppDataAndReceiveOverTcp(
-                            engine, payload, s);
+                            engine, payload, s, payload.length);
                     assertArrayEquals(payload, received,
                             "Полученные данные должны совпадать с отправленными");
                 }
@@ -336,8 +336,9 @@ class OpenSslJsseCrossValidationTest {
         assertTrue(serverReady.await(HANDSHAKE_TIMEOUT_SEC, TimeUnit.SECONDS));
         int port = portOut[0];
 
+        long timeout = size >= 16_384 ? 120_000 : TIMEOUT_MS;
         String clientOutput = OpenSslJsseHelper.runSClientWithData(port,
-                suiteIdToName(suiteId), curve.ianaName, payload, TIMEOUT_MS);
+                suiteIdToName(suiteId), curve.ianaName, payload, timeout);
 
         serverThread.join(5000);
 
