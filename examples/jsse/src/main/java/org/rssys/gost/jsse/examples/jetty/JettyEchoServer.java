@@ -2,6 +2,7 @@ package org.rssys.gost.jsse.examples.jetty;
 
 import org.rssys.gost.jsse.examples.EchoSocketClient;
 import org.rssys.gost.jsse.examples.ExamplesCertHelper;
+import org.rssys.gost.jsse.GostJsseConstants;
 
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.server.Handler;
@@ -32,7 +33,7 @@ public final class JettyEchoServer {
 
         SslContextFactory.Server scf = new SslContextFactory.Server();
         scf.setSslContext(helper.getSslContext());
-        scf.setIncludeProtocols("TLSv1.3");
+        scf.setIncludeProtocols(GostJsseConstants.PROTOCOL_TLS_1_3);
 
         Server server = new Server();
         ServerConnector connector = new ServerConnector(server,

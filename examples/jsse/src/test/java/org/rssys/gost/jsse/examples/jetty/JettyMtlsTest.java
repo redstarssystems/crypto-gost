@@ -26,6 +26,7 @@ import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.TlsTestHelper.CertBundle;
+import org.rssys.gost.jsse.GostJsseConstants;
 
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
@@ -88,13 +89,13 @@ class JettyMtlsTest {
         GostX509KeyManager serverKm = new GostX509KeyManager();
         serverKm.addKeyEntry("server", CertificateBridge.toJcaChain(serverCert.cert), serverCert.priv);
         GostX509TrustManager serverTm = new GostX509TrustManager(caPub, false);
-        SSLContext serverCtx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        SSLContext serverCtx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         serverCtx.init(new KeyManager[]{serverKm}, new TrustManager[]{serverTm}, null);
 
         SslContextFactory.Server scf = new SslContextFactory.Server();
         scf.setSslContext(serverCtx);
         scf.setNeedClientAuth(true);
-        scf.setIncludeProtocols("TLSv1.3");
+        scf.setIncludeProtocols(GostJsseConstants.PROTOCOL_TLS_1_3);
 
         server = new Server();
         ServerConnector connector = new ServerConnector(server,
@@ -141,7 +142,7 @@ class JettyMtlsTest {
         GostX509KeyManager clientKm = new GostX509KeyManager();
         clientKm.addKeyEntry("client", CertificateBridge.toJcaChain(clientCert.cert), clientCert.priv);
         GostX509TrustManager clientTm = new GostX509TrustManager(caPub, false);
-        SSLContext clientCtx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        SSLContext clientCtx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         clientCtx.init(new KeyManager[]{clientKm}, new TrustManager[]{clientTm}, null);
 
         assertEquals("PONG", EchoSocketClient.pingHttp("localhost", port, clientCtx));
@@ -151,7 +152,7 @@ class JettyMtlsTest {
     @DisplayName("Клиент без сертификата — TLS handshake failure")
     void mtlsWithoutClientCert() throws Exception {
         GostX509TrustManager clientTm = new GostX509TrustManager(caPub, false);
-        SSLContext clientCtx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        SSLContext clientCtx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         clientCtx.init(null, new TrustManager[]{clientTm}, null);
 
         assertThrows(Exception.class, () ->

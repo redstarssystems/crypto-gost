@@ -44,12 +44,12 @@ class RssysGostJsseProviderTest {
     void testSSLContextCreation() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         try {
-            SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+            SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
             assertNotNull(ctx, "SSLContext не должен быть null");
             ctx.init(null, null, null);
             assertNotNull(ctx.createSSLEngine(), "SSLEngine не должен быть null");
         } finally {
-            Security.removeProvider("RssysGostJsse");
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
         }
     }
 
@@ -58,10 +58,10 @@ class RssysGostJsseProviderTest {
     void testGostTls13Name() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         try {
-            SSLContext ctx = SSLContext.getInstance("GOST-TLSv1.3", "RssysGostJsse");
+            SSLContext ctx = SSLContext.getInstance("GOST-TLSv1.3", GostJsseConstants.PROVIDER_NAME);
             assertNotNull(ctx, "SSLContext для GOST-TLSv1.3 не должен быть null");
         } finally {
-            Security.removeProvider("RssysGostJsse");
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
         }
     }
 
@@ -70,10 +70,10 @@ class RssysGostJsseProviderTest {
     void testKeyManagerFactory() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         try {
-            KeyManagerFactory kmf = KeyManagerFactory.getInstance("GostX509", "RssysGostJsse");
+            KeyManagerFactory kmf = KeyManagerFactory.getInstance("GostX509", GostJsseConstants.PROVIDER_NAME);
             assertNotNull(kmf, "KeyManagerFactory не должен быть null");
         } finally {
-            Security.removeProvider("RssysGostJsse");
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
         }
     }
 
@@ -82,10 +82,10 @@ class RssysGostJsseProviderTest {
     void testTrustManagerFactory() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         try {
-            TrustManagerFactory tmf = TrustManagerFactory.getInstance("GostX509", "RssysGostJsse");
+            TrustManagerFactory tmf = TrustManagerFactory.getInstance("GostX509", GostJsseConstants.PROVIDER_NAME);
             assertNotNull(tmf, "TrustManagerFactory не должен быть null");
         } finally {
-            Security.removeProvider("RssysGostJsse");
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
         }
     }
 }

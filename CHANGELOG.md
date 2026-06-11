@@ -1,3 +1,40 @@
+# \[0.5.2\] - 11-06-2026
+
+## Модуль crypto-gost-jsse
+
+### Исправлено
+
+- **Устранено двойное шифрование close\_notify при закрытии соединения
+  через стандартный JSSE wrap()**. closeOutbound() сохранял уже
+  зашифрованную запись в outgoingQueue, откуда wrap() забирал её и
+  шифровал повторно — клиент получал мусор и отвечал bad\_record\_mac
+  (alert 20). Запись вынесена в отдельное поле pendingCloseRecord;
+  wrap() передаёт её в dst напрямую. GostSSLSocket (использует
+  pollOutboundRecord) не затронут. Добавлен regression-тест.
+
+- **Исправлен deadlock при передаче больших файлов**\* через Undertow (и
+  любой JSSE-совместимый сервер). unwrap() при получении close\_notify
+  возвращал Status.OK вместо Status.CLOSED — сервер продолжал ждать
+  данных и зависал. Добавлен regression-тест.
+
+- **Устранён data race по JMM**. Поля readerRecord, writerRecord,
+  deferredWriterDestroy, ciphersuite объявлены volatile. До этого поля
+  записывались под одним локом (inboundLock или outboundLock), читались
+  под другим без гарантий видимости.
+
+- **Исправлен двойной счёт bytesProduced в drain loop** при обработке
+  нескольких app data записей подряд после handshake: dstPosBefore не
+  обновлялся между итерациями, дельта накапливалась от начальной
+  позиции. Добавлен regression-тест.
+
+### Добавлено
+
+- Пример работы JSSE-сервера Undertow и клиента на базе OpenSSL 3.6.0 с
+  engine-gost. Файлы
+  [JSSE-сервер](examples/jsse/src/main/java/org/rssys/gost/jsse/examples/undertow/FileReceiveServer.java)
+  и [клиент openssl](examples/jsse/send-file.sh). Сервер принимает в
+  многопоточном режиме файлы, никуда их не сохраняет.
+
 # \[0.5.1\] - 10-06-2026
 
 ## Модуль crypto-gost-tls13

@@ -24,6 +24,8 @@ public final class TlsConstants {
     public static final byte HT_NEW_SESSION_TICKET = 4;
     public static final byte HT_FINISHED = 20;
     public static final byte HT_KEY_UPDATE = 24;
+    // message_hash — RFC 8446 §4.4.1: хеш первого ClientHello при HRR
+    public static final byte HT_MESSAGE_HASH = (byte) 254;
 
     // версии протокола
     public static final int PROTOCOL_TLS_1_2 = 0x0303;
@@ -160,6 +162,9 @@ public final class TlsConstants {
 
     // режимы PSK (RFC 8446 раздел 4.2.9)
     public static final byte PSK_DHE_KE = 1;
+
+    // строковое имя протокола (RFC 8446)
+    public static final String PROTOCOL_TLS13 = "TLSv1.3";
 
     // метки HKDF-Expand-Label (RFC 8446 раздел 7.1)
     public static final String LABEL_DERIVED = "derived";

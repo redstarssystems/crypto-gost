@@ -1,6 +1,7 @@
 package org.rssys.bench.jsse;
 
 import org.openjdk.jmh.annotations.*;
+import org.rssys.gost.jsse.GostJsseConstants;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLEngineResult;
@@ -27,7 +28,7 @@ public class JsseRecordBench {
 
     @Setup(Level.Trial)
     public void setup() throws Exception {
-        if (Security.getProvider("RssysGostJsse") == null)
+        if (Security.getProvider(GostJsseConstants.PROVIDER_NAME) == null)
             Security.addProvider(new org.rssys.gost.jsse.RssysGostJsseProvider());
 
         JsseBenchHelper.Bundle bundle = JsseBenchHelper.createBundle();

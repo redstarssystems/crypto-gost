@@ -36,6 +36,9 @@ public final class TlsDerParser {
     public static final byte[] SAN_OID_BYTES     = {0x55, 0x1D, 0x11};
     // OID: KeyUsage 2.5.29.15
     public static final byte[] KU_OID_BYTES      = {0x55, 0x1D, 0x0F};
+    // Key Usage bit masks (RFC 5280 §4.2.1.3)
+    public static final int KU_DIGITAL_SIGNATURE = 0x80;
+    public static final int KU_KEY_CERT_SIGN     = 0x04;
     // OID: ExtendedKeyUsage 2.5.29.37
     public static final byte[] EKU_OID_BYTES     = {0x55, 0x1D, 0x25};
     // OID: BasicConstraints 2.5.29.19

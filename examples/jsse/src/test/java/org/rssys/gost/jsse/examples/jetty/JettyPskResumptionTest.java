@@ -23,6 +23,7 @@ import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.socket.GostSSLSocket;
 import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.jsse.GostJsseConstants;
 
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
@@ -70,7 +71,7 @@ class JettyPskResumptionTest {
         // Серверный SSLContext для Jetty
         SslContextFactory.Server scf = new SslContextFactory.Server();
         scf.setSslContext(helper.getSslContext());
-        scf.setIncludeProtocols("TLSv1.3");
+        scf.setIncludeProtocols(GostJsseConstants.PROTOCOL_TLS_1_3);
 
         server = new Server();
         ServerConnector connector = new ServerConnector(server,

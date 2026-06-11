@@ -1,5 +1,6 @@
 package org.rssys.gost.jsse.engine;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
@@ -112,7 +113,7 @@ class GostSSLEngineTest {
 
         assertTrue(clientEngine.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"),
                 "Suite: " + clientEngine.getSession().getCipherSuite());
-        assertEquals("TLSv1.3", clientEngine.getSession().getProtocol());
+        assertEquals(GostJsseConstants.PROTOCOL_TLS_1_3, clientEngine.getSession().getProtocol());
 
         // WHY: отправляем app-данные, чтобы убедиться, что шифрование работает
         String msg = "Hello from GostSSLEngine!";

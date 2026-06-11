@@ -1345,9 +1345,9 @@ public final class TlsCertificate {
                         int valueStart = bitTlv[0] + 1;
                         int valueLen = bitTlv[1] - valueStart;
                         if (valueStart < bitTlv[1] && valueLen > 0) {
-                            kuDigitalSignature = (der[valueStart] & 0x80) != 0;
+                            kuDigitalSignature = (der[valueStart] & TlsDerParser.KU_DIGITAL_SIGNATURE) != 0;
                             // keyCertSign — бит 5 = 0x04 в первом байте (KU не определяет биты ≥ 9)
-                            if (valueLen > 0) kuKeyCertSign = (der[valueStart] & 0x04) != 0;
+                            if (valueLen > 0) kuKeyCertSign = (der[valueStart] & TlsDerParser.KU_KEY_CERT_SIGN) != 0;
                             // Собираем raw KU-маску для oid_filters matching
                             for (int k = 0; k < valueLen && k < 2; k++) {
                                 keyUsageBitsLocal |= (der[valueStart + k] & 0xFF) << (8 * k);

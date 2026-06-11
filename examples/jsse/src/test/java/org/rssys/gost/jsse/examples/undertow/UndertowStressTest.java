@@ -10,6 +10,7 @@ import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.util.CryptoRandom;
+import org.rssys.gost.jsse.GostJsseConstants;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSessionContext;
@@ -126,7 +127,7 @@ class UndertowStressTest {
         port = ((java.net.InetSocketAddress)
                 server.getListenerInfo().get(0).getAddress()).getPort();
 
-        clientCtx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        clientCtx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         clientCtx.init(null, new javax.net.ssl.TrustManager[]{helper.createTrustManager()}, null);
     }
 

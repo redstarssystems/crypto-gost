@@ -55,7 +55,7 @@ public final class TomcatEchoServer {
 
         SSLHostConfig sslHostConfig = new SSLHostConfig();
         sslHostConfig.setHostName("_default_");
-        sslHostConfig.setSslProtocol("TLSv1.3");
+        sslHostConfig.setSslProtocol(GostJsseConstants.PROTOCOL_TLS_1_3);
 
         SSLHostConfigCertificate cert = new SSLHostConfigCertificate(
                 sslHostConfig, SSLHostConfigCertificate.Type.UNDEFINED);

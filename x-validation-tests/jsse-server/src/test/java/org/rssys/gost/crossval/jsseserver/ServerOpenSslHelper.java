@@ -10,6 +10,7 @@ import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.jsse.GostJsseConstants;
 
 import org.rssys.gost.util.CryptoRandom;
 
@@ -67,7 +68,7 @@ final class ServerOpenSslHelper {
 
     static SSLContext createSslContext(GostX509KeyManager km,
                                         GostX509TrustManager tm) throws Exception {
-        SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         ctx.init(new javax.net.ssl.KeyManager[]{km},
                 new javax.net.ssl.TrustManager[]{tm}, CryptoRandom.INSTANCE);
         return ctx;
@@ -76,7 +77,7 @@ final class ServerOpenSslHelper {
     static SSLContext createMtlsSslContext(GostX509KeyManager km,
                                              PublicKeyParameters clientPub) throws Exception {
         GostX509TrustManager tm = new GostX509TrustManager(clientPub, false);
-        SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         ctx.init(new javax.net.ssl.KeyManager[]{km},
                 new javax.net.ssl.TrustManager[]{tm}, CryptoRandom.INSTANCE);
         return ctx;
@@ -214,7 +215,7 @@ final class ServerOpenSslHelper {
         org.apache.tomcat.util.net.SSLHostConfig sslHostConfig =
                 new org.apache.tomcat.util.net.SSLHostConfig();
         sslHostConfig.setHostName("_default_");
-        sslHostConfig.setSslProtocol("TLSv1.3");
+        sslHostConfig.setSslProtocol(GostJsseConstants.PROTOCOL_TLS_1_3);
         if (needClientAuth) {
             sslHostConfig.setCertificateVerification("required");
         }
@@ -306,7 +307,7 @@ final class ServerOpenSslHelper {
 
                 @Override
                 public String[] getEnabledProtocols() {
-                    return new String[]{"TLSv1.3"};
+                    return new String[]{GostJsseConstants.PROTOCOL_TLS_1_3};
                 }
 
                 @Override
@@ -324,7 +325,7 @@ final class ServerOpenSslHelper {
         org.eclipse.jetty.util.ssl.SslContextFactory.Server scf =
                 new org.eclipse.jetty.util.ssl.SslContextFactory.Server();
         scf.setSslContext(sslContext);
-        scf.setIncludeProtocols("TLSv1.3");
+        scf.setIncludeProtocols(GostJsseConstants.PROTOCOL_TLS_1_3);
         scf.setNeedClientAuth(needClientAuth);
 
         org.eclipse.jetty.server.Server server = new org.eclipse.jetty.server.Server();

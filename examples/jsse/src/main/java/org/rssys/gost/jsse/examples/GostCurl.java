@@ -3,6 +3,7 @@ package org.rssys.gost.jsse.examples;
 import okhttp3.*;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
@@ -120,7 +121,7 @@ public final class GostCurl {
      */
     private static SslSetup createSslSetup(CliOptions opts) throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         GostX509TrustManager tm;
 
         if (opts.insecure) {

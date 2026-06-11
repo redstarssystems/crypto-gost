@@ -180,7 +180,7 @@ public final class HandshakeContext {
         // message_hash handshake-сообщение: type(254) || length(3) || hash(hashLen)
         int hashLen = hsDigest.getDigestSize();
         byte[] frame = new byte[4 + hashLen];
-        frame[0] = (byte) 254;
+        frame[0] = TlsConstants.HT_MESSAGE_HASH;
         int len = hashLen;
         frame[1] = (byte) (len >>> 16);
         frame[2] = (byte) (len >>> 8);

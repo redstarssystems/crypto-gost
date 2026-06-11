@@ -43,7 +43,7 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class GostSSLSessionContext implements SSLSessionContext {
 
     /** RFC 8446 §4.6.1: ticket_lifetime MUST NOT exceed 604800 seconds (7 days) */
-    private static final long RFC_MAX_TICKET_LIFETIME = 604800L;
+    static final long RFC_MAX_TICKET_LIFETIME = 604800L;
     private static final int DEFAULT_MAX_PSK = 1000;
     private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSSLSessionContext");
 

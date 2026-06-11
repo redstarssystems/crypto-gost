@@ -1,6 +1,7 @@
 package org.rssys.gost.jsse.testkit;
 
 import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -39,7 +40,7 @@ public final class GostTestContext {
         GostX509KeyManager km = new GostX509KeyManager();
         km.addKeyEntry("default", serverChain, serverKey);
         GostX509TrustManager tm = new GostX509TrustManager(caPublicKey, false);
-        SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
         return ctx;
     }

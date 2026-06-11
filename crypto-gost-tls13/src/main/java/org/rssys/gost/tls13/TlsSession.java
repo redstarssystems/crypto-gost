@@ -1046,7 +1046,7 @@ public final class TlsSession implements AutoCloseable {
 
     /** @return "TLSv1.3" */
     public String getProtocol() {
-        return "TLSv1.3";
+        return TlsConstants.PROTOCOL_TLS13;
     }
 
     /** @return сертификаты пира (null, если handshake не завершён или PSK) */

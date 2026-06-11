@@ -128,6 +128,38 @@ class OpenSslJsseCrossValidationTest {
         runEngineServerTest(SUITE_L_ID, "GC256B", false, 0, true);
     }
 
+    @Test
+    @DisplayName("Engine-сервер с sessionContext + s_client: NST отправляется, close_notify корректен")
+    void testEngineServerWithSessionContext() throws Exception {
+        GostSSLSessionContext sessCtx = new GostSSLSessionContext(csL, csL.getHashLen());
+        CurveSpec curve = ALL_CURVES.get(0);
+        int suiteId = SUITE_L_ID;
+
+        OpenSslJsseHelper.ServerPkiBundle pki = OpenSslJsseHelper.createServerPki(curve.params);
+        GostX509KeyManager km = OpenSslJsseHelper.createKeyManager(
+                pki.cert(), pki.caCert(), pki.priv());
+
+        AtomicReference<Throwable> serverError = new AtomicReference<>();
+        CountDownLatch serverReady = new CountDownLatch(1);
+        int[] portOut = new int[1];
+
+        Thread serverThread = startEngineServer(km, null,
+                serverError, serverReady, false, false, portOut, 0, sessCtx);
+
+        assertTrue(serverReady.await(HANDSHAKE_TIMEOUT_SEC, TimeUnit.SECONDS),
+                "Engine-сервер не запустился за " + HANDSHAKE_TIMEOUT_SEC + "c");
+        int port = portOut[0];
+
+        String clientOutput = OpenSslJsseHelper.runSClientWithHttpGet(
+                port, suiteIdToName(suiteId), curve.ianaName, TIMEOUT_MS);
+
+        serverThread.join(5000);
+
+        assertNull(serverError.get(), "Server error: " + serverError.get());
+        assertTrue(clientOutput.contains("INTEROP_OK"),
+                "s_client output должен содержать INTEROP_OK");
+    }
+
     /* ========================================================================
      * Engine-клиент + s_server
      * ======================================================================== */
@@ -225,7 +257,7 @@ class OpenSslJsseCrossValidationTest {
         int[] portOut = new int[1];
 
         Thread serverThread = startEngineServer(km, null,
-                serverError, serverReady, false, keyUpdate, portOut, serverGroup);
+                serverError, serverReady, false, keyUpdate, portOut, serverGroup, null);
 
         assertTrue(serverReady.await(HANDSHAKE_TIMEOUT_SEC, TimeUnit.SECONDS),
                 "Engine-сервер не запустился за " + HANDSHAKE_TIMEOUT_SEC + "c");
@@ -267,7 +299,7 @@ class OpenSslJsseCrossValidationTest {
             int[] portOut = new int[1];
 
             Thread serverThread = startEngineServer(km, clientPub,
-                    serverError, serverReady, true, false, portOut, 0);
+                    serverError, serverReady, true, false, portOut, 0, null);
 
             assertTrue(serverReady.await(HANDSHAKE_TIMEOUT_SEC, TimeUnit.SECONDS));
             int port = portOut[0];
@@ -353,7 +385,8 @@ class OpenSslJsseCrossValidationTest {
                                       CountDownLatch serverReady,
                                       boolean mtls, boolean keyUpdate,
                                       int[] portOut,
-                                      int preferredGroup) {
+                                      int preferredGroup,
+                                      GostSSLSessionContext sessionCtx) {
         Thread t = new Thread(() -> {
             try (ServerSocket ss = new ServerSocket()) {
                 ss.setReuseAddress(true);
@@ -372,7 +405,9 @@ class OpenSslJsseCrossValidationTest {
                             ? new GostX509TrustManager(clientPub, false)
                             : new GostX509TrustManager(null, false);
 
-                    GostSSLEngine engine = new GostSSLEngine(km, tm, "localhost", effectivePort, false);
+                    GostSSLEngine engine = sessionCtx != null
+                            ? GostSSLEngine.createForServer(km, tm, "localhost", effectivePort, sessionCtx)
+                            : new GostSSLEngine(km, tm, "localhost", effectivePort, false);
                     if (preferredGroup != 0) {
                         engine.setClientNamedGroup(preferredGroup);
                     }

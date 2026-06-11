@@ -731,4 +731,175 @@ class GostSSLEngineLoopbackTest {
         }
         fail("Сервер не принял AppData за 80 итераций");
     }
+
+    // ========================================================================
+    // Regression: closeOutbound() → wrap() не перешифровывает close_notify
+    // ========================================================================
+
+    @Test
+    @DisplayName("Regression: closeOutbound() → wrap() не перешифровывает close_notify")
+    void testCloseOutboundWrapDoesNotDoubleEncrypt() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        // Сервер с сертификатом
+        GostX509KeyManager skm = new GostX509KeyManager();
+        skm.addKeyEntry("default",
+                CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert),
+                serverCertDefault.priv);
+        GostSSLEngine server = new GostSSLEngine(
+                skm, new GostX509TrustManager(null, false),
+                "localhost", 0, false);
+
+        // Клиент без сертификата (чистый клиент)
+        GostSSLEngine client = new GostSSLEngine(
+                new GostX509KeyManager(), new GostX509TrustManager(null, false),
+                "localhost", 0, true);
+
+        doLoopback(client, server, pair);
+
+        // Сервер закрывает исходящий канал (Undertow-сценарий: closeOutbound → wrap)
+        server.closeOutbound();
+        assertTrue(server.isOutboundDone(), "isOutboundDone после closeOutbound");
+
+        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        netBuf.clear();
+        // WHY: именно этот wrap() перешифровывал close_notify до фикса
+        SSLEngineResult wrapResult = server.wrap(ByteBuffer.allocate(0), netBuf);
+        assertTrue(wrapResult.bytesProduced() > 0,
+                "wrap() должен произвести байты (close_notify запись)");
+        netBuf.flip();
+
+        // Передаём клиенту — если двойное шифрование, unwrap() бросит SSLException
+        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
+        // WHY: assertDoesNotThrow — ключевая проверка регрессии
+        assertDoesNotThrow(() -> client.unwrap(netBuf, appBuf),
+                "unwrap() close_notify не должен бросать исключение (bad_record_mac)");
+        assertTrue(client.isInboundDone(),
+                "клиент должен зафиксировать получение close_notify");
+    }
+
+    // ========================================================================
+    // Regression: unwrap() возвращает Status.CLOSED при получении close_notify
+    // ========================================================================
+
+    @Test
+    @DisplayName("Regression: unwrap() close_notify возвращает Status.CLOSED, а не Status.OK")
+    void testUnwrapCloseNotifyReturnsClosed() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        GostX509KeyManager skm = new GostX509KeyManager();
+        skm.addKeyEntry("default",
+                CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert),
+                serverCertDefault.priv);
+        GostSSLEngine server = new GostSSLEngine(
+                skm, new GostX509TrustManager(null, false),
+                "localhost", 0, false);
+
+        GostSSLEngine client = new GostSSLEngine(
+                new GostX509KeyManager(), new GostX509TrustManager(null, false),
+                "localhost", 0, true);
+
+        doLoopback(client, server, pair);
+
+        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
+
+        // WHY: отправляем app data перед close_notify, чтобы гарантировать,
+        // что close_notify придёт отдельной TLS-записью, а не склеенной с данными.
+        // Иначе тест был бы зелёным и без фикса (как маленькие файлы работали).
+        ByteBuffer sendBuf = ByteBuffer.wrap(new byte[]{0x42});
+        netBuf.clear();
+        client.wrap(sendBuf, netBuf);
+        netBuf.flip();
+
+        appBuf.clear();
+        server.unwrap(netBuf, appBuf);
+        assertEquals(0x42, appBuf.get(0),
+                "сервер должен получить отправленный байт app data");
+
+        // Клиентское closeOutbound → wrap → close_notify в отдельной записи
+        client.closeOutbound();
+        netBuf.clear();
+        SSLEngineResult wrapResult = client.wrap(ByteBuffer.allocate(0), netBuf);
+        assertTrue(wrapResult.bytesProduced() > 0,
+                "wrap() должен произвести close_notify запись");
+        netBuf.flip();
+
+        // Сервер принимает close_notify — баг: возвращал Status.OK
+        appBuf.clear();
+        SSLEngineResult unwrapResult = server.unwrap(netBuf, appBuf);
+        assertEquals(SSLEngineResult.Status.CLOSED, unwrapResult.getStatus(),
+                "unwrap() close_notify должен вернуть Status.CLOSED, а не Status.OK");
+        assertTrue(server.isInboundDone(),
+                "сервер должен зафиксировать получение close_notify");
+    }
+
+    // ========================================================================
+    // Regression: bytesProduced корректен при нескольких AppData записях
+    // ========================================================================
+
+    @Test
+    @DisplayName("Regression: unwrap bytesProduced совпадает с реальными байтами")
+    void testMultiRecordUnwrapProducedCount() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        GostX509KeyManager skm = new GostX509KeyManager();
+        skm.addKeyEntry("default",
+                CertificateBridge.toJcaChain(serverCertDefault.cert, rootCa.cert),
+                serverCertDefault.priv);
+        GostSSLEngine server = new GostSSLEngine(
+                skm, new GostX509TrustManager(null, false),
+                "localhost", 0, false);
+        GostSSLEngine client = new GostSSLEngine(
+                new GostX509KeyManager(), new GostX509TrustManager(null, false),
+                "localhost", 0, true);
+
+        doLoopback(client, server, pair);
+
+        byte[] data1 = new byte[100];
+        byte[] data2 = new byte[200];
+        // Заполняем тестовыми данными
+        for (int i = 0; i < data1.length; i++) data1[i] = (byte) i;
+        for (int i = 0; i < data2.length; i++) data2[i] = (byte) (i + 100);
+
+        ByteBuffer tmp = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
+        ByteBuffer net1 = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        ByteBuffer net2 = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+
+        // Шифруем две отдельные записи в раздельные буферы
+        tmp.clear(); tmp.put(data1); tmp.flip();
+        client.wrap(tmp, net1);
+        net1.flip();
+
+        tmp.clear(); tmp.put(data2); tmp.flip();
+        client.wrap(tmp, net2);
+        net2.flip();
+
+        // WHY: подаём записи раздельно (а не склеенными), чтобы тест был
+        // детерминирован — каждая unwrap обрабатывает одну запись,
+        // без зависимости от внутренних оптимизаций обработки.
+        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
+
+        // Первая запись — отдельный буфер
+        appBuf.clear();
+        SSLEngineResult r1 = server.unwrap(net1, appBuf);
+        assertTrue(r1.bytesProduced() > 0,
+                "bytesProduced должен быть > 0 после unwrap первой записи");
+        appBuf.flip();
+        assertEquals(data1.length, appBuf.remaining(),
+                "сервер должен получить 100 байт первой записи");
+        assertEquals(data1.length, r1.bytesProduced(),
+                "bytesProduced должен равняться реальному количеству байт в dst");
+
+        // Вторая запись — отдельный буфер
+        appBuf.clear();
+        SSLEngineResult r2 = server.unwrap(net2, appBuf);
+        assertTrue(r2.bytesProduced() > 0,
+                "bytesProduced должен быть > 0 после unwrap второй записи");
+        appBuf.flip();
+        assertEquals(data2.length, appBuf.remaining(),
+                "сервер должен получить 200 байт второй записи");
+        assertEquals(data2.length, r2.bytesProduced(),
+                "bytesProduced должен равняться реальному количеству байт в dst");
+    }
 }

@@ -7,6 +7,7 @@ import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.bridge.KeyBridge;
+import org.rssys.gost.jsse.GostJsseConstants;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLEngine;
@@ -65,7 +66,7 @@ class JsseBenchHelper {
     }
 
     static SSLContext createSslContext(Bundle serverBundle) throws Exception {
-        SSLContext ctx = SSLContext.getInstance("TLSv1.3", new org.rssys.gost.jsse.RssysGostJsseProvider());
+        SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, new org.rssys.gost.jsse.RssysGostJsseProvider());
         ctx.init(new javax.net.ssl.KeyManager[]{serverBundle.keyManager},
                  new javax.net.ssl.TrustManager[]{new javax.net.ssl.X509ExtendedTrustManager() {
                      @Override public void checkClientTrusted(X509Certificate[] chain, String authType, Socket s) {}

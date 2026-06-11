@@ -278,7 +278,7 @@ public final class GostSsl {
                                     boolean ocspEnabled, int sessionCacheSize,
                                     boolean trustAll, boolean serverMode) {
         try {
-            if (Security.getProvider("RssysGostJsse") == null) {
+            if (Security.getProvider(GostJsseConstants.PROVIDER_NAME) == null) {
                 Security.addProvider(new RssysGostJsseProvider());
             }
 
@@ -311,7 +311,7 @@ public final class GostSsl {
             }
 
             // SSLContext
-            SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+            SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
             ctx.init(km != null ? new javax.net.ssl.KeyManager[]{km} : null,
                     new javax.net.ssl.TrustManager[]{tm}, null);
 

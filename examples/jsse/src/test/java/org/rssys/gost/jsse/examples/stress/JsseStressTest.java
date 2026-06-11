@@ -12,6 +12,7 @@ import org.rssys.gost.jsse.socket.GostSSLServerSocket;
 import org.rssys.gost.jsse.socket.GostSSLSocket;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.util.CryptoRandom;
+import org.rssys.gost.jsse.GostJsseConstants;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
@@ -114,7 +115,7 @@ class JsseStressTest {
         });
 
         // Клиентский контекст
-        clientCtx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        clientCtx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         clientCtx.init(null, new javax.net.ssl.TrustManager[]{helper.createTrustManager()}, null);
     }
 

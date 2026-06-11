@@ -70,8 +70,8 @@ public final class GostSSLEngine extends SSLEngine {
 
     private TlsHandshakeEngine handshakeEngine;
     private TlsMessageBuilder messageBuilder;
-    private TlsRecord readerRecord;
-    private TlsRecord writerRecord;
+    private volatile TlsRecord readerRecord;
+    private volatile TlsRecord writerRecord;
 
     /** Максимальный размер буфера сборки handshake-сообщений (защита от OOM). */
     private static final int MAX_HANDSHAKE_BUFFER =
@@ -83,7 +83,7 @@ public final class GostSSLEngine extends SSLEngine {
     // serverMode определяется как !clientMode — поле не нужно
     private final String peerHost;
     private final int peerPort;
-    private TlsCiphersuite ciphersuite;
+    private volatile TlsCiphersuite ciphersuite;
 
     /** ECDHE-группа для key_share (клиент, RFC 8446 §4.2.8). 0 = GC256B по умолчанию. */
     private int clientNamedGroup;
@@ -97,6 +97,9 @@ public final class GostSSLEngine extends SSLEngine {
     private volatile boolean handshakeDone;
     private volatile boolean closeSent;
     private volatile boolean closeReceived;
+    // Готовый зашифрованный close_notify — отдельно от outgoingQueue,
+    // чтобы wrap() не перешифровал его второй раз
+    private byte[] pendingCloseRecord;
 
     // WHY: два отдельных lock для inbound/outbound — SSLEngine допускает параллельные
     // wrap (outbound) и unwrap (inbound). Один lock заблокировал бы оба направления.
@@ -170,7 +173,7 @@ public final class GostSSLEngine extends SSLEngine {
     private int pendingWriteTagLen;
     private volatile boolean pendingWriteKeysExist;
     /** Старый writerRecord, ожидающий destroy() под outboundLock. */
-    private TlsRecord deferredWriterDestroy;
+    private volatile TlsRecord deferredWriterDestroy;
 
     // Переиспользуемый массив для отслеживания позиций dst-буферов в unwrap (GC pressure: #8)
     private int[] dstPosBefore = new int[1];
@@ -489,6 +492,26 @@ public final class GostSSLEngine extends SSLEngine {
             int bytesConsumed = 0;
             int bytesProduced = 0;
 
+            // Отправляем close_notify напрямую, без повторного шифрования
+            // через writerRecord.protect — запись уже зашифрована в closeOutbound().
+            // Ставим перед state-switch, чтобы отработать в любом состоянии engine.
+            if (pendingCloseRecord != null) {
+                byte[] rec = pendingCloseRecord;
+                if (dst.remaining() < rec.length) {
+                    // Не хватает места — не обнуляем поле, повторим в следующем wrap()
+                    return new SSLEngineResult(
+                            SSLEngineResult.Status.BUFFER_OVERFLOW,
+                            SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING, 0, 0);
+                }
+                pendingCloseRecord = null;
+                dst.put(rec);
+                // WHY: closeReceived неизбежно false здесь (closeOutbound при
+                // closeReceived=true уходит по early-return), поэтому всегда OK.
+                return new SSLEngineResult(SSLEngineResult.Status.OK,
+                        SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
+                        0, rec.length);
+            }
+
             if (engineState == EngineState.HANDSHAKE) {
                 // Отправляем handshake-фреймы из очереди (с фрагментацией при max_fragment_length)
                 applyDeferredWriterDestroy();
@@ -798,13 +821,19 @@ public final class GostSSLEngine extends SSLEngine {
                 // без вызова unwrap(), и данные потеряются.
                     while (handshakeDone && engineState == EngineState.HANDSHAKE
                             && src.hasRemaining()) {
+                        // WHY: перезахватываем dstPosBefore перед каждой итерацией,
+                        // иначе produced накапливает дельту от начальной позиции
+                        // (до первого handleEncryptedRecord), а не от текущей.
+                        for (int i = 0; i < length; i++) {
+                            if (dstPosBefore[i] >= 0) {
+                                dstPosBefore[i] = dsts[offset + i].position();
+                            }
+                        }
                         int addConsumed = handleEncryptedRecord(src, dsts, offset, length);
                         if (addConsumed == 0) break;
                         consumed += addConsumed;
                         for (int i = 0; i < length; i++) {
                             if (dstPosBefore[i] >= 0) {
-                                // single-call multi-record bytesProduced —
-                                // фикс тривиален: Math.max→+=. Unit-тест не добавлен.
                                 produced += Math.max(0,
                                         dsts[offset + i].position() - dstPosBefore[i]);
                             }
@@ -824,8 +853,10 @@ public final class GostSSLEngine extends SSLEngine {
                         getHandshakeStatus(), 0, 0);
             }
 
-            return new SSLEngineResult(
-                    SSLEngineResult.Status.OK,
+            SSLEngineResult.Status status = closeReceived
+                    ? SSLEngineResult.Status.CLOSED
+                    : SSLEngineResult.Status.OK;
+            return new SSLEngineResult(status,
                     getHandshakeStatus(), consumed, produced);
         } catch (TlsException e) {
             engineState = EngineState.CLOSED;
@@ -1293,8 +1324,8 @@ public final class GostSSLEngine extends SSLEngine {
                 if (psk != null) {
                     byte[] ticketIdentity = new byte[32];
                     CryptoRandom.INSTANCE.nextBytes(ticketIdentity);
-                    long ticketLifetime = Math.min(sessionContext.getSessionTimeout(), 604800L);
-                    if (ticketLifetime == 0) ticketLifetime = 604800L;
+                    long ticketLifetime = Math.min(sessionContext.getSessionTimeout(), GostSSLSessionContext.RFC_MAX_TICKET_LIFETIME);
+                    if (ticketLifetime == 0) ticketLifetime = GostSSLSessionContext.RFC_MAX_TICKET_LIFETIME;
                     byte[] ageAddBytes = new byte[4];
                     CryptoRandom.INSTANCE.nextBytes(ageAddBytes);
                     long ticketAgeAdd = ((ageAddBytes[0] & 0xFFL) << 24)
@@ -1386,6 +1417,7 @@ public final class GostSSLEngine extends SSLEngine {
             handshakeEngine.destroy();
         }
         currentPskTicketIdentity = null;
+        pendingCloseRecord = null;
     }
 
     // ========================================================================
@@ -1413,7 +1445,7 @@ public final class GostSSLEngine extends SSLEngine {
                 } else {
                     record = buildPlaintextRecord(TlsConstants.CT_ALERT, alertPayload);
                 }
-                outgoingQueue.addLast(record);
+                pendingCloseRecord = record;
                 closeSent = true;
                 LOG.log(Level.DEBUG, "close_notify sent");
             } catch (Exception e) {
@@ -1446,15 +1478,17 @@ public final class GostSSLEngine extends SSLEngine {
 
     /**
      * После closeOutbound() забирает уже собранный close_notify alert-record
-     * для прямой записи в сокет. wrap() для этого не подходит, так как запись
-     * уже зашифрована и лежит в outgoingQueue в виде готового TLS-рекорда.
+     * для прямой записи в сокет. Хранится отдельно от outgoingQueue, чтобы
+     * wrap() не перешифровал его второй раз.
      *
-     * @return зашифрованный alert-record или null если очередь пуста
+     * @return зашифрованный alert-record или null если записи нет
      */
     public byte[] pollOutboundRecord() {
         outboundLock.lock();
         try {
-            return outgoingQueue.poll();
+            byte[] rec = pendingCloseRecord;
+            pendingCloseRecord = null;
+            return rec;
         } finally {
             outboundLock.unlock();
         }

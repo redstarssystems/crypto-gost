@@ -1,5 +1,6 @@
 package org.rssys.gost.jsse.socket;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
@@ -737,7 +738,7 @@ class GostSSLSocketTcpTest {
     @Test
     @DisplayName("SSLContext factory: GostSSLSocketFactory через SSLContext.getSocketFactory()")
     void testFactoryFromContext() throws Exception {
-        javax.net.ssl.SSLContext ctx = javax.net.ssl.SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        javax.net.ssl.SSLContext ctx = javax.net.ssl.SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         ctx.init(null, null, null);
 
         javax.net.ssl.SSLSocketFactory factory = ctx.getSocketFactory();
@@ -1006,7 +1007,7 @@ class GostSSLSocketTcpTest {
         st.start();
 
         // WHY: SSLContext с нашим TrustManager — для валидации серверного сертификата
-        javax.net.ssl.SSLContext ctx = javax.net.ssl.SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
+        javax.net.ssl.SSLContext ctx = javax.net.ssl.SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         ctx.init(null, new javax.net.ssl.TrustManager[]{createTrustManager(caPub)}, null);
 
         URL url = new URL("https://localhost:" + port + "/test");
