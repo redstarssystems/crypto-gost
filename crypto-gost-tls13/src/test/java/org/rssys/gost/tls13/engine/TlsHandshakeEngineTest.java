@@ -1052,6 +1052,34 @@ class TlsHandshakeEngineTest {
     }
 
     @Test
+    @DisplayName("HRR без key_share: сервер присылает только cookie, клиент отвечает CH2 с той же группой")
+    void testHrrWithoutKeyShare() throws Exception {
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        NAMED_GROUP, SIG_SCHEME, null, null, HASH_LEN),
+                EC_PARAMS, NAMED_GROUP, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        byte[] ch1 = client.start();
+        assertNotNull(ch1);
+
+        // Строим HRR без key_share, с cookie
+        byte[] cookie = CryptoRandom.INSTANCE.generateSeed(16);
+        byte[] hrrBody = new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                NAMED_GROUP, SIG_SCHEME, null, null, HASH_LEN)
+                .buildHelloRetryRequest(cs().getId(), cookie);
+        byte[] hrr = new TlsHandshakeMessage(
+                TlsConstants.HT_SERVER_HELLO, hrrBody).encode();
+
+        // Клиент должен обработать HRR без исключения
+        client.receive(hrr);
+        byte[] ch2 = client.poll();
+        assertNotNull(ch2, "Клиент должен вернуть CH2 после HRR без key_share");
+        assertEquals(TlsHandshakeEngine.State.CLIENT_WAIT_SERVER_HELLO, client.getState(),
+                "Клиент ждёт настоящий SH");
+    }
+
+    @Test
     @DisplayName("handshake с max_fragment_length=1 (512 байт): согласование и фрагментация")
     void testHandshakeWithMaxFragmentLength() throws Exception {
         // Клиент запрашивает max_fragment_length=512 байт

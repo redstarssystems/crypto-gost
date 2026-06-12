@@ -54,10 +54,7 @@ public final class Pbkdf2Streebog {
         if (dkLen < 1) throw new IllegalArgumentException("dkLen must be >= 1");
 
         int hLen = prf.getMacSize();
-        if (dkLen > (long) (Integer.MAX_VALUE) * hLen) {
-            throw new IllegalArgumentException("derived key too long");
-        }
-
+        // l ≤ Integer.MAX_VALUE < 2³²−1 — структурно гарантировано типом int dkLen (RFC 2898 §5.2)
         int l = (dkLen + hLen - 1) / hLen;
         int r = dkLen - (l - 1) * hLen;
 

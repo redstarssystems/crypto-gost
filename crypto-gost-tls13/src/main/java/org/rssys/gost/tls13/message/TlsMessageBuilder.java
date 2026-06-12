@@ -816,6 +816,35 @@ public final class TlsMessageBuilder {
     }
 
     /**
+     * Собирает HelloRetryRequest без key_share extension, с опциональным cookie
+     * (RFC 8446 §4.2.8: key_share MAY be omitted in HelloRetryRequest).
+     * <p>
+     * ПОЧЕМУ без key_share: сервер может не запрашивать смену группы —
+     * достаточно прислать cookie для stateless HRR (некоторые реализации ГОСТ TLS 1.3 так и делают).
+     *
+     * @param cipherSuiteId выбранный cipher suite
+     * @param cookie        cookie для второго ClientHello, или null
+     * @return тело HelloRetryRequest (без handshake-заголовка)
+     */
+    public byte[] buildHelloRetryRequest(int cipherSuiteId, byte[] cookie) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TlsConstants.LEGACY_VERSION_MAJOR);
+        out.write(TlsConstants.LEGACY_VERSION_MINOR);
+        out.write(TlsConstants.HRR_RANDOM, 0, TlsConstants.HRR_RANDOM.length);
+        out.write(0x00); // session_id_len=0
+        TlsEncoding.encodeUint16(out, cipherSuiteId);
+        out.write(0x00); // compression=null
+
+        ByteArrayOutputStream ext = new ByteArrayOutputStream();
+        ext.write(SV_SERVER, 0, SV_SERVER.length);
+        addCookieExtension(ext, cookie);
+
+        TlsEncoding.encodeUint16(out, ext.size());
+        out.write(ext.toByteArray(), 0, ext.size());
+        return out.toByteArray();
+    }
+
+    /**
      * Собирает EncryptedExtensions с опциональным ALPN (RFC 7301, RFC 8446 §4.3.1).
      * Делегирует полной перегрузке для избежания дублирования.
      */
@@ -839,10 +868,15 @@ public final class TlsMessageBuilder {
         ByteArrayOutputStream extBody = new ByteArrayOutputStream();
         if (hasAlpn) {
             byte[] nameBytes = selectedAlpnProtocol.getBytes(StandardCharsets.US_ASCII);
-            byte[] alpnBody = new byte[1 + nameBytes.length];
-            alpnBody[0] = (byte) nameBytes.length;
-            System.arraycopy(nameBytes, 0, alpnBody, 1, nameBytes.length);
-            TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION, alpnBody);
+            // WHY: RFC 7301 §3.1 требует ProtocolNameList с 2-байтовой длиной
+            // (listLength || nameLen || name). Используем encodeUint16, а не
+            // ручное кодирование — (byte)(1+255) даёт переполнение.
+            ByteArrayOutputStream alpnBody = new ByteArrayOutputStream();
+            TlsEncoding.encodeUint16(alpnBody, 1 + nameBytes.length);
+            alpnBody.write(nameBytes.length);
+            alpnBody.write(nameBytes, 0, nameBytes.length);
+            TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION,
+                    alpnBody.toByteArray());
         }
         if (hasMaxFrag) {
             byte[] body = new byte[]{(byte) maxFragLen};

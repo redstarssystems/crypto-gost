@@ -85,7 +85,11 @@ class GostSSLEngineConcurrentWrapUnwrapTest {
                     pair.getClientTransport().sendRecord(enc);
                 }
             } catch (Exception e) {
-                clientError.set(e);
+                // WHY: гонка running.set(false) → transport.close() —
+                // поток может успеть войти в тело цикла после проверки running,
+                // но до закрытия транспорта. Это штатная ситуация завершения,
+                // не ошибка теста.
+                if (running.get()) clientError.set(e);
             }
         }, "client-wrap");
 
@@ -110,7 +114,7 @@ class GostSSLEngineConcurrentWrapUnwrapTest {
                     }
                 }
             } catch (Exception e) {
-                serverError.set(e);
+                if (running.get()) serverError.set(e);
             }
         }, "server-unwrap");
 
@@ -132,7 +136,7 @@ class GostSSLEngineConcurrentWrapUnwrapTest {
                     pair.getServerTransport().sendRecord(enc);
                 }
             } catch (Exception e) {
-                serverError.set(e);
+                if (running.get()) serverError.set(e);
             }
         }, "server-wrap");
 
@@ -157,7 +161,7 @@ class GostSSLEngineConcurrentWrapUnwrapTest {
                     }
                 }
             } catch (Exception e) {
-                clientError.set(e);
+                if (running.get()) clientError.set(e);
             }
         }, "client-unwrap");
 

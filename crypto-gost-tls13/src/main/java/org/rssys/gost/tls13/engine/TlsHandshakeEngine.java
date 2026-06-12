@@ -998,6 +998,12 @@ public final class TlsHandshakeEngine {
 
         int requestedGroup = parsedSH.requestedGroup;
 
+        // WHY: RFC 8446 §4.2.8 допускает HRR без key_share — сервер
+        //      не запрашивает смену группы; продолжаем с той же, что в CH1.
+        if (requestedGroup == 0) {
+            requestedGroup = selectedNamedGroup;
+        }
+
         // Проверка: группа должна быть известна
         try {
             TlsCiphersuite.namedGroupToParams(requestedGroup);

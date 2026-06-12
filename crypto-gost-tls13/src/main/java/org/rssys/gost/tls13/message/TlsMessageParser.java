@@ -278,14 +278,22 @@ public final class TlsMessageParser {
         int[] maxFragRef = new int[1];
         forEachExtension(eeBody, 2, 2 + extLen, "EncryptedExtensions", (extType, data, off, len) -> {
             if (extType == TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION && alpnRef[0] == null) {
-                if (len < 1) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: empty protocol name");
+                // WHY: RFC 7301 §3.2 — ProtocolNameList предварён 2-байтовой
+                // длиной списка. Без её пропуска парсинг обламывается на
+                // серверах, формирующих ALPN корректно по RFC (например,
+                // некоторые реализации ГОСТ TLS 1.3).
+                if (len < 3) {
+                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: extension too short");
                 }
-                int nameLen = data[off] & 0xFF;
-                if (nameLen < 1 || nameLen > len - 1) {
+                int listLen = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
+                if (listLen < 1 || listLen + 2 != len) {
+                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: invalid list length");
+                }
+                int nameLen = data[off + 2] & 0xFF;
+                if (nameLen < 1 || nameLen + 3 > len) {
                     throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: invalid name length");
                 }
-                alpnRef[0] = new String(data, off + 1, nameLen, StandardCharsets.US_ASCII);
+                alpnRef[0] = new String(data, off + 3, nameLen, StandardCharsets.US_ASCII);
             } else if (extType == TlsConstants.EXT_MAX_FRAGMENT_LENGTH && maxFragRef[0] == 0) {
                 if (len != 1 || (data[off] & 0xFF) < 1 || (data[off] & 0xFF) > 4) {
                     throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
@@ -586,8 +594,11 @@ public final class TlsMessageParser {
         });
 
         if (ecdheKeyRef[0] == null) {
-            throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
-                    "No key_share extension in ServerHello");
+            // WHY: RFC 8446 §4.2.8 разрешает опускать key_share в HRR.
+            //      Клиент продолжает с той же группой, что и в CH1.
+            //      actualGroupRef[0] остаётся 0 — handleHelloRetryRequest
+            //      подставит selectedNamedGroup.
+            ecdheKeyRef[0] = new byte[0];
         }
         int requestedGroup = actualGroupRef[0];
         return new ParsedServerHello(ecdheKeyRef[0], cipherSuiteId, actualGroupRef[0],
@@ -798,7 +809,7 @@ public final class TlsMessageParser {
                 cert = new TlsCertificate(certDer);
             } catch (RuntimeException e) {
                 throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                        "Failed to parse certificate DER", e);
+                        "Failed to parse certificate DER: " + e.getMessage(), e);
             }
             if (ocspRef[0] != null) {
                 cert.setOcspResponse(ocspRef[0]);

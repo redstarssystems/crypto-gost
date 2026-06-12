@@ -1,5 +1,58 @@
 = История изменений
 
+== [0.5.3] - 12-06-2026
+
+=== Модуль crypto-gost-core
+
+==== Исправлено
+
+* Уточнена документация к примерам.
+* *Добавлены OID TC26-256-ParamSet B/C/D как алиасы кривых CryptoPro (RFC 7836).* Сертификаты с OID `1.2.643.7.1.2.1.1.{2,3,4}` ранее падали с `Unknown GOST curve`. ParamSet B — та же кривая, что CryptoPro-A; ParamSet C — CryptoPro-B; ParamSet D — CryptoPro-C.
+
+=== Модуль crypto-gost-tls13
+
+==== Исправлено
+
+* *HelloRetryRequest без key_share (RFC 8446 §4.2.8).* parseServerHello() больше не требует key_share — RFC разрешает опускать его в HRR. handleHelloRetryRequest() при requestedGroup==0 подставляет selectedNamedGroup (продолжает работу с той же группой, что в CH1). Добавлен buildHelloRetryRequest(cipherSuiteId, cookie) — генератор HRR без key_share для тестов. gost-curl успешно соединяется с серверами, не включающими key_share в HRR.
+* *ALPN в EncryptedExtensions приведён к RFC 7301 §3.1.* buildEncryptedExtensions() теперь включает 2-байтовый ProtocolNameList.length; parseEncryptedExtensions() корректно пропускает listLen и читает имя со смещения off+3. Для кодирования listLen используется encodeUint16 вместо (byte)(1+nameLen) — устранено переполнение при длине протокола 255.
+
+=== Модуль crypto-gost-jsse
+
+==== Исправлено
+
+ * *Контекст ошибки в processHandshakeFrames().* Вместо «Handshake error» пробрасывается оригинальное сообщение TlsException — ускорена диагностика handshake-сбоев.
+
+=== Модуль examples/jsse (gost-curl)
+
+==== Добавлено
+
+* *Поддержка mTLS в gost-curl.* Добавлены опции `--cert <файл>` и `--key <файл>`
+для клиентского сертификата. KeyManager создаётся через `GostX509KeyManager + CertificateBridge`.
+* *Кросс-валидация со стендом TLS 1.3 ИнфоТеКС (https://infotecs.ru/products/tls-test.php/, https://91.244.183.22).* Выполнен прогон 28 сценариев на 21 порту (7 кривых × 3 режима: one-way, optional, mTLS).
+
+Результаты: **28/28** успешно.
+
+|===
+| Режим | Порты | Результат
+
+| One-way TLS (игнорировать cert)
+| 15001, 15011, 15021, 15031, 15071, 15081, 15091 | ✅ 7/7
+
+| One-way TLS (опциональный cert)
+| 15002, 15012, 15022, 15032, 15072, 15082, 15092 | ✅ 7/7
+
+| mTLS с сертификатом
+| 15003, 15013, 15023, 15033, 15073, 15083, 15093 | ✅ 7/7
+
+| mTLS без сертификата (ожидаемый 400)
+| 15003, 15013, 15023, 15033, 15073, 15083, 15093 | ✅ 7/7
+|===
+
+Все handshake — TLS 1.3, cipher suite — `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L` (0xC103),
+сервер nginx 1.26.3.
+
+
+
 == [0.5.2] - 11-06-2026
 
 === Модуль crypto-gost-jsse

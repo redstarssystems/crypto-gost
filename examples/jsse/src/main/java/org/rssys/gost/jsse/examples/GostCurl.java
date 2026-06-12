@@ -2,11 +2,15 @@ package org.rssys.gost.jsse.examples;
 
 import okhttp3.*;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
+import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
@@ -17,6 +21,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.Security;
 import java.util.*;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Консольный HTTP-клиент с поддержкой ГОСТ TLS 1.3 — gost-curl.
@@ -46,6 +52,14 @@ public final class GostCurl {
             System.err.println("Ошибка: не указан URL. Используйте gost-curl <url>");
             System.exit(1);
             return;
+        }
+
+        // JUL: без -v — только WARNING и выше, с -v — INFO, с -vv — ALL
+        Logger gostLog = Logger.getLogger("org.rssys.gost");
+        if (opts.verboseLevel == 0) {
+            gostLog.setLevel(Level.WARNING);
+        } else if (opts.verboseLevel >= 2) {
+            gostLog.setLevel(Level.ALL);
         }
 
         SslSetup ssl = createSslSetup(opts);
@@ -86,19 +100,19 @@ public final class GostCurl {
             rb.addHeader(h.getKey(), h.getValue());
         }
 
-        if (opts.verbose) {
+        if (opts.verboseLevel >= 1) {
             printRequest(opts.url, opts.method, opts.headers, opts.body);
         }
 
         try (Response resp = client.newCall(rb.build()).execute()) {
-            if (opts.verbose) {
+            if (opts.verboseLevel >= 1) {
                 printResponse(resp);
             }
             try (ResponseBody respBody = resp.body()) {
                 byte[] bytes = respBody != null ? respBody.bytes() : new byte[0];
                 if (opts.outputFile != null) {
                     Files.write(Path.of(opts.outputFile), bytes);
-                    if (opts.verbose) {
+                    if (opts.verboseLevel >= 1) {
                         System.err.println("Ответ сохранён в " + opts.outputFile);
                     }
                 } else {
@@ -121,30 +135,55 @@ public final class GostCurl {
      */
     private static SslSetup createSslSetup(CliOptions opts) throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+        SSLContext ctx = SSLContext.getInstance(
+                GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         GostX509TrustManager tm;
 
         if (opts.insecure) {
             tm = new GostX509TrustManager(null, false);
-            ctx.init(null, new TrustManager[]{tm}, null);
-            return new SslSetup(ctx, tm);
+        } else if (opts.caFile != null) {
+            tm = createTrustManager(Files.readAllBytes(Path.of(opts.caFile)));
+        } else {
+            return null;
         }
-        if (opts.caFile != null) {
-            byte[] raw = Files.readAllBytes(Path.of(opts.caFile));
-            String asStr = new String(raw, StandardCharsets.US_ASCII).trim();
-            PublicKeyParameters caKey;
-            if (asStr.startsWith("-----BEGIN")) {
-                String b64 = asStr.replaceAll("-----[A-Z ]+-----", "")
-                        .replaceAll("\\s", "");
-                caKey = new TlsCertificate(Base64.getDecoder().decode(b64)).getPublicKey();
-            } else {
-                caKey = new TlsCertificate(raw).getPublicKey();
-            }
-            tm = new GostX509TrustManager(caKey, false);
-            ctx.init(null, new TrustManager[]{tm}, null);
-            return new SslSetup(ctx, tm);
+
+        KeyManager[] keyManagers = null;
+        if (opts.certFile != null && opts.keyFile != null) {
+            keyManagers = new KeyManager[]{loadClientKeyManager(opts)};
+        } else if (opts.certFile != null || opts.keyFile != null) {
+            System.err.println("Ошибка: --cert и --key должны быть указаны вместе");
+            System.exit(1);
         }
-        return null;
+
+        ctx.init(keyManagers, new TrustManager[]{tm}, null);
+        return new SslSetup(ctx, tm);
+    }
+
+    private static GostX509KeyManager loadClientKeyManager(CliOptions opts) throws Exception {
+        byte[] certRaw = Files.readAllBytes(Path.of(opts.certFile));
+        byte[] keyRaw = Files.readAllBytes(Path.of(opts.keyFile));
+        TlsCertificate clientCert = new TlsCertificate(pemToDer(certRaw));
+        PrivateKeyParameters clientKey = org.rssys.gost.jca.spec.GostDerCodec
+                .decodePrivateKey(pemToDer(keyRaw));
+        GostX509KeyManager km = new GostX509KeyManager();
+        km.addKeyEntry("client",
+                CertificateBridge.toJcaChain(clientCert), clientKey);
+        return km;
+    }
+
+    private static GostX509TrustManager createTrustManager(byte[] raw) throws Exception {
+        PublicKeyParameters caKey = new TlsCertificate(pemToDer(raw)).getPublicKey();
+        return new GostX509TrustManager(caKey, false);
+    }
+
+    private static byte[] pemToDer(byte[] raw) {
+        String asStr = new String(raw, StandardCharsets.US_ASCII).trim();
+        if (asStr.startsWith("-----BEGIN")) {
+            String b64 = asStr.replaceAll("-----[A-Z ]+-----", "")
+                    .replaceAll("\\s", "");
+            return Base64.getDecoder().decode(b64);
+        }
+        return raw;
     }
 
     // ========================================================================
@@ -156,11 +195,13 @@ public final class GostCurl {
         String method = "GET";
         String body;
         Map<String, String> headers = new LinkedHashMap<>();
-        boolean verbose;
+        int verboseLevel;
         String outputFile;
         boolean followRedirects;
         boolean insecure;
         String caFile;
+        String certFile;
+        String keyFile;
         int connectTimeout = 10000;
         int readTimeout = 30000;
     }
@@ -191,9 +232,8 @@ public final class GostCurl {
                             hv.substring(colon + 1).trim());
                     break;
                 }
-                case "-v":
                 case "--verbose":
-                    opts.verbose = true;
+                    opts.verboseLevel++;
                     break;
                 case "-o":
                 case "--output":
@@ -210,6 +250,12 @@ public final class GostCurl {
                 case "--ca":
                     opts.caFile = nextArg(args, i++, a);
                     break;
+                case "--cert":
+                    opts.certFile = nextArg(args, i++, a);
+                    break;
+                case "--key":
+                    opts.keyFile = nextArg(args, i++, a);
+                    break;
                 case "--connect-timeout":
                     opts.connectTimeout = parseInt(nextArg(args, i++, a), a);
                     break;
@@ -220,6 +266,10 @@ public final class GostCurl {
                     printUsage();
                     System.exit(0);
                 default:
+                    if (a.matches("-v+")) {
+                        opts.verboseLevel += a.length() - 1;
+                        break;
+                    }
                     if (a.startsWith("-")) {
                         die("Неизвестный флаг: " + a);
                     }
@@ -273,12 +323,16 @@ public final class GostCurl {
                   -L, --location           Следовать перенаправлениям (3xx)
                   -k, --insecure           Отключить проверку сертификата (только разработка)
                       --ca <файл>          CA-сертификат (PEM или DER) для проверки сервера
+                      --cert <файл>        Клиентский сертификат (PEM или DER) для mTLS
+                      --key <файл>         Закрытый ключ клиента (PEM или DER) для mTLS
                       --connect-timeout мс Таймаут соединения (по умолчанию: 10000)
                       --read-timeout мс    Таймаут чтения (по умолчанию: 30000)
                       --help               Показать эту справку
 
                 Примеры:
                   gost-curl --ca ca.pem https://gost-server.example/api
+                  gost-curl --ca ca.pem --cert client.pem --key client-key.pem \\
+                            https://mtls-server.example/api
                   gost-curl -k -X POST -d '{"key":"value"}' -H "Content-Type: application/json" \\
                             --ca ca.pem https://gost-server.example/api
                   gost-curl -k -L -o page.html https://gost-server.example/redirect""");

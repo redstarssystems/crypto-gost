@@ -1070,8 +1070,9 @@ public final class GostSSLEngine extends SSLEngine {
                     handshakeInputBuf.reset();
                     String err = handshakeEngine.getErrorMessage();
                     LOG.log(Level.DEBUG, "Handshake error: {0}", err != null ? err : e.getMessage());
+                    String message = (err != null) ? err : e.getMessage();
                     throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
-                            "Handshake error");
+                            message);
                 }
                 handshakeInputBuf.reset();
                 throw e;

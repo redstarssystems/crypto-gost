@@ -57,4 +57,5 @@ README.xml
 /crypto-gost-tls13/doc/manual-interop-test.xml
 .cifuzz-corpus/
 **/crash-*
+test-certs
 

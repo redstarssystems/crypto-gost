@@ -73,8 +73,12 @@ class TlsMessageParserTest {
     // Если key_share отсутствует, handshake не может продолжаться (нет ECDHE).
 
     @Test
-    @DisplayName("parseServerHello: нет key_share бросает TlsException(ALERT_HANDSHAKE_FAILURE)")
-    void testParseServerHelloMissingKeyShare() {
+    @DisplayName("parseServerHello: нет key_share возвращает пустой ключ, группы 0")
+    void testParseServerHelloMissingKeyShare() throws TlsException {
+        // WHY: RFC 8446 §4.2.8 разрешает опускать key_share в HRR.
+        //      parseServerHello не отличает HRR от обычного SH на этапе
+        //      парсинга — он возвращает пустой ecdhePublicKeyRaw и group=0,
+        //      а caller (receiveServerHello) решает, HRR это или нет.
         byte[] body = new byte[2 + 32 + 1 + 2 + 1 + 2];
         int pos = 0;
         body[pos++] = 0x03; body[pos++] = 0x03;
@@ -84,9 +88,12 @@ class TlsMessageParserTest {
         body[pos++] = 0x00;
         body[pos++] = 0x00; body[pos++] = 0x00;
 
-        TlsException e = assertThrows(TlsException.class,
-                () -> TlsMessageParser.parseServerHello(body, TlsConstants.GRP_GC256A));
-        assertEquals(TlsConstants.ALERT_HANDSHAKE_FAILURE, e.getAlertCode());
+        TlsMessageParser.ParsedServerHello parsed =
+                TlsMessageParser.parseServerHello(body, TlsConstants.GRP_GC256A);
+        assertEquals(0, parsed.ecdhePublicKeyRaw.length,
+                "Без key_share ecdhePublicKeyRaw должен быть пустым");
+        assertEquals(0, parsed.actualGroup,
+                "Без key_share actualGroup должен быть 0");
     }
 
     @Test
@@ -687,7 +694,8 @@ class TlsMessageParserTest {
     // Клиент должен извлечь его, чтобы узнать, какой протокол согласован.
     void testParseEncryptedExtensionsAlpnValid() throws Exception {
         ByteArrayOutputStream extBody = new ByteArrayOutputStream();
-        byte[] alpnBody = new byte[]{0x02, 0x68, 0x32}; // length=2, "h2"
+        // RFC 7301: ProtocolNameList = listLength(2) || nameLen(1) || name(N)
+        byte[] alpnBody = new byte[]{0x00, 0x03, 0x02, 0x68, 0x32}; // listLen=3, nameLen=2, "h2"
         TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION, alpnBody);
         byte[] extBytes = extBody.toByteArray();
         byte[] eeBody = new byte[2 + extBytes.length];
@@ -715,9 +723,12 @@ class TlsMessageParserTest {
     void testParseEncryptedExtensionsAlpnLonger() throws Exception {
         byte[] name = "http/1.1".getBytes(StandardCharsets.US_ASCII);
         ByteArrayOutputStream extBody = new ByteArrayOutputStream();
-        byte[] alpnBody = new byte[1 + name.length];
-        alpnBody[0] = (byte) name.length;
-        System.arraycopy(name, 0, alpnBody, 1, name.length);
+        // RFC 7301: ProtocolNameList = listLength(2) || nameLen(1) || name(N)
+        byte[] alpnBody = new byte[3 + name.length];
+        alpnBody[0] = 0;
+        alpnBody[1] = (byte) (1 + name.length);
+        alpnBody[2] = (byte) name.length;
+        System.arraycopy(name, 0, alpnBody, 3, name.length);
         TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION, alpnBody);
         byte[] extBytes = extBody.toByteArray();
         byte[] eeBody = new byte[2 + extBytes.length];
