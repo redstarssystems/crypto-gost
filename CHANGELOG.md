@@ -1,3 +1,44 @@
+# \[0.5.4\] - 14-06-2026
+
+## Модуль crypto-gost-tls13
+
+### Исправлено
+
+- **Сервер не прерывает handshake при GREASE-значениях в key\_share (RFC
+  8701 §3.1)**
+
+### Добавлено
+
+- **`TlsCertificate.pemToDer(byte[])`** — сделан публичным, устраняет
+  дублирование с `GostSsl.pemToDer(String)` (приватный метод-обёртка
+  удалён).
+
+- **`TlsCertificate.isPem(byte[])` и `isPkcs12(byte[])`** — явные
+  детекторы формата PEM и PKCS12. `isPkcs12` использует дискриминатор
+  SEQUENCE + INTEGER 3 без полного разбора PFX.
+
+- **`GostPkcs12Loader.decryptPrivateKey(byte[], char[])`** — расшифровка
+  закрытого ключа (PKCS#8) по ГОСТ PBES2. Для не-ГОСТ PBE бросает
+  `IllegalArgumentException`. Пароль затирается после расшифровки.
+
+## Модуль crypto-gost-jsse
+
+### Добавлено
+
+- **`GostSslBuilder.trustCaFromPem(byte[] pemChain)`** — добавляет все
+  CA-сертификаты из PEM-цепочки (включая multi-CA файлы) в trust store
+  за один вызов.
+
+- **`GostSslBuilder.certificate(byte[], byte[])` и `trustCa(byte[])`** —
+  теперь с авто-определением формата PEM/DER. PEM-данные автоматически
+  конвертируются в DER. Для PEM-цепочки в `trustCa` добавляются все
+  сертификаты.
+
+- **`GostSsl.loadPrivateKey(byte[])`** и
+  **`GostSsl.loadPrivateKey(byte[], char[])`** — единая точка загрузки
+  закрытого ключа с авто-определением формата (PEM/DER) и поддержкой
+  расшифровки через ГОСТ PBES2.
+
 # \[0.5.3\] - 12-06-2026
 
 ## Модуль crypto-gost-core

@@ -3,6 +3,7 @@ package org.rssys.gost.jsse.examples.undertow;
 import io.undertow.Undertow;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
+import io.undertow.util.StatusCodes;
 import org.rssys.gost.jsse.GostSsl;
 import org.rssys.gost.jsse.GostSslBuilder;
 import org.rssys.gost.jsse.examples.ExamplesCertHelper;
@@ -10,11 +11,16 @@ import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 import javax.net.ssl.SSLContext;
 import java.io.FileWriter;
 import java.io.InputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.net.InetSocketAddress;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.time.LocalDateTime;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
@@ -49,6 +55,12 @@ import java.util.concurrent.locks.ReentrantLock;
  * <pre>{@code
  * curl -k --tlsv1.3 -X POST --data-binary @bigfile.bin https://localhost:8443/
  * }</pre>
+ *  * Раздача файла (GET):
+ *  * <pre>{@code
+ *  * java org.rssys.gost.jsse.examples.undertow.FileReceiveServer \
+ *  *     --port 8443 --file /path/to/bigfile.bin
+ *  * curl -k --tlsv1.3 https://localhost:8443/ -o received.bin
+ *  * }</pre>
  */
 public final class FileReceiveServer {
 
@@ -60,6 +72,9 @@ public final class FileReceiveServer {
     // ReentrantLock вместо synchronized: synchronized пиннит carrier thread
     // виртуального потока, что нейтрализует преимущества vthreads под нагрузкой
     private static final ReentrantLock LOG_LOCK = new ReentrantLock();
+
+    // Путь к файлу для раздачи по GET (опционально)
+    private static Path filePath;
 
     private FileReceiveServer() {}
 
@@ -79,6 +94,7 @@ public final class FileReceiveServer {
                 case "--ca":          caPath = args[++i];                 break;
                 case "--ca-password": caPassword = args[++i];             break;
                 case "--log":         logPath = args[++i];                break;
+                case "--file":        filePath = Path.of(args[++i]);      break;
                 default:
                     System.err.println("Unknown flag: " + args[i]);
                     printUsage();
@@ -138,6 +154,19 @@ public final class FileReceiveServer {
     }
 
     private static void handleRequest(HttpServerExchange exchange, PrintWriter log) throws Exception {
+        String method = exchange.getRequestMethod().toString();
+        switch (method) {
+            case "GET" -> handleGetRequest(exchange, log);
+            case "POST" -> handlePostRequest(exchange, log);
+            default -> {
+                exchange.setStatusCode(StatusCodes.METHOD_NOT_ALLOWED);
+                exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/plain; charset=utf-8");
+                exchange.getResponseSender().send("Method not allowed: " + method + "\n", StandardCharsets.UTF_8);
+            }
+        }
+    }
+
+    private static void handlePostRequest(HttpServerExchange exchange, PrintWriter log) throws Exception {
         String remoteAddr = exchange.getSourceAddress().toString();
         // Имя файла передаётся клиентом в заголовке X-Filename; если заголовка нет — unknown
         String filename = exchange.getRequestHeaders().getFirst("X-Filename");
@@ -170,6 +199,129 @@ public final class FileReceiveServer {
         }
     }
 
+    private static void handleGetRequest(HttpServerExchange exchange, PrintWriter log) throws Exception {
+        if (filePath == null) {
+            exchange.setStatusCode(StatusCodes.NOT_FOUND);
+            exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/plain; charset=utf-8");
+            exchange.getResponseSender().send("No file configured for download\n", StandardCharsets.UTF_8);
+            return;
+        }
+        if (!Files.exists(filePath) || !Files.isRegularFile(filePath)) {
+            exchange.setStatusCode(StatusCodes.NOT_FOUND);
+            exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/plain; charset=utf-8");
+            exchange.getResponseSender().send("File not found: " + filePath + "\n", StandardCharsets.UTF_8);
+            return;
+        }
+
+        long fileSize = Files.size(filePath);
+        String rangeHeader = exchange.getRequestHeaders().getFirst("Range");
+        String remoteAddr = exchange.getSourceAddress().toString();
+
+        exchange.startBlocking();
+        exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/octet-stream");
+        exchange.getResponseHeaders().put(Headers.ACCEPT_RANGES, "bytes");
+
+        boolean aborted = false;
+        long start = 0;
+        long end = fileSize - 1;
+
+        if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
+            String rangeValue = rangeHeader.substring(6).trim();
+            int dashIdx = rangeValue.indexOf('-');
+            if (dashIdx > 0) {
+                // bytes=start-end
+                try {
+                    start = Long.parseLong(rangeValue.substring(0, dashIdx).trim());
+                    if (dashIdx + 1 < rangeValue.length()) {
+                        end = Long.parseLong(rangeValue.substring(dashIdx + 1).trim());
+                    }
+                    // end по умолчанию — конец файла (оставляем как есть: инициализировано fileSize-1)
+                } catch (NumberFormatException e) {
+                    // непарсящийся Range — игнорируем, отдаём 200
+                    start = 0;
+                    end = fileSize - 1;
+                }
+            } else if (dashIdx == 0) {
+                // bytes=-suffix — последние N байт
+                try {
+                    long suffix = Long.parseLong(rangeValue.substring(1).trim());
+                    start = Math.max(0, fileSize - suffix);
+                    end = fileSize - 1;
+                } catch (NumberFormatException e) {
+                    start = 0;
+                    end = fileSize - 1;
+                }
+            }
+
+            // Валидация: если start > end или start >= fileSize — 416
+            if (start > end || start >= fileSize) {
+                exchange.setStatusCode(StatusCodes.REQUEST_RANGE_NOT_SATISFIABLE);
+                exchange.getResponseHeaders().put(Headers.CONTENT_RANGE,
+                        "bytes */" + fileSize);
+                exchange.getResponseSender().send("Range not satisfiable\n", StandardCharsets.UTF_8);
+                // логируем факт 416
+                writeLine(log, remoteAddr, "RANGE_NOT_SATISFIABLE start=" + start + " end=" + end
+                        + " fileSize=" + fileSize, 0, false);
+                return;
+            }
+
+            // Корректировка end, если выходит за границы
+            if (end >= fileSize) {
+                end = fileSize - 1;
+            }
+
+            long contentLength = end - start + 1;
+            long partialRemaining = contentLength;
+            exchange.setStatusCode(StatusCodes.PARTIAL_CONTENT);
+            exchange.getResponseHeaders().put(Headers.CONTENT_RANGE,
+                    "bytes " + start + "-" + end + "/" + fileSize);
+            exchange.getResponseHeaders().put(Headers.CONTENT_LENGTH, contentLength);
+            exchange.getResponseHeaders().put(Headers.CONTENT_DISPOSITION,
+                    "attachment; filename=\"" + filePath.getFileName() + "\"");
+
+            try (OutputStream os = exchange.getOutputStream();
+                 var dstChannel = Channels.newChannel(os);
+                 var fileChannel = FileChannel.open(filePath, StandardOpenOption.READ)) {
+                fileChannel.position(start);
+                while (partialRemaining > 0) {
+                    long transferred = fileChannel.transferTo(fileChannel.position(), partialRemaining, dstChannel);
+                    if (transferred <= 0) break;
+                    fileChannel.position(fileChannel.position() + transferred);
+                    partialRemaining -= transferred;
+                }
+            } catch (IOException e) {
+                aborted = true;
+            } finally {
+                writeLine(log, remoteAddr, filePath.getFileName().toString(),
+                        contentLength - Math.max(0, partialRemaining), aborted);
+            }
+            return;
+        }
+
+        // Без Range — полный файл, 200 OK
+        long fullRemaining = fileSize;
+        exchange.setStatusCode(StatusCodes.OK);
+        exchange.getResponseHeaders().put(Headers.CONTENT_LENGTH, fileSize);
+        exchange.getResponseHeaders().put(Headers.CONTENT_DISPOSITION,
+                "attachment; filename=\"" + filePath.getFileName() + "\"");
+
+        try (OutputStream os = exchange.getOutputStream();
+             var dstChannel = Channels.newChannel(os);
+             var fileChannel = FileChannel.open(filePath, StandardOpenOption.READ)) {
+            while (fullRemaining > 0) {
+                long transferred = fileChannel.transferTo(fileChannel.position(), fullRemaining, dstChannel);
+                if (transferred <= 0) break;
+                fileChannel.position(fileChannel.position() + transferred);
+                fullRemaining -= transferred;
+            }
+        } catch (IOException e) {
+            aborted = true;
+        } finally {
+            writeLine(log, remoteAddr, filePath.getFileName().toString(),
+                    fileSize - fullRemaining, aborted);
+        }
+    }
+
     private static void writeLine(PrintWriter log, String addr, String filename,
                                   long bytes, boolean aborted) {
         String line = String.format("%s %s file=%s received=%d bytes%s",
@@ -186,6 +338,6 @@ public final class FileReceiveServer {
 
     private static void printUsage() {
         System.err.println("Usage: FileReceiveServer [--port N] [--cert p12] [--password pwd]"
-                + " [--ca p12] [--ca-password pwd] [--log path]");
+                + " [--ca p12] [--ca-password pwd] [--log path] [--file path]");
     }
 }

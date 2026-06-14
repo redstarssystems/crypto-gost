@@ -32,14 +32,20 @@ public class GostSslBuilder {
     GostSslBuilder() {}
 
     /**
-     * Устанавливает сертификат и ключ из DER-байтов.
+     * Устанавливает сертификат и ключ с авто-определением формата.
+     * <p>
+     * Каждый аргумент может быть в PEM или DER. PEM автоматически конвертируется
+     * в DER через {@link TlsCertificate#pemToDer(byte[])}.
      *
-     * @param certDer сертификат в DER (X.509)
-     * @param keyDer  закрытый ключ в DER (PKCS#8 PrivateKeyInfo)
+     * @param certData сертификат X.509 (PEM или DER)
+     * @param keyData  закрытый ключ PKCS#8 (PEM или DER)
+     * @return this для fluent API
      */
-    public GostSslBuilder certificate(byte[] certDer, byte[] keyDer) {
-        this.certDer = certDer;
-        this.keyDer = keyDer;
+    public GostSslBuilder certificate(byte[] certData, byte[] keyData) {
+        this.certDer = TlsCertificate.isPem(certData)
+                ? TlsCertificate.pemToDer(certData) : certData;
+        this.keyDer = TlsCertificate.isPem(keyData)
+                ? TlsCertificate.pemToDer(keyData) : keyData;
         return this;
     }
 
@@ -56,11 +62,27 @@ public class GostSslBuilder {
     }
 
     /**
-     * Добавляет доверенный CA-сертификат (DER X.509).
+     * Добавляет доверенный CA-сертификат в trust store.
      * <p>
+     * Автоматически определяет формат: PEM (одиночный или цепочка) или DER.
+     * Для PEM-цепочки добавляются все сертификаты из неё.
      * Добавленные CA используются все при проверке цепочки сертификатов.
+     *
+     * @param caData PEM- или DER-байты CA-сертификата
+     * @return this для fluent API
+     * @throws IllegalArgumentException если данные не содержат валидного сертификата
      */
-    public GostSslBuilder trustCa(byte[] caDer) {
+    public GostSslBuilder trustCa(byte[] caData) {
+        if (TlsCertificate.isPem(caData)) {
+            TlsCertificate.listFromPem(caData)
+                    .forEach(ca -> trustCaSingle(ca.getEncoded()));
+        } else {
+            trustCaSingle(caData);
+        }
+        return this;
+    }
+
+    private void trustCaSingle(byte[] caDer) {
         if (this.trustedCaDers == null) {
             this.trustedCaDers = new byte[][]{caDer};
         } else {
@@ -69,7 +91,6 @@ public class GostSslBuilder {
             copy[trustedCaDers.length] = caDer;
             this.trustedCaDers = copy;
         }
-        return this;
     }
 
     /**
@@ -90,6 +111,20 @@ public class GostSslBuilder {
             throw new IllegalArgumentException("No CA certificate found in PFX");
         }
         caCerts.forEach(ca -> trustCa(ca.getEncoded()));
+        return this;
+    }
+
+    /**
+     * Добавляет все CA-сертификаты из PEM-цепочки в trust store.
+     * <p>Разбирает многострочный PEM, извлекает все сертификаты.
+     *
+     * @param pemChain PEM-байты с одним или несколькими сертификатами CA
+     * @return this для fluent API
+     * @throws IllegalArgumentException если PEM не содержит валидных сертификатов
+     */
+    public GostSslBuilder trustCaFromPem(byte[] pemChain) {
+        TlsCertificate.listFromPem(pemChain).forEach(
+                ca -> trustCa(ca.getEncoded()));
         return this;
     }
 

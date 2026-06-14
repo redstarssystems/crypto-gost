@@ -6,6 +6,7 @@ import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.DerCodec;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
@@ -2261,6 +2262,43 @@ public final class TlsCertificate {
     }
 
     /**
+     * Проверяет, являются ли данные PEM-форматом.
+     *
+     * <p>Дискриминатор: первый байт 0x2D (ASCII '-') — начало PEM-заголовка.
+     *
+     * @param data проверяемые байты
+     * @return true если данные начинаются с PEM-заголовка
+     */
+    public static boolean isPem(byte[] data) {
+        return data != null && data.length > 0 && (data[0] & 0xFF) == 0x2D;
+    }
+
+    /**
+     * Проверяет, являются ли данные PFX-контейнером (PKCS12).
+     *
+     * <p>Дискриминатор: внешний SEQUENCE, первый вложенный элемент — INTEGER 3
+     * (версия PFX). Это надёжнее полного разбора — без лишних аллокаций.
+     *
+     * @param data проверяемые байты
+     * @return true если данные имеют структуру PFX
+     */
+    public static boolean isPkcs12(byte[] data) {
+        if (data == null || data.length < 10) return false;
+        if ((data[0] & 0xFF) != 0x30) return false;
+        try {
+            byte[][] outer = DerCodec.parseSequenceContents(data, 0);
+            if (outer.length < 2) return false;
+            BigInteger version = DerCodec.parseInteger(outer[0], 0);
+            if (!version.equals(BigInteger.valueOf(3))) return false;
+            // AuthSafe должен быть SEQUENCE (ContentInfo)
+            return outer[1] != null && outer[1].length > 0
+                    && (outer[1][0] & 0xFF) == 0x30;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
      * Разбирает PEM-файл, содержащий один или несколько сертификатов (цепочку),
      * и возвращает список {@link TlsCertificate}.
      *
@@ -2295,11 +2333,13 @@ public final class TlsCertificate {
 
     /**
      * Декодирует PEM-формат (Base64 между заголовками) в DER-байты.
+     * <p>Вырезает любые PEM-заголовки {@code -----BEGIN ...-----} / {@code -----END ...-----}
+     * и пробельные символы, декодирует оставшийся Base64.
      *
-     * @param pem байты PEM-сертификата
+     * @param pem байты PEM-данных (сертификат, ключ или любой PEM-блок)
      * @return DER-байты
      */
-    private static byte[] pemToDer(byte[] pem) {
+    public static byte[] pemToDer(byte[] pem) {
         String text = new String(pem, java.nio.charset.StandardCharsets.US_ASCII);
         String b64 = text.replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
         return Base64.getDecoder().decode(b64);

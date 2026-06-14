@@ -1544,8 +1544,12 @@ public final class TlsHandshakeEngine {
             try {
                 actualEcParams = TlsCiphersuite.namedGroupToParams(actualGroup);
             } catch (IllegalArgumentException e) {
-                throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
-                        "ClientHello: key_share group 0x" + Integer.toHexString(actualGroup) + " not supported");
+                // RFC 8701 §3.1 — клиент вправе включать GREASE-значения
+                // (0xAAAA, 0xBABA...) в key_share. Сервер обязан их игнорировать,
+                // не прерывая handshake. Неизвестная группа → actualEcParams=null →
+                // далее selectHrrGroup() найдёт ГОСТ-группу и отправит HRR,
+                // либо бросит HANDSHAKE_FAILURE если пересечения нет.
+                actualEcParams = null;
             }
         }
 

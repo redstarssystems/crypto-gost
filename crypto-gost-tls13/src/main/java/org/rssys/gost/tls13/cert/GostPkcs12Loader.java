@@ -72,6 +72,31 @@ public final class GostPkcs12Loader {
         return loadJdkFallback(pfxData, password);
     }
 
+    /**
+     * Расшифровывает standalone EncryptedPrivateKeyInfo (PKCS#8) по ГОСТ PBES2.
+     * <p>
+     * Отличается от {@link #load(byte[], char[])} тем, что принимает
+     * не PFX-контейнер, а одиночный зашифрованный ключ (как в PEM
+     * {@code -----BEGIN ENCRYPTED PRIVATE KEY-----}).
+     * <p>
+     * Поддерживает только PBES2 с ГОСТ-шифрованием (Кузнечик CTR-ACPKM).
+     * Для не-ГОСТ PBE бросает {@link IllegalArgumentException}.
+     *
+     * @param encryptedDer DER EncryptedPrivateKeyInfo
+     * @param password     пароль
+     * @return расшифрованный закрытый ключ
+     */
+    public static PrivateKeyParameters decryptPrivateKey(byte[] encryptedDer, char[] password) {
+        GostPkcs12Parser.EncryptedPrivateKeyInfo epki =
+                GostPkcs12Parser.parseEncryptedPrivateKeyInfo(encryptedDer);
+        byte[] passwordBytes = toUtf8Bytes(password);
+        try {
+            return GostPbes2.decryptKey(epki, passwordBytes);
+        } finally {
+            Arrays.fill(passwordBytes, (byte) 0);
+        }
+    }
+
     private static boolean hasGostPbes2Key(PfxData pfx) {
         for (ContentInfoData ci : pfx.getAuthSafe().getContentInfos()) {
             if (!GostOids.PKCS7_DATA.equals(ci.getContentType())) continue;

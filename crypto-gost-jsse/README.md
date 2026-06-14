@@ -170,6 +170,16 @@ DER X.509 / PKCS#8
         .sessionCacheSize(5000)
         .buildServerContext();
 
+PEM-версия с авто-определением формата:
+
+    SSLContext ctx = GostSsl.builder()
+        .certificate(
+            Files.readAllBytes(Paths.get("server.pem")),       // авто PEM/DER
+            Files.readAllBytes(Paths.get("server-key.pem")))   // авто PEM/DER
+        .trustCaFromPem(Files.readAllBytes(Paths.get("ca-chain.pem")))
+        .ocsp(true)
+        .buildServerContext();
+
 ### Ограничения
 
 - PKCS12 с GOST PBE поддерживается нативно (PBKDF2-HMAC-Streebog +
@@ -234,6 +244,23 @@ CTR-ACPKM).
         CertificateBridge.toJca(serverCert),
         CertificateBridge.toJca(caCert)
     };
+
+Через PEM-файлы с авто-определением формата:
+
+    import org.rssys.gost.jsse.GostSsl;
+    import org.rssys.gost.signature.PrivateKeyParameters;
+    import java.nio.file.Files;
+    import java.nio.file.Paths;
+
+    PrivateKeyParameters key = GostSsl.loadPrivateKey(
+            Files.readAllBytes(Paths.get("server-key.pem")));
+    // Для зашифрованного PEM-ключа:
+    PrivateKeyParameters keyEnc = GostSsl.loadPrivateKey(
+            Files.readAllBytes(Paths.get("encrypted-key.pem")),
+            "password".toCharArray());
+
+`loadPrivateKey` авто-определяет PEM или DER и поддерживает расшифровку
+зашифрованных ключей по ГОСТ PBES2 без ручного pemToDer.
 
 ### GostX509KeyManager
 

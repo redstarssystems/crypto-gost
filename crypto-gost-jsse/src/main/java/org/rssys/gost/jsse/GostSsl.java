@@ -6,9 +6,11 @@ import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.ocsp.OcspPolicy;
+import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.cert.GostPkcs12Loader;
+import org.rssys.gost.tls13.cert.GostPkcs12Parser;
 import org.rssys.gost.tls13.cert.TlsCertificate;
 
 import javax.net.ssl.*;
@@ -97,13 +99,15 @@ public final class GostSsl {
 
     /** Серверный SSLContext из PEM-строк (cert, private key, CA). */
     public static SSLContext serverContext(String certPem, String keyPem, String caPem) {
-        return buildContext(pemToDer(certPem), pemToDer(keyPem), null, null,
+        return buildContext(TlsCertificate.pemToDer(certPem.getBytes(StandardCharsets.US_ASCII)),
+                TlsCertificate.pemToDer(keyPem.getBytes(StandardCharsets.US_ASCII)), null, null,
                 new byte[][]{TlsCertificate.fromPemOrDer(caPem.getBytes(StandardCharsets.US_ASCII)).toDer()}, false, -1, false, true);
     }
 
     /** Клиентский SSLContext из PEM-строк — mTLS. */
     public static SSLContext clientContext(String certPem, String keyPem, String caPem) {
-        return buildContext(pemToDer(certPem), pemToDer(keyPem), null, null,
+        return buildContext(TlsCertificate.pemToDer(certPem.getBytes(StandardCharsets.US_ASCII)),
+                TlsCertificate.pemToDer(keyPem.getBytes(StandardCharsets.US_ASCII)), null, null,
                 new byte[][]{TlsCertificate.fromPemOrDer(caPem.getBytes(StandardCharsets.US_ASCII)).toDer()}, false, -1, false, false);
     }
 
@@ -139,6 +143,58 @@ public final class GostSsl {
     public static SSLContext clientContext(byte[] certDer, byte[] keyDer, byte[] caDer) {
         return buildContext(certDer, keyDer, null, null,
                 new byte[][]{caDer}, false, -1, false, false);
+    }
+
+    // ========================================================================
+    // Загрузка закрытого ключа
+    // ========================================================================
+
+    /**
+     * Загружает закрытый ключ из PEM или DER, авто-определение формата.
+     * <p>Для зашифрованных ключей использует {@link #loadPrivateKey(byte[], char[])}.
+     *
+     * @param keyData PEM- или DER-байты ключа
+     * @return закрытый ключ ГОСТ
+     */
+    public static PrivateKeyParameters loadPrivateKey(byte[] keyData) {
+        if (TlsCertificate.isPem(keyData)) {
+            keyData = TlsCertificate.pemToDer(keyData);
+        }
+        return GostDerCodec.decodePrivateKey(keyData);
+    }
+
+    /**
+     * Загружает закрытый ключ из PEM или DER с паролем для расшифровки.
+     * <p>Если ключ незашифрован — игнорирует пароль.
+     * Зашифрованный ключ должен быть в ГОСТ PBES2, иначе {@link IllegalArgumentException}.
+     *
+     * @param keyData  PEM- или DER-байты ключа (plain или encrypted PKCS#8)
+     * @param password пароль для расшифровки
+     * @return закрытый ключ ГОСТ
+     */
+    public static PrivateKeyParameters loadPrivateKey(byte[] keyData, char[] password) {
+        if (TlsCertificate.isPem(keyData)) {
+            keyData = TlsCertificate.pemToDer(keyData);
+        }
+        if (isEncryptedPrivateKey(keyData)) {
+            return GostPkcs12Loader.decryptPrivateKey(keyData, password);
+        }
+        return GostDerCodec.decodePrivateKey(keyData);
+    }
+
+    /**
+     * Проверяет, является ли DER-данные зашифрованным ключом
+     * (EncryptedPrivateKeyInfo, а не plain PrivateKeyInfo).
+     * <p>Дискриминатор: {@code AlgorithmIdentifier} содержит PBES2 OID.
+     */
+    private static boolean isEncryptedPrivateKey(byte[] der) {
+        try {
+            GostPkcs12Parser.EncryptedPrivateKeyInfo epki =
+                    GostPkcs12Parser.parseEncryptedPrivateKeyInfo(der);
+            return org.rssys.gost.tls13.GostOids.PBES2.equals(epki.getEncryptionAlgorithmOid());
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     // ========================================================================
@@ -341,10 +397,5 @@ public final class GostSsl {
         km.addKeyEntry("default", new X509Certificate[]{cert},
                 GostDerCodec.decodePrivateKey(keyDer));
         return km;
-    }
-
-    private static byte[] pemToDer(String pem) {
-        String b64 = pem.replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
-        return Base64.getDecoder().decode(b64);
     }
 }
