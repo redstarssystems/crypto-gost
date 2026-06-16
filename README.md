@@ -22,6 +22,10 @@
 
 **Целевая JDK при сборке модулей библиотеки: JDK 21**.
 
+Основной репозиторий хранения исходного кода и артефактов:
+[GitFlic](https://gitflic.ru/project/red-stars-systems/crypto-gost).
+Зеркало на [GitHub](https://github.com/redstarssystems/crypto-gost)
+
 # Документация
 
 - [Криптографическое ядро:](crypto-gost-core/README.md) базовые функции
