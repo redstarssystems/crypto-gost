@@ -2,7 +2,7 @@ package org.rssys.gost.tls13;
 
 import org.rssys.gost.signature.ECParameters;
 
-import java.math.BigInteger;
+
 
 /**
  * Представляет cipher suite TLS 1.3 для ГОСТ-криптографии
@@ -35,8 +35,7 @@ public final class TlsCiphersuite {
             SNMAX_KUZNYECHIK_MGM_L,
             0xF800000000000000L,
             0xFFFFFFF000000000L,
-            0xFFFFFFFFFFFFE000L,
-            BigInteger.ONE);
+            0xFFFFFFFFFFFFE000L);
 
     public static final TlsCiphersuite TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S = new TlsCiphersuite(
             TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
@@ -48,8 +47,7 @@ public final class TlsCiphersuite {
             0x3FFFFFFFFFFL,
             0xFFFFFFFFE0000000L,
             0xFFFFFFFFFFFF0000L,
-            0xFFFFFFFFFFFFFFF8L,
-            BigInteger.ONE);
+            0xFFFFFFFFFFFFFFF8L);
 
     // ========================================================================
     // Поля
@@ -65,12 +63,10 @@ public final class TlsCiphersuite {
     private final long c1;
     private final long c2;
     private final long c3;
-    private final BigInteger cofactor;
 
     private TlsCiphersuite(int id, String ianaName, int hashLen, int keyLen,
                            int ivLen, int tagLen,
-                           long snmax, long c1, long c2, long c3,
-                           BigInteger cofactor) {
+                           long snmax, long c1, long c2, long c3) {
         this.id = id;
         this.ianaName = ianaName;
         this.hashLen = hashLen;
@@ -81,7 +77,6 @@ public final class TlsCiphersuite {
         this.c1 = c1;
         this.c2 = c2;
         this.c3 = c3;
-        this.cofactor = cofactor;
     }
 
     // ========================================================================
@@ -98,9 +93,6 @@ public final class TlsCiphersuite {
     public long getC1() { return c1; }
     public long getC2() { return c2; }
     public long getC3() { return c3; }
-    /** @return кофактор кривой (h=1 для всех ГОСТ Р 34.10-2012) */
-    public BigInteger getCofactor() { return cofactor; }
-
     // ========================================================================
     // Поиск по ID
     // ========================================================================

@@ -1204,4 +1204,63 @@ class TlsHandshakeEngineTest {
                 "Незапрошенное max_fragment_length от сервера → ALERT_ILLEGAL_PARAMETER");
         assertTrue(client.isError());
     }
+
+    // ====================================================================
+    // HRR wire-формат
+    // ====================================================================
+
+    @Test
+    @DisplayName("HRR: key_share extension содержит только NamedGroup (2 байта, RFC 8446 §4.2.8)")
+    void testHrrKeyShareWireFormat() throws Exception {
+        int clientGroup = TlsConstants.GRP_GC256A;
+        ECParameters clientParams = ECParameters.tc26a256();
+        int serverGroup = TlsConstants.GRP_GC256B;
+
+        TlsHandshakeEngine client = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.CLIENT, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        clientGroup, SIG_SCHEME, null, null, HASH_LEN),
+                clientParams, clientGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+        TlsHandshakeEngine server = new TlsHandshakeEngine(
+                TlsHandshakeEngine.Role.SERVER, cs(),
+                new TlsMessageBuilder(cs(), List.of(cs().getId()),
+                        serverGroup, SIG_SCHEME, serverCert.priv,
+                        List.of(serverCert.cert), HASH_LEN),
+                ECParameters.cryptoProA(), serverGroup, SIG_SCHEME, HASH_LEN, null, false, null);
+
+        byte[] ch1 = client.start();
+        assertNotNull(ch1);
+
+        server.receive(ch1);
+        byte[] hrr = server.poll();
+        assertNotNull(hrr);
+
+        TlsHandshakeMessage hrrMsg = TlsHandshakeMessage.decode(hrr);
+        assertTrue(TlsMessageParser.isHelloRetryRequest(
+                TlsMessageParser.parseServerHello(hrrMsg.getBody(), clientGroup)),
+                "Должен быть HRR");
+
+        // Проверка wire-формата: ищем EXT_KEY_SHARE (0x0033) в raw body
+        // со смещения extensions, чтобы не зацепить ложное совпадение в random или session_id
+        byte[] body = hrrMsg.getBody();
+        int sidLen = body[34] & 0xFF;
+        // Body layout: legacy_version[2] + random[32] + sid_len[1] + session_id[sidLen] +
+        //              cipher_suite[2] + compression[1] + ext_len[2] + extensions[...]
+        int extOffset = 40 + sidLen;
+        boolean found = false;
+        for (int i = extOffset; i <= body.length - 6; i++) {
+            if ((body[i] & 0xFF) == 0x00 && (body[i + 1] & 0xFF) == TlsConstants.EXT_KEY_SHARE) {
+                int extLen = ((body[i + 2] & 0xFF) << 8) | (body[i + 3] & 0xFF);
+                assertEquals(2, extLen,
+                        "HRR key_share extension data длина должна быть 2 (только NamedGroup)");
+                assertEquals(serverGroup >> 8, body[i + 4] & 0xFF,
+                        "HRR key_share NamedGroup (старший байт)");
+                assertEquals(serverGroup & 0xFF, body[i + 5] & 0xFF,
+                        "HRR key_share NamedGroup (младший байт)");
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found, "EXT_KEY_SHARE (0x0033) не найден в HRR");
+    }
 }

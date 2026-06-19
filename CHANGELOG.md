@@ -1,3 +1,249 @@
+# \[0.5.5\] - 19-06-2026
+
+Этот релиз целиком посвящен кросс-валидации с Крипто-Про CSP. Установка
+последнего, помогла выявить ранее не обнаруживаемые ошибки.
+
+## Модуль crypto-gost-tls13
+
+### Исправлено
+
+- **`TlsMessageBuilder.buildHelloRetryRequest` — корректный wire-формат
+  key\_share (RFC 8446 §4.2.8)**.  
+  HRR передавал `KeyShareEntry` с пустым `key_exchange` (4 байта:
+  NamedGroup + `0x00 0x00`), тогда как RFC 8446 §4.2.8 требует
+  `KeyShareHelloRetryRequest` — только 2 байта NamedGroup без поля
+  `key_exchange`. Исправлено: `ks = new byte[2]`. Старый формат нарушал
+  совместимость с OpenSSL и КриптоПро.
+
+- **`TlsHandshakeEngine.receiveClientHello` — `legacy_session_id` теперь
+  отражается и в HRR (RFC 8446 §4.1.3)**.  
+  Вызов `setClientSessionId` перенесён до возможной отправки HRR. Ранее
+  HRR всегда содержал `legacy_session_id = 0x00`, даже если клиент
+  передал session\_id в CH1, что нарушало требование §4.1.3 об
+  эхо-отражении.
+
+- **`TlsHandshakeEngine.computeEcdheShared` — убран кофактор из ECDHE**.
+  Метод умножал приватный ключ на кофактор кривой (`myPriv * h`), что
+  нарушает симметрию shared secret при `h > 1` (GC512C, h=4): стороны
+  получали разные значения. RFC 9367 §4.1 требует обычный ECDH —
+  приватный ключ уже в подгруппе порядка q, cofactor multiplication
+  здесь семантически неверен. При `h=1` (все TLS-кривые кроме GC512C)
+  поведение не изменилось. Удалено поле и геттер `getCofactor()` из
+  `TlsCiphersuite` как более не используемые.
+
+## Кросс-валидация с КриптоПРО CSP 5.0
+
+Выполнен полный цикл кросс-валидации TLS 1.3 и криптоядра между
+crypto-gost и КриптоПРО CSP 5.0 (curl 8.19.0-CPRO / csptest), включая
+независимую трёхстороннюю сверку с OpenSSL 3.6 gost-engine.
+
+### Изменения в коде
+
+- `InteropTestServer` (*examples/tls*): добавлены CLI-флаги `--curve`,
+  `--cipher` (L/S-mode), `--mtls`, `--client-ca-file <der>`, `--psk` и
+  `--keyupdate` для покрытия всех сценариев кросс-валидации с CSP.
+
+### TLS-сценарии
+
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Сценарий</th>
+<th style="text-align: left;">Кривая</th>
+<th style="text-align: left;">Cipher</th>
+<th style="text-align: left;">Результат</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><p>curl GET / POST</p></td>
+<td style="text-align: left;"><p>GC256B</p></td>
+<td style="text-align: left;"><p>0xC103 (L)</p></td>
+<td style="text-align: left;"><p>✅ HTTP 200</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>csptest -tlsc raw TLS</p></td>
+<td style="text-align: left;"><p>GC256B</p></td>
+<td style="text-align: left;"><p>0xC103 (L)</p></td>
+<td style="text-align: left;"><p>✅ HTTP 200</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>csptest -tlsc, S-mode</p></td>
+<td style="text-align: left;"><p>GC256B</p></td>
+<td style="text-align: left;"><p>0xC105 (S)</p></td>
+<td style="text-align: left;"><p>✅ Negotiated 0xc105, ErrorCode
+0</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>csptest -tlsc с HRR</p></td>
+<td style="text-align: left;"><p>GC256C (0x24)</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>csptest -tlsc с HRR</p></td>
+<td style="text-align: left;"><p>GC256D (0x25)</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>csptest -tlsc с HRR</p></td>
+<td style="text-align: left;"><p>GC512A (0x26)</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>csptest -tlsc с HRR</p></td>
+<td style="text-align: left;"><p>GC512B (0x27)</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>csptest -tlsc, S-mode + HRR</p></td>
+<td style="text-align: left;"><p>GC512A (0x26)</p></td>
+<td style="text-align: left;"><p>0xC105 (S)</p></td>
+<td style="text-align: left;"><p>✅ Negotiated 0xc105, ErrorCode
+0</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>csptest -tlsc, S-mode + HRR</p></td>
+<td style="text-align: left;"><p>GC512B (0x27)</p></td>
+<td style="text-align: left;"><p>0xC105 (S)</p></td>
+<td style="text-align: left;"><p>✅ Negotiated 0xc105, ErrorCode
+0</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>TLSTREE re-keying (POST
+1K/12K/32K/64K)</p></td>
+<td style="text-align: left;"><p>GC256B</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅ HTTP 200</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>mTLS (без клиентского
+сертификата)</p></td>
+<td style="text-align: left;"><p>GC256B</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅ alert certificate_required</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>mTLS полный цикл (с клиентским
+сертификатом CSP)</p></td>
+<td style="text-align: left;"><p>GC256B</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅ Peer certs: 1, HTTP 200</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>KeyUpdate инициирован сервером</p></td>
+<td style="text-align: left;"><p>GC256B</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅ HTTP 200, CSP принял данные на новых
+ключах</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>TLS 1.2 ClientHello (csptest -proto
+6)</p></td>
+<td style="text-align: left;"><p>—</p></td>
+<td style="text-align: left;"><p>—</p></td>
+<td style="text-align: left;"><p>✅ корректно отклонён</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>JSSE Undertow + curl</p></td>
+<td style="text-align: left;"><p>GC256B</p></td>
+<td style="text-align: left;"><p>0xC103</p></td>
+<td style="text-align: left;"><p>✅ эхо тела</p></td>
+</tr>
+</tbody>
+</table>
+
+Подтверждённые возможности протокола:
+
+- HelloRetryRequest — полный цикл GC256A→GC256C/D/GC512A/B.
+
+- Копирование `legacy_session_id` в HRR (RFC 8446 §4.1.3).
+
+- ClientHello CSP предлагает 6 cipher suites (включая Магму
+  0xC104/0xC106) и 7 ГОСТ-схем подписи (все кривые RFC 9367).
+
+- ECDHE с кофактором 1 — корректен для всех TLS-кривых.
+
+- S-mode (0xC105) совместим с HRR — подтверждено на GC512A и GC512B.
+
+- mTLS с клиентским сертификатом CSP (файловый контейнер, ГОСТ Р
+  34.10-2012) — сервер корректно верифицирует цепочку и завершает
+  handshake.
+
+- KeyUpdate (RFC 8446 §4.6.3) инициированный сервером — CSP принимает
+  смену ключей и продолжает передачу данных без разрыва соединения.
+
+- TLS 1.2 ClientHello отклоняется с `alert_missing_extension`
+  (`"supported_versions extension required"`) — ожидаемое fail-closed
+  поведение TLS 1.3-only сервера.
+
+Известные ограничения протокола:
+
+- `GC256A (0x0022)`: CSP (Schannel) не кладёт key\_share для этой группы
+  в ClientHello, ожидая HRR от сервера. При прямом ECDHE (сервер
+  отвечает GC256A key\_share) — ошибка `SEC_E_MESSAGE_ALTERED`.
+  Ограничение клиента CSP; crypto-gost обрабатывает группу корректно.
+  Рабочий сценарий: сервер на GC256B/C/D/GC512A/B → HRR → CSP
+  переключается на запрошенную группу.
+
+- `GC512C (0x0028)`: кофактор h=4, ECDHE на этой кривой расходится на
+  уровне самой группы. В TLS 1.3 не используется — RFC 9367 разрешает
+  только кривые с h=1.
+
+- PSK session resumption: CSP (Schannel) не реализует повторное
+  использование сессии TLS 1.3 — при повторном подключении выполняется
+  полный handshake вне зависимости от полученного NewSessionTicket.
+  Ограничение Schannel; InMemoryPskStore и логика NST в crypto-gost
+  проверены внутренними тестами
+  (`GostSslContextHandshakePskResumptionTest`).
+
+### Криптоядро
+
+- **Streebog-256** — хэши совпадают побайтово (`csptest -hash` vs
+  `Digest.digest256()`).
+
+- **Параметры кривой и EC-арифметика** —
+  `id-GostR3410-2001-CryptoPro-A-ParamSet` подтверждён побайтово
+  идентичным `ECParameters.cryptoProA()`; публичные ключи CSP лежат на
+  кривой, корректного порядка (`n·Q = O`).
+
+- **sign/verify** — подпись X.509-сертификата CSP (`-makecert`)
+  верифицируется crypto-gost через `ECDSASigner` при декодировании
+  подписи как `s‖r` (CSP хранит подпись как `r‖s`).
+
+  Несовместимость выявлена только в команде
+  `csptest -keyset -sign GOST12_256`: подписи, созданные именно этой
+  командой, не верифицируются ни crypto-gost, ни OpenSSL 3.6
+  gost-engine, ни самим CSP через `-pkverify`.
+
+  Независимая трёхсторонняя сверка (3×3, все направления sign/verify)
+  подтверждает: crypto-gost и OpenSSL gost-engine полностью взаимно
+  совместимы. Точный механизм расхождения `-keyset -sign` не установлен
+  (исходный код CSP закрыт); затронута только эта команда — TLS 1.3
+  handshake, хэширование Streebog и параметры кривой подтверждены
+  полностью совместимыми.
+
+### Дополнительно (внутренние тесты)
+
+- **KeyUpdate двусторонний** (`update_requested=true`) — проверен через
+  `InMemoryTlsTransport` с передачей данных до и после обновления ключей
+  с обеих сторон.
+
+  Наблюдение: csptest интерпретирует `NewSessionTicket` как
+  `Server requested renegotiate!` — артефакт отображения Schannel, не
+  ошибка протокола. \* **PSK session resumption** — подтверждён тестом
+  `GostSslContextHandshakePskResumptionTest` (модуль
+  `crypto-gost-netty`).
+
 # \[0.5.4\] - 14-06-2026
 
 ## Модуль crypto-gost-tls13

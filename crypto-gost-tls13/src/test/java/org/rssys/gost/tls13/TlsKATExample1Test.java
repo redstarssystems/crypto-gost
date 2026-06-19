@@ -546,7 +546,7 @@ public class TlsKATExample1Test {
         PublicKeyParameters serverPub = new PublicKeyParameters(serverQ, params);
 
         byte[] shared = computeEcdheShared(
-                clientPriv, serverPub, BigInteger.ONE, hlen);
+                clientPriv, serverPub, hlen);
         assertArrayEquals(ECDHE_GC256B, shared,
                 () -> "Ожидал " + hexStr(ECDHE_GC256B) + ", получил " + hexStr(shared));
     }
@@ -554,8 +554,8 @@ public class TlsKATExample1Test {
     // Локальная копия метода, удалённого из TlsEncoding при реструктуризации
     private static byte[] computeEcdheShared(PrivateKeyParameters myPriv,
                                               PublicKeyParameters peerPub,
-                                              BigInteger cofactor, int hashLen) throws Exception {
-        org.rssys.gost.signature.ECPoint shared = peerPub.getQ().multiply(myPriv.getD().multiply(cofactor));
+                                              int hashLen) throws Exception {
+        org.rssys.gost.signature.ECPoint shared = peerPub.getQ().multiply(myPriv.getD());
         shared = shared.normalize();
         if (shared.isInfinity()) {
             throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,

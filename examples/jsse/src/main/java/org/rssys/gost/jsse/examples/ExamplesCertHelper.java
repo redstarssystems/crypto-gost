@@ -83,7 +83,7 @@ public final class ExamplesCertHelper {
     // ========================================================================
 
     private static CertChain createServerCert() throws Exception {
-        return createServerCert(ECParameters.tc26a256());
+        return createServerCert(ECParameters.cryptoProA());
     }
 
     private static CertChain createServerCert(ECParameters params) throws Exception {

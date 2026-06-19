@@ -38,6 +38,7 @@ public final class PfxExportExample {
         String password = "changeit";
         String friendlyName = null;
         int iterations = 2000;
+        String curveName = null;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -53,14 +54,18 @@ public final class PfxExportExample {
                 case "--iterations":
                     iterations = Integer.parseInt(args[++i]);
                     break;
+                case "--curve":
+                    curveName = args[++i];
+                    break;
                 default:
                     System.err.println("Unknown flag: " + args[i]);
                     System.exit(1);
             }
         }
 
-        ECParameters params = ECParameters.tc26a256();
-
+        ECParameters params = curveName != null
+                ? mapCurve(curveName.toUpperCase())
+                : ECParameters.tc26a256();
         // 1. Генерируем CA
         KeyPair caKp = KeyGenerator.generateKeyPair(params);
         PrivateKeyParameters caPriv = caKp.getPrivate();
@@ -128,5 +133,18 @@ public final class PfxExportExample {
         }
         System.out.println("Sign/verify: OK");
         System.out.println("SUCCESS");
+    }
+
+    private static ECParameters mapCurve(String name) {
+        return switch (name) {
+            case "GC256A" -> ECParameters.tc26a256();
+            case "GC256B" -> ECParameters.cryptoProA();
+            case "GC256C" -> ECParameters.cryptoProB();
+            case "GC256D" -> ECParameters.cryptoProC();
+            case "GC512A" -> ECParameters.tc26a512();
+            case "GC512B" -> ECParameters.tc26b512();
+            case "GC512C" -> ECParameters.tc26c512();
+            default -> throw new IllegalArgumentException("Unknown curve: " + name);
+        };
     }
 }

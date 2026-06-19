@@ -771,12 +771,13 @@ public final class TlsMessageBuilder {
     }
 
     /**
-     * Собирает HelloRetryRequest (RFC 8446 §4.1.3).
+     * Собирает HelloRetryRequest (RFC 8446 §4.1.3, §4.2.8).
      * <p>
      * Структура тела идентична ServerHello, но:
      * <ul>
      *   <li>random = HRR_RANDOM (0xCF × 32)</li>
-     *   <li>key_share содержит только NamedGroup (key_exchange длины 0)</li>
+     *   <li>key_share содержит только NamedGroup (2 байта), без key_exchange</li>
+     *   <li>legacy_session_id копируется из ClientHello (RFC 8446 §4.1.3)</li>
      * </ul>
      *
      * @param requestedGroup желаемая именованная группа сервера
@@ -791,7 +792,12 @@ public final class TlsMessageBuilder {
 
         out.write(TlsConstants.HRR_RANDOM, 0, TlsConstants.HRR_RANDOM.length);
 
-        out.write(0x00);
+        if (clientSessionId != null) {
+            out.write(clientSessionId.length);
+            out.write(clientSessionId, 0, clientSessionId.length);
+        } else {
+            out.write(0x00);
+        }
 
         TlsEncoding.encodeUint16(out, cipherSuiteId);
 
@@ -801,12 +807,13 @@ public final class TlsMessageBuilder {
 
         ext.write(SV_SERVER, 0, SV_SERVER.length);
 
-        // key_share: только NamedGroup, key_len=0 (RFC 8446 §4.2.8)
-        byte[] ks = new byte[4];
+        // key_share: только NamedGroup (RFC 8446 §4.2.8).
+        // HelloRetryRequest использует сокращённую форму KeyShareEntry
+        // без key_exchange вектора — только поле NamedGroup (2 байта).
+        // OpenSSL ожидает именно такой формат, без key_len=0.
+        byte[] ks = new byte[2];
         ks[0] = (byte) (requestedGroup >>> 8);
         ks[1] = (byte) requestedGroup;
-        ks[2] = 0;
-        ks[3] = 0;
         TlsEncoding.encodeExtension(ext, TlsConstants.EXT_KEY_SHARE, ks);
 
         TlsEncoding.encodeUint16(out, ext.size());

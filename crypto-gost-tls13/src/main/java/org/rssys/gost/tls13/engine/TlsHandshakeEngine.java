@@ -945,7 +945,7 @@ public final class TlsHandshakeEngine {
             PublicKeyParameters peerPub = TlsEncoding.decodePoint(pubKeyRaw, serverSelectedParams);
             ctx.setPeerEcdhePublicKey(peerPub);
             sharedSecret = computeEcdheShared(
-                    priv, peerPub, negotiatedCiphersuite.getCofactor(), serverSelectedParams.hlen);
+                    priv, peerPub, serverSelectedParams.hlen);
         } finally {
             ctx.destroyEcdheKeys();
         }
@@ -1535,6 +1535,16 @@ public final class TlsHandshakeEngine {
         this.requestedServerName = parsedCH.serverName;
         this.maxFragmentLength = parsedCH.clientMaxFragLen;
 
+        // Эхо-отражение legacy_session_id из ClientHello (RFC 8446 §4.1.3)
+        // Должно быть выполнено ДО возможной отправки HRR, чтобы HRR тоже
+        // содержал session_id клиента.
+        int sidLen = chBody[34] & 0xFF;
+        if (sidLen > 0) {
+            byte[] sid = new byte[sidLen];
+            System.arraycopy(chBody, 35, sid, 0, sidLen);
+            messageBuilder.setClientSessionId(sid);
+        }
+
         // Определяем ECParams по фактической группе клиента
         int actualGroup = parsedCH.actualGroup;
         ECParameters actualEcParams;
@@ -1589,7 +1599,7 @@ public final class TlsHandshakeEngine {
         // Shared secret
         byte[] sharedSecret = computeEcdheShared(
                 ctx.getEcdhePrivateKey(), ctx.getPeerEcdhePublicKey(),
-                ciphersuite.getCofactor(), actualEcParams.hlen);
+                actualEcParams.hlen);
         ctx.setEcdhePrivateKey(null);
 
         ctx.setKeySchedule(new TlsKeySchedule(ciphersuite));
@@ -1602,14 +1612,6 @@ public final class TlsHandshakeEngine {
             ctx.getKeySchedule().deriveHandshakeSecret(sharedSecret);
         } finally {
             TlsUtils.wipeArray(sharedSecret);
-        }
-
-        // Эхо-отражение legacy_session_id из ClientHello (RFC 8446 §4.1.3)
-        int sidLen = chBody[34] & 0xFF;
-        if (sidLen > 0) {
-            byte[] sid = new byte[sidLen];
-            System.arraycopy(chBody, 35, sid, 0, sidLen);
-            messageBuilder.setClientSessionId(sid);
         }
 
         // ServerHello: key_share с той же группой, что у клиента
@@ -2016,7 +2018,9 @@ public final class TlsHandshakeEngine {
     /**
      * Вычисляет ECDHE shared secret (RFC 6090, RFC 9367 §4.1).
      * <p>
-     * Выполняет умножение {@code peerPub * (myPriv * cofactor)} на эллиптической кривой.
+     * Выполняет скалярное умножение {@code myPriv * peerPub} на эллиптической кривой.
+     * Кофактор НЕ применяется — приватный ключ уже в подгруппе порядка q,
+     * RFC 9367 §4.1 требует обычный ECDH, без cofactor ECDH.
      * Результат — X-координата точки (BigInteger), переведённая в bytes big-endian
      * фиксированной длины через {@link #toFixedLengthBytes}.
      * <p>
@@ -2028,8 +2032,8 @@ public final class TlsHandshakeEngine {
      */
     private static byte[] computeEcdheShared(PrivateKeyParameters myPriv,
                                                PublicKeyParameters peerPub,
-                                               BigInteger cofactor, int hashLen) throws TlsException {
-        ECPoint shared = peerPub.getQ().multiply(myPriv.getD().multiply(cofactor));
+                                               int hashLen) throws TlsException {
+        ECPoint shared = peerPub.getQ().multiply(myPriv.getD());
         shared = shared.normalize();
         if (shared.isInfinity()) {
             throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
