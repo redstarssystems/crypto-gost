@@ -1855,22 +1855,26 @@ public final class TlsCertificate {
                     int[] ctxTlv = readTlv(der, gnPos);
                     gnPos = ctxTlv[0];
                 }
-                // GeneralNames (SEQUENCE)
+                // ФНС и другие УЦ могут кодировать GeneralNames c IMPLICIT [0] fullName
+                // (без SEQUENCE-обёртки, GeneralName-элементы лежат прямо под [0]).
+                // Обрабатываем оба варианта: с SEQUENCE и без.
                 if (gnPos < gnEnd && (der[gnPos] & 0xFF) == TAG_SEQUENCE) {
+                    // EXPLICIT: GeneralNames SEQUENCE
                     int[] gnSeqTlv = readTlv(der, gnPos);
-                    int gnInner = gnSeqTlv[0];
-                    int gnInnerEnd = gnSeqTlv[1];
-                    while (gnInner < gnInnerEnd) {
-                        int gnTag = der[gnInner] & 0xFF;
-                        if ((gnTag & 0xDF) == 0x86) {
-                            int[] uriTlv = readTlv(der, gnInner);
-                            String uri = new String(der, uriTlv[0], uriTlv[1] - uriTlv[0],
-                                    java.nio.charset.StandardCharsets.US_ASCII);
-                            uriList.add(uri);
-                            gnInner = uriTlv[1];
-                        } else {
-                            gnInner = readTlv(der, gnInner)[1];
-                        }
+                    gnPos = gnSeqTlv[0];
+                    gnEnd = gnSeqTlv[1];
+                }
+                // IMPLICIT или EXPLICIT: извлекаем URI из GeneralName-элементов
+                while (gnPos < gnEnd) {
+                    int gnTag = der[gnPos] & 0xFF;
+                    if ((gnTag & 0xDF) == 0x86) {
+                        int[] uriTlv = readTlv(der, gnPos);
+                        String uri = new String(der, uriTlv[0], uriTlv[1] - uriTlv[0],
+                                java.nio.charset.StandardCharsets.US_ASCII);
+                        uriList.add(uri);
+                        gnPos = uriTlv[1];
+                    } else {
+                        gnPos = readTlv(der, gnPos)[1];
                     }
                 }
             }

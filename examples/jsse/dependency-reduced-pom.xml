@@ -3,13 +3,13 @@
   <parent>
     <artifactId>crypto-gost</artifactId>
     <groupId>org.rssys</groupId>
-    <version>0.5.5</version>
+    <version>0.5.6</version>
     <relativePath>../../pom.xml</relativePath>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>examples-jsse</artifactId>
   <name>examples-jsse</name>
-  <version>0.5.5</version>
+  <version>0.5.6</version>
   <description>Примеры интеграции crypto-gost-jsse с серверами приложений</description>
   <licenses>
     <license>
@@ -192,14 +192,14 @@
     <dependency>
       <groupId>org.rssys</groupId>
       <artifactId>crypto-gost-tls13</artifactId>
-      <version>0.5.5</version>
+      <version>0.5.6</version>
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>org.rssys</groupId>
       <artifactId>crypto-gost-jsse</artifactId>
-      <version>0.5.5</version>
+      <version>0.5.6</version>
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>

@@ -182,9 +182,12 @@ public final class TlsDerParser {
         int lenBytes = lenResult[0];
         int contentLen = lenResult[1];
         int valueStart = offset + 1 + lenBytes;
+        if (contentLen < 0) {
+            throw new IllegalArgumentException("DER length overflow (negative) at offset " + offset);
+        }
         int valueEnd = valueStart + contentLen;
-        if (valueEnd > der.length) {
-            throw new IllegalArgumentException("Truncated DER encoding at offset " + offset);
+        if (valueEnd < valueStart || valueEnd > der.length) {
+            throw new IllegalArgumentException("DER length exceeds available data at offset " + offset);
         }
         return new int[]{valueStart, valueEnd};
     }
@@ -205,7 +208,7 @@ public final class TlsDerParser {
             return new int[]{1, first};
         }
         int numBytes = first & 0x7F;
-        if (numBytes == 0 || numBytes > 3) {
+        if (numBytes == 0 || numBytes > 4) {
             throw new IllegalArgumentException("Unsupported DER length encoding at offset " + offset);
         }
         if (offset + numBytes >= der.length) {

@@ -127,11 +127,38 @@ class TlsCertificateTest {
     }
 
     @Test
-    @DisplayName("parseLength: numBytes=4 > 3 → IllegalArgumentException")
+    @DisplayName("parseLength: numBytes=4, корректная 4-байтовая длина → OK")
+    void testparseLength4Byte() {
+        byte[] data = new byte[]{(byte) 0x84, 0x02, (byte) 0xB1, 0x1F, 0x34};
+        int[] result = TlsDerParser.parseLength(data, 0);
+        assertEquals(5, result[0]);
+        assertEquals(0x02B11F34, result[1]);
+    }
+
+    @Test
+    @DisplayName("parseLength: numBytes=5 > 4 → IllegalArgumentException")
     void testparseLengthTooManyLengthBytes() {
-        byte[] data = new byte[]{(byte) 0x84, 0x01, 0x02, 0x03, 0x04};
+        byte[] data = new byte[]{(byte) 0x85, 0x01, 0x02, 0x03, 0x04, 0x05};
         assertThrows(IllegalArgumentException.class,
                 () -> TlsDerParser.parseLength(data, 0));
+    }
+
+    @Test
+    @DisplayName("readTlv: 4-байтовая длина с переполнением int → IllegalArgumentException")
+    void testreadTlvOverflowLength() {
+        byte[] data = new byte[]{0x30, (byte) 0x84, (byte) 0x84, (byte) 0x84,
+                (byte) 0x84, (byte) 0x84};
+        assertThrows(IllegalArgumentException.class,
+                () -> TlsDerParser.readTlv(data, 0));
+    }
+
+    @Test
+    @DisplayName("readTlv: 4-байтовая длина с переполнением valueStart+contentLen → IllegalArgumentException")
+    void testreadTlvSumOverflowLength() {
+        byte[] data = new byte[]{0x30, (byte) 0x84, 0x7F, (byte) 0xFF,
+                (byte) 0xFF, (byte) 0xFF};
+        assertThrows(IllegalArgumentException.class,
+                () -> TlsDerParser.readTlv(data, 0));
     }
 
     @Test

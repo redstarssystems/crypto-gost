@@ -26,6 +26,8 @@ public final class GostCurves {
     public static final String OID_TC26_C_512 = "1.2.643.7.1.2.1.2.3";
     public static final String OID_CRYPTOPRO_A = "1.2.643.2.2.35.1";
     public static final String OID_CRYPTOPRO_B = "1.2.643.2.2.35.2";
+    public static final String OID_CRYPTOPRO_XCHA = "1.2.643.2.2.36.0";
+    public static final String OID_CRYPTOPRO_XCHB = "1.2.643.2.2.38.0";
     public static final String OID_CRYPTOPRO_C = "1.2.643.2.2.35.3";
 
 
@@ -76,6 +78,11 @@ public final class GostCurves {
         map.put("cryptopro-C",      cpc);
         map.put(OID_CRYPTOPRO_C,    cpc);
         oid.put(cpc, OID_CRYPTOPRO_C);
+
+        // XchA/XchB (RFC 4357) — те же кривые, что CryptoPro A/B, но OID для key exchange.
+        // ФНС выпускает сертификаты с XchA. XchB зарегистрирован для симметрии.
+        map.put(OID_CRYPTOPRO_XCHA,  cpa);
+        map.put(OID_CRYPTOPRO_XCHB,  cpb);
 
         // TC26 256-bit ParamSet B/C/D — те же кривые, что CryptoPro A/B/C (RFC 7836, назначение OID в TC26).
         // Эти алиасы регистрируются только в REGISTRY для byName()-lookup.
