@@ -1,16 +1,15 @@
 package org.rssys.gost.jsse.examples;
 
-import org.rssys.gost.jsse.GostSsl;
-import org.rssys.gost.jsse.GostSslBuilder;
-
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
+import org.rssys.gost.jsse.GostSsl;
+import org.rssys.gost.jsse.GostSslBuilder;
 
 /**
  * JSSE-сервер, загружающий сертификаты из PFX-файлов.
@@ -64,16 +63,16 @@ public final class PfxServerExample {
         }
 
         if (certPath == null) {
-            System.err.println("Usage: PfxServerExample --cert <server.p12> --password <pwd>"
-                    + " [--ca <ca.p12>] [--ca-password <pwd>] [--port <n>]");
+            System.err.println(
+                    "Usage: PfxServerExample --cert <server.p12> --password <pwd>"
+                            + " [--ca <ca.p12>] [--ca-password <pwd>] [--port <n>]");
             System.exit(1);
         }
 
         byte[] serverPfx = Files.readAllBytes(Path.of(certPath));
         char[] pwd = password.toCharArray();
 
-        GostSslBuilder builder = GostSsl.builder()
-                .certificate(serverPfx, pwd);
+        GostSslBuilder builder = GostSsl.builder().certificate(serverPfx, pwd);
 
         if (caPath != null) {
             byte[] caPfx = Files.readAllBytes(Path.of(caPath));
@@ -85,8 +84,8 @@ public final class PfxServerExample {
 
         SSLContext ctx = builder.buildServerContext();
 
-        try (SSLServerSocket srv = (SSLServerSocket) ctx.getServerSocketFactory()
-                .createServerSocket(port)) {
+        try (SSLServerSocket srv =
+                (SSLServerSocket) ctx.getServerSocketFactory().createServerSocket(port)) {
             System.out.println("Listening on port " + port);
 
             while (true) {

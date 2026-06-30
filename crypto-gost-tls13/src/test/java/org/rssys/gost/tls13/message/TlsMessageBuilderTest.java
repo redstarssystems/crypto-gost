@@ -1,14 +1,13 @@
 package org.rssys.gost.tls13.message;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.util.CryptoRandom;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("TlsMessageBuilder — сборка handshake-сообщений")
 class TlsMessageBuilderTest {
@@ -21,7 +20,11 @@ class TlsMessageBuilderTest {
         return new TlsMessageBuilder(
                 TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
                 List.of(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId()),
-                NAMED_GROUP, SIG_SCHEME, null, null, HASH_LEN);
+                NAMED_GROUP,
+                SIG_SCHEME,
+                null,
+                null,
+                HASH_LEN);
     }
 
     @Test
@@ -32,8 +35,10 @@ class TlsMessageBuilderTest {
 
         TlsMessageBuilder mb = builder();
         mb.setClientSessionId(sid);
-        byte[] hrrBody = mb.buildHelloRetryRequest(NAMED_GROUP,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId());
+        byte[] hrrBody =
+                mb.buildHelloRetryRequest(
+                        NAMED_GROUP,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId());
 
         // Body layout: legacy_version(2) + random(32) + session_id_len(1) + session_id(N) + ...
         int sidLen = hrrBody[34] & 0xFF;
@@ -47,8 +52,10 @@ class TlsMessageBuilderTest {
     @DisplayName("HRR: без session_id поле session_id_len = 0")
     void testHrrWithoutSessionId() throws Exception {
         TlsMessageBuilder mb = builder();
-        byte[] hrrBody = mb.buildHelloRetryRequest(NAMED_GROUP,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId());
+        byte[] hrrBody =
+                mb.buildHelloRetryRequest(
+                        NAMED_GROUP,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId());
 
         int sidLen = hrrBody[34] & 0xFF;
         assertEquals(0, sidLen, "Без вызова setClientSessionId session_id_len должен быть 0");
@@ -59,11 +66,13 @@ class TlsMessageBuilderTest {
     void testHrrNullSessionId() throws Exception {
         TlsMessageBuilder mb = builder();
         mb.setClientSessionId(null);
-        byte[] hrrBody = mb.buildHelloRetryRequest(NAMED_GROUP,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId());
+        byte[] hrrBody =
+                mb.buildHelloRetryRequest(
+                        NAMED_GROUP,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId());
 
         int sidLen = hrrBody[34] & 0xFF;
-        assertEquals(0, sidLen, "setClientSessionId(null) → session_id_len = 0");
+        assertEquals(0, sidLen, "setClientSessionId(null) -> длина session_id = 0");
     }
 
     @Test
@@ -71,10 +80,12 @@ class TlsMessageBuilderTest {
     void testHrrEmptySessionId() throws Exception {
         TlsMessageBuilder mb = builder();
         mb.setClientSessionId(new byte[0]);
-        byte[] hrrBody = mb.buildHelloRetryRequest(NAMED_GROUP,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId());
+        byte[] hrrBody =
+                mb.buildHelloRetryRequest(
+                        NAMED_GROUP,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L.getId());
 
         int sidLen = hrrBody[34] & 0xFF;
-        assertEquals(0, sidLen, "setClientSessionId([]) → session_id_len = 0");
+        assertEquals(0, sidLen, "setClientSessionId([]) -> длина session_id = 0");
     }
 }

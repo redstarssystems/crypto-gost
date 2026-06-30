@@ -6,7 +6,7 @@ import org.rssys.gost.util.OutputLengthException;
 /**
  * Расширение {@link BlockCipher} для режимов с побайтовой обработкой данных.
  * <p>Реализуют режимы гаммирования по ГОСТ Р 34.13-2015:
-
+ *
  */
 public interface StreamCipher extends BlockCipher {
 

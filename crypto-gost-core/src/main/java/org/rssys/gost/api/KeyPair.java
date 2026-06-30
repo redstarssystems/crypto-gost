@@ -14,11 +14,11 @@ import org.rssys.gost.signature.PublicKeyParameters;
 public final class KeyPair {
 
     private final PrivateKeyParameters privateKey;
-    private final PublicKeyParameters  publicKey;
+    private final PublicKeyParameters publicKey;
 
     KeyPair(PrivateKeyParameters privateKey, PublicKeyParameters publicKey) {
         this.privateKey = privateKey;
-        this.publicKey  = publicKey;
+        this.publicKey = publicKey;
     }
 
     /** Возвращает закрытый ключ. */

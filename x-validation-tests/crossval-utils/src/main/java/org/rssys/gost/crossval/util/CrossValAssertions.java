@@ -16,8 +16,7 @@ public final class CrossValAssertions {
      * Все {@link AssertionError} собираются; если есть хотя бы одна ошибка —
      * первая выбрасывается с остальными в suppressed.
      */
-    public static void assertForEachMessage(byte[][] messages,
-                                            ThrowingConsumer<byte[]> assertion) {
+    public static void assertForEachMessage(byte[][] messages, ThrowingConsumer<byte[]> assertion) {
         List<AssertionError> errors = new ArrayList<>();
         for (byte[] msg : messages) {
             try {
@@ -40,8 +39,8 @@ public final class CrossValAssertions {
     /**
      * Перегрузка с индексом сообщения. Позволяет включить {@code i} в сообщение об ошибке.
      */
-    public static void assertForEachMessage(byte[][] messages,
-                                            ThrowingBiConsumer<byte[], Integer> assertion) {
+    public static void assertForEachMessage(
+            byte[][] messages, ThrowingBiConsumer<byte[], Integer> assertion) {
         List<AssertionError> errors = new ArrayList<>();
         for (int i = 0; i < messages.length; i++) {
             try {

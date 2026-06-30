@@ -1,5 +1,8 @@
 package org.rssys.gost.cipher.mode;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Arrays;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -8,10 +11,6 @@ import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
-
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Тесты CTR-ACPKM (RFC 8645, RFC 9337 §5) для Кузнечика.
@@ -41,7 +40,7 @@ class CtrAcpkmModeTest {
     @Test
     @DisplayName("Без OMAC: roundtrip 1 байт")
     void testNoOmacRoundtrip1() {
-        roundtripNoOmac(key, ukm, new byte[]{0x42});
+        roundtripNoOmac(key, ukm, new byte[] {0x42});
     }
 
     @Test
@@ -117,7 +116,7 @@ class CtrAcpkmModeTest {
     @Test
     @DisplayName("С OMAC: roundtrip 1 байт")
     void testOmacRoundtrip1() throws Exception {
-        roundtripOmac(key, ukm, new byte[]{0x42});
+        roundtripOmac(key, ukm, new byte[] {0x42});
     }
 
     @Test
@@ -168,7 +167,8 @@ class CtrAcpkmModeTest {
     @DisplayName("С OMAC: данные короче 16 байт -> AuthenticationException")
     void testOmacDataTooShort() {
         byte[] tooShort = new byte[TAG_LEN - 1];
-        assertThrows(AuthenticationException.class,
+        assertThrows(
+                AuthenticationException.class,
                 () -> CtrAcpkmMode.decryptWithMac(key, ukm, tooShort));
     }
 
@@ -179,8 +179,8 @@ class CtrAcpkmModeTest {
         byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, plaintext);
         // Повреждаем байт шифртекста (не тега)
         ct[0] ^= 0xFF;
-        assertThrows(AuthenticationException.class,
-                () -> CtrAcpkmMode.decryptWithMac(key, ukm, ct));
+        assertThrows(
+                AuthenticationException.class, () -> CtrAcpkmMode.decryptWithMac(key, ukm, ct));
     }
 
     @Test
@@ -190,8 +190,8 @@ class CtrAcpkmModeTest {
         byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, plaintext);
         // Повреждаем байт в теге (последний байт)
         ct[ct.length - 1] ^= 0xFF;
-        assertThrows(AuthenticationException.class,
-                () -> CtrAcpkmMode.decryptWithMac(key, ukm, ct));
+        assertThrows(
+                AuthenticationException.class, () -> CtrAcpkmMode.decryptWithMac(key, ukm, ct));
     }
 
     @Test
@@ -201,7 +201,8 @@ class CtrAcpkmModeTest {
         byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, plaintext);
 
         SymmetricKey wrongKey = new SymmetricKey(randomBytes(KEY_LEN));
-        assertThrows(AuthenticationException.class,
+        assertThrows(
+                AuthenticationException.class,
                 () -> CtrAcpkmMode.decryptWithMac(wrongKey, ukm, ct));
     }
 
@@ -212,28 +213,27 @@ class CtrAcpkmModeTest {
     @Test
     @DisplayName("Инициализация с null cipher -> IllegalArgumentException")
     void testNullCipher() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new CtrAcpkmMode(null, false));
+        assertThrows(IllegalArgumentException.class, () -> new CtrAcpkmMode(null, false));
     }
 
     @Test
     @DisplayName("OMAC без UKM -> IllegalArgumentException")
     void testOmacNoUkm() {
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true);
-        assertThrows(IllegalArgumentException.class,
-                () -> mode.init(true, key));
+        assertThrows(IllegalArgumentException.class, () -> mode.init(true, key));
     }
 
     @Test
     @DisplayName("OMAC с UKM не 16 байт -> IllegalArgumentException")
     void testOmacWrongUkmLen() {
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true);
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> mode.init(true, new ParametersWithIV(key, new byte[8])));
     }
 
     @Test
-    @DisplayName("Без OMAC: переполнение 64-битного счётчика (0xFF···FF → 0x00···00)")
+    @DisplayName("Без OMAC: переполнение 64-битного счётчика (0xFF···FF -> 0x00···00)")
     void testNoOmacCounterOverflow() {
         // IV: первые 8 байт (S') произвольные, последние 8 байт (счётчик) = 0xFF···FF
         byte[] overflowUkm = randomBytes(16);
@@ -251,7 +251,8 @@ class CtrAcpkmModeTest {
     @DisplayName("processBytes до init() -> IllegalStateException")
     void testNotInitialized() {
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false);
-        assertThrows(IllegalStateException.class,
+        assertThrows(
+                IllegalStateException.class,
                 () -> mode.processBytes(new byte[1], 0, 1, new byte[1], 0));
     }
 

@@ -9,8 +9,9 @@ import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 
 import javax.net.ssl.SSLEngineResult;
 import java.io.BufferedReader;
@@ -18,6 +19,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.InputStreamReader;
 import java.io.InputStream;
+import java.util.List;
+import javax.net.ssl.SSLEngineResult;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -158,8 +161,8 @@ final class OpenSslJsseHelper {
         }
     }
 
-    record ServerPkiBundle(TlsCertificate cert, PrivateKeyParameters priv,
-                           TlsCertificate caCert, PublicKeyParameters caPub) {}
+    record ServerPkiBundle(GostCertificate cert, PrivateKeyParameters priv,
+                           GostCertificate caCert, PublicKeyParameters caPub) {}
 
     static ServerPkiBundle createServerPki(ECParameters params) throws Exception {
         TlsTestHelper.CertBundle rootCa = TlsTestHelper.createRootCA(params);
@@ -176,10 +179,10 @@ final class OpenSslJsseHelper {
                 rootCa.cert, caPub);
     }
 
-    static GostX509KeyManager createKeyManager(TlsCertificate serverCert,
-                                                TlsCertificate caCert,
+    static GostX509KeyManager createKeyManager(GostCertificate serverCert,
+                                                GostCertificate caCert,
                                                 PrivateKeyParameters priv) throws Exception {
-        X509Certificate[] jcaChain = CertificateBridge.toJcaChain(serverCert, caCert);
+        X509Certificate[] jcaChain = CertificateBridge.toJca(List.of(serverCert, caCert));
         GostX509KeyManager km = new GostX509KeyManager();
         km.addKeyEntry("default", jcaChain, priv);
         return km;
@@ -229,7 +232,7 @@ final class OpenSslJsseHelper {
 
             switch (hs) {
                 case NEED_WRAP: {
-                    ByteBuffer net = ByteBuffer.allocate(MAX_CIPHERTEXT + 64);
+                    ByteBuffer net = ByteBuffer.allocate(MAX_CIPHERTEXT + TlsConstants.RECORD_BUFFER_HEADROOM);
                     engine.wrap(ByteBuffer.allocate(0), net);
                     net.flip();
                     byte[] data = new byte[net.remaining()];
@@ -269,7 +272,7 @@ final class OpenSslJsseHelper {
         InputStream sockIn = socket.getInputStream();
         OutputStream sockOut = socket.getOutputStream();
         ByteBuffer appBuf = ByteBuffer.allocate(MAX_PLAINTEXT);
-        ByteBuffer net = ByteBuffer.allocate(MAX_CIPHERTEXT + 64);
+        ByteBuffer net = ByteBuffer.allocate(MAX_CIPHERTEXT + TlsConstants.RECORD_BUFFER_HEADROOM);
 
         // Отправляем фрагментами — одна TLS-запись на вызов wrap()
         ByteBuffer src = ByteBuffer.wrap(dataToSend);

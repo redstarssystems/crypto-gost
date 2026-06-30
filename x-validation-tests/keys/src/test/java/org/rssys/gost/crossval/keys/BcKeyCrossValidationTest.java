@@ -41,7 +41,7 @@ class BcKeyCrossValidationTest {
     @MethodSource("curveParams")
     @DisplayName("BC roundtrip DER: {0}")
     void crossValidateRoundtrip(TestData.CurveSpec spec) {
-        // encode→decode не должен терять точность координат и d
+        // encode->decode не должен терять точность координат и d
         ECParameters params = spec.paramsFn().get();
         KeyPair pair = KeyGenerator.generateKeyPair(params);
         PublicKeyParameters pub = pair.getPublic();
@@ -86,10 +86,10 @@ class BcKeyCrossValidationTest {
         ECPublicKeyParameters bcPub = new ECPublicKeyParameters(bcQ, bcDomain);
 
         assertTrue(bcPriv.getD().equals(d),
-                spec.name() + ": d crypto-gost→BC не совпадает");
+                spec.name() + ": d crypto-gost->BC не совпадает");
         assertTrue(bcPub.getQ().getXCoord().toBigInteger().equals(qx)
                         && bcPub.getQ().getYCoord().toBigInteger().equals(qy),
-                spec.name() + ": Q crypto-gost→BC не совпадает");
+                spec.name() + ": Q crypto-gost->BC не совпадает");
     }
 
     @ParameterizedTest
@@ -121,9 +121,9 @@ class BcKeyCrossValidationTest {
 
         ECPoint qNorm = gostPub.getQ().normalize();
         assertTrue(qNorm.getX().equals(qx) && qNorm.getY().equals(qy),
-                spec.name() + ": Q BC→crypto-gost не совпадает");
+                spec.name() + ": Q BC->crypto-gost не совпадает");
         assertTrue(gostPriv.getD().equals(d),
-                spec.name() + ": d BC→crypto-gost не совпадает");
+                spec.name() + ": d BC->crypto-gost не совпадает");
 
         ECPoint g = ECPoint.affine(params.gx, params.gy, params);
         ECPoint expectedQ = g.multiply(d).normalize();

@@ -1,21 +1,20 @@
 package org.rssys.gost.tls13;
 
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.config.TlsClientConfig;
-import org.rssys.gost.tls13.config.TlsServerConfig;
-import org.rssys.gost.tls13.transport.SocketTlsTransport;
-
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HexFormat;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.tls13.config.TlsClientConfig;
+import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.transport.SocketTlsTransport;
 
 /**
  * Минимальный демо-тест для захвата трафика tcpdump/Wireshark.
  *
  * Запуск:
- *   1. sudo tcpdump -i lo -w /tmp/gost-tls.pcap port <PORT>  ← PORT печатается в stdout
+ *   1. sudo tcpdump -i lo -w /tmp/gost-tls.pcap port <PORT>  <- PORT печатается в stdout
  *   2. mvn test -pl crypto-gost-tls13 -Dtest=GostTlsDumpDemo
  *   3. Ctrl+C tcpdump
  *   4. wireshark /tmp/gost-tls.pcap   (или: tshark -r /tmp/gost-tls.pcap)
@@ -34,16 +33,13 @@ public class GostTlsDumpDemo {
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
 
         // Генерируем самоподписанный ГОСТ-сертификат
-        TlsTestHelper.CertBundle bundle =
-                TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
 
-        TlsServerConfig serverConfig = new TlsServerConfig(
-                cs,
-                Collections.singletonList(bundle.cert),
-                bundle.priv);
+        TlsServerConfig serverConfig =
+                new TlsServerConfig(cs, Collections.singletonList(bundle.cert), bundle.priv);
 
-        TlsClientConfig clientConfig = new TlsClientConfig(cs)
-                .withCaPublicKey(bundle.cert.getPublicKey());
+        TlsClientConfig clientConfig =
+                new TlsClientConfig(cs).withCaPublicKey(bundle.cert.getPublicKey());
 
         // Сервер на случайном порту
         ServerSocket serverSocket = new ServerSocket(0);
@@ -57,29 +53,47 @@ public class GostTlsDumpDemo {
         System.in.read();
 
         // Серверный поток
-        Thread serverThread = Thread.ofVirtual().name("demo-server").start(() -> {
-            try {
-                Socket raw = serverSocket.accept();
-                System.out.println("[SERVER] Принято соединение от " + raw.getRemoteSocketAddress());
+        Thread serverThread =
+                Thread.ofVirtual()
+                        .name("demo-server")
+                        .start(
+                                () -> {
+                                    try {
+                                        Socket raw = serverSocket.accept();
+                                        System.out.println(
+                                                "[SERVER] Принято соединение от "
+                                                        + raw.getRemoteSocketAddress());
 
-                try (var t = new SocketTlsTransport(raw);
-                     var s = TlsSession.createServer(serverConfig, t)) {
-                    s.handshakeAsServer();
+                                        try (var t = new SocketTlsTransport(raw);
+                                                var s = TlsSession.createServer(serverConfig, t)) {
+                                            s.handshakeAsServer();
 
-                    byte[] received = s.read();
-                    System.out.println("[SERVER] Получено: " + new String(received, StandardCharsets.UTF_8));
-                    System.out.println("[SERVER] Hex: " + HexFormat.of().formatHex(received));
+                                            byte[] received = s.read();
+                                            System.out.println(
+                                                    "[SERVER] Получено: "
+                                                            + new String(
+                                                                    received,
+                                                                    StandardCharsets.UTF_8));
+                                            System.out.println(
+                                                    "[SERVER] Hex: "
+                                                            + HexFormat.of().formatHex(received));
 
-                    byte[] response = "Hello from server! Я зашифрован ГОСТ Кузнечик-МГМ.".getBytes(StandardCharsets.UTF_8);
-                    s.write(response);
-                    System.out.println("[SERVER] Отправлен ответ (" + response.length + " байт)");
-                }
+                                            byte[] response =
+                                                    "Hello from server! Я зашифрован ГОСТ Кузнечик-МГМ."
+                                                            .getBytes(StandardCharsets.UTF_8);
+                                            s.write(response);
+                                            System.out.println(
+                                                    "[SERVER] Отправлен ответ ("
+                                                            + response.length
+                                                            + " байт)");
+                                        }
 
-                System.out.println("[SERVER] Соединение закрыто (close_notify отправлен)");
-            } catch (Exception e) {
-                System.err.println("[SERVER] Ошибка: " + e.getMessage());
-            }
-        });
+                                        System.out.println(
+                                                "[SERVER] Соединение закрыто (close_notify отправлен)");
+                                    } catch (Exception e) {
+                                        System.err.println("[SERVER] Ошибка: " + e.getMessage());
+                                    }
+                                });
 
         // Небольшая пауза чтобы сервер успел вызвать accept()
         Thread.sleep(200);
@@ -87,20 +101,22 @@ public class GostTlsDumpDemo {
         // Клиент
         System.out.println("\n[CLIENT] Подключаемся к localhost:" + port);
         try (Socket raw = new Socket("localhost", port);
-             var t = new SocketTlsTransport(raw);
-             var s = TlsSession.createClient(clientConfig, t)) {
+                var t = new SocketTlsTransport(raw);
+                var s = TlsSession.createClient(clientConfig, t)) {
 
             s.handshakeAsClient();
-            System.out.println("[CLIENT] TLS handshake завершён (ГОСТ Р 34.10-2012 + Кузнечик-МГМ)");
-
+            System.out.println(
+                    "[CLIENT] TLS handshake завершён (ГОСТ Р 34.10-2012 + Кузнечик-МГМ)");
 
             byte[] message = "Hello from client!".getBytes(StandardCharsets.UTF_8);
-            System.out.println("[CLIENT] Отправляем: \"" + new String(message, StandardCharsets.UTF_8) + "\"");
+            System.out.println(
+                    "[CLIENT] Отправляем: \"" + new String(message, StandardCharsets.UTF_8) + "\"");
             System.out.println("[CLIENT] Plaintext hex: " + HexFormat.of().formatHex(message));
             s.write(message);
 
             byte[] response = s.read();
-            System.out.println("[CLIENT] Получен ответ: " + new String(response, StandardCharsets.UTF_8));
+            System.out.println(
+                    "[CLIENT] Получен ответ: " + new String(response, StandardCharsets.UTF_8));
         }
 
         serverThread.join(3000);
@@ -113,9 +129,11 @@ public class GostTlsDumpDemo {
         System.out.println("  tshark -r /tmp/gost-tls.pcap -V");
         System.out.println();
         System.out.println("Что искать в Wireshark:");
-        System.out.println("  Content Type: Handshake (22)    → ClientHello, ServerHello, Certificate");
-        System.out.println("  Content Type: Application Data (23) → зашифрованные байты");
-        System.out.println("  Plaintext 'Hello from client!' в pcap отсутствует → трафик зашифрован");
+        System.out.println(
+                "  Content Type: Handshake (22)    -> ClientHello, ServerHello, Certificate");
+        System.out.println("  Content Type: Application Data (23) -> зашифрованные байты");
+        System.out.println(
+                "  Plaintext 'Hello from client!' в pcap отсутствует -> трафик зашифрован");
         System.out.println("========================================");
     }
 }

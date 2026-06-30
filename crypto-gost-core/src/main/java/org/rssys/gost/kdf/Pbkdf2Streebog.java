@@ -1,11 +1,9 @@
 package org.rssys.gost.kdf;
 
-import org.rssys.gost.digest.Streebog256;
+import java.util.Arrays;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.mac.Mac;
-
-import java.util.Arrays;
 
 /**
  * PBKDF2 на основе HMAC-Streebog (RFC 9337 §4, RFC 2898 §5.2).
@@ -67,7 +65,7 @@ public final class Pbkdf2Streebog {
             System.arraycopy(salt, 0, tmp, 0, salt.length);
 
             for (int i = 1; i <= l; i++) {
-                tmp[salt.length]     = (byte) (i >> 24);
+                tmp[salt.length] = (byte) (i >> 24);
                 tmp[salt.length + 1] = (byte) (i >> 16);
                 tmp[salt.length + 2] = (byte) (i >> 8);
                 tmp[salt.length + 3] = (byte) i;
@@ -89,8 +87,8 @@ public final class Pbkdf2Streebog {
             return result;
 
         } finally {
-            Arrays.fill(U,   (byte) 0);
-            Arrays.fill(T,   (byte) 0);
+            Arrays.fill(U, (byte) 0);
+            Arrays.fill(T, (byte) 0);
             Arrays.fill(tmp, (byte) 0);
         }
     }

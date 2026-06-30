@@ -1,16 +1,14 @@
 package org.rssys.gost.tls13.crypto;
 
-import org.rssys.gost.tls13.*;
-import org.rssys.gost.tls13.record.TlsTrafficKeys;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.digest.Streebog256;
-
-
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.rssys.gost.tls13.*;
+import org.rssys.gost.tls13.record.TlsTrafficKeys;
 
 /**
  * Тесты TLS 1.3 Key Schedule (RFC 8446 §7.1) с ГОСТ-примитивами.
@@ -23,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   — Finished verify_data
  *   — детерминированность, различие ключей, жизненный цикл destroy
  */
-@DisplayName("TLS 1.3 Key Schedule: early/handshake/master secret, traffic keys, finished")
+@DisplayName("Расписание ключей TLS 1.3: early/handshake/master секрет, ключи трафика, finished")
 class TlsKeyScheduleTest {
 
     private static byte[] hash256(byte[] msg) {
@@ -36,8 +34,8 @@ class TlsKeyScheduleTest {
 
     /** Создаёт TlsKeySchedule (256-бит) с уже вычисленным handshake secret */
     private static TlsKeySchedule createKeySchedule256() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.deriveHandshakeSecret(new byte[32]);
         return ks;
     }
@@ -55,8 +53,8 @@ class TlsKeyScheduleTest {
     @Test
     @DisplayName("early secret: длина 32 байта (256-битный cipher suite)")
     void testearlySecretLength256() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] secret = ks.getEarlySecret();
         assertEquals(32, secret.length);
     }
@@ -64,10 +62,10 @@ class TlsKeyScheduleTest {
     @Test
     @DisplayName("early secret: детерминированность")
     void testearlySecretDeterministic() {
-        TlsKeySchedule ks1 = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        TlsKeySchedule ks2 = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks1 =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks2 =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         assertArrayEquals(ks1.getEarlySecret(), ks2.getEarlySecret());
     }
 
@@ -78,8 +76,8 @@ class TlsKeyScheduleTest {
     @Test
     @DisplayName("handshake secret: длина 32 байта (256-бит)")
     void testhandshakeSecretDerivation256() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] sharedSecret = new byte[32];
         Arrays.fill(sharedSecret, (byte) 0xAB);
         ks.deriveHandshakeSecret(sharedSecret);
@@ -91,12 +89,12 @@ class TlsKeyScheduleTest {
     }
 
     @Test
-    @DisplayName("handshake secret: разные ECDHE → разные handshake secret")
+    @DisplayName("handshake secret: разные ECDHE -> разные handshake secret")
     void testhandshakeSecretDifferentSharedSecrets() {
-        TlsKeySchedule ks1 = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        TlsKeySchedule ks2 = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks1 =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks2 =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] ss1 = new byte[32];
         Arrays.fill(ss1, (byte) 0x01);
         byte[] ss2 = new byte[32];
@@ -106,18 +104,19 @@ class TlsKeyScheduleTest {
         byte[] transcript = hash256("test".getBytes());
         byte[] secret1 = ks1.getServerHandshakeTrafficSecret(transcript);
         byte[] secret2 = ks2.getServerHandshakeTrafficSecret(transcript);
-        assertFalse(Arrays.equals(
-                ks1.deriveTrafficKeys(secret1).getKey(),
-                ks2.deriveTrafficKeys(secret2).getKey()));
+        assertFalse(
+                Arrays.equals(
+                        ks1.deriveTrafficKeys(secret1).getKey(),
+                        ks2.deriveTrafficKeys(secret2).getKey()));
         TlsUtils.wipeArray(secret1);
         TlsUtils.wipeArray(secret2);
     }
 
     @Test
-    @DisplayName("handshake secret: null sharedSecret → исключение")
+    @DisplayName("handshake secret: null sharedSecret -> исключение")
     void testhandshakeSecretRequiresNonNullSharedSecret() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         assertThrows(IllegalArgumentException.class, () -> ks.deriveHandshakeSecret(null));
     }
 
@@ -128,8 +127,8 @@ class TlsKeyScheduleTest {
     @Test
     @DisplayName("master secret: длина 32 байта")
     void testmasterSecretDerivation256() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.deriveHandshakeSecret(new byte[32]);
         ks.deriveMasterSecret();
         byte[] transcript = hash256("test".getBytes());
@@ -140,26 +139,27 @@ class TlsKeyScheduleTest {
     }
 
     @Test
-    @DisplayName("master secret: требуется handshake secret → исключение")
+    @DisplayName("master secret: требуется handshake secret -> исключение")
     void testmasterSecretRequiresHandshakeSecret() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         assertThrows(IllegalStateException.class, ks::deriveMasterSecret);
     }
 
     @Test
     @DisplayName("master secret: отличается от handshake secret")
     void testmasterSecretDifferentFromHandshakeSecret() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.deriveHandshakeSecret(new byte[32]);
         byte[] transcript = hash256("test".getBytes());
         byte[] hsSecret = ks.getServerHandshakeTrafficSecret(transcript);
         ks.deriveMasterSecret();
         byte[] apSecret = ks.getServerApplicationTrafficSecret(transcript);
-        assertFalse(Arrays.equals(
-                ks.deriveTrafficKeys(hsSecret).getKey(),
-                ks.deriveTrafficKeys(apSecret).getKey()));
+        assertFalse(
+                Arrays.equals(
+                        ks.deriveTrafficKeys(hsSecret).getKey(),
+                        ks.deriveTrafficKeys(apSecret).getKey()));
         TlsUtils.wipeArray(hsSecret);
         TlsUtils.wipeArray(apSecret);
     }
@@ -211,7 +211,7 @@ class TlsKeyScheduleTest {
     }
 
     @Test
-    @DisplayName("handshake traffic keys: разный transcript → разные ключи")
+    @DisplayName("handshake traffic keys: разный transcript -> разные ключи")
     void testhandshakeTrafficKeysDifferentTranscript() {
         TlsKeySchedule ks = createKeySchedule256();
 
@@ -235,11 +235,13 @@ class TlsKeyScheduleTest {
         ks.deriveMasterSecret();
         byte[] transcript = hash256("full handshake transcript".getBytes());
 
-        TlsTrafficKeys serverKeys = deriveKeys(ks, ks.getServerApplicationTrafficSecret(transcript));
+        TlsTrafficKeys serverKeys =
+                deriveKeys(ks, ks.getServerApplicationTrafficSecret(transcript));
         assertEquals(32, serverKeys.getKey().length);
         assertEquals(16, serverKeys.getIv().length);
 
-        TlsTrafficKeys clientKeys = deriveKeys(ks, ks.getClientApplicationTrafficSecret(transcript));
+        TlsTrafficKeys clientKeys =
+                deriveKeys(ks, ks.getClientApplicationTrafficSecret(transcript));
         assertEquals(32, clientKeys.getKey().length);
         assertEquals(16, clientKeys.getIv().length);
     }
@@ -250,11 +252,13 @@ class TlsKeyScheduleTest {
         TlsKeySchedule ks = createKeySchedule256();
 
         byte[] hsTranscript = hash256("handshake transcript".getBytes());
-        TlsTrafficKeys hsServerKeys = deriveKeys(ks, ks.getServerHandshakeTrafficSecret(hsTranscript));
+        TlsTrafficKeys hsServerKeys =
+                deriveKeys(ks, ks.getServerHandshakeTrafficSecret(hsTranscript));
         ks.deriveMasterSecret();
 
         byte[] apTranscript = hash256("application transcript".getBytes());
-        TlsTrafficKeys apServerKeys = deriveKeys(ks, ks.getServerApplicationTrafficSecret(apTranscript));
+        TlsTrafficKeys apServerKeys =
+                deriveKeys(ks, ks.getServerApplicationTrafficSecret(apTranscript));
 
         assertFalse(Arrays.equals(hsServerKeys.getKey(), apServerKeys.getKey()));
         assertFalse(Arrays.equals(hsServerKeys.getIv(), apServerKeys.getIv()));
@@ -267,9 +271,10 @@ class TlsKeyScheduleTest {
         ks.deriveMasterSecret();
         byte[] transcript = hash256("transcript".getBytes());
 
-        assertFalse(Arrays.equals(
-                deriveKeys(ks, ks.getServerApplicationTrafficSecret(transcript)).getKey(),
-                deriveKeys(ks, ks.getClientApplicationTrafficSecret(transcript)).getKey()));
+        assertFalse(
+                Arrays.equals(
+                        deriveKeys(ks, ks.getServerApplicationTrafficSecret(transcript)).getKey(),
+                        deriveKeys(ks, ks.getClientApplicationTrafficSecret(transcript)).getKey()));
     }
 
     @Test
@@ -287,7 +292,7 @@ class TlsKeyScheduleTest {
     }
 
     @Test
-    @DisplayName("application keys: разный transcript → разные ключи")
+    @DisplayName("application keys: разный transcript -> разные ключи")
     void testapplicationTrafficKeysDifferentTranscript() {
         TlsKeySchedule ks = createKeySchedule256();
         ks.deriveMasterSecret();
@@ -295,9 +300,10 @@ class TlsKeyScheduleTest {
         byte[] t1 = hash256("transcript X".getBytes());
         byte[] t2 = hash256("transcript Y".getBytes());
 
-        assertFalse(Arrays.equals(
-                deriveKeys(ks, ks.getServerApplicationTrafficSecret(t1)).getKey(),
-                deriveKeys(ks, ks.getServerApplicationTrafficSecret(t2)).getKey()));
+        assertFalse(
+                Arrays.equals(
+                        deriveKeys(ks, ks.getServerApplicationTrafficSecret(t1)).getKey(),
+                        deriveKeys(ks, ks.getServerApplicationTrafficSecret(t2)).getKey()));
     }
 
     // -----------------------------------------------------------------------
@@ -320,9 +326,10 @@ class TlsKeyScheduleTest {
         TlsKeySchedule ks = createKeySchedule256();
         byte[] transcript = hash256("same transcript".getBytes());
 
-        assertFalse(Arrays.equals(
-                ks.getServerHandshakeTrafficSecret(transcript),
-                ks.getClientHandshakeTrafficSecret(transcript)));
+        assertFalse(
+                Arrays.equals(
+                        ks.getServerHandshakeTrafficSecret(transcript),
+                        ks.getClientHandshakeTrafficSecret(transcript)));
     }
 
     // -----------------------------------------------------------------------
@@ -353,7 +360,7 @@ class TlsKeyScheduleTest {
     }
 
     @Test
-    @DisplayName("computeVerifyData: разный transcript → разные verify_data")
+    @DisplayName("computeVerifyData: разный transcript -> разные verify_data")
     void testcomputeVerifyDataDifferentTranscript() {
         TlsKeySchedule ks = createKeySchedule256();
         byte[] trafficSecret = ks.getServerHandshakeTrafficSecret(hash256("t1".getBytes()));
@@ -397,7 +404,7 @@ class TlsKeyScheduleTest {
     void testdestroyIdempotent() {
         TlsKeySchedule ks = createKeySchedule256();
         ks.destroy();
-        ks.destroy();  // не должно бросить исключение
+        ks.destroy(); // не должно бросить исключение
         assertTrue(ks.isDestroyed());
     }
 
@@ -419,8 +426,10 @@ class TlsKeyScheduleTest {
         ks.deriveHandshakeSecret(sharedSecret);
 
         byte[] hsTranscript = hash256("ClientHelloServerHello".getBytes());
-        TlsTrafficKeys hsServerKeys = deriveKeys(ks, ks.getServerHandshakeTrafficSecret(hsTranscript));
-        TlsTrafficKeys hsClientKeys = deriveKeys(ks, ks.getClientHandshakeTrafficSecret(hsTranscript));
+        TlsTrafficKeys hsServerKeys =
+                deriveKeys(ks, ks.getServerHandshakeTrafficSecret(hsTranscript));
+        TlsTrafficKeys hsClientKeys =
+                deriveKeys(ks, ks.getClientHandshakeTrafficSecret(hsTranscript));
         assertNotNull(hsServerKeys);
         assertNotNull(hsClientKeys);
 
@@ -428,8 +437,10 @@ class TlsKeyScheduleTest {
         ks.deriveMasterSecret();
 
         byte[] fullTranscript = hash256("full handshake".getBytes());
-        TlsTrafficKeys apServerKeys = deriveKeys(ks, ks.getServerApplicationTrafficSecret(fullTranscript));
-        TlsTrafficKeys apClientKeys = deriveKeys(ks, ks.getClientApplicationTrafficSecret(fullTranscript));
+        TlsTrafficKeys apServerKeys =
+                deriveKeys(ks, ks.getServerApplicationTrafficSecret(fullTranscript));
+        TlsTrafficKeys apClientKeys =
+                deriveKeys(ks, ks.getClientApplicationTrafficSecret(fullTranscript));
         assertNotNull(apServerKeys);
         assertNotNull(apClientKeys);
 
@@ -451,81 +462,84 @@ class TlsKeyScheduleTest {
     // =======================================================================
 
     @Test
-    @DisplayName("getServerHandshakeTrafficSecret до deriveHandshakeSecret → исключение")
+    @DisplayName("getServerHandshakeTrafficSecret до deriveHandshakeSecret -> исключение")
     void testServerHandshakeTrafficSecretBeforeDerive() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] transcript = hash256("transcript".getBytes());
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> ks.getServerHandshakeTrafficSecret(transcript));
     }
 
     @Test
-    @DisplayName("getClientHandshakeTrafficSecret до deriveHandshakeSecret → исключение")
+    @DisplayName("getClientHandshakeTrafficSecret до deriveHandshakeSecret -> исключение")
     void testClientHandshakeTrafficSecretBeforeDerive() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] transcript = hash256("transcript".getBytes());
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> ks.getClientHandshakeTrafficSecret(transcript));
     }
 
     @Test
-    @DisplayName("getServerApplicationTrafficSecret до deriveMasterSecret → исключение")
+    @DisplayName("getServerApplicationTrafficSecret до deriveMasterSecret -> исключение")
     void testServerApplicationTrafficSecretBeforeDerive() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] transcript = hash256("transcript".getBytes());
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> ks.getServerApplicationTrafficSecret(transcript));
     }
 
     @Test
-    @DisplayName("getClientApplicationTrafficSecret до deriveMasterSecret → исключение")
+    @DisplayName("getClientApplicationTrafficSecret до deriveMasterSecret -> исключение")
     void testClientApplicationTrafficSecretBeforeDerive() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] transcript = hash256("transcript".getBytes());
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> ks.getClientApplicationTrafficSecret(transcript));
     }
 
     @Test
-    @DisplayName("deriveHandshakeSecret после destroy → исключение")
+    @DisplayName("deriveHandshakeSecret после destroy -> исключение")
     void testDeriveHandshakeAfterDestroy() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.destroy();
-        assertThrows(IllegalStateException.class,
-                () -> ks.deriveHandshakeSecret(new byte[32]));
+        assertThrows(IllegalStateException.class, () -> ks.deriveHandshakeSecret(new byte[32]));
     }
 
     @Test
-    @DisplayName("deriveMasterSecret после destroy → исключение")
+    @DisplayName("deriveMasterSecret после destroy -> исключение")
     void testDeriveMasterAfterDestroy() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.destroy();
         assertThrows(IllegalStateException.class, ks::deriveMasterSecret);
     }
 
     @Test
-    @DisplayName("computeVerifyData после destroy → исключение")
+    @DisplayName("computeVerifyData после destroy -> исключение")
     void testComputeVerifyDataAfterDestroy() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.destroy();
-        assertThrows(IllegalStateException.class,
+        assertThrows(
+                IllegalStateException.class,
                 () -> ks.computeVerifyData(new byte[32], new byte[32]));
     }
 
     @Test
-    @DisplayName("пустой sharedSecret → исключение")
+    @DisplayName("пустой sharedSecret -> исключение")
     void testEmptySharedSecretThrows() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        assertThrows(IllegalArgumentException.class,
-                () -> ks.deriveHandshakeSecret(new byte[0]));
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        assertThrows(IllegalArgumentException.class, () -> ks.deriveHandshakeSecret(new byte[0]));
     }
 
     // =======================================================================
@@ -580,7 +594,7 @@ class TlsKeyScheduleTest {
     }
 
     @Test
-    @DisplayName("null cipher suite → исключение")
+    @DisplayName("null cipher suite -> исключение")
     void testnullCiphersuiteThrows() {
         assertThrows(IllegalArgumentException.class, () -> new TlsKeySchedule(null));
     }
@@ -592,28 +606,28 @@ class TlsKeyScheduleTest {
     @Test
     @DisplayName("deriveEarlySecret: PSK даёт non-zero early secret, отличный от no-PSK")
     void testDeriveEarlySecretWithPsk() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] psk = new byte[32];
         Arrays.fill(psk, (byte) 0x42);
         ks.deriveEarlySecret(psk);
 
         byte[] earlyWithPsk = ks.getEarlySecret();
-        assertFalse(allZeros(earlyWithPsk), "PSK-based early secret must be non-zero");
+        assertFalse(allZeros(earlyWithPsk), "EarlySecret на основе PSK должен быть ненулевым");
 
         // без PSK — другой early secret
-        TlsKeySchedule ksNoPsk = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ksNoPsk =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         assertFalse(Arrays.equals(earlyWithPsk, ksNoPsk.getEarlySecret()));
     }
 
     @Test
-    @DisplayName("deriveEarlySecret: разные PSK → разные early secret")
+    @DisplayName("deriveEarlySecret: разные PSK -> разные early secret")
     void testDeriveEarlySecretDifferentPsk() {
-        TlsKeySchedule ks1 = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        TlsKeySchedule ks2 = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks1 =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks2 =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] psk1 = new byte[32];
         Arrays.fill(psk1, (byte) 0x01);
         byte[] psk2 = new byte[32];
@@ -625,10 +639,10 @@ class TlsKeyScheduleTest {
     }
 
     @Test
-    @DisplayName("deriveEarlySecret: null → исключение")
+    @DisplayName("deriveEarlySecret: null -> исключение")
     void testDeriveEarlySecretNullPsk() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         assertThrows(IllegalArgumentException.class, () -> ks.deriveEarlySecret(null));
         assertThrows(IllegalArgumentException.class, () -> ks.deriveEarlySecret(new byte[0]));
     }
@@ -636,8 +650,8 @@ class TlsKeyScheduleTest {
     @Test
     @DisplayName("getResumptionMasterSecret: длина 32, детерминированность, требует master")
     void testResumptionMasterSecret() {
-        TlsKeySchedule ks = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsKeySchedule ks =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.deriveHandshakeSecret(new byte[32]);
         ks.deriveMasterSecret();
 
@@ -649,9 +663,9 @@ class TlsKeyScheduleTest {
         byte[] resMaster2 = ks.getResumptionMasterSecret();
         assertArrayEquals(resMaster1, resMaster2);
 
-        // без master secret → исключение
-        TlsKeySchedule ksNoMaster = new TlsKeySchedule(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        // без master secret -> исключение
+        TlsKeySchedule ksNoMaster =
+                new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         assertThrows(IllegalStateException.class, ksNoMaster::getResumptionMasterSecret);
     }
 

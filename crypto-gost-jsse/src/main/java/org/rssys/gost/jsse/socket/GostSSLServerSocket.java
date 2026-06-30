@@ -1,15 +1,14 @@
 package org.rssys.gost.jsse.socket;
-import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.engine.GostSSLEngine;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
 
 /**
  * SSLServerSocket для ГОСТ TLS 1.3.
@@ -33,27 +32,39 @@ public final class GostSSLServerSocket extends SSLServerSocket {
     private String[] enabledCipherSuites = GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
     private String[] enabledProtocols = GostJsseConstants.SUPPORTED_PROTOCOLS.clone();
 
-    public GostSSLServerSocket(int port,
-                               GostX509KeyManager km, GostX509TrustManager tm,
-                               GostSSLSessionContext sessionContext) throws IOException {
+    public GostSSLServerSocket(
+            int port,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
         super(port);
         this.keyManager = km;
         this.trustManager = tm;
         this.sessionContext = sessionContext;
     }
 
-    public GostSSLServerSocket(int port, int backlog,
-                               GostX509KeyManager km, GostX509TrustManager tm,
-                               GostSSLSessionContext sessionContext) throws IOException {
+    public GostSSLServerSocket(
+            int port,
+            int backlog,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
         super(port, backlog);
         this.keyManager = km;
         this.trustManager = tm;
         this.sessionContext = sessionContext;
     }
 
-    public GostSSLServerSocket(int port, int backlog, InetAddress bindAddr,
-                               GostX509KeyManager km, GostX509TrustManager tm,
-                               GostSSLSessionContext sessionContext) throws IOException {
+    public GostSSLServerSocket(
+            int port,
+            int backlog,
+            InetAddress bindAddr,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
         super(port, backlog, bindAddr);
         this.keyManager = km;
         this.trustManager = tm;

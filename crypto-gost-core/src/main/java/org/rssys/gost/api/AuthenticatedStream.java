@@ -1,14 +1,13 @@
 package org.rssys.gost.api;
 
-import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
-import org.rssys.gost.util.AuthenticationException;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
+import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
 
 /**
@@ -97,12 +96,13 @@ public final class AuthenticatedStream {
      * Выводит per-stream ключи cmacKey и ctrKey из мастер-ключа и streamNonce.
      * Промежуточные byte[] затираются через try/finally.
      */
-    private static void deriveStreamKeys(SymmetricKey masterKey, byte[] streamNonce,
-                                          SymmetricKey[] outKeys) {
+    private static void deriveStreamKeys(
+            SymmetricKey masterKey, byte[] streamNonce, SymmetricKey[] outKeys) {
         byte[] masterBytes = masterKey.getKey();
         try {
-            byte[] keyMaterial = KdfTreeGostR3411_2012_256.generate(
-                masterBytes, KDF_LABEL, streamNonce, 2, KEY_LEN);
+            byte[] keyMaterial =
+                    KdfTreeGostR3411_2012_256.generate(
+                            masterBytes, KDF_LABEL, streamNonce, 2, KEY_LEN);
             try {
                 byte[] cmacKeyBytes = Arrays.copyOf(keyMaterial, KEY_LEN);
                 byte[] ctrKeyBytes = Arrays.copyOfRange(keyMaterial, KEY_LEN, 2 * KEY_LEN);
@@ -186,6 +186,7 @@ public final class AuthenticatedStream {
 
         /** Внутренний буфер для накопления одного чанка plaintext (ручное управление). */
         private final byte[] chunkBuf;
+
         private int chunkCount;
 
         /** Заголовок потока (nonce[8] + version[1] + chunkSize[4]), нужен для AAD при seqNo=0. */
@@ -203,12 +204,11 @@ public final class AuthenticatedStream {
         private boolean closed = false;
 
         SealingStream(OutputStream out, SymmetricKey key, int chunkSize) throws IOException {
-            if (chunkSize < 16)
-                throw new IllegalArgumentException("chunkSize must be >= 16 bytes");
-            this.out       = out;
-            this.key       = key;
+            if (chunkSize < 16) throw new IllegalArgumentException("chunkSize must be >= 16 bytes");
+            this.out = out;
+            this.key = key;
             this.chunkSize = chunkSize;
-            this.chunkBuf  = new byte[chunkSize];
+            this.chunkBuf = new byte[chunkSize];
             this.chunkCount = 0;
             writeStreamHeader();
         }
@@ -256,8 +256,8 @@ public final class AuthenticatedStream {
                 int toWrite = Math.min(remaining, space);
                 System.arraycopy(b, srcOff, chunkBuf, chunkCount, toWrite);
                 chunkCount += toWrite;
-                srcOff     += toWrite;
-                remaining  -= toWrite;
+                srcOff += toWrite;
+                remaining -= toWrite;
                 if (chunkCount >= chunkSize) {
                     flushChunk(false);
                 }
@@ -276,8 +276,12 @@ public final class AuthenticatedStream {
             CryptoRandom.INSTANCE.nextBytes(iv);
 
             // AAD: seqNo(8) || flags(1) || IV(8), для первого чанка (seqNo=0) с заголовком потока
-            byte[] aad = buildAad(seqNo == 0 ? firstHeader : null, seqNo,
-                    isLast ? FLAG_LAST : FLAG_NORMAL, iv);
+            byte[] aad =
+                    buildAad(
+                            seqNo == 0 ? firstHeader : null,
+                            seqNo,
+                            isLast ? FLAG_LAST : FLAG_NORMAL,
+                            iv);
             if (firstHeader != null) {
                 Arrays.fill(firstHeader, (byte) 0);
                 firstHeader = null;
@@ -342,6 +346,7 @@ public final class AuthenticatedStream {
 
         /** Буфер расшифрованных данных текущего чанка. */
         private byte[] plainBuf = new byte[0];
+
         /** Позиция чтения в plainBuf. */
         private int plainPos = 0;
 
@@ -349,30 +354,32 @@ public final class AuthenticatedStream {
         private long seqNo = 0;
 
         private boolean lastChunkSeen = false;
-        private boolean streamEnded   = false;
+        private boolean streamEnded = false;
 
         OpeningStream(InputStream in, SymmetricKey key)
                 throws IOException, AuthenticationException {
-            this.in  = in;
+            this.in = in;
             this.key = key;
             this.chunkSize = readAndVerifyStreamHeader();
         }
 
         /** Читает и проверяет 13-байтный заголовок потока. Возвращает chunkSize. */
-        private int readAndVerifyStreamHeader()
-                throws IOException, AuthenticationException {
+        private int readAndVerifyStreamHeader() throws IOException, AuthenticationException {
             byte[] header = readExactly(HEADER_SIZE);
             // Включим заголовок в AAD первого чанка для защиты целостности.
             // Nonce (8 байт) на позициях 0..7 — аутентифицируется только через CMAC.
             if (header[8] != VERSION) {
                 throw new AuthenticationException(
-                    "Unsupported format version: " + (header[8] & 0xFF)
-                    + " (expected " + VERSION + ")");
+                        "Unsupported format version: "
+                                + (header[8] & 0xFF)
+                                + " (expected "
+                                + VERSION
+                                + ")");
             }
             int declaredChunkSize = readIntFromBytes(header, 9);
             if (declaredChunkSize < 16 || declaredChunkSize > MAX_CHUNK_SIZE) {
                 throw new AuthenticationException(
-                    "Invalid chunk size in header: " + declaredChunkSize);
+                        "Invalid chunk size in header: " + declaredChunkSize);
             }
             this.firstHeader = header;
 
@@ -406,24 +413,23 @@ public final class AuthenticatedStream {
             } catch (IOException e) {
                 // Поток завершился без флага последнего чанка — усечение!
                 throw new AuthenticationException(
-                    "Unexpected end of stream: last chunk not found (truncation attack?)");
+                        "Unexpected end of stream: last chunk not found (truncation attack?)");
             }
 
             int chunkLen = readIntFromBytes(chunkHeader, 0);
-            byte flags   = chunkHeader[4];
-            byte[] iv    = Arrays.copyOfRange(chunkHeader, 5,  13);
-            byte[] tag   = Arrays.copyOfRange(chunkHeader, 13, 13 + AuthenticatedCipher.TAG_LEN);
+            byte flags = chunkHeader[4];
+            byte[] iv = Arrays.copyOfRange(chunkHeader, 5, 13);
+            byte[] tag = Arrays.copyOfRange(chunkHeader, 13, 13 + AuthenticatedCipher.TAG_LEN);
 
             if (chunkLen < 0 || chunkLen > chunkSize) {
-                throw new AuthenticationException(
-                    "Invalid chunk length: " + chunkLen);
+                throw new AuthenticationException("Invalid chunk length: " + chunkLen);
             }
 
             // Читаем шифртекст чанка
             byte[] ciphertext = (chunkLen > 0) ? readExactly(chunkLen) : new byte[0];
 
             // Проверяем CMAC от AAD(seqNo || flags || IV) || шифртекста ДО расшифрования
-            byte[] aad      = buildAad(seqNo == 0 ? firstHeader : null, seqNo, flags, iv);
+            byte[] aad = buildAad(seqNo == 0 ? firstHeader : null, seqNo, flags, iv);
             byte[] fullCmac = AuthenticatedCipher.computeCmac(aad, ciphertext, cmacKey);
             seqNo++;
 
@@ -435,8 +441,8 @@ public final class AuthenticatedStream {
                 Arrays.fill(tag, (byte) 0);
                 Arrays.fill(iv, (byte) 0);
                 throw new AuthenticationException(
-                    "Chunk integrity violation: CMAC mismatch. " +
-                    "Stream is corrupted or tampered.");
+                        "Chunk integrity violation: CMAC mismatch. "
+                                + "Stream is corrupted or tampered.");
             }
 
             // Только после успешной верификации — расшифрование
@@ -494,10 +500,10 @@ public final class AuthenticatedStream {
                 }
 
                 int available = plainBuf.length - plainPos;
-                int toCopy    = Math.min(available, len - totalRead);
+                int toCopy = Math.min(available, len - totalRead);
                 System.arraycopy(plainBuf, plainPos, buf, off + totalRead, toCopy);
-                plainPos   += toCopy;
-                totalRead  += toCopy;
+                plainPos += toCopy;
+                totalRead += toCopy;
             }
 
             return (totalRead == 0 && streamEnded) ? -1 : totalRead;
@@ -523,8 +529,9 @@ public final class AuthenticatedStream {
             int read = 0;
             while (read < n) {
                 int r = in.read(buf, read, n - read);
-                if (r < 0) throw new IOException(
-                    "Unexpected end of stream: expected " + n + " bytes, read " + read);
+                if (r < 0)
+                    throw new IOException(
+                            "Unexpected end of stream: expected " + n + " bytes, read " + read);
                 read += r;
             }
             return buf;
@@ -532,10 +539,10 @@ public final class AuthenticatedStream {
 
         /** Читает big-endian int из массива байт с заданным смещением. */
         private static int readIntFromBytes(byte[] b, int off) {
-            return ((b[off]   & 0xFF) << 24) |
-                   ((b[off+1] & 0xFF) << 16) |
-                   ((b[off+2] & 0xFF) <<  8) |
-                    (b[off+3] & 0xFF);
+            return ((b[off] & 0xFF) << 24)
+                    | ((b[off + 1] & 0xFF) << 16)
+                    | ((b[off + 2] & 0xFF) << 8)
+                    | (b[off + 3] & 0xFF);
         }
     }
 
@@ -557,13 +564,13 @@ public final class AuthenticatedStream {
             System.arraycopy(firstHeader, 0, aad, 0, hdrLen);
             off = hdrLen;
         }
-        aad[off]     = (byte)(seqNo >> 56);
-        aad[off + 1] = (byte)(seqNo >> 48);
-        aad[off + 2] = (byte)(seqNo >> 40);
-        aad[off + 3] = (byte)(seqNo >> 32);
-        aad[off + 4] = (byte)(seqNo >> 24);
-        aad[off + 5] = (byte)(seqNo >> 16);
-        aad[off + 6] = (byte)(seqNo >>  8);
+        aad[off] = (byte) (seqNo >> 56);
+        aad[off + 1] = (byte) (seqNo >> 48);
+        aad[off + 2] = (byte) (seqNo >> 40);
+        aad[off + 3] = (byte) (seqNo >> 32);
+        aad[off + 4] = (byte) (seqNo >> 24);
+        aad[off + 5] = (byte) (seqNo >> 16);
+        aad[off + 6] = (byte) (seqNo >> 8);
         aad[off + 7] = (byte) seqNo;
         aad[off + 8] = flags;
         System.arraycopy(iv, 0, aad, off + 9, iv.length);
@@ -574,7 +581,7 @@ public final class AuthenticatedStream {
     private static void writeInt(OutputStream out, int v) throws IOException {
         out.write((v >> 24) & 0xFF);
         out.write((v >> 16) & 0xFF);
-        out.write((v >>  8) & 0xFF);
-        out.write( v        & 0xFF);
+        out.write((v >> 8) & 0xFF);
+        out.write(v & 0xFF);
     }
 }

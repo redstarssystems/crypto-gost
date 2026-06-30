@@ -1,14 +1,13 @@
 package org.rssys.gost.tls13.transport;
 
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsTransport;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsTransport;
 
 /**
  * Транспорт TLS 1.3 поверх блокирующего сокета (TCP).
@@ -33,7 +32,8 @@ public final class SocketTlsTransport implements TlsTransport {
     private final OutputStream out;
     private volatile boolean closed;
     private final byte[] headerBuf = new byte[TlsConstants.RECORD_HEADER_SIZE];
-    private final byte[] recordBuf = new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
+    private final byte[] recordBuf =
+            new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
 
     /**
      * @param socket установленное TCP-соединение
@@ -78,8 +78,8 @@ public final class SocketTlsTransport implements TlsTransport {
         int length = ((recordBuf[3] & 0xFF) << 8) | (recordBuf[4] & 0xFF);
 
         if (length > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
-            throw new IOException("Record too long: " + length
-                    + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+            throw new IOException(
+                    "Record too long: " + length + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
         readFully(recordBuf, TlsConstants.RECORD_HEADER_SIZE, length);
@@ -109,8 +109,8 @@ public final class SocketTlsTransport implements TlsTransport {
         int length = ((recordBuf[3] & 0xFF) << 8) | (recordBuf[4] & 0xFF);
 
         if (length > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
-            throw new IOException("Record too long: " + length
-                    + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+            throw new IOException(
+                    "Record too long: " + length + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
         readFully(recordBuf, TlsConstants.RECORD_HEADER_SIZE, length);

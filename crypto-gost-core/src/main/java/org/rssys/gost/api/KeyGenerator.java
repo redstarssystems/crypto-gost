@@ -1,17 +1,15 @@
 package org.rssys.gost.api;
 
+import java.math.BigInteger;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
 import org.rssys.crypto.util.SCrypt;
-import org.rssys.gost.api.Cipher;
 import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-
-import java.math.BigInteger;
-import java.security.GeneralSecurityException;
-import java.security.SecureRandom;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * Генератор ключей
@@ -110,7 +108,7 @@ public final class KeyGenerator {
         ECPoint q = g.multiply(d).normalize();
 
         PrivateKeyParameters priv = new PrivateKeyParameters(d, params);
-        PublicKeyParameters  pub  = new PublicKeyParameters(q, params);
+        PublicKeyParameters pub = new PublicKeyParameters(q, params);
 
         return new KeyPair(priv, pub);
     }
@@ -139,7 +137,7 @@ public final class KeyGenerator {
      * @throws GeneralSecurityException если HmacSHA256 недоступен в JCA
      */
     public static SymmetricKey deriveKey(byte[] password, byte[] salt)
-        throws GeneralSecurityException {
+            throws GeneralSecurityException {
         // Параметры scrypt, рекомендованные RFC 7914 и OWASP
         return deriveKey(password, salt, 524288, 8, 1);
     }
@@ -156,7 +154,7 @@ public final class KeyGenerator {
      * @throws GeneralSecurityException если HmacSHA256 недоступен в JCA
      */
     public static SymmetricKey deriveKey(byte[] password, byte[] salt, int N, int r, int p)
-        throws GeneralSecurityException {
+            throws GeneralSecurityException {
         byte[] keyBytes = SCrypt.generate(password, salt, N, r, p, Cipher.KEY_SIZE);
         return new SymmetricKey(keyBytes);
     }

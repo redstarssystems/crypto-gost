@@ -253,10 +253,10 @@ public class KuznyechikCrossValidation {
       // CTR: случайные данные и случайный IV, оба направления
       byte[] ctrIv = new byte[8];
       rnd.nextBytes(ctrIv);
-      // gost→bc: crypto-gost шифрует, BC расшифровывает
+      // gost->bc: crypto-gost шифрует, BC расшифровывает
       boolean ctrGostToBc = Arrays.equals(msg,
           bcCtr(Cipher.encrypt(msg, gostKey, ctrIv, Cipher.Mode.CTR), keyBytes, ctrIv));
-      // bc→gost: BC шифрует, crypto-gost расшифровывает
+      // bc->gost: BC шифрует, crypto-gost расшифровывает
       boolean ctrBcToGost = Arrays.equals(msg,
           Cipher.decrypt(bcCtr(msg, keyBytes, ctrIv), gostKey, ctrIv, Cipher.Mode.CTR));
       printResult("CTR/random", sz, ctrGostToBc, ctrBcToGost);
@@ -264,10 +264,10 @@ public class KuznyechikCrossValidation {
       // CFB: случайные данные и случайный IV, оба направления
       byte[] cfbIv = new byte[16];
       rnd.nextBytes(cfbIv);
-      // gost→bc
+      // gost->bc
       boolean cfbGostToBc = Arrays.equals(msg,
           bcCfb(Cipher.encrypt(msg, gostKey, cfbIv, Cipher.Mode.CFB), keyBytes, cfbIv, false));
-      // bc→gost
+      // bc->gost
       boolean cfbBcToGost = Arrays.equals(msg,
           Cipher.decrypt(bcCfb(msg, keyBytes, cfbIv, true), gostKey, cfbIv, Cipher.Mode.CFB));
       printResult("CFB/random", sz, cfbGostToBc, cfbBcToGost);

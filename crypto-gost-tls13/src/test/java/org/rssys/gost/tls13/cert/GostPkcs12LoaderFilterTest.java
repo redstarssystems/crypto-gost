@@ -1,18 +1,21 @@
 package org.rssys.gost.tls13.cert;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.GostOids;
-import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.util.CryptoRandom;
-import org.rssys.gost.util.DerCodec;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.ArrayList;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostPbes2;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.pkix.cert.GostPkcs12Mac;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsTestHelper;
+import org.rssys.gost.util.CryptoRandom;
+import org.rssys.gost.util.DerCodec;
 
 @DisplayName("GostPkcs12Loader — фильтрация по localKeyId и сортировка цепочки")
 class GostPkcs12LoaderFilterTest {
@@ -25,19 +28,21 @@ class GostPkcs12LoaderFilterTest {
     // ========================================================================
 
     @Test
-    @DisplayName("certBag с localKeyId физически до keyBag — отфильтрован, chain пуст → IllegalArgumentException")
+    @DisplayName(
+            "certBag с localKeyId физически до keyBag — отфильтрован, chain пуст -> IllegalArgumentException")
     void testCertBagBeforeKeyBagWrongLocalKeyId() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
 
-        byte[] keyLkid = new byte[]{0x01, 0x02, 0x03};
-        byte[] certLkid = new byte[]{0x0A, 0x0B, 0x0C};
+        byte[] keyLkid = new byte[] {0x01, 0x02, 0x03};
+        byte[] certLkid = new byte[] {0x0A, 0x0B, 0x0C};
 
         byte[] pfx = buildPfxCertFirst(bundle.priv, keyLkid, bundle.cert, certLkid);
 
-        assertThrows(IllegalArgumentException.class,
-            () -> GostPkcs12Loader.load(pfx, PASSWORD),
-            "должно упасть с пустой цепочкой после фильтрации");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostPkcs12Loader.load(pfx, PASSWORD, true),
+                "должно упасть с пустой цепочкой после фильтрации");
     }
 
     @Test
@@ -46,11 +51,11 @@ class GostPkcs12LoaderFilterTest {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
 
-        byte[] keyLkid = new byte[]{0x01, 0x02, 0x03};
+        byte[] keyLkid = new byte[] {0x01, 0x02, 0x03};
 
         byte[] pfx = buildPfxCertFirst(bundle.priv, keyLkid, bundle.cert, null);
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
         assertNotNull(result.getPrivateKey(), "ключ загружен");
         assertNotNull(result.getCertificateChain(), "цепочка не null");
         assertFalse(result.getCertificateChain().isEmpty(), "цепочка не пуста");
@@ -62,12 +67,11 @@ class GostPkcs12LoaderFilterTest {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
 
-        byte[] certLkid = new byte[]{0x0A, 0x0B, 0x0C};
+        byte[] certLkid = new byte[] {0x0A, 0x0B, 0x0C};
 
-        byte[] pfx = buildPfx(bundle.priv, null,
-            new CertBagDef(bundle.cert, certLkid));
+        byte[] pfx = buildPfx(bundle.priv, null, new CertBagDef(bundle.cert, certLkid));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
         assertNotNull(result.getPrivateKey(), "ключ загружен");
         assertEquals(1, result.getCertificateChain().size(), "сертификат загружен");
     }
@@ -81,61 +85,96 @@ class GostPkcs12LoaderFilterTest {
     void testCaBeforeLeaf() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-            params, ca.priv, ca.cert.getPublicKey(), ca.subjectDn,
-            "20240501120000Z", "21060101120000Z",
-            null, null, null, false, null);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        ca.priv,
+                        ca.cert.getPublicKey(),
+                        ca.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        false,
+                        null);
 
         byte[] keyLkid = new byte[20];
         CryptoRandom.INSTANCE.nextBytes(keyLkid);
 
-        byte[] pfx = buildPfx(leaf.priv, keyLkid,
-            new CertBagDef(ca.cert, null),
-            new CertBagDef(leaf.cert, keyLkid));
+        byte[] pfx =
+                buildPfx(
+                        leaf.priv,
+                        keyLkid,
+                        new CertBagDef(ca.cert, null),
+                        new CertBagDef(leaf.cert, keyLkid));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD);
-        List<TlsCertificate> chain = result.getCertificateChain();
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        List<GostCertificate> chain = result.getCertificateChain();
         assertEquals(2, chain.size());
         assertFalse(chain.get(0).isCA(), "chain[0] — leaf (не CA)");
-        assertTrue(chain.get(1).isCA(), "chain[1] — CA");
+        assertTrue(chain.get(1).isCA(), "chain[1] — УЦ");
     }
 
     @Test
-    @DisplayName("intermediate CA — топологическая сортировка leaf→intermediate→root")
+    @DisplayName("intermediate CA — топологическая сортировка leaf->intermediate->root")
     void testIntermediateCa() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle intermediate = TlsTestHelper.createCertSignedBy(
-            params, root.priv, root.cert.getPublicKey(), root.subjectDn,
-            "20240501120000Z", "21060101120000Z",
-            null, null, null, true, null);
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-            params, intermediate.priv, intermediate.cert.getPublicKey(), intermediate.subjectDn,
-            "20240501120000Z", "21060101120000Z",
-            null, null, null, false, null);
+        TlsTestHelper.CertBundle intermediate =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        true,
+                        null);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        intermediate.priv,
+                        intermediate.cert.getPublicKey(),
+                        intermediate.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        false,
+                        null);
 
         byte[] keyLkid = new byte[20];
         CryptoRandom.INSTANCE.nextBytes(keyLkid);
 
-        byte[] pfx = buildPfx(leaf.priv, keyLkid,
-            new CertBagDef(root.cert, null),
-            new CertBagDef(intermediate.cert, null),
-            new CertBagDef(leaf.cert, keyLkid));
+        byte[] pfx =
+                buildPfx(
+                        leaf.priv,
+                        keyLkid,
+                        new CertBagDef(root.cert, null),
+                        new CertBagDef(intermediate.cert, null),
+                        new CertBagDef(leaf.cert, keyLkid));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD);
-        List<TlsCertificate> chain = result.getCertificateChain();
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        List<GostCertificate> chain = result.getCertificateChain();
         assertEquals(3, chain.size(), "три сертификата");
-        assertFalse(chain.get(0).isCA(), "chain[0] — leaf");
-        assertTrue(chain.get(1).isCA(), "chain[1] — intermediate");
-        assertTrue(chain.get(2).isCA(), "chain[2] — root");
+        assertFalse(chain.get(0).isCA(), "chain[0] — конечный (не CA)");
+        assertTrue(chain.get(1).isCA(), "chain[1] — промежуточный");
+        assertTrue(chain.get(2).isCA(), "chain[2] — корневой");
 
-        // Проверка issuer→subject по DER-байтам
+        // Проверка issuer->subject по DER-байтам
         assertArrayEquals(
-            chain.get(0).getIssuerDnBytes(), chain.get(1).getSubjectDnBytes(),
-            "leaf issuer = intermediate subject");
+                chain.get(0).getIssuerDnBytes(),
+                chain.get(1).getSubjectDnBytes(),
+                "издатель leaf = субъект intermediate");
         assertArrayEquals(
-            chain.get(1).getIssuerDnBytes(), chain.get(2).getSubjectDnBytes(),
-            "intermediate issuer = root subject");
+                chain.get(1).getIssuerDnBytes(),
+                chain.get(2).getSubjectDnBytes(),
+                "издатель intermediate = субъект root");
     }
 
     // ========================================================================
@@ -152,11 +191,14 @@ class GostPkcs12LoaderFilterTest {
         byte[] keyLkid = new byte[20];
         CryptoRandom.INSTANCE.nextBytes(keyLkid);
 
-        byte[] pfx = buildPfx(leaf1.priv, keyLkid,
-            new CertBagDef(leaf1.cert, keyLkid),
-            new CertBagDef(leaf2.cert, keyLkid));
+        byte[] pfx =
+                buildPfx(
+                        leaf1.priv,
+                        keyLkid,
+                        new CertBagDef(leaf1.cert, keyLkid),
+                        new CertBagDef(leaf2.cert, keyLkid));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
         assertEquals(2, result.getCertificateChain().size(), "два сертификата");
     }
 
@@ -169,12 +211,11 @@ class GostPkcs12LoaderFilterTest {
         byte[] keyLkid = new byte[20];
         CryptoRandom.INSTANCE.nextBytes(keyLkid);
 
-        byte[] pfx = buildPfx(ca.priv, keyLkid,
-            new CertBagDef(ca.cert, null));
+        byte[] pfx = buildPfx(ca.priv, keyLkid, new CertBagDef(ca.cert, null));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
         assertEquals(1, result.getCertificateChain().size(), "один CA-сертификат");
-        assertTrue(result.getCertificateChain().get(0).isCA(), "это CA");
+        assertTrue(result.getCertificateChain().get(0).isCA(), "это УЦ");
     }
 
     @Test
@@ -182,102 +223,118 @@ class GostPkcs12LoaderFilterTest {
     void testNormalOrderNotBroken() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-            params, ca.priv, ca.cert.getPublicKey(), ca.subjectDn,
-            "20240501120000Z", "21060101120000Z",
-            null, null, null, false, null);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        ca.priv,
+                        ca.cert.getPublicKey(),
+                        ca.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        false,
+                        null);
 
         byte[] keyLkid = new byte[20];
         CryptoRandom.INSTANCE.nextBytes(keyLkid);
 
-        byte[] pfx = buildPfx(leaf.priv, keyLkid,
-            new CertBagDef(leaf.cert, keyLkid),
-            new CertBagDef(ca.cert, null));
+        byte[] pfx =
+                buildPfx(
+                        leaf.priv,
+                        keyLkid,
+                        new CertBagDef(leaf.cert, keyLkid),
+                        new CertBagDef(ca.cert, null));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD);
-        List<TlsCertificate> chain = result.getCertificateChain();
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        List<GostCertificate> chain = result.getCertificateChain();
         assertEquals(2, chain.size());
-        assertFalse(chain.get(0).isCA(), "chain[0] — leaf");
-        assertTrue(chain.get(1).isCA(), "chain[1] — CA");
+        assertFalse(chain.get(0).isCA(), "chain[0] — конечный (не CA)");
+        assertTrue(chain.get(1).isCA(), "chain[1] — УЦ");
     }
 
     // ========================================================================
     // Хелперы сборки PFX
     // ========================================================================
 
-    private static byte[] buildPfx(PrivateKeyParameters key, byte[] keyLocalKeyId,
-                                   CertBagDef... certBags) throws Exception {
-        byte[] passwordBytes = GostPkcs12Loader.toUtf8Bytes(PASSWORD);
+    private static byte[] toUtf8Bytes(char[] password) {
+        if (password == null || password.length == 0) return new byte[0];
+        return new String(password).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
 
-        byte[] encryptedKeyBytes = GostPbes2.encryptKey(
-            key, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, TEST_ITER);
+    private static byte[] buildPfx(
+            PrivateKeyParameters key, byte[] keyLocalKeyId, CertBagDef... certBags)
+            throws Exception {
+        byte[] passwordBytes = toUtf8Bytes(PASSWORD);
+
+        byte[] encryptedKeyBytes =
+                GostPbes2.encryptKey(key, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, TEST_ITER);
         byte[] keyBag = buildKeyBagDer(encryptedKeyBytes, keyLocalKeyId);
 
         List<byte[]> bagDers = new ArrayList<>();
         bagDers.add(keyBag);
         for (CertBagDef cbd : certBags) {
-            bagDers.add(buildCertBagDer(cbd.cert.getCertData(), cbd.localKeyId));
+            bagDers.add(buildCertBagDer(cbd.cert.getEncoded(), cbd.localKeyId));
         }
 
-        byte[] safeContents = DerCodec.encodeSequence(
-            bagDers.toArray(new byte[0][]));
+        byte[] safeContents = DerCodec.encodeSequence(bagDers.toArray(new byte[0][]));
 
-        byte[] dataContentInfo = DerCodec.encodeSequence(
-            DerCodec.encodeOid(GostOids.PKCS7_DATA),
-            DerCodec.encodeContextConstructed(0,
-                DerCodec.encodeOctetString(safeContents)));
+        byte[] dataContentInfo =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.PKCS7_DATA),
+                        DerCodec.encodeContextConstructed(
+                                0, DerCodec.encodeOctetString(safeContents)));
 
         byte[] authSafe = DerCodec.encodeSequence(dataContentInfo);
 
-        byte[] outerContentInfo = DerCodec.encodeSequence(
-            DerCodec.encodeOid(GostOids.PKCS7_DATA),
-            DerCodec.encodeContextConstructed(0,
-                DerCodec.encodeOctetString(authSafe)));
+        byte[] outerContentInfo =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.PKCS7_DATA),
+                        DerCodec.encodeContextConstructed(0, DerCodec.encodeOctetString(authSafe)));
 
         byte[] salt = new byte[16];
         CryptoRandom.INSTANCE.nextBytes(salt);
         byte[] macData = GostPkcs12Mac.compute(authSafe, passwordBytes, TEST_ITER, salt);
 
-        return DerCodec.encodeSequence(
-            DerCodec.encodeInteger(3),
-            outerContentInfo,
-            macData);
+        return DerCodec.encodeSequence(DerCodec.encodeInteger(3), outerContentInfo, macData);
     }
 
-    private static byte[] buildPfxCertFirst(PrivateKeyParameters key, byte[] keyLocalKeyId,
-                                             TlsCertificate cert, byte[] certLocalKeyId) throws Exception {
-        byte[] passwordBytes = GostPkcs12Loader.toUtf8Bytes(PASSWORD);
+    private static byte[] buildPfxCertFirst(
+            PrivateKeyParameters key,
+            byte[] keyLocalKeyId,
+            GostCertificate cert,
+            byte[] certLocalKeyId)
+            throws Exception {
+        byte[] passwordBytes = toUtf8Bytes(PASSWORD);
 
-        byte[] encryptedKeyBytes = GostPbes2.encryptKey(
-            key, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, TEST_ITER);
+        byte[] encryptedKeyBytes =
+                GostPbes2.encryptKey(key, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, TEST_ITER);
 
         List<byte[]> bagDers = new ArrayList<>();
-        bagDers.add(buildCertBagDer(cert.getCertData(), certLocalKeyId));
+        bagDers.add(buildCertBagDer(cert.getEncoded(), certLocalKeyId));
         bagDers.add(buildKeyBagDer(encryptedKeyBytes, keyLocalKeyId));
 
-        byte[] safeContents = DerCodec.encodeSequence(
-            bagDers.toArray(new byte[0][]));
+        byte[] safeContents = DerCodec.encodeSequence(bagDers.toArray(new byte[0][]));
 
-        byte[] dataContentInfo = DerCodec.encodeSequence(
-            DerCodec.encodeOid(GostOids.PKCS7_DATA),
-            DerCodec.encodeContextConstructed(0,
-                DerCodec.encodeOctetString(safeContents)));
+        byte[] dataContentInfo =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.PKCS7_DATA),
+                        DerCodec.encodeContextConstructed(
+                                0, DerCodec.encodeOctetString(safeContents)));
 
         byte[] authSafe = DerCodec.encodeSequence(dataContentInfo);
 
-        byte[] outerContentInfo = DerCodec.encodeSequence(
-            DerCodec.encodeOid(GostOids.PKCS7_DATA),
-            DerCodec.encodeContextConstructed(0,
-                DerCodec.encodeOctetString(authSafe)));
+        byte[] outerContentInfo =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.PKCS7_DATA),
+                        DerCodec.encodeContextConstructed(0, DerCodec.encodeOctetString(authSafe)));
 
         byte[] salt = new byte[16];
         CryptoRandom.INSTANCE.nextBytes(salt);
         byte[] macData = GostPkcs12Mac.compute(authSafe, passwordBytes, TEST_ITER, salt);
 
-        return DerCodec.encodeSequence(
-            DerCodec.encodeInteger(3),
-            outerContentInfo,
-            macData);
+        return DerCodec.encodeSequence(DerCodec.encodeInteger(3), outerContentInfo, macData);
     }
 
     private static byte[] buildKeyBagDer(byte[] encryptedKeyDer, byte[] localKeyId) {
@@ -286,42 +343,37 @@ class GostPkcs12LoaderFilterTest {
             byte[] attr = buildLocalKeyIdAttr(localKeyId);
             byte[] attrs = DerCodec.encodeSet(attr);
             return DerCodec.encodeSequence(
-                DerCodec.encodeOid(GostOids.BAG_PKCS8_SHROUDED_KEY),
-                bagValue, attrs);
+                    DerCodec.encodeOid(GostOids.BAG_PKCS8_SHROUDED_KEY), bagValue, attrs);
         }
         return DerCodec.encodeSequence(
-            DerCodec.encodeOid(GostOids.BAG_PKCS8_SHROUDED_KEY),
-            bagValue);
+                DerCodec.encodeOid(GostOids.BAG_PKCS8_SHROUDED_KEY), bagValue);
     }
 
     private static byte[] buildCertBagDer(byte[] certDer, byte[] localKeyId) {
-        byte[] certBagContent = DerCodec.encodeSequence(
-            DerCodec.encodeOid(GostOids.PKCS9_X509_CERT),
-            DerCodec.encodeContextConstructed(0,
-                DerCodec.encodeOctetString(certDer)));
+        byte[] certBagContent =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.PKCS9_X509_CERT),
+                        DerCodec.encodeContextConstructed(0, DerCodec.encodeOctetString(certDer)));
         byte[] bagValue = DerCodec.encodeContextConstructed(0, certBagContent);
         if (localKeyId != null) {
             byte[] attr = buildLocalKeyIdAttr(localKeyId);
             byte[] attrs = DerCodec.encodeSet(attr);
-            return DerCodec.encodeSequence(
-                DerCodec.encodeOid(GostOids.BAG_CERT),
-                bagValue, attrs);
+            return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.BAG_CERT), bagValue, attrs);
         }
-        return DerCodec.encodeSequence(
-            DerCodec.encodeOid(GostOids.BAG_CERT),
-            bagValue);
+        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.BAG_CERT), bagValue);
     }
 
     private static byte[] buildLocalKeyIdAttr(byte[] keyId) {
         return DerCodec.encodeSequence(
-            DerCodec.encodeOid(GostOids.ATTR_LOCAL_KEY_ID),
-            DerCodec.encodeSet(DerCodec.encodeOctetString(keyId)));
+                DerCodec.encodeOid(GostOids.ATTR_LOCAL_KEY_ID),
+                DerCodec.encodeSet(DerCodec.encodeOctetString(keyId)));
     }
 
     private static final class CertBagDef {
-        final TlsCertificate cert;
+        final GostCertificate cert;
         final byte[] localKeyId;
-        CertBagDef(TlsCertificate cert, byte[] localKeyId) {
+
+        CertBagDef(GostCertificate cert, byte[] localKeyId) {
             this.cert = cert;
             this.localKeyId = localKeyId;
         }

@@ -2,8 +2,6 @@ package org.rssys.gost.tls13;
 
 import org.rssys.gost.signature.ECParameters;
 
-
-
 /**
  * Представляет cipher suite TLS 1.3 для ГОСТ-криптографии
  * по RFC 9367: Кузнечик-MGM-Streebog-256.
@@ -25,29 +23,31 @@ public final class TlsCiphersuite {
     // Предопределённые cipher suite (RFC 9367 §3.1.2)
     // ========================================================================
 
-    public static final TlsCiphersuite TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L = new TlsCiphersuite(
-            TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-            TlsConstants.IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-            TlsConstants.STREEBOG_256_HASH_LEN,
-            TlsConstants.KUZNYECHIK_KEY_SIZE,
-            TlsConstants.MGM_IV_SIZE,
-            TlsConstants.MGM_TAG_SIZE,
-            SNMAX_KUZNYECHIK_MGM_L,
-            0xF800000000000000L,
-            0xFFFFFFF000000000L,
-            0xFFFFFFFFFFFFE000L);
+    public static final TlsCiphersuite TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L =
+            new TlsCiphersuite(
+                    TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                    TlsConstants.IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                    TlsConstants.STREEBOG_256_HASH_LEN,
+                    TlsConstants.KUZNYECHIK_KEY_SIZE,
+                    TlsConstants.MGM_IV_SIZE,
+                    TlsConstants.MGM_TAG_SIZE,
+                    SNMAX_KUZNYECHIK_MGM_L,
+                    0xF800000000000000L,
+                    0xFFFFFFF000000000L,
+                    0xFFFFFFFFFFFFE000L);
 
-    public static final TlsCiphersuite TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S = new TlsCiphersuite(
-            TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
-            TlsConstants.IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
-            TlsConstants.STREEBOG_256_HASH_LEN,
-            TlsConstants.KUZNYECHIK_KEY_SIZE,
-            TlsConstants.MGM_IV_SIZE,
-            TlsConstants.MGM_TAG_SIZE,
-            0x3FFFFFFFFFFL,
-            0xFFFFFFFFE0000000L,
-            0xFFFFFFFFFFFF0000L,
-            0xFFFFFFFFFFFFFFF8L);
+    public static final TlsCiphersuite TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S =
+            new TlsCiphersuite(
+                    TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
+                    TlsConstants.IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
+                    TlsConstants.STREEBOG_256_HASH_LEN,
+                    TlsConstants.KUZNYECHIK_KEY_SIZE,
+                    TlsConstants.MGM_IV_SIZE,
+                    TlsConstants.MGM_TAG_SIZE,
+                    0x3FFFFFFFFFFL,
+                    0xFFFFFFFFE0000000L,
+                    0xFFFFFFFFFFFF0000L,
+                    0xFFFFFFFFFFFFFFF8L);
 
     // ========================================================================
     // Поля
@@ -64,9 +64,17 @@ public final class TlsCiphersuite {
     private final long c2;
     private final long c3;
 
-    private TlsCiphersuite(int id, String ianaName, int hashLen, int keyLen,
-                           int ivLen, int tagLen,
-                           long snmax, long c1, long c2, long c3) {
+    private TlsCiphersuite(
+            int id,
+            String ianaName,
+            int hashLen,
+            int keyLen,
+            int ivLen,
+            int tagLen,
+            long snmax,
+            long c1,
+            long c2,
+            long c3) {
         this.id = id;
         this.ianaName = ianaName;
         this.hashLen = hashLen;
@@ -83,16 +91,46 @@ public final class TlsCiphersuite {
     // Геттеры
     // ========================================================================
 
-    public int getId() { return id; }
-    public String getIanaName() { return ianaName; }
-    public int getHashLen() { return hashLen; }
-    public int getKeyLen() { return keyLen; }
-    public int getIvLen() { return ivLen; }
-    public int getTagLen() { return tagLen; }
-    public long getSnmax() { return snmax; }
-    public long getC1() { return c1; }
-    public long getC2() { return c2; }
-    public long getC3() { return c3; }
+    public int getId() {
+        return id;
+    }
+
+    public String getIanaName() {
+        return ianaName;
+    }
+
+    public int getHashLen() {
+        return hashLen;
+    }
+
+    public int getKeyLen() {
+        return keyLen;
+    }
+
+    public int getIvLen() {
+        return ivLen;
+    }
+
+    public int getTagLen() {
+        return tagLen;
+    }
+
+    public long getSnmax() {
+        return snmax;
+    }
+
+    public long getC1() {
+        return c1;
+    }
+
+    public long getC2() {
+        return c2;
+    }
+
+    public long getC3() {
+        return c3;
+    }
+
     // ========================================================================
     // Поиск по ID
     // ========================================================================
@@ -136,14 +174,13 @@ public final class TlsCiphersuite {
      * @return массив всех определённых cipher suite (L и S)
      */
     public static TlsCiphersuite[] values() {
-        return new TlsCiphersuite[]{
-                TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S
+        return new TlsCiphersuite[] {
+            TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L, TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S
         };
     }
 
     // ========================================================================
-    // Отображение ECParameters ↔ NamedGroup
+    // Отображение ECParameters <-> NamedGroup
     // ========================================================================
 
     /**
@@ -154,13 +191,13 @@ public final class TlsCiphersuite {
      * @return идентификатор именованной группы
      */
     public static int paramsToNamedGroup(ECParameters params) {
-        if (params.n.equals(ECParameters.tc26a256().n))   return TlsConstants.GRP_GC256A;
-        if (params.n.equals(ECParameters.cryptoProA().n))  return TlsConstants.GRP_GC256B;
-        if (params.n.equals(ECParameters.cryptoProB().n))  return TlsConstants.GRP_GC256C;
-        if (params.n.equals(ECParameters.cryptoProC().n))  return TlsConstants.GRP_GC256D;
-        if (params.n.equals(ECParameters.tc26a512().n))   return TlsConstants.GRP_GC512A;
-        if (params.n.equals(ECParameters.tc26b512().n))   return TlsConstants.GRP_GC512B;
-        if (params.n.equals(ECParameters.tc26c512().n))   return TlsConstants.GRP_GC512C;
+        if (params.n.equals(ECParameters.tc26a256().n)) return TlsConstants.GRP_GC256A;
+        if (params.n.equals(ECParameters.cryptoProA().n)) return TlsConstants.GRP_GC256B;
+        if (params.n.equals(ECParameters.cryptoProB().n)) return TlsConstants.GRP_GC256C;
+        if (params.n.equals(ECParameters.cryptoProC().n)) return TlsConstants.GRP_GC256D;
+        if (params.n.equals(ECParameters.tc26a512().n)) return TlsConstants.GRP_GC512A;
+        if (params.n.equals(ECParameters.tc26b512().n)) return TlsConstants.GRP_GC512B;
+        if (params.n.equals(ECParameters.tc26c512().n)) return TlsConstants.GRP_GC512C;
         throw new IllegalArgumentException("Unknown ECParameters");
     }
 
@@ -172,15 +209,23 @@ public final class TlsCiphersuite {
      */
     public static ECParameters namedGroupToParams(int namedGroup) {
         switch (namedGroup) {
-            case TlsConstants.GRP_GC256A: return ECParameters.tc26a256();
-            case TlsConstants.GRP_GC256B: return ECParameters.cryptoProA();
-            case TlsConstants.GRP_GC256C: return ECParameters.cryptoProB();
-            case TlsConstants.GRP_GC256D: return ECParameters.cryptoProC();
-            case TlsConstants.GRP_GC512A: return ECParameters.tc26a512();
-            case TlsConstants.GRP_GC512B: return ECParameters.tc26b512();
-            case TlsConstants.GRP_GC512C: return ECParameters.tc26c512();
+            case TlsConstants.GRP_GC256A:
+                return ECParameters.tc26a256();
+            case TlsConstants.GRP_GC256B:
+                return ECParameters.cryptoProA();
+            case TlsConstants.GRP_GC256C:
+                return ECParameters.cryptoProB();
+            case TlsConstants.GRP_GC256D:
+                return ECParameters.cryptoProC();
+            case TlsConstants.GRP_GC512A:
+                return ECParameters.tc26a512();
+            case TlsConstants.GRP_GC512B:
+                return ECParameters.tc26b512();
+            case TlsConstants.GRP_GC512C:
+                return ECParameters.tc26c512();
             default:
-                throw new IllegalArgumentException("Unknown named group: 0x" + Integer.toHexString(namedGroup));
+                throw new IllegalArgumentException(
+                        "Unknown named group: 0x" + Integer.toHexString(namedGroup));
         }
     }
 
@@ -192,20 +237,28 @@ public final class TlsCiphersuite {
      */
     public static int namedGroupToSignatureScheme(int namedGroup) {
         switch (namedGroup) {
-            case TlsConstants.GRP_GC256A: return TlsConstants.SIG_GOST_TC26_A_256;
-            case TlsConstants.GRP_GC256B: return TlsConstants.SIG_GOST_CRYPTOPRO_A;
-            case TlsConstants.GRP_GC256C: return TlsConstants.SIG_GOST_CRYPTOPRO_B;
-            case TlsConstants.GRP_GC256D: return TlsConstants.SIG_GOST_CRYPTOPRO_C;
-            case TlsConstants.GRP_GC512A: return TlsConstants.SIG_GOST_TC26_512_A;
-            case TlsConstants.GRP_GC512B: return TlsConstants.SIG_GOST_TC26_512_B;
-            case TlsConstants.GRP_GC512C: return TlsConstants.SIG_GOST_TC26_512_C;
+            case TlsConstants.GRP_GC256A:
+                return TlsConstants.SIG_GOST_TC26_A_256;
+            case TlsConstants.GRP_GC256B:
+                return TlsConstants.SIG_GOST_CRYPTOPRO_A;
+            case TlsConstants.GRP_GC256C:
+                return TlsConstants.SIG_GOST_CRYPTOPRO_B;
+            case TlsConstants.GRP_GC256D:
+                return TlsConstants.SIG_GOST_CRYPTOPRO_C;
+            case TlsConstants.GRP_GC512A:
+                return TlsConstants.SIG_GOST_TC26_512_A;
+            case TlsConstants.GRP_GC512B:
+                return TlsConstants.SIG_GOST_TC26_512_B;
+            case TlsConstants.GRP_GC512C:
+                return TlsConstants.SIG_GOST_TC26_512_C;
             default:
-                throw new IllegalArgumentException("Unknown named group: 0x" + Integer.toHexString(namedGroup));
+                throw new IllegalArgumentException(
+                        "Unknown named group: 0x" + Integer.toHexString(namedGroup));
         }
     }
 
     // ========================================================================
-    // Отображение IANA-имён ↔ числовые ID
+    // Отображение IANA-имён <-> числовые ID
     // ========================================================================
 
     /**
@@ -245,15 +298,23 @@ public final class TlsCiphersuite {
      */
     public static String namedGroupToIanaName(int namedGroup) {
         switch (namedGroup) {
-            case TlsConstants.GRP_GC256A: return TlsConstants.IANA_GC256A;
-            case TlsConstants.GRP_GC256B: return TlsConstants.IANA_GC256B;
-            case TlsConstants.GRP_GC256C: return TlsConstants.IANA_GC256C;
-            case TlsConstants.GRP_GC256D: return TlsConstants.IANA_GC256D;
-            case TlsConstants.GRP_GC512A: return TlsConstants.IANA_GC512A;
-            case TlsConstants.GRP_GC512B: return TlsConstants.IANA_GC512B;
-            case TlsConstants.GRP_GC512C: return TlsConstants.IANA_GC512C;
+            case TlsConstants.GRP_GC256A:
+                return TlsConstants.IANA_GC256A;
+            case TlsConstants.GRP_GC256B:
+                return TlsConstants.IANA_GC256B;
+            case TlsConstants.GRP_GC256C:
+                return TlsConstants.IANA_GC256C;
+            case TlsConstants.GRP_GC256D:
+                return TlsConstants.IANA_GC256D;
+            case TlsConstants.GRP_GC512A:
+                return TlsConstants.IANA_GC512A;
+            case TlsConstants.GRP_GC512B:
+                return TlsConstants.IANA_GC512B;
+            case TlsConstants.GRP_GC512C:
+                return TlsConstants.IANA_GC512C;
             default:
-                throw new IllegalArgumentException("Unknown named group: 0x" + Integer.toHexString(namedGroup));
+                throw new IllegalArgumentException(
+                        "Unknown named group: 0x" + Integer.toHexString(namedGroup));
         }
     }
 
@@ -294,16 +355,23 @@ public final class TlsCiphersuite {
      */
     public static String signatureSchemeToIanaName(int sigScheme) {
         switch (sigScheme) {
-            case TlsConstants.SIG_GOST_TC26_A_256: return TlsConstants.IANA_SIG_GOST_TC26_A_256;
-            case TlsConstants.SIG_GOST_CRYPTOPRO_A:  return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_A;
-            case TlsConstants.SIG_GOST_CRYPTOPRO_B:  return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_B;
-            case TlsConstants.SIG_GOST_CRYPTOPRO_C:  return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_C;
-            case TlsConstants.SIG_GOST_TC26_512_A:   return TlsConstants.IANA_SIG_GOST_TC26_512_A;
-            case TlsConstants.SIG_GOST_TC26_512_B:   return TlsConstants.IANA_SIG_GOST_TC26_512_B;
-            case TlsConstants.SIG_GOST_TC26_512_C:   return TlsConstants.IANA_SIG_GOST_TC26_512_C;
+            case TlsConstants.SIG_GOST_TC26_A_256:
+                return TlsConstants.IANA_SIG_GOST_TC26_A_256;
+            case TlsConstants.SIG_GOST_CRYPTOPRO_A:
+                return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_A;
+            case TlsConstants.SIG_GOST_CRYPTOPRO_B:
+                return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_B;
+            case TlsConstants.SIG_GOST_CRYPTOPRO_C:
+                return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_C;
+            case TlsConstants.SIG_GOST_TC26_512_A:
+                return TlsConstants.IANA_SIG_GOST_TC26_512_A;
+            case TlsConstants.SIG_GOST_TC26_512_B:
+                return TlsConstants.IANA_SIG_GOST_TC26_512_B;
+            case TlsConstants.SIG_GOST_TC26_512_C:
+                return TlsConstants.IANA_SIG_GOST_TC26_512_C;
             default:
-                throw new IllegalArgumentException("Unknown signature scheme: 0x" + Integer.toHexString(sigScheme));
+                throw new IllegalArgumentException(
+                        "Unknown signature scheme: 0x" + Integer.toHexString(sigScheme));
         }
     }
-
 }

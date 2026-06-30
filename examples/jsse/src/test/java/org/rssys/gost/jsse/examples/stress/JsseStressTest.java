@@ -1,21 +1,8 @@
 package org.rssys.gost.jsse.examples.stress;
 
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
-import org.rssys.gost.jsse.engine.GostSSLSessionContext;
-import org.rssys.gost.jsse.examples.ExamplesCertHelper;
-import org.rssys.gost.jsse.socket.GostSSLServerSocket;
-import org.rssys.gost.jsse.socket.GostSSLSocket;
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.util.CryptoRandom;
-import org.rssys.gost.jsse.GostJsseConstants;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSocket;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,11 +22,21 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
+import org.rssys.gost.jsse.socket.GostSSLServerSocket;
+import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * Стресс-тест GostSSLServerSocket + ГОСТ TLS 1.3: длительная работа под смешанной нагрузкой.
@@ -68,6 +65,7 @@ class JsseStressTest {
     private static final AtomicLong[] profileRequests = new AtomicLong[5];
     private static final AtomicLong[] profileErrors = new AtomicLong[5];
     private static final AtomicLong bytesSent = new AtomicLong(0);
+
     static {
         for (int i = 0; i < 5; i++) {
             profileRequests[i] = new AtomicLong(0);
@@ -85,38 +83,53 @@ class JsseStressTest {
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         srvCtx = new GostSSLSessionContext(cs, cs.getHashLen());
         srvCtx.setSessionCacheSize(5000);
-        serverSocket = new GostSSLServerSocket(0, 1024,
-                helper.createKeyManager(), helper.createTrustManager(), srvCtx);
+        serverSocket =
+                new GostSSLServerSocket(
+                        0, 1024, helper.createKeyManager(), helper.createTrustManager(), srvCtx);
         port = serverSocket.getLocalPort();
 
         // Принимающий поток: на каждое подключение — виртуальный тред с echo-циклом
-        serverThread = Thread.ofPlatform().name("gost-accept").start(() -> {
-            while (true) {
-                try {
-                    Socket raw = serverSocket.accept();
-                    if (raw == null) break;
-                    Thread.ofVirtual().name("gost-srv-" + raw.getPort()).start(() -> {
-                        try (SSLSocket ssl = (SSLSocket) raw;
-                             InputStream in = ssl.getInputStream();
-                             OutputStream out = ssl.getOutputStream()) {
-                            byte[] buf = new byte[8192];
-                            int n;
-                            while ((n = in.read(buf)) > 0) {
-                                out.write(buf, 0, n);
-                                out.flush();
-                            }
-                        } catch (Exception ignored) {
-                        }
-                    });
-                } catch (Exception e) {
-                    if (!serverSocket.isBound()) break;
-                }
-            }
-        });
+        serverThread =
+                Thread.ofPlatform()
+                        .name("gost-accept")
+                        .start(
+                                () -> {
+                                    while (true) {
+                                        try {
+                                            Socket raw = serverSocket.accept();
+                                            if (raw == null) break;
+                                            Thread.ofVirtual()
+                                                    .name("gost-srv-" + raw.getPort())
+                                                    .start(
+                                                            () -> {
+                                                                try (SSLSocket ssl =
+                                                                                (SSLSocket) raw;
+                                                                        InputStream in =
+                                                                                ssl
+                                                                                        .getInputStream();
+                                                                        OutputStream out =
+                                                                                ssl
+                                                                                        .getOutputStream()) {
+                                                                    byte[] buf = new byte[8192];
+                                                                    int n;
+                                                                    while ((n = in.read(buf)) > 0) {
+                                                                        out.write(buf, 0, n);
+                                                                        out.flush();
+                                                                    }
+                                                                } catch (Exception ignored) {
+                                                                }
+                                                            });
+                                        } catch (Exception e) {
+                                            if (!serverSocket.isBound()) break;
+                                        }
+                                    }
+                                });
 
         // Клиентский контекст
-        clientCtx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
-        clientCtx.init(null, new javax.net.ssl.TrustManager[]{helper.createTrustManager()}, null);
+        clientCtx =
+                SSLContext.getInstance(
+                        GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+        clientCtx.init(null, new javax.net.ssl.TrustManager[] {helper.createTrustManager()}, null);
     }
 
     @AfterAll
@@ -140,40 +153,54 @@ class JsseStressTest {
         ScheduledExecutorService monitor = Executors.newSingleThreadScheduledExecutor();
         List<Long> heapSamples = new ArrayList<>();
         long gcCountStart = totalGcCount();
-        String dumpFile = System.getProperty("user.dir")
-                + "/build/reports/stress-dump-"
-                + Instant.now().toString().replace(":", "-") + ".txt";
+        String dumpFile =
+                System.getProperty("user.dir")
+                        + "/build/reports/stress-dump-"
+                        + Instant.now().toString().replace(":", "-")
+                        + ".txt";
 
-        monitor.scheduleAtFixedRate(() -> {
-            if (!running) return;
-            long used = Runtime.getRuntime().totalMemory()
-                    - Runtime.getRuntime().freeMemory();
-            long max = Runtime.getRuntime().maxMemory();
-            int pct = (int) (used * 100 / max);
-            heapSamples.add(used);
+        monitor.scheduleAtFixedRate(
+                () -> {
+                    if (!running) return;
+                    long used =
+                            Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+                    long max = Runtime.getRuntime().maxMemory();
+                    int pct = (int) (used * 100 / max);
+                    heapSamples.add(used);
 
-            // Считаем сессии через getIds() — это LRU-кэш под sessionCacheSize
-            int sessionCount = countIds(srvCtx);
-            int pskCount = 0; // IPskStore не имеет метода size() публичного
-            long gcNow = totalGcCount();
+                    // Считаем сессии через getIds() — это LRU-кэш под sessionCacheSize
+                    int sessionCount = countIds(srvCtx);
+                    int pskCount = 0; // IPskStore не имеет метода size() публичного
+                    long gcNow = totalGcCount();
 
-            System.out.printf("[JM] Heap: %dMB/%dMB (%d%%), Session ids: %d, "
-                            + "GC: +%d, Reqs: [1=%d 2=%d 3=%d 4=%d], Err: [1=%d 2=%d 3=%d 4=%d]%n",
-                    used / 1024 / 1024, max / 1024 / 1024, pct,
-                    sessionCount, gcNow - gcCountStart,
-                    profileRequests[1].get(), profileRequests[2].get(),
-                    profileRequests[3].get(), profileRequests[4].get(),
-                    profileErrors[1].get(), profileErrors[2].get(),
-                    profileErrors[3].get(), profileErrors[4].get());
+                    System.out.printf(
+                            "[JM] Heap: %dMB/%dMB (%d%%), Session ids: %d, "
+                                    + "GC: +%d, Reqs: [1=%d 2=%d 3=%d 4=%d], Err: [1=%d 2=%d 3=%d 4=%d]%n",
+                            used / 1024 / 1024,
+                            max / 1024 / 1024,
+                            pct,
+                            sessionCount,
+                            gcNow - gcCountStart,
+                            profileRequests[1].get(),
+                            profileRequests[2].get(),
+                            profileRequests[3].get(),
+                            profileRequests[4].get(),
+                            profileErrors[1].get(),
+                            profileErrors[2].get(),
+                            profileErrors[3].get(),
+                            profileErrors[4].get());
 
-            // Дамп потоков если heap растёт подозрительно
-            if (heapSamples.size() >= 3) {
-                long prev = heapSamples.get(heapSamples.size() - 3);
-                if (used > prev * 1.5 && pct > HEAP_WARN_PCT) {
-                    dumpThreads(dumpFile);
-                }
-            }
-        }, 0, 30, TimeUnit.SECONDS);
+                    // Дамп потоков если heap растёт подозрительно
+                    if (heapSamples.size() >= 3) {
+                        long prev = heapSamples.get(heapSamples.size() - 3);
+                        if (used > prev * 1.5 && pct > HEAP_WARN_PCT) {
+                            dumpThreads(dumpFile);
+                        }
+                    }
+                },
+                0,
+                30,
+                TimeUnit.SECONDS);
 
         // Profile 1: 30 коротких сессий (fire-and-forget)
         for (int i = 0; i < 30; i++) {
@@ -200,28 +227,28 @@ class JsseStressTest {
 
         // Проверки: каждый профиль должен сделать хотя бы один успешный обмен
         long reqs2 = profileRequests[2].get();
-        assertTrue(reqs2 > 0,
-                "Профиль 2: должен быть хотя бы один успешный запрос");
+        assertTrue(reqs2 > 0, "Профиль 2: должен быть хотя бы один успешный запрос");
         long reqs3 = profileRequests[3].get();
-        assertEquals(0, profileErrors[3].get(),
-                "Профиль 3: ошибок быть не должно");
+        assertEquals(0, profileErrors[3].get(), "Профиль 3: ошибок быть не должно");
         long reqs1 = profileRequests[1].get();
-        assertTrue(reqs1 > 0,
-                "Профиль 1: должен быть хотя бы один запрос");
+        assertTrue(reqs1 > 0, "Профиль 1: должен быть хотя бы один запрос");
         long errs1 = profileErrors[1].get();
         long total1 = reqs1 + errs1;
-        assertTrue(errs1 * 100 < total1,
-                "Профиль 1: ошибок более 1% (" + errs1
-                + " из " + total1 + ")");
+        assertTrue(
+                errs1 * 100 < total1,
+                "Профиль 1: ошибок более 1% (" + errs1 + " из " + total1 + ")");
 
-        System.out.printf("[RESULT] Profile 1: %d req, %d err%n",
+        System.out.printf(
+                "[RESULT] Profile 1: %d req, %d err%n",
                 profileRequests[1].get(), profileErrors[1].get());
-        System.out.printf("[RESULT] Profile 2: %d req, %d err%n",
+        System.out.printf(
+                "[RESULT] Profile 2: %d req, %d err%n",
                 profileRequests[2].get(), profileErrors[2].get());
-        System.out.printf("[RESULT] Profile 3: %d req, %d err, %d MB sent%n",
-                profileRequests[3].get(), profileErrors[3].get(),
-                bytesSent.get() / 1024 / 1024);
-        System.out.printf("[RESULT] Profile 4: %d req, %d err (expected)%n",
+        System.out.printf(
+                "[RESULT] Profile 3: %d req, %d err, %d MB sent%n",
+                profileRequests[3].get(), profileErrors[3].get(), bytesSent.get() / 1024 / 1024);
+        System.out.printf(
+                "[RESULT] Profile 4: %d req, %d err (expected)%n",
                 profileRequests[4].get(), profileErrors[4].get());
     }
 
@@ -236,8 +263,7 @@ class JsseStressTest {
         while (running) {
             SSLSocket s = null;
             try {
-                s = (SSLSocket) clientCtx.getSocketFactory()
-                        .createSocket("localhost", port);
+                s = (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port);
                 s.setSoTimeout(15000);
                 OutputStream out = s.getOutputStream();
                 out.write(payload);
@@ -247,7 +273,11 @@ class JsseStressTest {
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
             } finally {
-                if (s != null) try { s.close(); } catch (Exception ignored) {}
+                if (s != null)
+                    try {
+                        s.close();
+                    } catch (Exception ignored) {
+                    }
             }
         }
     }
@@ -260,8 +290,7 @@ class JsseStressTest {
             long deadline = System.currentTimeMillis() + sessionDuration;
             SSLSocket s = null;
             try {
-                s = (SSLSocket) clientCtx.getSocketFactory()
-                        .createSocket("localhost", port);
+                s = (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port);
                 s.setSoTimeout(15000);
                 OutputStream out = s.getOutputStream();
                 InputStream in = s.getInputStream();
@@ -280,7 +309,11 @@ class JsseStressTest {
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
             } finally {
-                if (s != null) try { s.close(); } catch (Exception ignored) {}
+                if (s != null)
+                    try {
+                        s.close();
+                    } catch (Exception ignored) {
+                    }
             }
         }
     }
@@ -293,8 +326,7 @@ class JsseStressTest {
         while (running) {
             SSLSocket s = null;
             try {
-                s = (SSLSocket) clientCtx.getSocketFactory()
-                        .createSocket("localhost", port);
+                s = (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port);
                 s.setSoTimeout(30000);
                 OutputStream out = s.getOutputStream();
                 InputStream in = s.getInputStream();
@@ -309,7 +341,11 @@ class JsseStressTest {
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
             } finally {
-                if (s != null) try { s.close(); } catch (Exception ignored) {}
+                if (s != null)
+                    try {
+                        s.close();
+                    } catch (Exception ignored) {
+                    }
             }
         }
     }
@@ -322,8 +358,11 @@ class JsseStressTest {
             SSLSocket ssl = null;
             try {
                 raw = new Socket("localhost", port);
-                ssl = (SSLSocket) clientCtx.getSocketFactory()
-                        .createSocket(raw, "localhost", port, true);
+                ssl =
+                        (SSLSocket)
+                                clientCtx
+                                        .getSocketFactory()
+                                        .createSocket(raw, "localhost", port, true);
                 ssl.setSoTimeout(5000);
                 ssl.startHandshake();
                 Thread.sleep(CryptoRandom.INSTANCE.nextInt(2001));
@@ -331,8 +370,14 @@ class JsseStressTest {
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
             } finally {
-                try { if (ssl != null) ssl.close(); } catch (Exception ignored) {}
-                try { if (raw != null) raw.close(); } catch (Exception ignored) {}
+                try {
+                    if (ssl != null) ssl.close();
+                } catch (Exception ignored) {
+                }
+                try {
+                    if (raw != null) raw.close();
+                } catch (Exception ignored) {
+                }
             }
         }
     }
@@ -353,23 +398,26 @@ class JsseStressTest {
         for (int n = step; n <= 1000 && maxSessions >= n - step; n += step) {
             CountDownLatch latch = new CountDownLatch(step);
             for (int i = 0; i < step; i++) {
-                pool.submit(() -> {
-                    try {
-                        SSLSocket s = (SSLSocket) clientCtx.getSocketFactory()
-                                .createSocket("localhost", port);
-                        s.startHandshake();
-                        sockets.add(s);
-                    } catch (Exception e) {
-                        // not counted — нормально при достижении лимита
-                    } finally {
-                        latch.countDown();
-                    }
-                });
+                pool.submit(
+                        () -> {
+                            try {
+                                SSLSocket s =
+                                        (SSLSocket)
+                                                clientCtx
+                                                        .getSocketFactory()
+                                                        .createSocket("localhost", port);
+                                s.startHandshake();
+                                sockets.add(s);
+                            } catch (Exception e) {
+                                // not counted — нормально при достижении лимита
+                            } finally {
+                                latch.countDown();
+                            }
+                        });
             }
             if (!latch.await(30, TimeUnit.SECONDS)) break;
 
-            long heapNow = Runtime.getRuntime().totalMemory()
-                    - Runtime.getRuntime().freeMemory();
+            long heapNow = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
             if (heapNow > maxMem * HEAP_WARN_PCT / 100.0) break;
             maxSessions = n;
         }
@@ -377,7 +425,10 @@ class JsseStressTest {
         assertTrue(maxSessions >= 50, "Должен выдержать минимум 50 сессий");
         log("Максимум одновременных сессий: ~" + maxSessions);
         for (SSLSocket s : sockets) {
-            try { s.close(); } catch (Exception ignored) {}
+            try {
+                s.close();
+            } catch (Exception ignored) {
+            }
         }
         pool.shutdown();
     }
@@ -429,13 +480,21 @@ class JsseStressTest {
     private static void dumpThreads(String path) {
         try (PrintWriter pw = new PrintWriter(new FileWriter(path, true))) {
             pw.println("=== Thread dump at " + Instant.now() + " ===");
-            Thread.getAllStackTraces().forEach((t, stack) -> {
-                pw.println(t.threadId() + " \"" + t.getName() + "\" [" + t.getState() + "]");
-                for (StackTraceElement e : stack) {
-                    pw.println("\tat " + e);
-                }
-                pw.println();
-            });
+            Thread.getAllStackTraces()
+                    .forEach(
+                            (t, stack) -> {
+                                pw.println(
+                                        t.threadId()
+                                                + " \""
+                                                + t.getName()
+                                                + "\" ["
+                                                + t.getState()
+                                                + "]");
+                                for (StackTraceElement e : stack) {
+                                    pw.println("\tat " + e);
+                                }
+                                pw.println();
+                            });
         } catch (Exception ignored) {
         }
     }

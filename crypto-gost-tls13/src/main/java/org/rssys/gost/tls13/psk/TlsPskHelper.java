@@ -1,12 +1,10 @@
 package org.rssys.gost.tls13.psk;
 
+import java.util.Arrays;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.mac.Hmac;
-import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.crypto.HkdfStreebog;
-
-import java.util.Arrays;
 
 /**
  * Пакетный helper для PSK-операций (binder, PSK derivation).
@@ -15,12 +13,11 @@ import java.util.Arrays;
  */
 public final class TlsPskHelper {
 
-    private TlsPskHelper() {
-    }
+    private TlsPskHelper() {}
 
     /**
      * Создаёт дайджест Streebog нужной длины.
-     * @param hashLen 32 → Streebog-256, 64 → Streebog-512
+     * @param hashLen 32 -> Streebog-256, 64 -> Streebog-512
      */
     private static Digest newDigest(int hashLen) {
         return HkdfStreebog.newDigest(hashLen);
@@ -50,8 +47,9 @@ public final class TlsPskHelper {
         byte[] emptyHash = new byte[hashLen];
         d = newDigest(hashLen);
         d.doFinal(emptyHash, 0);
-        byte[] binderKey = HkdfStreebog.deriveSecret(
-                earlySecret, HkdfStreebog.PREFIXED_RES_BINDER, emptyHash, hashLen);
+        byte[] binderKey =
+                HkdfStreebog.deriveSecret(
+                        earlySecret, HkdfStreebog.PREFIXED_RES_BINDER, emptyHash, hashLen);
         TlsUtils.wipeArray(earlySecret);
         TlsUtils.wipeArray(emptyHash);
 
@@ -80,8 +78,8 @@ public final class TlsPskHelper {
      * @param hashLen       длина хэша (32 для Streebog256)
      * @return binder (hashLen байт)
      */
-    public static byte[] computeBinderForHrr(byte[] hrrPrefixHash, byte[] ch2Body,
-                                              byte[] psk, int hashLen) {
+    public static byte[] computeBinderForHrr(
+            byte[] hrrPrefixHash, byte[] ch2Body, byte[] psk, int hashLen) {
         int bindersTotalLen = 3 + hashLen;
         byte[] truncated = Arrays.copyOf(ch2Body, ch2Body.length - bindersTotalLen);
 
@@ -98,8 +96,9 @@ public final class TlsPskHelper {
         byte[] emptyHash = new byte[hashLen];
         d = newDigest(hashLen);
         d.doFinal(emptyHash, 0);
-        byte[] binderKey = HkdfStreebog.deriveSecret(
-                earlySecret, HkdfStreebog.PREFIXED_RES_BINDER, emptyHash, hashLen);
+        byte[] binderKey =
+                HkdfStreebog.deriveSecret(
+                        earlySecret, HkdfStreebog.PREFIXED_RES_BINDER, emptyHash, hashLen);
         TlsUtils.wipeArray(earlySecret);
         TlsUtils.wipeArray(emptyHash);
 
@@ -124,11 +123,10 @@ public final class TlsPskHelper {
      * @param hashLen       длина хэша
      * @return true если binder совпадает
      */
-    public static boolean verifyBinderForHrr(byte[] hrrPrefixHash, byte[] ch2Body,
-                                              byte[] psk, int hashLen) {
+    public static boolean verifyBinderForHrr(
+            byte[] hrrPrefixHash, byte[] ch2Body, byte[] psk, int hashLen) {
         byte[] expected = computeBinderForHrr(hrrPrefixHash, ch2Body, psk, hashLen);
-        byte[] actual = Arrays.copyOfRange(ch2Body,
-                ch2Body.length - hashLen, ch2Body.length);
+        byte[] actual = Arrays.copyOfRange(ch2Body, ch2Body.length - hashLen, ch2Body.length);
         boolean result = java.security.MessageDigest.isEqual(expected, actual);
         TlsUtils.wipeArray(expected);
         return result;
@@ -144,8 +142,9 @@ public final class TlsPskHelper {
      */
     public static boolean verifyBinder(byte[] clientHelloBody, byte[] psk, int hashLen) {
         byte[] expected = computeBinder(clientHelloBody, psk, hashLen);
-        byte[] actual = Arrays.copyOfRange(clientHelloBody,
-                clientHelloBody.length - hashLen, clientHelloBody.length);
+        byte[] actual =
+                Arrays.copyOfRange(
+                        clientHelloBody, clientHelloBody.length - hashLen, clientHelloBody.length);
         boolean result = java.security.MessageDigest.isEqual(expected, actual);
         TlsUtils.wipeArray(expected);
         return result;
@@ -163,7 +162,10 @@ public final class TlsPskHelper {
     public static byte[] derivePsk(byte[] resumptionMasterSecret, byte[] ticketNonce, int hashLen) {
         if (resumptionMasterSecret == null) return null;
         return HkdfStreebog.expandLabel(
-                resumptionMasterSecret, HkdfStreebog.PREFIXED_RESUMPTION,
-                ticketNonce, hashLen, hashLen);
+                resumptionMasterSecret,
+                HkdfStreebog.PREFIXED_RESUMPTION,
+                ticketNonce,
+                hashLen,
+                hashLen);
     }
 }

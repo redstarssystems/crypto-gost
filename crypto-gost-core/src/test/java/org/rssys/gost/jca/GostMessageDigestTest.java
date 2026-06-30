@@ -1,15 +1,15 @@
 package org.rssys.gost.jca;
 
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.api.Digest;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.security.MessageDigest;
 import java.security.Security;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.rssys.gost.api.Digest;
 
 @DisplayName("GostMessageDigestSpi — Стрибог через JCA MessageDigest")
 class GostMessageDigestTest {
@@ -20,7 +20,8 @@ class GostMessageDigestTest {
     private static final byte[] EMPTY = new byte[0];
 
     // Тестовые данные
-    private static final byte[] DATA = "Тест ГОСТ Р 34.11-2012".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    private static final byte[] DATA =
+            "Тест ГОСТ Р 34.11-2012".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
     @BeforeAll
     static void registerProvider() {
@@ -30,102 +31,85 @@ class GostMessageDigestTest {
     }
 
     // -----------------------------------------------------------------------
-    // Стрибог-256
+    // Стрибог-256 и Стрибог-512 — параметризованные тесты
     // -----------------------------------------------------------------------
 
-    @Test
-    @DisplayName("GOST3411-2012-256: getInstance не бросает исключений")
-    void testGetInstance256() throws Exception {
-        MessageDigest md = MessageDigest.getInstance("GOST3411-2012-256", PROVIDER);
+    @ParameterizedTest
+    @DisplayName("getInstance не бросает исключений, длина совпадает с ожидаемой")
+    @CsvSource({"GOST3411-2012-256, 32", "GOST3411-2012-512, 64"})
+    void testGetInstance(String algorithm, int expectedLen) throws Exception {
+        MessageDigest md = MessageDigest.getInstance(algorithm, PROVIDER);
         assertNotNull(md);
-        assertEquals(32, md.getDigestLength());
+        assertEquals(expectedLen, md.getDigestLength());
     }
 
-    @Test
-    @DisplayName("GOST3411-2012-256: результат совпадает с эталонным Digest.digest256")
-    void testOutput256MatchesReferenceApi() throws Exception {
-        MessageDigest md = MessageDigest.getInstance("GOST3411-2012-256", PROVIDER);
+    @ParameterizedTest
+    @DisplayName("результат совпадает с эталонным Digest.digest*")
+    @CsvSource({"GOST3411-2012-256, 32", "GOST3411-2012-512, 64"})
+    void testOutputMatchesReferenceApi(String algorithm, int hlen) throws Exception {
+        MessageDigest md = MessageDigest.getInstance(algorithm, PROVIDER);
         byte[] jcaResult = md.digest(DATA);
-        byte[] refResult = Digest.digest256(DATA);
-        assertArrayEquals(refResult, jcaResult,
-            "JCA MessageDigest должен давать тот же результат что и Digest.digest256");
+        byte[] refResult = hlen == 32 ? Digest.digest256(DATA) : Digest.digest512(DATA);
+        assertArrayEquals(
+                refResult,
+                jcaResult,
+                "JCA MessageDigest должен давать тот же результат что и Digest.digest*");
     }
 
-    @Test
-    @DisplayName("GOST3411-2012-256: инкрементальное обновление = однократное")
-    void testIncremental256() throws Exception {
-        MessageDigest md = MessageDigest.getInstance("GOST3411-2012-256", PROVIDER);
-
-        // Однократный вызов
+    @ParameterizedTest
+    @DisplayName("инкрементальное обновление (byte-by-byte) = однократное")
+    @CsvSource({"GOST3411-2012-256", "GOST3411-2012-512"})
+    void testIncrementalByByte(String algorithm) throws Exception {
+        MessageDigest md = MessageDigest.getInstance(algorithm, PROVIDER);
         byte[] full = md.digest(DATA);
 
-        // Инкрементальный по байту
         md.reset();
         for (byte b : DATA) {
             md.update(b);
         }
         byte[] incremental = md.digest();
-
-        assertArrayEquals(full, incremental, "Инкрементальный хэш должен совпадать с полным");
+        assertArrayEquals(
+                full, incremental, "Инкрементальный хэш (by byte) должен совпадать с полным");
     }
+
+    @ParameterizedTest
+    @DisplayName("инкрементальное обновление (chunked) = однократное")
+    @CsvSource({"GOST3411-2012-256, 3", "GOST3411-2012-512, 5"})
+    void testIncrementalByChunk(String algorithm, int chunkSize) throws Exception {
+        MessageDigest md = MessageDigest.getInstance(algorithm, PROVIDER);
+        byte[] full = md.digest(DATA);
+
+        md.reset();
+        int offset = 0;
+        while (offset < DATA.length) {
+            int len = Math.min(chunkSize, DATA.length - offset);
+            md.update(DATA, offset, len);
+            offset += len;
+        }
+        byte[] incremental = md.digest();
+        assertArrayEquals(
+                full, incremental, "Инкрементальный хэш (chunked) должен совпадать с полным");
+    }
+
+    @ParameterizedTest
+    @DisplayName("длина выходного массива совпадает с ожидаемой")
+    @CsvSource({"GOST3411-2012-256, 32", "GOST3411-2012-512, 64"})
+    void testDigestLength(String algorithm, int expectedLen) throws Exception {
+        MessageDigest md = MessageDigest.getInstance(algorithm, PROVIDER);
+        assertEquals(expectedLen, md.digest(DATA).length);
+    }
+
+    // -----------------------------------------------------------------------
+    // Стрибог-256 (оставшиеся неповторяющиеся тесты)
+    // -----------------------------------------------------------------------
 
     @Test
     @DisplayName("GOST3411-2012-256: reset позволяет повторное использование")
     void testReset256() throws Exception {
         MessageDigest md = MessageDigest.getInstance("GOST3411-2012-256", PROVIDER);
-        byte[] first  = md.digest(DATA);
+        byte[] first = md.digest(DATA);
         byte[] second = md.digest(DATA);
         assertArrayEquals(first, second, "После reset должен вернуть тот же хэш");
-    }
-
-    @Test
-    @DisplayName("GOST3411-2012-256: длина выходного массива = 32")
-    void testDigestLength256() throws Exception {
-        MessageDigest md = MessageDigest.getInstance("GOST3411-2012-256", PROVIDER);
-        assertEquals(32, md.digest(DATA).length);
-    }
-
-    // -----------------------------------------------------------------------
-    // Стрибог-512
-    // -----------------------------------------------------------------------
-
-    @Test
-    @DisplayName("GOST3411-2012-512: getInstance не бросает исключений")
-    void testGetInstance512() throws Exception {
-        MessageDigest md = MessageDigest.getInstance("GOST3411-2012-512", PROVIDER);
-        assertNotNull(md);
-        assertEquals(64, md.getDigestLength());
-    }
-
-    @Test
-    @DisplayName("GOST3411-2012-512: результат совпадает с эталонным Digest.digest512")
-    void testOutput512MatchesReferenceApi() throws Exception {
-        MessageDigest md = MessageDigest.getInstance("GOST3411-2012-512", PROVIDER);
-        byte[] jcaResult = md.digest(DATA);
-        byte[] refResult = Digest.digest512(DATA);
-        assertArrayEquals(refResult, jcaResult,
-            "JCA MessageDigest должен давать тот же результат что и Digest.digest512");
-    }
-
-    @Test
-    @DisplayName("GOST3411-2012-512: длина выходного массива = 64")
-    void testDigestLength512() throws Exception {
-        MessageDigest md = MessageDigest.getInstance("GOST3411-2012-512", PROVIDER);
-        assertEquals(64, md.digest(DATA).length);
-    }
-
-    @Test
-    @DisplayName("GOST3411-2012-512: инкрементальное обновление = однократное")
-    void testIncremental512() throws Exception {
-        MessageDigest md = MessageDigest.getInstance("GOST3411-2012-512", PROVIDER);
-        byte[] full = md.digest(DATA);
-
-        md.reset();
-        md.update(DATA, 0, DATA.length / 2);
-        md.update(DATA, DATA.length / 2, DATA.length - DATA.length / 2);
-        byte[] chunked = md.digest();
-
-        assertArrayEquals(full, chunked, "Разбитый на чанки хэш должен совпадать с полным");
     }
 
     // -----------------------------------------------------------------------

@@ -329,7 +329,7 @@ final class OpenSslTls13Helper {
                 null, null);
     }
 
-    /** PEM-обёртка приватного ключа: PKCS#8 DER → -----BEGIN PRIVATE KEY-----. */
+    /** PEM-обёртка приватного ключа: PKCS#8 DER -> -----BEGIN PRIVATE KEY-----. */
     static String privateKeyToPem(byte[] der) {
         String b64 = Base64.getMimeEncoder(64, new byte[]{'\n'}).encodeToString(der);
         return "-----BEGIN PRIVATE KEY-----\n" + b64 + "\n-----END PRIVATE KEY-----\n";

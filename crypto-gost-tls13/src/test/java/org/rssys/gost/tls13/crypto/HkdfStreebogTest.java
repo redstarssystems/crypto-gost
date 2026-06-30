@@ -1,16 +1,15 @@
 package org.rssys.gost.tls13.crypto;
-import org.rssys.gost.tls13.*;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
-
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.rssys.gost.tls13.*;
 
 /**
  * Тесты HKDF-Streebog (RFC 5869 + RFC 8446 §7.1).
@@ -22,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   — Derive-Secret
  *   — граничные случаи и исключения
  */
-@DisplayName("HKDF-Streebog: extract, expand, expand-label, derive-secret")
+@DisplayName("HKDF-Streebog: извлечение, расширение, метка, порождение секрета")
 class HkdfStreebogTest {
 
     /** Вычисляет HMAC-Streebog-256 напрямую для верификации */
@@ -55,11 +54,11 @@ class HkdfStreebogTest {
     }
 
     // -----------------------------------------------------------------------
-    // HKDF-Extract: null/пустая соль → hashLen нулевых байт
+    // HKDF-Extract: null/пустая соль -> hashLen нулевых байт
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("extract: null salt → детерминированный вывод")
+    @DisplayName("extract: null salt -> детерминированный вывод")
     void testextractNullSaltProducesConsistentOutput() {
         byte[] ikm = "test input key material".getBytes(StandardCharsets.US_ASCII);
         byte[] prk1 = HkdfStreebog.extract(null, ikm, 32);
@@ -78,7 +77,7 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("extract: null salt, hashLen=64")
+    @DisplayName("извлечение: нулевая соль, hashLen=64")
     void testextractNullSalt512() {
         byte[] ikm = "test input key material for 512".getBytes(StandardCharsets.US_ASCII);
         byte[] prk = HkdfStreebog.extract(null, ikm, 64);
@@ -116,7 +115,7 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("extract: разные соли → разные PRK")
+    @DisplayName("extract: разные соли -> разные PRK")
     void testextractDifferentSaltGivesDifferentPrk() {
         byte[] ikm = "same ikm".getBytes(StandardCharsets.US_ASCII);
         byte[] prk1 = HkdfStreebog.extract("salt1".getBytes(StandardCharsets.US_ASCII), ikm, 32);
@@ -129,7 +128,7 @@ class HkdfStreebogTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("expand: нулевая длина → пустой массив")
+    @DisplayName("expand: нулевая длина -> пустой массив")
     void testexpandZeroLength() {
         byte[] prk = new byte[32];
         byte[] result = HkdfStreebog.expand(prk, new byte[0], 0, 32);
@@ -146,7 +145,7 @@ class HkdfStreebogTest {
     void testexpandSingleIteration256() {
         byte[] prk = new byte[32];
         Arrays.fill(prk, (byte) 0xAB);
-        byte[] expected = hmac256(prk, new byte[]{1});
+        byte[] expected = hmac256(prk, new byte[] {1});
         byte[] actual = HkdfStreebog.expand(prk, new byte[0], 32, 32);
         assertArrayEquals(expected, actual);
     }
@@ -164,8 +163,8 @@ class HkdfStreebogTest {
         Arrays.fill(prk, (byte) 0xCD);
         byte[] info = "info".getBytes(StandardCharsets.US_ASCII);
 
-        byte[] t1 = hmac256(prk, concat(info, new byte[]{1}));
-        byte[] t2 = hmac256(prk, concat(t1, concat(info, new byte[]{2})));
+        byte[] t1 = hmac256(prk, concat(info, new byte[] {1}));
+        byte[] t2 = hmac256(prk, concat(t1, concat(info, new byte[] {2})));
 
         byte[] expected = new byte[64];
         System.arraycopy(t1, 0, expected, 0, 32);
@@ -185,8 +184,8 @@ class HkdfStreebogTest {
         Arrays.fill(prk, (byte) 0xEF);
         byte[] info = "info-512".getBytes(StandardCharsets.US_ASCII);
 
-        byte[] t1 = hmac512(prk, concat(info, new byte[]{1}));
-        byte[] t2 = hmac512(prk, concat(t1, concat(info, new byte[]{2})));
+        byte[] t1 = hmac512(prk, concat(info, new byte[] {1}));
+        byte[] t2 = hmac512(prk, concat(t1, concat(info, new byte[] {2})));
 
         byte[] expected = new byte[128];
         System.arraycopy(t1, 0, expected, 0, 64);
@@ -206,7 +205,7 @@ class HkdfStreebogTest {
         Arrays.fill(prk, (byte) 0x11);
         byte[] result = HkdfStreebog.expand(prk, new byte[0], 16, 32);
         assertEquals(16, result.length);
-        byte[] t1 = hmac256(prk, new byte[]{1});
+        byte[] t1 = hmac256(prk, new byte[] {1});
         byte[] expected = Arrays.copyOf(t1, 16);
         assertArrayEquals(expected, result);
     }
@@ -223,7 +222,7 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("expand: разные PRK → разные выводы")
+    @DisplayName("expand: разные PRK -> разные выводы")
     void testexpandDifferentPrkGivesDifferentOutput() {
         byte[] prk1 = new byte[32];
         Arrays.fill(prk1, (byte) 0x01);
@@ -236,7 +235,7 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("expand: разный info → разные выводы")
+    @DisplayName("expand: разный info -> разные выводы")
     void testexpandDifferentInfoGivesDifferentOutput() {
         byte[] prk = new byte[32];
         Arrays.fill(prk, (byte) 0x55);
@@ -250,7 +249,7 @@ class HkdfStreebogTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("extract-then-expand roundtrip, hashLen=32")
+    @DisplayName("обратимость извлечение-расширение, hashLen=32")
     void testextractThenExpandRoundtrip256() {
         byte[] ikm = "roundtrip test ikm".getBytes(StandardCharsets.US_ASCII);
         byte[] salt = "roundtrip salt".getBytes(StandardCharsets.US_ASCII);
@@ -269,10 +268,11 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("extract-then-expand roundtrip, hashLen=64")
+    @DisplayName("обратимость извлечение-расширение, hashLen=64")
     void testextractThenExpandRoundtrip512() {
-        byte[] ikm = "roundtrip 512 ikm with more data for 512-bit hash"
-                .getBytes(StandardCharsets.US_ASCII);
+        byte[] ikm =
+                "roundtrip 512 ikm with more data for 512-bit hash"
+                        .getBytes(StandardCharsets.US_ASCII);
         byte[] salt = "roundtrip salt 512".getBytes(StandardCharsets.US_ASCII);
         byte[] info = "roundtrip info 512".getBytes(StandardCharsets.US_ASCII);
 
@@ -332,7 +332,7 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("expandLabel: разные метки → разные выводы")
+    @DisplayName("expandLabel: разные метки -> разные выводы")
     void testexpandLabelDifferentLabelsProduceDifferentOutput() {
         byte[] secret = new byte[32];
         Arrays.fill(secret, (byte) 0xCC);
@@ -354,7 +354,7 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("expandLabel: hashLen=64")
+    @DisplayName("метка расширения: hashLen=64")
     void testexpandLabel512() {
         byte[] secret = new byte[64];
         Arrays.fill(secret, (byte) 0xEE);
@@ -382,17 +382,16 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("deriveSecret: разные метки → разные выводы")
+    @DisplayName("deriveSecret: разные метки -> разные выводы")
     void testderiveSecretDifferentLabels() {
         byte[] secret = new byte[32];
         Arrays.fill(secret, (byte) 0x01);
         byte[] transcript = new byte[32];
 
-        byte[] cHsTraffic = HkdfStreebog.deriveSecret(
-                secret, "c hs traffic", transcript, 32);
-        byte[] sHsTraffic = HkdfStreebog.deriveSecret(
-                secret, "s hs traffic", transcript, 32);
-        assertFalse(Arrays.equals(cHsTraffic, sHsTraffic),
+        byte[] cHsTraffic = HkdfStreebog.deriveSecret(secret, "c hs traffic", transcript, 32);
+        byte[] sHsTraffic = HkdfStreebog.deriveSecret(secret, "s hs traffic", transcript, 32);
+        assertFalse(
+                Arrays.equals(cHsTraffic, sHsTraffic),
                 "Разные метки deriveSecret должны давать разные выводы");
     }
 
@@ -409,15 +408,17 @@ class HkdfStreebogTest {
     }
 
     @Test
-    @DisplayName("deriveSecret: разный transcript → разные выводы")
+    @DisplayName("deriveSecret: разный transcript -> разные выводы")
     void testderiveSecretDifferentTranscript() {
         byte[] secret = new byte[32];
         Arrays.fill(secret, (byte) 0x03);
 
-        byte[] d1 = HkdfStreebog.deriveSecret(secret, "label",
-                "transcript A".getBytes(StandardCharsets.US_ASCII), 32);
-        byte[] d2 = HkdfStreebog.deriveSecret(secret, "label",
-                "transcript B".getBytes(StandardCharsets.US_ASCII), 32);
+        byte[] d1 =
+                HkdfStreebog.deriveSecret(
+                        secret, "label", "transcript A".getBytes(StandardCharsets.US_ASCII), 32);
+        byte[] d2 =
+                HkdfStreebog.deriveSecret(
+                        secret, "label", "transcript B".getBytes(StandardCharsets.US_ASCII), 32);
         assertFalse(Arrays.equals(d1, d2));
     }
 
@@ -426,59 +427,66 @@ class HkdfStreebogTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("extract: null IKM → исключение")
+    @DisplayName("extract: null IKM -> исключение")
     void testextractNullIkmThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> HkdfStreebog.extract(new byte[32], null, 32));
+        assertThrows(
+                IllegalArgumentException.class, () -> HkdfStreebog.extract(new byte[32], null, 32));
     }
 
     @Test
-    @DisplayName("extract: неверный hashLen → исключение")
+    @DisplayName("extract: неверный hashLen -> исключение")
     void testextractInvalidHashLenThrows() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> HkdfStreebog.extract(new byte[16], new byte[16], 16));
     }
 
     @Test
-    @DisplayName("expand: null PRK → исключение")
+    @DisplayName("expand: null PRK -> исключение")
     void testexpandNullPrkThrows() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> HkdfStreebog.expand(null, new byte[0], 32, 32));
     }
 
     @Test
-    @DisplayName("expand: неверный hashLen → исключение")
+    @DisplayName("expand: неверный hashLen -> исключение")
     void testexpandInvalidHashLenThrows() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> HkdfStreebog.expand(new byte[16], new byte[0], 32, 16));
     }
 
     @Test
-    @DisplayName("expand: отрицательная длина → исключение")
+    @DisplayName("expand: отрицательная длина -> исключение")
     void testexpandNegativeLengthThrows() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> HkdfStreebog.expand(new byte[32], new byte[0], -1, 32));
     }
 
     @Test
-    @DisplayName("expand: длина > 255×hashLen → исключение")
+    @DisplayName("expand: длина > 255×hashLen -> исключение")
     void testexpandTooLargeOutputThrows() {
         // 257 > 255 (макс. итераций по RFC 5869 §2.3), поэтому исключение
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> HkdfStreebog.expand(new byte[32], new byte[0], 8193, 32));
     }
 
     @Test
-    @DisplayName("expandLabel: null secret → исключение")
+    @DisplayName("expandLabel: null secret -> исключение")
     void testexpandLabelNullSecretThrows() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> HkdfStreebog.expandLabel(null, "label", new byte[0], 32, 32));
     }
 
     @Test
-    @DisplayName("expandLabel: null label → исключение")
+    @DisplayName("expandLabel: null label -> исключение")
     void testexpandLabelNullLabelThrows() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> HkdfStreebog.expandLabel(new byte[32], (String) null, new byte[0], 32, 32));
     }
 }

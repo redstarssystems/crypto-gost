@@ -1,14 +1,13 @@
 package org.rssys.gost.tls13.config;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsUtils;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
 
 /**
  * Конфигурация клиента TLS 1.3.
@@ -21,7 +20,7 @@ import java.util.List;
  */
 public final class TlsClientConfig {
     private final TlsCiphersuite ciphersuite;
-    private List<TlsCertificate> clientCertificateChain;
+    private List<GostCertificate> clientCertificateChain;
     private PrivateKeyParameters clientPrivateKey;
     private List<PublicKeyParameters> caPublicKeys;
     private String serverHostname;
@@ -45,7 +44,7 @@ public final class TlsClientConfig {
      *              только листовой сертификат, если промежуточные не нужны)
      * @return this
      */
-    public TlsClientConfig withClientCertificateChain(List<TlsCertificate> chain) {
+    public TlsClientConfig withClientCertificateChain(List<GostCertificate> chain) {
         this.clientCertificateChain = chain;
         return this;
     }
@@ -58,7 +57,7 @@ public final class TlsClientConfig {
      * @param certs сертификаты клиента leaf-first
      * @return this
      */
-    public TlsClientConfig withClientCertificateChain(TlsCertificate... certs) {
+    public TlsClientConfig withClientCertificateChain(GostCertificate... certs) {
         return withClientCertificateChain(Arrays.asList(certs));
     }
 
@@ -122,19 +121,33 @@ public final class TlsClientConfig {
     }
 
     // package-private аксессоры для фабрики TlsSession
-    public TlsCiphersuite getCiphersuite() { return ciphersuite; }
-    public List<TlsCertificate> getClientCertificateChain() {
+    public TlsCiphersuite getCiphersuite() {
+        return ciphersuite;
+    }
+
+    public List<GostCertificate> getClientCertificateChain() {
         return clientCertificateChain;
     }
-    public PrivateKeyParameters getClientPrivateKey() { return clientPrivateKey; }
-    public List<PublicKeyParameters> getCaPublicKeys() { return caPublicKeys; }
+
+    public PrivateKeyParameters getClientPrivateKey() {
+        return clientPrivateKey;
+    }
+
+    public List<PublicKeyParameters> getCaPublicKeys() {
+        return caPublicKeys;
+    }
 
     public PublicKeyParameters getCaPublicKey() {
-        return (caPublicKeys != null && !caPublicKeys.isEmpty())
-                ? caPublicKeys.get(0) : null;
+        return (caPublicKeys != null && !caPublicKeys.isEmpty()) ? caPublicKeys.get(0) : null;
     }
-    public String getServerHostname() { return serverHostname; }
-    public List<String> getAlpnProtocols() { return alpnProtocols; }
+
+    public String getServerHostname() {
+        return serverHostname;
+    }
+
+    public List<String> getAlpnProtocols() {
+        return alpnProtocols;
+    }
 
     /**
      * Устанавливает селектор сертификата клиента для mTLS.

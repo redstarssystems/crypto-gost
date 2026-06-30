@@ -149,7 +149,7 @@ class OpenSslEcdhCrossValidationTest {
             pairA.getPrivate().destroy();
 
             assertArrayEquals(sharedGost, sharedOssl,
-                    () -> spec.name() + ": crypto-gost A → OpenSSL B не совпадает\n"
+                    () -> spec.name() + ": crypto-gost A -> OpenSSL B не совпадает\n"
                             + CrossValUtils.diffContext(sharedGost, sharedOssl));
             assertArrayEquals(sharedGost, sharedGostRev,
                     () -> spec.name() + ": симметричность нарушена (A·B ≠ B·A)");

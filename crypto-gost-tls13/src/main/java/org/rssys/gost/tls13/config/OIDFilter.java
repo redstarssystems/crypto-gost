@@ -42,7 +42,11 @@ public record OIDFilter(byte[] extensionOid, byte[] extensionValues) {
 
     @Override
     public String toString() {
-        return "OIDFilter{oid=" + bytesToHex(extensionOid) + ", values=" + bytesToHex(extensionValues) + "}";
+        return "OIDFilter{oid="
+                + bytesToHex(extensionOid)
+                + ", values="
+                + bytesToHex(extensionValues)
+                + "}";
     }
 
     private static String bytesToHex(byte[] b) {

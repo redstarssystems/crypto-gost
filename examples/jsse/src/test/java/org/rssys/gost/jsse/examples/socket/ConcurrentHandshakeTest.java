@@ -1,5 +1,16 @@
 package org.rssys.gost.jsse.examples.socket;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.Security;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,19 +24,6 @@ import org.rssys.gost.jsse.socket.GostSSLSocket;
 import org.rssys.gost.jsse.testkit.GostTestCerts;
 import org.rssys.gost.jsse.testkit.GostTestCerts.CertChain;
 import org.rssys.gost.tls13.TlsCiphersuite;
-
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
-import java.security.Security;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Тест 100 параллельных TLS handshake'ов к одному {@link GostSSLServerSocket}.
@@ -106,67 +104,78 @@ class ConcurrentHandshakeTest {
 
         serverPool = Executors.newFixedThreadPool(N);
         for (int i = 0; i < N; i++) {
-            serverPool.submit(() -> {
-                try {
-                    serverBlocked.countDown();
-                    GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept();
-                    accepted.startHandshake();
-                    // Читаем PING от клиента
-                    InputStream in = accepted.getInputStream();
-                    OutputStream out = accepted.getOutputStream();
-                    byte[] buf = new byte[1024];
-                    int len = in.read(buf);
-                    if (len > 0) {
-                        out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
-                        out.flush();
-                    }
-                } catch (Exception e) {
-                    firstError.compareAndSet(null,
-                            "Server error: " + e.getClass().getSimpleName()
-                                    + ": " + e.getMessage());
-                }
-            });
+            serverPool.submit(
+                    () -> {
+                        try {
+                            serverBlocked.countDown();
+                            GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept();
+                            accepted.startHandshake();
+                            // Читаем PING от клиента
+                            InputStream in = accepted.getInputStream();
+                            OutputStream out = accepted.getOutputStream();
+                            byte[] buf = new byte[1024];
+                            int len = in.read(buf);
+                            if (len > 0) {
+                                out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
+                                out.flush();
+                            }
+                        } catch (Exception e) {
+                            firstError.compareAndSet(
+                                    null,
+                                    "Server error: "
+                                            + e.getClass().getSimpleName()
+                                            + ": "
+                                            + e.getMessage());
+                        }
+                    });
         }
 
         // Ждём пока все серверные треды заблокируются на accept()
         // Создаём клиентов после того как сервер готов
-        assertTrue(serverBlocked.await(10, TimeUnit.SECONDS),
+        assertTrue(
+                serverBlocked.await(10, TimeUnit.SECONDS),
                 "Все серверные треды должны войти в accept()");
 
         // Клиентский пул: N тредов, каждый создаёт GostSSLSocket
         clientPool = Executors.newFixedThreadPool(N);
         for (int i = 0; i < N; i++) {
-            clientPool.submit(() -> {
-                try {
-                    GostSSLSocket client = new GostSSLSocket("localhost", port,
-                            clientKm, clientTm, clientCtx);
-                    client.setSoTimeout(15000);
-                    // Handshake стартует автоматически при первом write
-                    OutputStream out = client.getOutputStream();
-                    out.write("PING\n".getBytes(StandardCharsets.UTF_8));
-                    out.flush();
+            clientPool.submit(
+                    () -> {
+                        try {
+                            GostSSLSocket client =
+                                    new GostSSLSocket(
+                                            "localhost", port, clientKm, clientTm, clientCtx);
+                            client.setSoTimeout(15000);
+                            // Handshake стартует автоматически при первом write
+                            OutputStream out = client.getOutputStream();
+                            out.write("PING\n".getBytes(StandardCharsets.UTF_8));
+                            out.flush();
 
-                    InputStream in = client.getInputStream();
-                    byte[] buf = new byte[1024];
-                    int len = in.read(buf);
-                    String response = new String(buf, 0, len, StandardCharsets.UTF_8).trim();
-                    if (!"PONG".equals(response)) {
-                        firstError.compareAndSet(null,
-                                "Unexpected response: " + response);
-                    }
-                    client.close();
-                } catch (Exception e) {
-                    firstError.compareAndSet(null,
-                            "Client error: " + e.getClass().getSimpleName()
-                                    + ": " + e.getMessage());
-                } finally {
-                    allDone.countDown();
-                }
-            });
+                            InputStream in = client.getInputStream();
+                            byte[] buf = new byte[1024];
+                            int len = in.read(buf);
+                            String response =
+                                    new String(buf, 0, len, StandardCharsets.UTF_8).trim();
+                            if (!"PONG".equals(response)) {
+                                firstError.compareAndSet(null, "Unexpected response: " + response);
+                            }
+                            client.close();
+                        } catch (Exception e) {
+                            firstError.compareAndSet(
+                                    null,
+                                    "Client error: "
+                                            + e.getClass().getSimpleName()
+                                            + ": "
+                                            + e.getMessage());
+                        } finally {
+                            allDone.countDown();
+                        }
+                    });
         }
 
         // Ждём завершения всех клиентов
-        assertTrue(allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS),
+        assertTrue(
+                allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS),
                 "Не все клиенты завершились за " + TIMEOUT_SEC + " с");
 
         // Верификация
@@ -175,12 +184,12 @@ class ConcurrentHandshakeTest {
         }
 
         // Сервер выдал NST каждому клиенту — в serverCtx должны быть PSK
-        assertTrue(serverCtx.getPskStore().size() > 0,
+        assertTrue(
+                serverCtx.getPskStore().size() > 0,
                 "Сервер должен выдать NST после " + N + " handshake'ов");
 
         // Клиент получил NST — в clientCtx должны быть PSK
-        assertTrue(clientCtx.getPskStore().size() > 0,
-                "Клиент должен получить NST от сервера");
+        assertTrue(clientCtx.getPskStore().size() > 0, "Клиент должен получить NST от сервера");
     }
 
     private static void shutdownPool(ExecutorService pool) {

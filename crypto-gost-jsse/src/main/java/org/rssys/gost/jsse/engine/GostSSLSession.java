@@ -1,13 +1,5 @@
 package org.rssys.gost.jsse.engine;
 
-import org.rssys.gost.jsse.GostJsseConstants;
-
-import javax.net.ssl.ExtendedSSLSession;
-import javax.net.ssl.SSLPeerUnverifiedException;
-import javax.net.ssl.SSLSessionBindingEvent;
-import javax.net.ssl.SSLSessionBindingListener;
-import javax.net.ssl.SSLSessionContext;
-import org.rssys.gost.util.CryptoRandom;
 import java.security.Principal;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
@@ -15,6 +7,14 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import javax.net.ssl.ExtendedSSLSession;
+import javax.net.ssl.SSLPeerUnverifiedException;
+import javax.net.ssl.SSLSessionBindingEvent;
+import javax.net.ssl.SSLSessionBindingListener;
+import javax.net.ssl.SSLSessionContext;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * Реализация SSLSession для ГОСТ TLS 1.3.
@@ -51,9 +51,12 @@ public final class GostSSLSession extends ExtendedSSLSession {
     private int applicationBufferSize = GostJsseConstants.DEFAULT_APPLICATION_BUFFER_SIZE;
     private int packetBufferSize = GostJsseConstants.DEFAULT_PACKET_BUFFER_SIZE;
 
-    public GostSSLSession(String cipherSuite, String peerHost, int peerPort,
-                          X509Certificate[] peerCertificates,
-                          X509Certificate[] localCertificates) {
+    public GostSSLSession(
+            String cipherSuite,
+            String peerHost,
+            int peerPort,
+            X509Certificate[] peerCertificates,
+            X509Certificate[] localCertificates) {
         this(cipherSuite, peerHost, peerPort, peerCertificates, localCertificates, null);
     }
 
@@ -71,20 +74,25 @@ public final class GostSSLSession extends ExtendedSSLSession {
      * @param localCertificates  собственные сертификаты (leaf-first), не null
      * @param applicationProtocol согласованный протокол ALPN, или null
      */
-    public GostSSLSession(String cipherSuite, String peerHost, int peerPort,
-                          X509Certificate[] peerCertificates,
-                          X509Certificate[] localCertificates,
-                          String applicationProtocol) {
+    public GostSSLSession(
+            String cipherSuite,
+            String peerHost,
+            int peerPort,
+            X509Certificate[] peerCertificates,
+            X509Certificate[] localCertificates,
+            String applicationProtocol) {
         this.cipherSuite = cipherSuite;
         this.protocol = GostJsseConstants.PROTOCOL_TLS_1_3;
         this.peerHost = peerHost;
         this.peerPort = peerPort;
-        this.peerCertificates = peerCertificates != null ? peerCertificates.clone() : new X509Certificate[0];
-        this.localCertificates = localCertificates != null ? localCertificates.clone() : new X509Certificate[0];
+        this.peerCertificates =
+                peerCertificates != null ? peerCertificates.clone() : new X509Certificate[0];
+        this.localCertificates =
+                localCertificates != null ? localCertificates.clone() : new X509Certificate[0];
         this.applicationProtocol = applicationProtocol;
         this.creationTime = System.currentTimeMillis();
         this.lastAccessedTime = creationTime;
-        this.sessionId = new byte[32];
+        this.sessionId = new byte[TlsConstants.SESSION_ID_LENGTH];
         CryptoRandom.INSTANCE.nextBytes(this.sessionId);
     }
 
@@ -277,5 +285,4 @@ public final class GostSSLSession extends ExtendedSSLSession {
     byte[] getOcspResponse() {
         return ocspResponse != null ? ocspResponse.clone() : null;
     }
-
 }

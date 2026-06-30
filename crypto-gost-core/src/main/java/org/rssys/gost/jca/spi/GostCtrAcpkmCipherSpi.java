@@ -1,27 +1,26 @@
 package org.rssys.gost.jca.spi;
 
-import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.cipher.Kuznyechik;
-import org.rssys.gost.cipher.ParametersWithIV;
-import org.rssys.gost.cipher.mode.CtrAcpkmMode;
-import org.rssys.gost.jca.key.GostSecretKey;
-import org.rssys.gost.util.CryptoRandom;
-
+import java.security.AlgorithmParameters;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.Key;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
+import java.util.Arrays;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.BadPaddingException;
 import javax.crypto.CipherSpi;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.SecretKey;
 import javax.crypto.ShortBufferException;
-import java.security.MessageDigest;
 import javax.crypto.spec.IvParameterSpec;
-import java.security.AlgorithmParameters;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.Key;
-import java.security.SecureRandom;
-import java.security.spec.AlgorithmParameterSpec;
-import java.util.Arrays;
+import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.cipher.mode.CtrAcpkmMode;
+import org.rssys.gost.jca.key.GostSecretKey;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * JCA SPI для Кузнечик-CTR-ACPKM (RFC 9337 §5).
@@ -41,12 +40,16 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
 
     /** Без OMAC — чистый CTR-ACPKM. */
     public static final class WithoutOmac extends GostCtrAcpkmCipherSpi {
-        public WithoutOmac() { super(false); }
+        public WithoutOmac() {
+            super(false);
+        }
     }
 
     /** С OMAC — CTR-ACPKM с CMAC (Encrypt-then-MAC). */
     public static final class WithOmac extends GostCtrAcpkmCipherSpi {
-        public WithOmac() { super(true); }
+        public WithOmac() {
+            super(true);
+        }
     }
 
     private static final int UKM_LEN = 16;
@@ -71,10 +74,9 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
      */
     @Override
     protected void engineSetMode(String modeStr) throws java.security.NoSuchAlgorithmException {
-        if (!"CTR-ACPKM".equalsIgnoreCase(modeStr)
-            && !"CTR-ACPKM-OMAC".equalsIgnoreCase(modeStr)) {
+        if (!"CTR-ACPKM".equalsIgnoreCase(modeStr) && !"CTR-ACPKM-OMAC".equalsIgnoreCase(modeStr)) {
             throw new java.security.NoSuchAlgorithmException(
-                "Only CTR-ACPKM/CTR-ACPKM-OMAC supported, got: " + modeStr);
+                    "Only CTR-ACPKM/CTR-ACPKM-OMAC supported, got: " + modeStr);
         }
     }
 
@@ -113,22 +115,23 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected void engineInit(int opmode, Key key, AlgorithmParameterSpec params,
-                              SecureRandom random)
+    protected void engineInit(
+            int opmode, Key key, AlgorithmParameterSpec params, SecureRandom random)
             throws InvalidKeyException, InvalidAlgorithmParameterException {
         this.keyParam = extractSymmetricKey(key);
-        forEncryption = (opmode == javax.crypto.Cipher.ENCRYPT_MODE
-                      || opmode == javax.crypto.Cipher.WRAP_MODE);
+        forEncryption =
+                (opmode == javax.crypto.Cipher.ENCRYPT_MODE
+                        || opmode == javax.crypto.Cipher.WRAP_MODE);
 
         if (params instanceof IvParameterSpec ivp) {
             byte[] iv = ivp.getIV();
             if (useOmac && iv.length != UKM_LEN) {
                 throw new InvalidAlgorithmParameterException(
-                    "CTR-ACPKM-OMAC requires 16-byte UKM, got " + iv.length);
+                        "CTR-ACPKM-OMAC requires 16-byte UKM, got " + iv.length);
             }
             if (!useOmac && iv.length < 8) {
                 throw new InvalidAlgorithmParameterException(
-                    "CTR-ACPKM requires UKM of at least 8 bytes, got " + iv.length);
+                        "CTR-ACPKM requires UKM of at least 8 bytes, got " + iv.length);
             }
             this.ukm = Arrays.copyOf(iv, iv.length);
         } else if (params == null) {
@@ -137,7 +140,7 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
                 (random != null ? random : CryptoRandom.INSTANCE).nextBytes(ukm);
             } else {
                 throw new InvalidAlgorithmParameterException(
-                    "CTR-ACPKM decryption requires UKM (IvParameterSpec)");
+                        "CTR-ACPKM decryption requires UKM (IvParameterSpec)");
             }
         } else {
             throw new InvalidAlgorithmParameterException("Use IvParameterSpec for CTR-ACPKM");
@@ -150,24 +153,21 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected void engineInit(int opmode, Key key, AlgorithmParameters params,
-                              SecureRandom random)
+    protected void engineInit(int opmode, Key key, AlgorithmParameters params, SecureRandom random)
             throws InvalidKeyException, InvalidAlgorithmParameterException {
         AlgorithmParameterSpec spec = null;
         if (params != null) {
             try {
                 spec = params.getParameterSpec(IvParameterSpec.class);
             } catch (Exception e) {
-                throw new InvalidAlgorithmParameterException(
-                    "Cannot extract IvParameterSpec", e);
+                throw new InvalidAlgorithmParameterException("Cannot extract IvParameterSpec", e);
             }
         }
         engineInit(opmode, key, spec, random);
     }
 
     @Override
-    protected void engineInit(int opmode, Key key, SecureRandom random)
-            throws InvalidKeyException {
+    protected void engineInit(int opmode, Key key, SecureRandom random) throws InvalidKeyException {
         try {
             engineInit(opmode, key, (AlgorithmParameterSpec) null, random);
         } catch (InvalidAlgorithmParameterException e) {
@@ -188,8 +188,9 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected int engineUpdate(byte[] input, int inputOffset, int inputLen,
-                               byte[] output, int outputOffset) throws ShortBufferException {
+    protected int engineUpdate(
+            byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
+            throws ShortBufferException {
         byte[] result = engineUpdate(input, inputOffset, inputLen);
         if (result.length > output.length - outputOffset) {
             throw new ShortBufferException("Output buffer too short");
@@ -245,13 +246,13 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected int engineDoFinal(byte[] input, int inputOffset, int inputLen,
-                                byte[] output, int outputOffset)
+    protected int engineDoFinal(
+            byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
             throws ShortBufferException, IllegalBlockSizeException, BadPaddingException {
         byte[] result = engineDoFinal(input, inputOffset, inputLen);
         if (result.length > output.length - outputOffset) {
             throw new ShortBufferException(
-                "Output buffer too small: need " + result.length + " bytes");
+                    "Output buffer too small: need " + result.length + " bytes");
         }
         System.arraycopy(result, 0, output, outputOffset, result.length);
         return result.length;
@@ -262,10 +263,10 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
         if (key instanceof GostSecretKey gsk) return gsk.toSymmetricKey();
         if (key instanceof SecretKey && "RAW".equals(key.getFormat())) {
             byte[] encoded = key.getEncoded();
-            if (encoded == null || encoded.length != 32) {
+            if (encoded == null || encoded.length != Kuznyechik.KEY_SIZE) {
                 throw new InvalidKeyException(
-                    "Kuznyechik requires 32-byte key, got "
-                    + (encoded == null ? "null" : encoded.length));
+                        "Kuznyechik requires 32-byte key, got "
+                                + (encoded == null ? "null" : encoded.length));
             }
             return new SymmetricKey(encoded);
         }

@@ -1,15 +1,14 @@
 package org.rssys.gost.api;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
-
 import org.rssys.gost.util.CryptoRandom;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("KeyGenerator Tests")
 class KeyGeneratorTest {
@@ -30,8 +29,9 @@ class KeyGeneratorTest {
     void testSymmetricKeyUniqueness() {
         SymmetricKey k1 = KeyGenerator.generateSymmetricKey();
         SymmetricKey k2 = KeyGenerator.generateSymmetricKey();
-        assertFalse(Arrays.equals(k1.getKey(), k2.getKey()),
-            "Два сгенерированных ключа не должны совпадать");
+        assertFalse(
+                Arrays.equals(k1.getKey(), k2.getKey()),
+                "Два сгенерированных ключа не должны совпадать");
     }
 
     @Test
@@ -77,8 +77,10 @@ class KeyGeneratorTest {
         ECParameters params = ECParameters.cryptoProA();
         KeyPair p1 = KeyGenerator.generateKeyPair(params);
         KeyPair p2 = KeyGenerator.generateKeyPair(params);
-        assertNotEquals(p1.getPrivate().getD(), p2.getPrivate().getD(),
-            "Два сгенерированных закрытых ключа не должны совпадать");
+        assertNotEquals(
+                p1.getPrivate().getD(),
+                p2.getPrivate().getD(),
+                "Два сгенерированных закрытых ключа не должны совпадать");
     }
 
     @Test
@@ -89,7 +91,7 @@ class KeyGeneratorTest {
 
         ECPoint g = ECPoint.affine(params.gx, params.gy, params);
         ECPoint expectedQ = g.multiply(pair.getPrivate().getD()).normalize();
-        ECPoint actualQ   = pair.getPublic().getQ().normalize();
+        ECPoint actualQ = pair.getPublic().getQ().normalize();
 
         assertEquals(expectedQ.getX(), actualQ.getX(), "Qx должен совпадать");
         assertEquals(expectedQ.getY(), actualQ.getY(), "Qy должен совпадать");
@@ -113,28 +115,30 @@ class KeyGeneratorTest {
     @DisplayName("deriveKey: длина 32 байта")
     void testDeriveKeyLength() throws Exception {
         byte[] password = "test-password".getBytes("UTF-8");
-        byte[] salt     = "test-salt-16byt".getBytes("UTF-8");
+        byte[] salt = "test-salt-16byt".getBytes("UTF-8");
         SymmetricKey key = KeyGenerator.deriveKey(password, salt, 16, 1, 1);
         assertEquals(32, key.getKey().length);
     }
 
     @Test
-    @DisplayName("deriveKey: детерминированность — одинаковые параметры → одинаковый ключ")
+    @DisplayName("deriveKey: детерминированность — одинаковые параметры -> одинаковый ключ")
     void testDeriveKeyDeterministic() throws Exception {
         byte[] password = "my-password".getBytes("UTF-8");
-        byte[] salt     = "my-salt-16bytes".getBytes("UTF-8");
+        byte[] salt = "my-salt-16bytes".getBytes("UTF-8");
         SymmetricKey k1 = KeyGenerator.deriveKey(password, salt, 16, 1, 1);
         SymmetricKey k2 = KeyGenerator.deriveKey(password, salt, 16, 1, 1);
-        assertArrayEquals(k1.getKey(), k2.getKey(), "Производный ключ должен быть детерминированным");
+        assertArrayEquals(
+                k1.getKey(), k2.getKey(), "Производный ключ должен быть детерминированным");
     }
 
     @Test
-    @DisplayName("deriveKey: разные пароли → разные ключи")
+    @DisplayName("deriveKey: разные пароли -> разные ключи")
     void testDeriveKeyPasswordSensitivity() throws Exception {
         byte[] salt = "fixed-salt-12345".getBytes("UTF-8");
         SymmetricKey k1 = KeyGenerator.deriveKey("password1".getBytes("UTF-8"), salt, 16, 1, 1);
         SymmetricKey k2 = KeyGenerator.deriveKey("password2".getBytes("UTF-8"), salt, 16, 1, 1);
-        assertFalse(Arrays.equals(k1.getKey(), k2.getKey()),
-            "Разные пароли должны давать разные ключи");
+        assertFalse(
+                Arrays.equals(k1.getKey(), k2.getKey()),
+                "Разные пароли должны давать разные ключи");
     }
 }

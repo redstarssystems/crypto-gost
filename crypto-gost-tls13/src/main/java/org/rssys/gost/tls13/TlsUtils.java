@@ -9,8 +9,7 @@ import java.util.List;
  */
 public final class TlsUtils {
 
-    private TlsUtils() {
-    }
+    private TlsUtils() {}
 
     /**
      * Проверяет список протоколов ALPN на соответствие RFC 7301 §3.1:

@@ -1,12 +1,11 @@
 package org.rssys.gost.kdf;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 
 /**
  * Тесты KDF_GOST_R_3411_2012_256 (RFC 7836 раздел 4).
@@ -61,8 +60,12 @@ class KdfGostR3411_2012_256Test {
         byte[] key = new byte[32];
         byte[] seed = new byte[8];
 
-        byte[] r1 = KdfGostR3411_2012_256.expand(key, "a".getBytes(StandardCharsets.US_ASCII), seed, 32);
-        byte[] r2 = KdfGostR3411_2012_256.expand(key, "b".getBytes(StandardCharsets.US_ASCII), seed, 32);
+        byte[] r1 =
+                KdfGostR3411_2012_256.expand(
+                        key, "a".getBytes(StandardCharsets.US_ASCII), seed, 32);
+        byte[] r2 =
+                KdfGostR3411_2012_256.expand(
+                        key, "b".getBytes(StandardCharsets.US_ASCII), seed, 32);
         assertFalse(Arrays.equals(r1, r2));
     }
 
@@ -132,8 +135,12 @@ class KdfGostR3411_2012_256Test {
         byte[] result = KdfGostR3411_2012_256.expand(key, label, seed, 32);
 
         // Проверяем, что результат не совпадает с произвольными вариациями
-        byte[] wrongLabel = KdfGostR3411_2012_256.expand(key, "wrong".getBytes(StandardCharsets.US_ASCII), seed, 32);
-        byte[] wrongSeed = KdfGostR3411_2012_256.expand(key, label, "wrong".getBytes(StandardCharsets.US_ASCII), 32);
+        byte[] wrongLabel =
+                KdfGostR3411_2012_256.expand(
+                        key, "wrong".getBytes(StandardCharsets.US_ASCII), seed, 32);
+        byte[] wrongSeed =
+                KdfGostR3411_2012_256.expand(
+                        key, label, "wrong".getBytes(StandardCharsets.US_ASCII), 32);
         assertFalse(Arrays.equals(result, wrongLabel));
         assertFalse(Arrays.equals(result, wrongSeed));
     }
@@ -145,35 +152,42 @@ class KdfGostR3411_2012_256Test {
     @Test
     @DisplayName("expand: null key — IllegalArgumentException")
     void testNullKey() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> KdfGostR3411_2012_256.expand(null, new byte[0], new byte[0], 32));
     }
 
     @Test
     @DisplayName("expand: null label — IllegalArgumentException")
     void testNullLabel() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> KdfGostR3411_2012_256.expand(new byte[32], null, new byte[0], 32));
     }
 
     @Test
     @DisplayName("expand: null seed — IllegalArgumentException")
     void testNullSeed() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> KdfGostR3411_2012_256.expand(new byte[32], new byte[0], null, 32));
     }
 
     @Test
     @DisplayName("expand: отрицательная длина — IllegalArgumentException")
     void testNegativeLength() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> KdfGostR3411_2012_256.expand(new byte[32], new byte[0], new byte[0], -1));
     }
 
     @Test
     @DisplayName("expand: длина > 255*32 — IllegalArgumentException")
     void testTooLargeLength() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KdfGostR3411_2012_256.expand(new byte[32], new byte[0], new byte[0], 256 * 32));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        KdfGostR3411_2012_256.expand(
+                                new byte[32], new byte[0], new byte[0], 256 * 32));
     }
 }

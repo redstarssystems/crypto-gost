@@ -1,10 +1,10 @@
 package org.rssys.gost.tls13.crypto;
 
+import java.nio.charset.StandardCharsets;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.tls13.TlsConstants;
-import java.nio.charset.StandardCharsets;
 
 /**
  * HKDF на основе HMAC-Streebog (RFC 5869) для TLS 1.3 (RFC 8446 §7.1).
@@ -28,23 +28,36 @@ public final class HkdfStreebog {
     // Precomputed "tls13 " + label (RFC 8446 §7.1) — одна аллокация при
     // class loading, избегает конкатенации строк и кодирования на каждый вызов.
     // ========================================================================
-    public static final byte[] PREFIXED_DERIVED          = "tls13 derived".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_S_HS_TRAFFIC     = "tls13 s hs traffic".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_C_HS_TRAFFIC     = "tls13 c hs traffic".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_S_AP_TRAFFIC     = "tls13 s ap traffic".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_C_AP_TRAFFIC     = "tls13 c ap traffic".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_KEY              = "tls13 key".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_IV               = "tls13 iv".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_FINISHED         = "tls13 finished".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_RES_BINDER       = "tls13 res binder".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_RES_MASTER       = "tls13 res master".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_RESUMPTION       = "tls13 resumption".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_TRAFFIC_UPD      = "tls13 traffic upd".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_DERIVED =
+            "tls13 derived".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_S_HS_TRAFFIC =
+            "tls13 s hs traffic".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_C_HS_TRAFFIC =
+            "tls13 c hs traffic".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_S_AP_TRAFFIC =
+            "tls13 s ap traffic".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_C_AP_TRAFFIC =
+            "tls13 c ap traffic".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_KEY = "tls13 key".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_IV = "tls13 iv".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_FINISHED =
+            "tls13 finished".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_RES_BINDER =
+            "tls13 res binder".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_RES_MASTER =
+            "tls13 res master".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_RESUMPTION =
+            "tls13 resumption".getBytes(StandardCharsets.US_ASCII);
+    public static final byte[] PREFIXED_TRAFFIC_UPD =
+            "tls13 traffic upd".getBytes(StandardCharsets.US_ASCII);
+
     /** Пустой контекст — заменяет new byte[0] в caller'ах. Длина 0 — System.arraycopy no-op. */
-    public static final byte[] EMPTY_CONTEXT             = new byte[0];
+    public static final byte[] EMPTY_CONTEXT = new byte[0];
+
     /** ZERO_SALT для HKDF-Extract, когда salt не передан — одна аллокация при class loading. */
-    private static final byte[] ZERO_SALT_256            = new byte[32];
-    private static final byte[] ZERO_SALT_512            = new byte[64];
+    private static final byte[] ZERO_SALT_256 = new byte[32];
+
+    private static final byte[] ZERO_SALT_512 = new byte[64];
 
     /**
      * HKDF-Extract: PRK = HMAC-Streebog(salt, IKM)
@@ -58,7 +71,8 @@ public final class HkdfStreebog {
         if (ikm == null) {
             throw new IllegalArgumentException("IKM must not be null");
         }
-        if (hashLen != TlsConstants.STREEBOG_256_HASH_LEN && hashLen != TlsConstants.STREEBOG_512_HASH_LEN) {
+        if (hashLen != TlsConstants.STREEBOG_256_HASH_LEN
+                && hashLen != TlsConstants.STREEBOG_512_HASH_LEN) {
             throw new IllegalArgumentException("hashLen must be 32 or 64");
         }
         if (salt == null || salt.length == 0) {
@@ -94,7 +108,8 @@ public final class HkdfStreebog {
         if (length < 0) {
             throw new IllegalArgumentException("Length must be non-negative");
         }
-        if (hashLen != TlsConstants.STREEBOG_256_HASH_LEN && hashLen != TlsConstants.STREEBOG_512_HASH_LEN) {
+        if (hashLen != TlsConstants.STREEBOG_256_HASH_LEN
+                && hashLen != TlsConstants.STREEBOG_512_HASH_LEN) {
             throw new IllegalArgumentException("hashLen must be 32 or 64");
         }
         if (length == 0) {
@@ -123,12 +138,12 @@ public final class HkdfStreebog {
 
         for (int i = 1; i <= n; i++) {
             if (i > 1) {
-                hmac.update(t, 0, hashLen);   // T(i-1) для i >= 2
+                hmac.update(t, 0, hashLen); // T(i-1) для i >= 2
             }
             hmac.update(info, 0, info.length);
             hmac.update((byte) i);
 
-            hmac.doFinal(t, 0);                // перезаписывает t = T(i)
+            hmac.doFinal(t, 0); // перезаписывает t = T(i)
 
             int copyLen = Math.min(hashLen, length - (i - 1) * hashLen);
             System.arraycopy(t, 0, result, (i - 1) * hashLen, copyLen);
@@ -158,8 +173,8 @@ public final class HkdfStreebog {
      * @param hashLen        32 для Streebog-256, 64 для Streebog-512
      * @return выходной ключевой материал
      */
-    public static byte[] expandLabel(byte[] secret, byte[] prefixedLabel, byte[] context,
-                                     int length, int hashLen) {
+    public static byte[] expandLabel(
+            byte[] secret, byte[] prefixedLabel, byte[] context, int length, int hashLen) {
         if (secret == null) {
             throw new IllegalArgumentException("secret must not be null");
         }
@@ -200,8 +215,8 @@ public final class HkdfStreebog {
      * @param hashLen  32 для Streebog-256, 64 для Streebog-512
      * @return выходной ключевой материал
      */
-    public static byte[] expandLabel(byte[] secret, String label, byte[] context,
-                                     int length, int hashLen) {
+    public static byte[] expandLabel(
+            byte[] secret, String label, byte[] context, int length, int hashLen) {
         if (secret == null) {
             throw new IllegalArgumentException("secret must not be null");
         }
@@ -226,8 +241,8 @@ public final class HkdfStreebog {
      * @param hashLen       32 для Streebog-256, 64 для Streebog-512
      * @return производный ключ длиной hashLen
      */
-    public static byte[] deriveSecret(byte[] secret, byte[] prefixedLabel,
-                                      byte[] transcriptHash, int hashLen) {
+    public static byte[] deriveSecret(
+            byte[] secret, byte[] prefixedLabel, byte[] transcriptHash, int hashLen) {
         return expandLabel(secret, prefixedLabel, transcriptHash, hashLen, hashLen);
     }
 
@@ -243,15 +258,18 @@ public final class HkdfStreebog {
      * @param hashLen       32 для Streebog-256, 64 для Streebog-512
      * @return производный ключ длиной hashLen
      */
-    public static byte[] deriveSecret(byte[] secret, String label,
-                                      byte[] transcriptHash, int hashLen) {
-        return deriveSecret(secret, ("tls13 " + label).getBytes(StandardCharsets.US_ASCII),
-                            transcriptHash, hashLen);
+    public static byte[] deriveSecret(
+            byte[] secret, String label, byte[] transcriptHash, int hashLen) {
+        return deriveSecret(
+                secret,
+                ("tls13 " + label).getBytes(StandardCharsets.US_ASCII),
+                transcriptHash,
+                hashLen);
     }
 
     /**
      * Создаёт HMAC-Streebog по длине хеша.
-     * hashLen=32 → Streebog-256, hashLen=64 → Streebog-512.
+     * hashLen=32 -> Streebog-256, hashLen=64 -> Streebog-512.
      *
      * @param hashLen длина хеша (32 или 64)
      * @return HMAC-Streebog
@@ -268,7 +286,7 @@ public final class HkdfStreebog {
 
     /**
      * Создаёт экземпляр Streebog нужной разрядности.
-     * hashLen=32 → Streebog-256, hashLen=64 → Streebog-512.
+     * hashLen=32 -> Streebog-256, hashLen=64 -> Streebog-512.
      *
      * @param hashLen длина хэша (32 или 64)
      * @return дайджест Streebog

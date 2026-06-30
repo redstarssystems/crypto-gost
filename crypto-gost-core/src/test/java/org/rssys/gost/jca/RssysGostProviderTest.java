@@ -1,13 +1,14 @@
 package org.rssys.gost.jca;
 
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.security.Provider;
 import java.security.Security;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 @DisplayName("RssysGostProvider — регистрация провайдера")
 class RssysGostProviderTest {
@@ -28,32 +29,20 @@ class RssysGostProviderTest {
         assertEquals(RssysGostProvider.PROVIDER_NAME, p.getName());
     }
 
-    @Test
-    @DisplayName("провайдер поддерживает MessageDigest.GOST3411-2012-256")
-    void testHasMessageDigest256() throws Exception {
+    @ParameterizedTest
+    @DisplayName("провайдер поддерживает MessageDigest")
+    @CsvSource({"GOST3411-2012-256", "GOST3411-2012-512"})
+    void testHasMessageDigest(String algo) {
         Provider p = Security.getProvider(RssysGostProvider.PROVIDER_NAME);
-        assertNotNull(p.getService("MessageDigest", "GOST3411-2012-256"));
+        assertNotNull(p.getService("MessageDigest", algo));
     }
 
-    @Test
-    @DisplayName("провайдер поддерживает MessageDigest.GOST3411-2012-512")
-    void testHasMessageDigest512() throws Exception {
+    @ParameterizedTest
+    @DisplayName("провайдер поддерживает Mac.HmacGOST3411-2012")
+    @CsvSource({"HmacGOST3411-2012-256", "HmacGOST3411-2012-512"})
+    void testHasHmac(String algo) {
         Provider p = Security.getProvider(RssysGostProvider.PROVIDER_NAME);
-        assertNotNull(p.getService("MessageDigest", "GOST3411-2012-512"));
-    }
-
-    @Test
-    @DisplayName("провайдер поддерживает Mac.HmacGOST3411-2012-256")
-    void testHasHmac256() {
-        Provider p = Security.getProvider(RssysGostProvider.PROVIDER_NAME);
-        assertNotNull(p.getService("Mac", "HmacGOST3411-2012-256"));
-    }
-
-    @Test
-    @DisplayName("провайдер поддерживает Mac.HmacGOST3411-2012-512")
-    void testHasHmac512() {
-        Provider p = Security.getProvider(RssysGostProvider.PROVIDER_NAME);
-        assertNotNull(p.getService("Mac", "HmacGOST3411-2012-512"));
+        assertNotNull(p.getService("Mac", algo));
     }
 
     @Test
@@ -98,34 +87,30 @@ class RssysGostProviderTest {
         assertNotNull(p.getService("SecretKeyFactory", "Kuznyechik"));
     }
 
-    @Test
-    @DisplayName("провайдер поддерживает Signature.ECGOST3410-2012-256")
-    void testHasSignature256() {
+    @ParameterizedTest
+    @DisplayName("провайдер поддерживает Signature.ECGOST3410-2012")
+    @CsvSource({"ECGOST3410-2012-256", "ECGOST3410-2012-512"})
+    void testHasSignature(String algo) {
         Provider p = Security.getProvider(RssysGostProvider.PROVIDER_NAME);
-        assertNotNull(p.getService("Signature", "ECGOST3410-2012-256"));
-    }
-
-    @Test
-    @DisplayName("провайдер поддерживает Signature.ECGOST3410-2012-512")
-    void testHasSignature512() {
-        Provider p = Security.getProvider(RssysGostProvider.PROVIDER_NAME);
-        assertNotNull(p.getService("Signature", "ECGOST3410-2012-512"));
+        assertNotNull(p.getService("Signature", algo));
     }
 
     @Test
     @DisplayName("алиас Streebog-256 разрешается в GOST3411-2012-256")
     void testAlias256() throws Exception {
         // getInstance должен найти алгоритм через алиас
-        java.security.MessageDigest md = java.security.MessageDigest.getInstance(
-            "Streebog-256", RssysGostProvider.PROVIDER_NAME);
+        java.security.MessageDigest md =
+                java.security.MessageDigest.getInstance(
+                        "Streebog-256", RssysGostProvider.PROVIDER_NAME);
         assertNotNull(md);
     }
 
     @Test
     @DisplayName("алиас OID 1.2.643.7.1.1.2.3 разрешается в GOST3411-2012-512")
     void testOidAlias512() throws Exception {
-        java.security.MessageDigest md = java.security.MessageDigest.getInstance(
-            "1.2.643.7.1.1.2.3", RssysGostProvider.PROVIDER_NAME);
+        java.security.MessageDigest md =
+                java.security.MessageDigest.getInstance(
+                        "1.2.643.7.1.1.2.3", RssysGostProvider.PROVIDER_NAME);
         assertNotNull(md);
     }
 }

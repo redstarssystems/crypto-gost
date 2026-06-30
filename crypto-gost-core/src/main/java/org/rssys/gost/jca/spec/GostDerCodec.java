@@ -1,5 +1,7 @@
 package org.rssys.gost.jca.spec;
 
+import java.math.BigInteger;
+import java.util.Arrays;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
@@ -7,9 +9,6 @@ import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
 import org.rssys.gost.util.Pack;
-
-import java.math.BigInteger;
-import java.util.Arrays;
 
 /**
  * Минимальный DER-кодек для ключей ГОСТ Р 34.10-2012 без внешних зависимостей.
@@ -57,12 +56,34 @@ import java.util.Arrays;
  */
 public final class GostDerCodec {
 
+    // значения совпадают с GostOids.DIGEST_256/DIGEST_512 — core не зависит от pkix
     private static final String OID_STREEBOG_256 = "1.2.643.7.1.1.2.2";
     private static final String OID_STREEBOG_512 = "1.2.643.7.1.1.2.3";
 
     private GostDerCodec() {}
 
-        /**
+    /**
+     * Извлекает байты точки открытого ключа в формате x_LE || y_LE
+     * (little-endian координаты, RFC 4491 §2.3.2).
+     *
+     * <p>Используется для вычисления Subject Key Identifier (RFC 5280 §4.2.1.2).</p>
+     *
+     * @param pub открытый ключ
+     * @return байты точки (2 × coordLen байт)
+     */
+    public static byte[] subjectPublicKeyPointBytes(PublicKeyParameters pub) {
+        ECParameters params = pub.getParams();
+        int coordLen = (params.p.bitLength() + 7) / 8;
+        ECPoint q = pub.getQ().normalize();
+        byte[] xLE = Pack.reverseBytes(toFixedBytes(q.getX(), coordLen));
+        byte[] yLE = Pack.reverseBytes(toFixedBytes(q.getY(), coordLen));
+        byte[] pointBytes = new byte[coordLen * 2];
+        System.arraycopy(xLE, 0, pointBytes, 0, coordLen);
+        System.arraycopy(yLE, 0, pointBytes, coordLen, coordLen);
+        return pointBytes;
+    }
+
+    /**
      * Кодирует открытый ключ в DER SubjectPublicKeyInfo (X.509).
      * <p>
      * Точка кодируется как OCTET STRING c координатами в порядке little-endian:
@@ -73,27 +94,17 @@ public final class GostDerCodec {
      * @throws IllegalArgumentException если параметры кривой не распознаны
      */
     public static byte[] encodePublicKey(PublicKeyParameters pub) {
-        ECParameters params  = pub.getParams();
-        String signAlgOid    = signAlgOid(params);
-        String curveOid      = GostCurves.oidOf(params);
-        String digestOid     = digestOid(params);
+        ECParameters params = pub.getParams();
+        String signAlgOid = signAlgOid(params);
+        String curveOid = GostCurves.oidOf(params);
+        String digestOid = digestOid(params);
 
-        // Нормализуем точку в аффинные координаты
-        ECPoint q = pub.getQ().normalize();
-        int coordLen = (params.p.bitLength() + 7) / 8; // 32 или 64 байта
+        byte[] pointBytes = subjectPublicKeyPointBytes(pub);
 
-        // Координаты в little-endian: reverseBytes(big-endian)
-        byte[] xLE = Pack.reverseBytes(toFixedBytes(q.getX(), coordLen));
-        byte[] yLE = Pack.reverseBytes(toFixedBytes(q.getY(), coordLen));
-
-        // Публичный ключ как OCTET STRING: x_LE || y_LE
-        byte[] pointBytes = new byte[coordLen * 2];
-        System.arraycopy(xLE, 0, pointBytes, 0,         coordLen);
-        System.arraycopy(yLE, 0, pointBytes, coordLen,  coordLen);
-
-        // AlgorithmIdentifier: SEQUENCE { signAlgOID, SEQUENCE { curveOID, digestOID } }
-        byte[] pubKeyParams = DerCodec.encodeSequence(DerCodec.encodeOid(curveOid), DerCodec.encodeOid(digestOid));
-        byte[] algId        = DerCodec.encodeSequence(DerCodec.encodeOid(signAlgOid), pubKeyParams);
+        byte[] pubKeyParams =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(curveOid), DerCodec.encodeOid(digestOid));
+        byte[] algId = DerCodec.encodeSequence(DerCodec.encodeOid(signAlgOid), pubKeyParams);
 
         byte[] pointOctetStr = DerCodec.encodeOctetString(pointBytes);
         byte[] bitStr = DerCodec.encodeBitString(pointOctetStr);
@@ -116,7 +127,7 @@ public final class GostDerCodec {
         }
 
         // AlgorithmIdentifier ::= SEQUENCE { OID, SEQUENCE { OID, OID } }
-        byte[][] algId      = DerCodec.parseSequenceContents(outer[0], 0);
+        byte[][] algId = DerCodec.parseSequenceContents(outer[0], 0);
         if (algId.length < 2) {
             throw new IllegalArgumentException("Invalid AlgorithmIdentifier: expected 2 elements");
         }
@@ -124,30 +135,33 @@ public final class GostDerCodec {
         if (pubKeyParams.length < 1) {
             throw new IllegalArgumentException("Invalid GostR3410-PublicKeyParameters");
         }
-        String curveOid    = DerCodec.parseOid(pubKeyParams[0], 0);
+        String curveOid = DerCodec.parseOid(pubKeyParams[0], 0);
         ECParameters params = GostCurves.byName(curveOid);
 
-        // BIT STRING → OCTET STRING с координатами
+        // BIT STRING -> OCTET STRING с координатами
         byte[] bitStrContent = DerCodec.parseBitString(outer[1], 0);
         byte[] pointOctetStr = DerCodec.parseOctetString(bitStrContent, 0);
 
         int coordLen = (params.p.bitLength() + 7) / 8;
         if (pointOctetStr.length != coordLen * 2) {
             throw new IllegalArgumentException(
-                "Invalid EC point encoding: expected " + (coordLen * 2)
-                + " bytes, got " + pointOctetStr.length);
+                    "Invalid EC point encoding: expected "
+                            + (coordLen * 2)
+                            + " bytes, got "
+                            + pointOctetStr.length);
         }
 
-        // Координаты в little-endian → конвертируем в big-endian для BigInteger
-        byte[] xLE = Arrays.copyOfRange(pointOctetStr, 0,         coordLen);
-        byte[] yLE = Arrays.copyOfRange(pointOctetStr, coordLen,  coordLen * 2);
+        // Координаты в little-endian -> конвертируем в big-endian для BigInteger
+        byte[] xLE = Arrays.copyOfRange(pointOctetStr, 0, coordLen);
+        byte[] yLE = Arrays.copyOfRange(pointOctetStr, coordLen, coordLen * 2);
         BigInteger x = new BigInteger(1, Pack.reverseBytes(xLE));
         BigInteger y = new BigInteger(1, Pack.reverseBytes(yLE));
 
         ECPoint q = ECPoint.affine(x, y, params);
         return new PublicKeyParameters(q, params);
     }
-     /**
+
+    /**
      * Кодирует закрытый ключ в DER PrivateKeyInfo (PKCS#8 / RFC 5958).
      * <p>
      * Значение d хранится как OCTET STRING в little-endian порядке (RFC 9548 §5.1,
@@ -160,10 +174,10 @@ public final class GostDerCodec {
      * @throws IllegalStateException    если ключ уничтожен
      */
     public static byte[] encodePrivateKey(PrivateKeyParameters priv) {
-        ECParameters params  = priv.getParams();
-        String signAlgOid    = signAlgOid(params);
-        String curveOid      = GostCurves.oidOf(params);
-        String digestOid     = digestOid(params);
+        ECParameters params = priv.getParams();
+        String signAlgOid = signAlgOid(params);
+        String curveOid = GostCurves.oidOf(params);
+        String digestOid = digestOid(params);
 
         int keyLen = (params.n.bitLength() + 7) / 8; // 32 или 64 байта
         byte[] dBytes = toFixedBytes(priv.getD(), keyLen); // BE из BigInteger
@@ -173,8 +187,10 @@ public final class GostDerCodec {
         byte[] privateKey = DerCodec.encodeOctetString(dLE); // Одна обёртка
 
         // AlgorithmIdentifier: тот же формат что и для открытого ключа
-        byte[] pubKeyParams = DerCodec.encodeSequence(DerCodec.encodeOid(curveOid), DerCodec.encodeOid(digestOid));
-        byte[] algId        = DerCodec.encodeSequence(DerCodec.encodeOid(signAlgOid), pubKeyParams);
+        byte[] pubKeyParams =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(curveOid), DerCodec.encodeOid(digestOid));
+        byte[] algId = DerCodec.encodeSequence(DerCodec.encodeOid(signAlgOid), pubKeyParams);
 
         // PrivateKeyInfo ::= SEQUENCE { version INTEGER(0), algId, privateKey OCTET STRING }
         return DerCodec.encodeSequence(DerCodec.encodeInteger(BigInteger.ZERO), algId, privateKey);
@@ -203,13 +219,13 @@ public final class GostDerCodec {
         }
 
         // AlgorithmIdentifier: SEQUENCE { OID signAlg, SEQUENCE { OID curve, OID digest } }
-        byte[][] algId       = DerCodec.parseSequenceContents(outer[1], 0);
+        byte[][] algId = DerCodec.parseSequenceContents(outer[1], 0);
         if (algId.length < 2) {
             throw new IllegalArgumentException("Invalid AlgorithmIdentifier in PrivateKeyInfo");
         }
         byte[][] pubKeyParams = DerCodec.parseSequenceContents(algId[1], 0);
-        String curveOid       = DerCodec.parseOid(pubKeyParams[0], 0);
-        ECParameters params   = GostCurves.byName(curveOid);
+        String curveOid = DerCodec.parseOid(pubKeyParams[0], 0);
+        ECParameters params = GostCurves.byName(curveOid);
 
         byte[] dBytes = DerCodec.parseOctetString(outer[2], 0);
         // OpenSSL gost-engine пишет d в little-endian; конвертируем в BE для BigInteger
@@ -231,14 +247,12 @@ public final class GostDerCodec {
     public static void checkNotMasked(byte[] encoded) {
         byte[][] outer = DerCodec.parseSequenceContents(encoded, 0);
         if (outer.length < 3) {
-            throw new IllegalArgumentException(
-                "Invalid PrivateKeyInfo: expected 3 elements");
+            throw new IllegalArgumentException("Invalid PrivateKeyInfo: expected 3 elements");
         }
 
         byte[][] algId = DerCodec.parseSequenceContents(outer[1], 0);
         if (algId.length < 2) {
-            throw new IllegalArgumentException(
-                "Invalid AlgorithmIdentifier in PrivateKeyInfo");
+            throw new IllegalArgumentException("Invalid AlgorithmIdentifier in PrivateKeyInfo");
         }
         byte[][] pubKeyParams = DerCodec.parseSequenceContents(algId[1], 0);
         String curveOid = DerCodec.parseOid(pubKeyParams[0], 0);
@@ -248,23 +262,27 @@ public final class GostDerCodec {
         byte[] iBytes = DerCodec.parseOctetString(outer[2], 0);
         if (iBytes.length > n) {
             throw new UnsupportedOperationException(
-                "Masked GOST keys (k>0) are not supported: "
-                + "key data length " + iBytes.length
-                + " exceeds curve byte length " + n);
+                    "Masked GOST keys (k>0) are not supported: "
+                            + "key data length "
+                            + iBytes.length
+                            + " exceeds curve byte length "
+                            + n);
         }
     }
 
     /**
      * Возвращает OID алгоритма подписи по параметрам кривой:
-     * 256-бит → {@code 1.2.643.7.1.1.1.1}, 512-бит → {@code 1.2.643.7.1.1.1.2}.
+     * 256-бит -> {@code 1.2.643.7.1.1.1.1}, 512-бит -> {@code 1.2.643.7.1.1.1.2}.
      */
     private static String signAlgOid(ECParameters params) {
-        return (params.hlen == Streebog256.DIGEST_SIZE) ? GostCurves.OID_SIGN_256 : GostCurves.OID_SIGN_512;
+        return (params.hlen == Streebog256.DIGEST_SIZE)
+                ? GostCurves.OID_SIGN_256
+                : GostCurves.OID_SIGN_512;
     }
 
     /**
      * Возвращает OID хэш-функции для digestParamSet:
-     * 256-бит → Стрибог-256, 512-бит → Стрибог-512.
+     * 256-бит -> Стрибог-256, 512-бит -> Стрибог-512.
      */
     private static String digestOid(ECParameters params) {
         return (params.hlen == Streebog256.DIGEST_SIZE) ? OID_STREEBOG_256 : OID_STREEBOG_512;

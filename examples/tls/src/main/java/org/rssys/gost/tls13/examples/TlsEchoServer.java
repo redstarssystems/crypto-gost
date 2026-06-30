@@ -1,20 +1,17 @@
 package org.rssys.gost.tls13.examples;
 
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsSession;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.cert.GostPkcs12Loader;
-import org.rssys.gost.tls13.cert.Pkcs12Loader;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.config.TlsServerConfig;
-import org.rssys.gost.tls13.transport.SocketTlsTransport;
-
 import java.io.FileInputStream;
-import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.List;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsSession;
+import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.transport.SocketTlsTransport;
 
 /**
  * Standalone echo-сервер для ручного interop-тестирования.
@@ -42,7 +39,8 @@ public final class TlsEchoServer {
         int port = 4443;
         String p12Path = null;
         String password = "changeit";
-        TlsCiphersuite suite = TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsCiphersuite suite =
+                TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         boolean mtls = false;
         String caPath = null;
         String caPassword = null;
@@ -58,18 +56,25 @@ public final class TlsEchoServer {
                 case "--password":
                     password = args[++i];
                     break;
-                case "--cipher": {
-                    String name = args[++i].toUpperCase();
-                    if (name.equals("L")) {
-                        suite = TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-                    } else if (name.equals("S")) {
-                        suite = TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-                    } else {
-                        System.err.println("Unknown cipher: " + name + " (use L or S)");
-                        System.exit(1);
+                case "--cipher":
+                    {
+                        String name = args[++i].toUpperCase();
+                        if (name.equals("L")) {
+                            suite =
+                                    TlsCiphersuite.byId(
+                                            TlsConstants
+                                                    .TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+                        } else if (name.equals("S")) {
+                            suite =
+                                    TlsCiphersuite.byId(
+                                            TlsConstants
+                                                    .TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+                        } else {
+                            System.err.println("Unknown cipher: " + name + " (use L or S)");
+                            System.exit(1);
+                        }
+                        break;
                     }
-                    break;
-                }
                 case "--mtls":
                     mtls = true;
                     break;
@@ -84,32 +89,43 @@ public final class TlsEchoServer {
         }
 
         if (p12Path == null) {
-            System.err.println("Usage: TlsEchoServer --cert <p12> [--port <port>] [--password <pwd>]"
-                    + " [--cipher L|S] [--mtls] [--ca <p12> <password>]");
+            System.err.println(
+                    "Usage: TlsEchoServer --cert <p12> [--port <port>] [--password <pwd>]"
+                            + " [--cipher L|S] [--mtls] [--ca <p12> <password>]");
             System.exit(1);
         }
 
         GostPkcs12Loader.Result p12;
         try (FileInputStream fis = new FileInputStream(p12Path)) {
-            p12 = Pkcs12Loader.load(fis.readAllBytes(), password.toCharArray());
+            p12 = GostPkcs12Loader.load(fis.readAllBytes(), password.toCharArray(), true);
         }
 
-        List<TlsCertificate> chain = p12.getCertificateChain();
+        List<GostCertificate> chain = p12.getCertificateChain();
         PrivateKeyParameters privKey = p12.getPrivateKey();
         TlsServerConfig config = new TlsServerConfig(suite, chain, privKey);
 
         if (mtls && caPath != null) {
             try (FileInputStream fis = new FileInputStream(caPath)) {
-                GostPkcs12Loader.Result caP12 = Pkcs12Loader.load(fis.readAllBytes(), caPassword.toCharArray());
-                config.withCaPublicKey(caP12.getCertificateChain().stream()
-                    .filter(TlsCertificate::isCA)
-                    .findFirst().orElseThrow()
-                    .getPublicKey());
+                GostPkcs12Loader.Result caP12 =
+                        GostPkcs12Loader.load(fis.readAllBytes(), caPassword.toCharArray(), true);
+                config.withCaPublicKey(
+                        caP12.getCertificateChain().stream()
+                                .filter(GostCertificate::isCA)
+                                .findFirst()
+                                .orElseThrow()
+                                .getPublicKey());
             }
         }
 
         try (ServerSocket ss = new ServerSocket(port)) {
-            System.out.println("Listening on port " + port + " (0x" + Integer.toHexString(suite.getId()) + ", mtls=" + mtls + ")");
+            System.out.println(
+                    "Listening on port "
+                            + port
+                            + " (0x"
+                            + Integer.toHexString(suite.getId())
+                            + ", mtls="
+                            + mtls
+                            + ")");
 
             try (Socket socket = ss.accept()) {
                 System.out.println("Accepted: " + socket.getRemoteSocketAddress());
@@ -118,11 +134,15 @@ public final class TlsEchoServer {
                     connConfig.withCaPublicKey(config.getCaPublicKey());
                 }
                 try (SocketTlsTransport transport = new SocketTlsTransport(socket);
-                     TlsSession server = TlsSession.createServer(connConfig, transport)) {
+                        TlsSession server = TlsSession.createServer(connConfig, transport)) {
                     server.handshakeAsServer();
-                    System.out.println("Handshake done: 0x" + Integer.toHexString(suite.getId())
-                            + ", peer=" + (server.getPeerCertificates() != null
-                            ? server.getPeerCertificates().size() + " certs" : "none"));
+                    System.out.println(
+                            "Handshake done: 0x"
+                                    + Integer.toHexString(suite.getId())
+                                    + ", peer="
+                                    + (server.getPeerCertificates() != null
+                                            ? server.getPeerCertificates().size() + " certs"
+                                            : "none"));
 
                     byte[] data = server.read();
                     System.out.println("Received " + data.length + " bytes");

@@ -16,8 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
  * Кросс-валидация Кузнечик: crypto-gost vs OpenSSL.
  *
  * Для каждого режима (CTR, CBC, CFB, OFB) и размера:
- * — шифрование обеими → сравнение;
- * — расшифрование шифртекста собеседника → сверка с plaintext.
+ * — шифрование обеими -> сравнение;
+ * — расшифрование шифртекста собеседника -> сверка с plaintext.
  * Тест пропускается, если OpenSSL недоступен или собран без Кузнечика.
  */
 class OpenSslCrossValidationTest {
@@ -50,12 +50,12 @@ class OpenSslCrossValidationTest {
 
         byte[] decryptedFromOpenSsl = Cipher.decrypt(ciphertextOpenSsl, symmetricKey, iv, Cipher.Mode.CBC, Cipher.Padding.NONE);
         assertArrayEquals(plaintext, decryptedFromOpenSsl,
-                () -> "OpenSSL→ГОСТ ошибка: CBC/NoPad size=" + size
+                () -> "OpenSSL->ГОСТ ошибка: CBC/NoPad size=" + size
                         + " " + CrossValUtils.diffContext(plaintext, decryptedFromOpenSsl) + " " + kv);
 
         byte[] decryptedFromGost = CompatHelper.opensslOp(Cipher.Mode.CBC, "-d", key, iv, ciphertextGost, true);
         assertArrayEquals(plaintext, decryptedFromGost,
-                () -> "ГОСТ→OpenSSL ошибка: CBC/NoPad size=" + size
+                () -> "ГОСТ->OpenSSL ошибка: CBC/NoPad size=" + size
                         + " " + CrossValUtils.diffContext(plaintext, decryptedFromGost) + " " + kv);
     }
 
@@ -85,12 +85,12 @@ class OpenSslCrossValidationTest {
 
         byte[] decryptedFromOpenSsl = Cipher.decrypt(ciphertextOpenSsl, symmetricKey, ivForGost, mode, padding);
         assertArrayEquals(plaintext, decryptedFromOpenSsl,
-                () -> "OpenSSL→ГОСТ ошибка дешифровки: mode=" + mode + " size=" + size
+                () -> "OpenSSL->ГОСТ ошибка дешифровки: mode=" + mode + " size=" + size
                         + " " + CrossValUtils.diffContext(plaintext, decryptedFromOpenSsl) + " " + kv);
 
         byte[] decryptedFromGost = CompatHelper.opensslOp(mode, "-d", key, iv, ciphertextGost);
         assertArrayEquals(plaintext, decryptedFromGost,
-                () -> "ГОСТ→OpenSSL ошибка дешифровки: mode=" + mode + " size=" + size
+                () -> "ГОСТ->OpenSSL ошибка дешифровки: mode=" + mode + " size=" + size
                         + " " + CrossValUtils.diffContext(plaintext, decryptedFromGost) + " " + kv);
     }
 }

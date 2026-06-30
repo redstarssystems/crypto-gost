@@ -1,5 +1,7 @@
 package org.rssys.gost.tls13.crypto;
 
+import java.math.BigInteger;
+import java.util.function.Supplier;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.signature.ECDSASigner;
@@ -7,8 +9,6 @@ import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
-import java.math.BigInteger;
-import java.util.function.Supplier;
 
 /**
  * Кодек подписи ГОСТ Р 34.10-2012 для TLS 1.3 (RFC 9367 §3.2).
@@ -52,7 +52,9 @@ public final class TlsSignatureCodec {
     public static BigInteger[] decode(byte[] sig, int rolen) {
         if (sig == null || sig.length != 2 * rolen) {
             throw new IllegalArgumentException(
-                    "Signature must be exactly " + (2 * rolen) + " bytes, got "
+                    "Signature must be exactly "
+                            + (2 * rolen)
+                            + " bytes, got "
                             + (sig == null ? "null" : sig.length));
         }
         byte[] rLe = new byte[rolen];
@@ -61,7 +63,7 @@ public final class TlsSignatureCodec {
         System.arraycopy(sig, rolen, sLe, 0, rolen);
         BigInteger r = new BigInteger(1, reverse(rLe));
         BigInteger s = new BigInteger(1, reverse(sLe));
-        return new BigInteger[]{r, s};
+        return new BigInteger[] {r, s};
     }
 
     /**
@@ -97,8 +99,7 @@ public final class TlsSignatureCodec {
      * @param rolen   длина каждой компоненты подписи в байтах
      * @return true если подпись действительна
      */
-    public static boolean verify(byte[] hash, byte[] sigBytes,
-                                    PublicKeyParameters pub, int rolen) {
+    public static boolean verify(byte[] hash, byte[] sigBytes, PublicKeyParameters pub, int rolen) {
         if (hash == null || pub == null || rolen <= 0) {
             throw new IllegalArgumentException("hash, pub must not be null, rolen > 0");
         }
@@ -132,7 +133,7 @@ public final class TlsSignatureCodec {
     }
 
     /**
-     * Реверсирует порядок байт (big-endian ↔ little-endian).
+     * Реверсирует порядок байт (big-endian <-> little-endian).
      *
      * @param src исходный массив
      * @return реверсированный массив
@@ -152,6 +153,8 @@ public final class TlsSignatureCodec {
      * @return фабрика дайджестов
      */
     private static Supplier<org.rssys.gost.digest.Digest> digestFactory(ECParameters params) {
-        return params.hlen == TlsConstants.STREEBOG_256_HASH_LEN ? Streebog256::new : Streebog512::new;
+        return params.hlen == TlsConstants.STREEBOG_256_HASH_LEN
+                ? Streebog256::new
+                : Streebog512::new;
     }
 }

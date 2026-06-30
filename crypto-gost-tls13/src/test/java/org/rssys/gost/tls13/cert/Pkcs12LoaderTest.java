@@ -1,13 +1,7 @@
 package org.rssys.gost.tls13.cert;
 
-import org.rssys.gost.tls13.TlsTestHelper;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.rssys.gost.tls13.TlsTestHelper.*;
-
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.jca.RssysGostProvider;
-import org.rssys.gost.jca.key.GostECPrivateKey;
-import org.rssys.gost.signature.ECParameters;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -15,10 +9,18 @@ import java.security.KeyStore;
 import java.security.Security;
 import java.security.cert.CertificateFactory;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.jca.RssysGostProvider;
+import org.rssys.gost.jca.key.GostECPrivateKey;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.pkix.cert.Pkcs12Loader;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.tls13.TlsTestHelper;
 
 @DisplayName("Pkcs12Loader — загрузка PFX-контейнеров через JDK KeyStore")
+@SuppressWarnings("deprecation")
 class Pkcs12LoaderTest {
 
     static {
@@ -33,33 +35,35 @@ class Pkcs12LoaderTest {
     @DisplayName("GOST PFX: полный roundtrip — load возвращает ключ и сертификат")
     void testGostRoundtrip() throws Exception {
         byte[] pfx = buildGostPfxViaJdk();
-        GostPkcs12Loader.Result result = Pkcs12Loader.load(pfx, PASSWORD);
+        GostPkcs12Loader.Result result = Pkcs12Loader.load(pfx, PASSWORD, true);
 
-        assertNotNull(result.getPrivateKey(), "private key");
-        assertNotNull(result.getCertificateChain(), "cert chain");
-        assertFalse(result.getCertificateChain().isEmpty(), "cert chain not empty");
-        assertTrue(result.getCertificateChain().get(0).isEkuValidForServer(), "server cert");
+        assertNotNull(result.getPrivateKey(), "приватный ключ");
+        assertNotNull(result.getCertificateChain(), "цепочка сертификатов");
+        assertFalse(result.getCertificateChain().isEmpty(), "цепочка сертификатов не пуста");
+        assertTrue(
+                result.getCertificateChain().get(0).isEkuValidForServer(), "серверный сертификат");
     }
 
     @Test
-    @DisplayName("GOST PFX: неверный пароль → IllegalArgumentException")
+    @DisplayName("GOST PFX: неверный пароль -> IllegalArgumentException")
     void testGostWrongPassword() throws Exception {
         byte[] pfx = buildGostPfxViaJdk();
-        assertThrows(IllegalArgumentException.class,
-                () -> Pkcs12Loader.load(pfx, "wrong".toCharArray()));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> Pkcs12Loader.load(pfx, "wrong".toCharArray(), true));
     }
 
     @Test
     @DisplayName("GOST PFX: цепочка из CA + leaf")
     void testGostChain() throws Exception {
         byte[] pfx = buildGostChainPfxViaJdk();
-        GostPkcs12Loader.Result result = Pkcs12Loader.load(pfx, PASSWORD);
+        GostPkcs12Loader.Result result = Pkcs12Loader.load(pfx, PASSWORD, true);
 
         assertNotNull(result.getPrivateKey());
-        List<TlsCertificate> chain = result.getCertificateChain();
-        assertEquals(2, chain.size(), "chain size");
-        assertTrue(chain.get(0).isEkuValidForServer(), "leaf is server cert");
-        assertTrue(chain.get(1).isCA(), "second is CA");
+        List<GostCertificate> chain = result.getCertificateChain();
+        assertEquals(2, chain.size(), "размер цепочки");
+        assertTrue(chain.get(0).isEkuValidForServer(), "leaf — серверный сертификат");
+        assertTrue(chain.get(1).isCA(), "второй — CA");
     }
 
     // ---------------------------------------------------------------
@@ -76,40 +80,54 @@ class Pkcs12LoaderTest {
     private static byte[] buildGostChainPfxViaJdk() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-                params, ca.priv, ca.cert.getPublicKey(), ca.subjectDn,
-                "20250101000000Z", "21060101120000Z",
-                null, null, null, null, false, null);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        ca.priv,
+                        ca.cert.getPublicKey(),
+                        ca.subjectDn,
+                        "20250101000000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        null,
+                        false,
+                        null);
 
         return storePfx("leaf", leaf.priv, leaf.cert, ca.cert);
     }
 
     /** Создаёт PFX через JDK KeyStore. */
-    private static byte[] storePfx(String alias,
-                                   org.rssys.gost.signature.PrivateKeyParameters priv,
-                                   TlsCertificate firstCert,
-                                   TlsCertificate... extraCerts) throws Exception {
+    private static byte[] storePfx(
+            String alias,
+            org.rssys.gost.signature.PrivateKeyParameters priv,
+            GostCertificate firstCert,
+            GostCertificate... extraCerts)
+            throws Exception {
         KeyStore ks = KeyStore.getInstance("PKCS12");
         ks.load(null, null);
 
-        // Наш PrivateKey → JDK PrivateKey
+        // Наш PrivateKey -> JDK PrivateKey
         GostECPrivateKey jdkKey = new GostECPrivateKey(priv);
 
-        // Наши TlsCertificate → JDK X509Certificate[]
+        // Наши GostCertificate -> JDK X509Certificate[]
         CertificateFactory cf = CertificateFactory.getInstance("X.509");
         java.security.cert.X509Certificate jdkFirst =
-                (java.security.cert.X509Certificate) cf.generateCertificate(
-                        new ByteArrayInputStream(firstCert.getCertData()));
+                (java.security.cert.X509Certificate)
+                        cf.generateCertificate(new ByteArrayInputStream(firstCert.getEncoded()));
         java.security.cert.X509Certificate[] jdkChain;
         if (extraCerts.length > 0) {
             jdkChain = new java.security.cert.X509Certificate[1 + extraCerts.length];
             jdkChain[0] = jdkFirst;
             for (int i = 0; i < extraCerts.length; i++) {
-                jdkChain[1 + i] = (java.security.cert.X509Certificate)
-                        cf.generateCertificate(new ByteArrayInputStream(extraCerts[i].getCertData()));
+                jdkChain[1 + i] =
+                        (java.security.cert.X509Certificate)
+                                cf.generateCertificate(
+                                        new ByteArrayInputStream(extraCerts[i].getEncoded()));
             }
         } else {
-            jdkChain = new java.security.cert.X509Certificate[]{jdkFirst};
+            jdkChain = new java.security.cert.X509Certificate[] {jdkFirst};
         }
 
         ks.setKeyEntry(alias, jdkKey, PASSWORD, jdkChain);

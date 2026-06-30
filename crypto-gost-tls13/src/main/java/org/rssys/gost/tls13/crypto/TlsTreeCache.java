@@ -2,7 +2,6 @@ package org.rssys.gost.tls13.crypto;
 
 import org.rssys.gost.tls13.TlsUtils;
 
-
 /**
  * Кэш TLSTREE-ключей по RFC 9367 §4.2 (RECOMMENDED).
  * <p>
@@ -87,8 +86,11 @@ public final class TlsTreeCache {
      * k1/k2/k3 — производные от startKey, принадлежат кэшу, затираются здесь.
      */
     public void destroy() {
-        TlsUtils.wipeArray(k1); k1 = null;
-        TlsUtils.wipeArray(k2); k2 = null;
-        TlsUtils.wipeArray(k3); k3 = null;
+        TlsUtils.wipeArray(k1);
+        k1 = null;
+        TlsUtils.wipeArray(k2);
+        k2 = null;
+        TlsUtils.wipeArray(k3);
+        k3 = null;
     }
 }

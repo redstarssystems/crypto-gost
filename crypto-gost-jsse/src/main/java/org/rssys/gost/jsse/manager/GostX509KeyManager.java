@@ -1,28 +1,28 @@
 package org.rssys.gost.jsse.manager;
-import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.bridge.KeyBridge;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.config.SniCertificateSelector;
-import org.rssys.gost.tls13.config.TlsServerCredentials;
-import org.rssys.gost.tls13.config.ClientCertificateSelector;
-import org.rssys.gost.tls13.config.TlsClientCredentials;
-import org.rssys.gost.tls13.config.OIDFilter;
 
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.X509ExtendedKeyManager;
 import java.net.Socket;
 import java.security.Principal;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
-import javax.security.auth.x500.X500Principal;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.X509ExtendedKeyManager;
+import javax.security.auth.x500.X500Principal;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.bridge.KeyBridge;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.cert.TlsCertUtils;
+import org.rssys.gost.tls13.config.ClientCertificateSelector;
+import org.rssys.gost.tls13.config.OIDFilter;
+import org.rssys.gost.tls13.config.SniCertificateSelector;
+import org.rssys.gost.tls13.config.TlsClientCredentials;
+import org.rssys.gost.tls13.config.TlsServerCredentials;
 
 /**
  * X509KeyManager для ГОСТ-ключей.
@@ -51,7 +51,8 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
     }
 
     @Override
-    public String chooseEngineClientAlias(String[] keyTypes, Principal[] issuers, SSLEngine engine) {
+    public String chooseEngineClientAlias(
+            String[] keyTypes, Principal[] issuers, SSLEngine engine) {
         return chooseFirst(keyTypes, issuers);
     }
 
@@ -87,12 +88,12 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
      * для передачи в SniCertificateSelector.
      *
      * @param alias алиас записи
-     * @return цепочка TlsCertificate, или null если алиас не найден
+     * @return цепочка GostCertificate, или null если алиас не найден
      */
-    public List<TlsCertificate> getCertificateChainTls(String alias) {
+    public List<GostCertificate> getCertificateChainTls(String alias) {
         for (KeyEntry entry : entries) {
             if (entry.alias.equals(alias)) {
-                return CertificateBridge.toTls(entry.chain);
+                return CertificateBridge.toGost(entry.chain);
             }
         }
         return null;
@@ -131,7 +132,7 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
      * Только SAN dNSName (RFC 6125), без fallback на CN.
      * Exact match, без wildcard — для детерминированного поведения в тестах.
      *
-     * @param hostname DNS-имя для поиска (null → первый алиас)
+     * @param hostname DNS-имя для поиска (null -> первый алиас)
      * @return алиас или null
      */
     public String chooseAliasForHostname(String hostname) {
@@ -144,47 +145,18 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
         }
         for (KeyEntry entry : entries) {
             if (entry.chain == null || entry.chain.length == 0) continue;
-            TlsCertificate tlsCert = CertificateBridge.toTls(entry.chain[0]);
-            String[] sanNames = tlsCert.getSanDnsNames();
+            List<GostCertificate> chain = getCertificateChainTls(entry.alias);
+            if (chain == null || chain.isEmpty()) continue;
+            GostCertificate cert = chain.get(0);
+            String[] sanNames = cert.getSanDnsNames();
             if (sanNames == null) continue;
             for (String dnsName : sanNames) {
-                if (matchHostname(normalized, dnsName.toLowerCase())) {
+                if (GostCertificate.matchDnsName(normalized, dnsName)) {
                     return entry.alias;
                 }
             }
         }
         return null;
-    }
-
-    /**
-     * Проверяет соответствие hostname DNS-имени SAN с поддержкой wildcard.
-     * Алгоритм соответствует RFC 6125 и {@code TlsCertificate.verifyHostname()}.
-     */
-    private static boolean matchHostname(String normalized, String sanLower) {
-        // Точное совпадение
-        if (normalized.equals(sanLower)) return true;
-
-        // Wildcard: должен начинаться с "*."
-        if (sanLower.startsWith("*.")) {
-            String suffix = sanLower.substring(2);
-
-            // Wildcard не должен быть "*." + apex
-            if (suffix.isEmpty() || suffix.indexOf('.') < 0) return false;
-
-            // Частичный wildcard (f*.example.com) запрещён
-            if (sanLower.indexOf('*', 1) >= 0) return false;
-
-            // IDN A-label wildcard запрещён
-            if (suffix.startsWith("xn--") || suffix.contains(".xn--")) return false;
-
-            // Первая метка hostname не должна содержать точек
-            int firstDot = normalized.indexOf('.');
-            if (firstDot < 0) return false;
-
-            // Оставшаяся часть hostname должна совпадать с suffix
-            return normalized.substring(firstDot + 1).equals(suffix);
-        }
-        return false;
     }
 
     /**
@@ -195,7 +167,7 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
         return serverName -> {
             String alias = chooseAliasForHostname(serverName);
             if (alias == null) return null;
-            List<TlsCertificate> chain = getCertificateChainTls(alias);
+            List<GostCertificate> chain = getCertificateChainTls(alias);
             PrivateKeyParameters key = getPrivateKeyParams(alias);
             if (chain == null || key == null) return null;
             return new TlsServerCredentials(chain, key, null);
@@ -215,14 +187,14 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
             if (entries.isEmpty()) return null;
             for (KeyEntry entry : entries) {
                 if (entry.chain == null || entry.chain.length == 0) continue;
-                List<TlsCertificate> chain = getCertificateChainTls(entry.alias);
+                List<GostCertificate> chain = getCertificateChainTls(entry.alias);
                 PrivateKeyParameters key = getPrivateKeyParams(entry.alias);
                 if (chain == null || chain.isEmpty() || key == null) continue;
-                TlsCertificate leaf = chain.get(0);
+                GostCertificate leaf = chain.get(0);
                 // Проверка OID-фильтров
                 boolean matches = true;
                 for (OIDFilter filter : oidFilters) {
-                    if (!leaf.matchesOidFilter(filter)) {
+                    if (!TlsCertUtils.matchesOidFilter(leaf, filter)) {
                         matches = false;
                         break;
                     }
@@ -242,18 +214,20 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
      */
     private List<String> filterAliases(String keyType, Principal[] issuers) {
         if (keyType == null) return Collections.emptyList();
-        if (!keyType.startsWith(GostJsseConstants.KEY_ALG_ECGOST_2012)) return Collections.emptyList();
+        if (!keyType.startsWith(GostJsseConstants.KEY_ALG_ECGOST_2012))
+            return Collections.emptyList();
 
         boolean want256 = keyType.contains("256");
 
         List<String> result = new ArrayList<>();
         for (KeyEntry entry : entries) {
             if (entry.chain == null || entry.chain.length == 0) continue;
-            TlsCertificate tlsCert = CertificateBridge.toTls(entry.chain[0]);
-            int hlen = tlsCert.getPublicKey().getParams().hlen;
+            GostCertificate gostCert = CertificateBridge.toGost(entry.chain[0]);
+            int hlen = gostCert.getPublicKey().getParams().hlen;
             boolean is256 = hlen == TlsConstants.STREEBOG_256_HASH_LEN;
             if (want256 != is256) continue;
-            if (issuers != null && issuers.length > 0 && !issuerMatches(entry.chain[0], issuers)) continue;
+            if (issuers != null && issuers.length > 0 && !issuerMatches(entry.chain[0], issuers))
+                continue;
             result.add(entry.alias);
         }
         return result;

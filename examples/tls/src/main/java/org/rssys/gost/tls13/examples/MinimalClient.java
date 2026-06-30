@@ -1,15 +1,9 @@
 package org.rssys.gost.tls13.examples;
 
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.api.KeyPair;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.*;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
-
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.*;
+import org.rssys.gost.tls13.*;
+import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
 /**
  * Минимальный клиент TLS 1.3 (анонимный, без проверки CA).
@@ -26,10 +20,8 @@ public final class MinimalClient {
 
     public static void main(String[] args) throws Exception {
         // 1. Генерируем корневой CA и сертификат сервера
-        TlsCertificate ca = ExampleUtils.createRootCA();
-        KeyPair kp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
-        PrivateKeyParameters serverPriv = kp.getPrivate();
-        TlsCertificate serverCert = ExampleUtils.createServerCert(ca, serverPriv, kp.getPublic());
+        ExampleUtils.CertBundle caBundle = ExampleUtils.createRootCABundle();
+        ExampleUtils.CertBundle serverBundle = ExampleUtils.createServerCertBundle(caBundle);
 
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
 
@@ -39,18 +31,19 @@ public final class MinimalClient {
         InMemoryTlsTransport clientTp = pair.getClientTransport();
 
         // 3. Создаём сессии сервера и клиента
-        TlsSession server = TlsSession.createServer(
-                serverTp, cs, serverCert, serverPriv);
-        TlsSession client = TlsSession.createClient(
-                clientTp, cs, null, null);
+        TlsSession server =
+                TlsSession.createServer(serverTp, cs, serverBundle.cert(), serverBundle.priv());
+        TlsSession client = TlsSession.createClient(clientTp, cs, null, null);
 
         ExecutorService exec = Executors.newSingleThreadExecutor();
         try {
             // 4. Серверный handshake в отдельном потоке
-            Future<Void> sf = exec.submit(() -> {
-                server.handshakeAsServer();
-                return null;
-            });
+            Future<Void> sf =
+                    exec.submit(
+                            () -> {
+                                server.handshakeAsServer();
+                                return null;
+                            });
 
             // 5. Клиентский handshake в текущем потоке
             client.handshakeAsClient();
@@ -64,11 +57,26 @@ public final class MinimalClient {
         } finally {
             // 7. Очистка
             exec.shutdown();
-            try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
-            try { server.close(); } catch (Exception ignored) {}
-            try { client.close(); } catch (Exception ignored) {}
-            try { serverTp.close(); } catch (Exception ignored) {}
-            try { clientTp.close(); } catch (Exception ignored) {}
+            try {
+                exec.awaitTermination(5, TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            try {
+                server.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                client.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                serverTp.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                clientTp.close();
+            } catch (Exception ignored) {
+            }
         }
     }
 }

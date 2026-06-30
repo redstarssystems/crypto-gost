@@ -12,11 +12,9 @@ public interface Mac {
 
     void update(byte in) throws IllegalStateException;
 
-    void update(byte[] in, int inOff, int len)
-            throws DataLengthException, IllegalStateException;
+    void update(byte[] in, int inOff, int len) throws DataLengthException, IllegalStateException;
 
-    int doFinal(byte[] out, int outOff)
-            throws DataLengthException, IllegalStateException;
+    int doFinal(byte[] out, int outOff) throws DataLengthException, IllegalStateException;
 
     void reset();
 }

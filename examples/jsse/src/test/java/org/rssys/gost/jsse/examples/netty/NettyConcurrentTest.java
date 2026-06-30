@@ -1,5 +1,7 @@
 package org.rssys.gost.jsse.examples.netty;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -17,6 +19,14 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.DecoderException;
 import io.netty.util.CharsetUtil;
 import io.netty.util.ReferenceCountUtil;
+import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.net.ssl.SSLException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -27,17 +37,6 @@ import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.netty.GostSslContext;
 import org.rssys.gost.netty.GostSslContextBuilder;
-
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import javax.net.ssl.SSLException;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Тест конкурентных TLS-соединений через Netty pipeline.
@@ -81,14 +80,16 @@ class NettyConcurrentTest {
         ServerBootstrap sb = new ServerBootstrap();
         sb.group(bossGroup, workerGroup)
                 .channel(NioServerSocketChannel.class)
-                .childHandler(new ChannelInitializer<SocketChannel>() {
-                    @Override
-                    protected void initChannel(SocketChannel ch) {
-                        ch.pipeline().addLast(
-                                serverCtx.newHandler(ch.alloc()),
-                                new ServerEchoHandler());
-                    }
-                });
+                .childHandler(
+                        new ChannelInitializer<SocketChannel>() {
+                            @Override
+                            protected void initChannel(SocketChannel ch) {
+                                ch.pipeline()
+                                        .addLast(
+                                                serverCtx.newHandler(ch.alloc()),
+                                                new ServerEchoHandler());
+                            }
+                        });
 
         serverChannel = sb.bind(0).sync().channel();
         port = ((InetSocketAddress) serverChannel.localAddress()).getPort();
@@ -104,7 +105,7 @@ class NettyConcurrentTest {
     }
 
     @Test
-    @DisplayName("10 параллельных клиентов — все PING→PONG завершены успешно")
+    @DisplayName("10 параллельных клиентов — все PING->PONG завершены успешно")
     void tenConcurrentClients() throws Exception {
         int n = CLIENTS;
         CountDownLatch allStart = new CountDownLatch(1);
@@ -115,38 +116,56 @@ class NettyConcurrentTest {
         List<Thread> clients = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
             final int clientId = i;
-            Thread t = new Thread(() -> {
-                EventLoopGroup g = new NioEventLoopGroup(1);
-                try {
-                    allStart.await();
+            Thread t =
+                    new Thread(
+                            () -> {
+                                EventLoopGroup g = new NioEventLoopGroup(1);
+                                try {
+                                    allStart.await();
 
-                    CountDownLatch clientDone = new CountDownLatch(1);
+                                    CountDownLatch clientDone = new CountDownLatch(1);
 
-                    Bootstrap cl = new Bootstrap();
-                    cl.group(g)
-                            .channel(NioSocketChannel.class)
-                            .option(io.netty.channel.ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000)
-                            .handler(new ChannelInitializer<SocketChannel>() {
-                                @Override
-                                protected void initChannel(SocketChannel ch) {
-                                    ch.pipeline().addLast(
-                                            clientCtx.newHandler(ch.alloc(), "localhost", port),
-                                            new ClientEchoHandler(clientId, successCount,
-                                                    firstError, clientDone));
+                                    Bootstrap cl = new Bootstrap();
+                                    cl.group(g)
+                                            .channel(NioSocketChannel.class)
+                                            .option(
+                                                    io.netty.channel.ChannelOption
+                                                            .CONNECT_TIMEOUT_MILLIS,
+                                                    10000)
+                                            .handler(
+                                                    new ChannelInitializer<SocketChannel>() {
+                                                        @Override
+                                                        protected void initChannel(
+                                                                SocketChannel ch) {
+                                                            ch.pipeline()
+                                                                    .addLast(
+                                                                            clientCtx.newHandler(
+                                                                                    ch.alloc(),
+                                                                                    "localhost",
+                                                                                    port),
+                                                                            new ClientEchoHandler(
+                                                                                    clientId,
+                                                                                    successCount,
+                                                                                    firstError,
+                                                                                    clientDone));
+                                                        }
+                                                    });
+
+                                    cl.connect("localhost", port).sync();
+                                    clientDone.await(15, TimeUnit.SECONDS);
+                                } catch (InterruptedException e) {
+                                    firstError.compareAndSet(
+                                            null, "Client " + clientId + " interrupted");
+                                } catch (Exception e) {
+                                    firstError.compareAndSet(
+                                            null,
+                                            "Client " + clientId + " error: " + e.getMessage());
+                                } finally {
+                                    g.shutdownGracefully(0, 0, TimeUnit.SECONDS);
+                                    allDone.countDown();
                                 }
-                            });
-
-                    cl.connect("localhost", port).sync();
-                    clientDone.await(15, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    firstError.compareAndSet(null, "Client " + clientId + " interrupted");
-                } catch (Exception e) {
-                    firstError.compareAndSet(null, "Client " + clientId + " error: " + e.getMessage());
-                } finally {
-                    g.shutdownGracefully(0, 0, TimeUnit.SECONDS);
-                    allDone.countDown();
-                }
-            }, "client-" + i);
+                            },
+                            "client-" + i);
             clients.add(t);
         }
 
@@ -157,14 +176,14 @@ class NettyConcurrentTest {
         allStart.countDown();
 
         if (!allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS)) {
-            throw new AssertionError("Таймаут: не все клиенты завершились за " + TIMEOUT_SEC + " с");
+            throw new AssertionError(
+                    "Таймаут: не все клиенты завершились за " + TIMEOUT_SEC + " с");
         }
 
         if (firstError.get() != null) {
             throw new AssertionError(firstError.get());
         }
-        assertEquals(n, successCount.get(),
-                "Все " + n + " клиентов должны получить PONG");
+        assertEquals(n, successCount.get(), "Все " + n + " клиентов должны получить PONG");
     }
 
     @Test
@@ -182,14 +201,21 @@ class NettyConcurrentTest {
                 cl.group(g)
                         .channel(NioSocketChannel.class)
                         .option(io.netty.channel.ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
-                        .handler(new ChannelInitializer<SocketChannel>() {
-                            @Override
-                            protected void initChannel(SocketChannel ch) {
-                                ch.pipeline().addLast(
-                                        clientCtx.newHandler(ch.alloc(), "localhost", port),
-                                        new ClientEchoHandler(clientIdx, new AtomicInteger(0), err, done));
-                            }
-                        });
+                        .handler(
+                                new ChannelInitializer<SocketChannel>() {
+                                    @Override
+                                    protected void initChannel(SocketChannel ch) {
+                                        ch.pipeline()
+                                                .addLast(
+                                                        clientCtx.newHandler(
+                                                                ch.alloc(), "localhost", port),
+                                                        new ClientEchoHandler(
+                                                                clientIdx,
+                                                                new AtomicInteger(0),
+                                                                err,
+                                                                done));
+                                    }
+                                });
 
                 cl.connect("localhost", port).sync();
 
@@ -209,7 +235,7 @@ class NettyConcurrentTest {
      * Серверный handler — echo PONG на PING.
      * <p>
      * Stateless: каждый экземпляр обслуживает одно соединение.
-     * Протокол приложения — минимальный (PING→PONG), достаточный
+     * Протокол приложения — минимальный (PING->PONG), достаточный
      * для верификации TLS-соединения без HTTP-стека.
      */
     private static final class ServerEchoHandler extends SimpleChannelInboundHandler<ByteBuf> {
@@ -246,8 +272,11 @@ class NettyConcurrentTest {
         private final AtomicReference<String> errorRef;
         private final CountDownLatch done;
 
-        ClientEchoHandler(int clientId, AtomicInteger successCounter,
-                          AtomicReference<String> errorRef, CountDownLatch done) {
+        ClientEchoHandler(
+                int clientId,
+                AtomicInteger successCounter,
+                AtomicReference<String> errorRef,
+                CountDownLatch done) {
             this.clientId = clientId;
             this.successCounter = successCounter;
             this.errorRef = errorRef;
@@ -267,8 +296,8 @@ class NettyConcurrentTest {
                 if ("PONG".equals(text)) {
                     successCounter.incrementAndGet();
                 } else {
-                    errorRef.compareAndSet(null,
-                            "Client " + clientId + " unexpected reply: " + text);
+                    errorRef.compareAndSet(
+                            null, "Client " + clientId + " unexpected reply: " + text);
                 }
                 ctx.close();
             } finally {
@@ -283,8 +312,8 @@ class NettyConcurrentTest {
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            errorRef.compareAndSet(null,
-                    "Client " + clientId + " exception: " + cause.getMessage());
+            errorRef.compareAndSet(
+                    null, "Client " + clientId + " exception: " + cause.getMessage());
             ctx.close();
         }
     }

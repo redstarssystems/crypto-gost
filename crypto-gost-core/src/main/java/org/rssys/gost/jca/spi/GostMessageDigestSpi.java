@@ -1,10 +1,9 @@
 package org.rssys.gost.jca.spi;
 
+import java.security.MessageDigestSpi;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
-
-import java.security.MessageDigestSpi;
 
 /**
  * Реализация {@link MessageDigestSpi} для хэш-функции Стрибог (ГОСТ Р 34.11-2012).
@@ -76,7 +75,7 @@ public abstract class GostMessageDigestSpi extends MessageDigestSpi {
     @Override
     public Object clone() throws CloneNotSupportedException {
         throw new CloneNotSupportedException(
-            "GostMessageDigestSpi cannot be cloned — delegate state is mutable");
+                "GostMessageDigestSpi cannot be cloned — delegate state is mutable");
     }
 
     /**

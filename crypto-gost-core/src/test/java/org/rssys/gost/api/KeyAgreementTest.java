@@ -1,5 +1,8 @@
 package org.rssys.gost.api;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.math.BigInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.signature.ECParameters;
@@ -7,10 +10,6 @@ import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.Pack;
-
-import java.math.BigInteger;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("KeyAgreement: ECDH shared secret")
 class KeyAgreementTest {
@@ -20,15 +19,17 @@ class KeyAgreementTest {
     // Данные из TlsKATExample1Test (RFC 9367 §6.1.1, Example 2)
     // ========================================================================
 
-    private static final BigInteger D_C_GC256B = new BigInteger(
-            1, hex("0202020202020202020202020202020202020202020202020202020202020202"));
+    private static final BigInteger D_C_GC256B =
+            new BigInteger(
+                    1, hex("0202020202020202020202020202020202020202020202020202020202020202"));
 
-    private static final byte[] Q_S_LE_GC256B = hex(
-            "3D2FB067E106CC9980FB8842811164BA708BBB5038D5EDFBEE1D5E5DFBE6F74F"
-                    + "1931217C67C2BDF46253DB9CE3487241F2DBD84E2DABDF65455851B0B19AEFEC");
+    private static final byte[] Q_S_LE_GC256B =
+            hex(
+                    "3D2FB067E106CC9980FB8842811164BA708BBB5038D5EDFBEE1D5E5DFBE6F74F"
+                            + "1931217C67C2BDF46253DB9CE3487241F2DBD84E2DABDF65455851B0B19AEFEC");
 
-    private static final byte[] ECDHE_GC256B = hex(
-            "985A8659D55A8D48E0E6771396580B2CDCDA37E92AEE1814D10E1BF2A44F0D24");
+    private static final byte[] ECDHE_GC256B =
+            hex("985A8659D55A8D48E0E6771396580B2CDCDA37E92AEE1814D10E1BF2A44F0D24");
 
     @Test
     @DisplayName("KAT vector: CryptoPro-A, d=0x02×32")
@@ -39,7 +40,9 @@ class KeyAgreementTest {
         PublicKeyParameters serverPub = decodePublicKeyLe(Q_S_LE_GC256B, params);
 
         byte[] shared = KeyAgreement.computeSharedSecret(clientPriv, serverPub);
-        assertArrayEquals(ECDHE_GC256B, shared,
+        assertArrayEquals(
+                ECDHE_GC256B,
+                shared,
                 () -> "Ожидал " + hexStr(ECDHE_GC256B) + ", получил " + hexStr(shared));
     }
 
@@ -72,12 +75,14 @@ class KeyAgreementTest {
         KeyPair pairA = KeyGenerator.generateKeyPair(params);
         KeyPair pairB = KeyGenerator.generateKeyPair(params);
         try {
-            byte[] secretAB = KeyAgreement.computeSharedSecret(pairA.getPrivate(), pairB.getPublic());
-            byte[] secretBA = KeyAgreement.computeSharedSecret(pairB.getPrivate(), pairA.getPublic());
+            byte[] secretAB =
+                    KeyAgreement.computeSharedSecret(pairA.getPrivate(), pairB.getPublic());
+            byte[] secretBA =
+                    KeyAgreement.computeSharedSecret(pairB.getPrivate(), pairA.getPublic());
 
             assertEquals(secretAB.length, params.hlen, "Длина shared secret = hlen");
-            assertArrayEquals(secretAB, secretBA,
-                    "shared secret должен быть симметричным: A·B == B·A");
+            assertArrayEquals(
+                    secretAB, secretBA, "shared secret должен быть симметричным: A·B == B·A");
         } finally {
             pairA.getPrivate().destroy();
             pairB.getPrivate().destroy();
@@ -106,12 +111,14 @@ class KeyAgreementTest {
         BigInteger ukm = leBytesToBigInteger(UKM_8BYTES);
 
         byte[] kekA = KeyAgreement.vkoGostR3410_2012_256(privA, pubB, ukm);
-        assertArrayEquals(KEK_VKO_TC26A512, kekA,
+        assertArrayEquals(
+                KEK_VKO_TC26A512,
+                kekA,
                 () -> "Ожидал " + hexStr(KEK_VKO_TC26A512) + ", получил " + hexStr(kekA));
 
         byte[] kekB = KeyAgreement.vkoGostR3410_2012_256(privB, pubA, ukm);
-        assertArrayEquals(KEK_VKO_TC26A512, kekB,
-                "VKO должен быть симметричным на эталонных ключах");
+        assertArrayEquals(
+                KEK_VKO_TC26A512, kekB, "VKO должен быть симметричным на эталонных ключах");
     }
 
     @Test
@@ -126,8 +133,7 @@ class KeyAgreementTest {
         KeyPair pairB = KeyGenerator.generateKeyPair(params);
         try {
             byte[] shared = KeyAgreement.computeSharedSecret(pairA.getPrivate(), pairB.getPublic());
-            assertEquals(expectedLen, shared.length,
-                    "Длина shared secret для hlen=" + params.hlen);
+            assertEquals(expectedLen, shared.length, "Длина shared secret для hlen=" + params.hlen);
         } finally {
             pairA.getPrivate().destroy();
             pairB.getPrivate().destroy();
@@ -139,7 +145,7 @@ class KeyAgreementTest {
     // ========================================================================
 
     @Test
-    @DisplayName("CryptoPro-A vs tc26a512: разные кривые → IllegalArgumentException")
+    @DisplayName("CryptoPro-A vs tc26a512: разные кривые -> IllegalArgumentException")
     void sharedSecret_curveMismatch() {
         ECParameters paramsA = ECParameters.cryptoProA();
         ECParameters paramsB = ECParameters.tc26a512();
@@ -147,7 +153,8 @@ class KeyAgreementTest {
         KeyPair pairA = KeyGenerator.generateKeyPair(paramsA);
         KeyPair pairB = KeyGenerator.generateKeyPair(paramsB);
         try {
-            assertThrows(IllegalArgumentException.class,
+            assertThrows(
+                    IllegalArgumentException.class,
                     () -> KeyAgreement.computeSharedSecret(pairA.getPrivate(), pairB.getPublic()),
                     "Разные кривые должны давать IllegalArgumentException");
         } finally {
@@ -161,11 +168,12 @@ class KeyAgreementTest {
     // ========================================================================
 
     @Test
-    @DisplayName("null закрытый ключ → IllegalArgumentException")
+    @DisplayName("null закрытый ключ -> IllegalArgumentException")
     void sharedSecret_nullPrivate() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
-            assertThrows(IllegalArgumentException.class,
+            assertThrows(
+                    IllegalArgumentException.class,
                     () -> KeyAgreement.computeSharedSecret(null, pair.getPublic()));
         } finally {
             pair.getPrivate().destroy();
@@ -173,11 +181,12 @@ class KeyAgreementTest {
     }
 
     @Test
-    @DisplayName("null открытый ключ → IllegalArgumentException")
+    @DisplayName("null открытый ключ -> IllegalArgumentException")
     void sharedSecret_nullPublic() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
-            assertThrows(IllegalArgumentException.class,
+            assertThrows(
+                    IllegalArgumentException.class,
                     () -> KeyAgreement.computeSharedSecret(pair.getPrivate(), null));
         } finally {
             pair.getPrivate().destroy();
@@ -185,10 +194,10 @@ class KeyAgreementTest {
     }
 
     @Test
-    @DisplayName("оба null → IllegalArgumentException")
+    @DisplayName("оба null -> IllegalArgumentException")
     void sharedSecret_bothNull() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KeyAgreement.computeSharedSecret(null, null));
+        assertThrows(
+                IllegalArgumentException.class, () -> KeyAgreement.computeSharedSecret(null, null));
     }
 
     // ========================================================================
@@ -196,31 +205,33 @@ class KeyAgreementTest {
     // ========================================================================
 
     @Test
-    @DisplayName("уничтоженный закрытый ключ → IllegalStateException")
+    @DisplayName("уничтоженный закрытый ключ -> IllegalStateException")
     void sharedSecret_destroyedPrivate() {
         ECParameters params = ECParameters.cryptoProA();
         PrivateKeyParameters priv = new PrivateKeyParameters(D_C_GC256B, params);
         PublicKeyParameters pub = decodePublicKeyLe(Q_S_LE_GC256B, params);
 
         priv.destroy();
-        assertThrows(IllegalStateException.class,
+        assertThrows(
+                IllegalStateException.class,
                 () -> KeyAgreement.computeSharedSecret(priv, pub),
                 "Уничтоженный ключ должен давать IllegalStateException");
     }
 
     // ========================================================================
-    // Бесконечность: точка peerPub = infinity → IllegalStateException
+    // Бесконечность: точка peerPub = infinity -> IllegalStateException
     // ========================================================================
 
     @Test
-    @DisplayName("ключ удалённой стороны — точка на бесконечности → IllegalStateException")
+    @DisplayName("ключ удалённой стороны — точка на бесконечности -> IllegalStateException")
     void sharedSecret_peerInfinity() {
         ECParameters params = ECParameters.cryptoProA();
         PrivateKeyParameters priv = new PrivateKeyParameters(D_C_GC256B, params);
         ECPoint infinity = ECPoint.infinity(params);
         PublicKeyParameters peerPub = new PublicKeyParameters(infinity, params);
         try {
-            assertThrows(IllegalStateException.class,
+            assertThrows(
+                    IllegalStateException.class,
                     () -> KeyAgreement.computeSharedSecret(priv, peerPub),
                     "Точка на бесконечности должна давать IllegalStateException");
         } finally {
@@ -250,14 +261,11 @@ class KeyAgreementTest {
         byte[] sharedBA = KeyAgreement.computeSharedSecret(privB, pubA);
 
         assertEquals(params.hlen, sharedAB.length);
-        assertArrayEquals(sharedAB, sharedBA,
-                "d=1: A·B == B·A");
+        assertArrayEquals(sharedAB, sharedBA, "d=1: A·B == B·A");
 
         // shared = X(dA·dB·G) = X(1·1·G) = X(G). Для CryptoPro-A Gx известен.
-        byte[] expected = ECPoint.affine(params.gx, params.gy, params)
-                .normalize()
-                .getX()
-                .toByteArray();
+        byte[] expected =
+                ECPoint.affine(params.gx, params.gy, params).normalize().getX().toByteArray();
         // X координата — это shared secret
         BigInteger sharedX = new BigInteger(1, sharedAB);
         assertTrue(sharedX.signum() > 0, "shared secret не должен быть 0");
@@ -282,8 +290,7 @@ class KeyAgreementTest {
             byte[] sharedAB = KeyAgreement.computeSharedSecret(privA, pairB.getPublic());
             byte[] sharedBA = KeyAgreement.computeSharedSecret(pairB.getPrivate(), pubA);
 
-            assertArrayEquals(sharedAB, sharedBA,
-                    "d=1 × random: A·B == B·A");
+            assertArrayEquals(sharedAB, sharedBA, "d=1 × random: A·B == B·A");
         } finally {
             privA.destroy();
             pairB.getPrivate().destroy();
@@ -308,8 +315,7 @@ class KeyAgreementTest {
         byte[] sharedBA = KeyAgreement.computeSharedSecret(privB, pubA);
 
         assertEquals(params.hlen, sharedAB.length);
-        assertArrayEquals(sharedAB, sharedBA,
-                "d=n-1: A·B == B·A");
+        assertArrayEquals(sharedAB, sharedBA, "d=n-1: A·B == B·A");
 
         // (n-1)·(n-1)·G = 1·G = G, но shared = X координата.
         BigInteger sharedX = new BigInteger(1, sharedAB);
@@ -327,28 +333,34 @@ class KeyAgreementTest {
 
     private static final byte[] UKM_8BYTES = hex("1d80603c8544c727");
 
-    private static final BigInteger D_A_TC26A512 = leBytesToBigInteger(
-            hex("c990ecd972fce84ec4db022778f50fcac726f46708384b8d458304962d7147f8"
-                    + "c2db41cef22c90b102f2968404f9b9be6d47c79692d81826b32b8daca43cb667"));
+    private static final BigInteger D_A_TC26A512 =
+            leBytesToBigInteger(
+                    hex(
+                            "c990ecd972fce84ec4db022778f50fcac726f46708384b8d458304962d7147f8"
+                                    + "c2db41cef22c90b102f2968404f9b9be6d47c79692d81826b32b8daca43cb667"));
 
-    private static final BigInteger D_B_TC26A512 = leBytesToBigInteger(
-            hex("48c859f7b6f11585887cc05ec6ef1390cfea739b1a18c0d4662293ef63b79e3b"
-                    + "8014070b44918590b4b996acfea4edfbbbcccc8c06edd8bf5bda92a51392d0db"));
+    private static final BigInteger D_B_TC26A512 =
+            leBytesToBigInteger(
+                    hex(
+                            "48c859f7b6f11585887cc05ec6ef1390cfea739b1a18c0d4662293ef63b79e3b"
+                                    + "8014070b44918590b4b996acfea4edfbbbcccc8c06edd8bf5bda92a51392d0db"));
 
-    private static final byte[] Q_A_LE_TC26A512 = hex(
-            "aab0eda4abff21208d18799fb9a8556654ba783070eba10cb9abb253ec56dcf5"
-                    + "d3ccba6192e464e6e5bcb6dea137792f2431f6c897eb1b3c0cc14327b1adc0a7"
-                    + "914613a3074e363aedb204d38d3563971bd8758e878c9db11403721b48002d38"
-                    + "461f92472d40ea92f9958c0ffa4c93756401b97f89fdbe0b5e46e4a4631cdb5a");
+    private static final byte[] Q_A_LE_TC26A512 =
+            hex(
+                    "aab0eda4abff21208d18799fb9a8556654ba783070eba10cb9abb253ec56dcf5"
+                            + "d3ccba6192e464e6e5bcb6dea137792f2431f6c897eb1b3c0cc14327b1adc0a7"
+                            + "914613a3074e363aedb204d38d3563971bd8758e878c9db11403721b48002d38"
+                            + "461f92472d40ea92f9958c0ffa4c93756401b97f89fdbe0b5e46e4a4631cdb5a");
 
-    private static final byte[] Q_B_LE_TC26A512 = hex(
-            "192fe183b9713a077253c72c8735de2ea42a3dbc66ea317838b65fa32523cd5e"
-                    + "fca974eda7c863f4954d1147f1f2b25c395fce1c129175e876d132e94ed5a651"
-                    + "04883b414c9b592ec4dc84826f07d0b6d9006dda176ce48c391e3f97d102e03b"
-                    + "b598bf132a228a45f7201aba08fc524a2d77e43a362ab022ad4028f75bde3b79");
+    private static final byte[] Q_B_LE_TC26A512 =
+            hex(
+                    "192fe183b9713a077253c72c8735de2ea42a3dbc66ea317838b65fa32523cd5e"
+                            + "fca974eda7c863f4954d1147f1f2b25c395fce1c129175e876d132e94ed5a651"
+                            + "04883b414c9b592ec4dc84826f07d0b6d9006dda176ce48c391e3f97d102e03b"
+                            + "b598bf132a228a45f7201aba08fc524a2d77e43a362ab022ad4028f75bde3b79");
 
-    private static final byte[] KEK_VKO_TC26A512 = hex(
-            "c9a9a77320e2cc559ed72dce6f47e2192ccea95fa648670582c054c0ef36c221");
+    private static final byte[] KEK_VKO_TC26A512 =
+            hex("c9a9a77320e2cc559ed72dce6f47e2192ccea95fa648670582c054c0ef36c221");
 
     @Test
     @DisplayName("VKO: UKM=1 даёт 32 байта для любой кривой")
@@ -357,8 +369,9 @@ class KeyAgreementTest {
         KeyPair pair = KeyGenerator.generateKeyPair(params);
         KeyPair peer = KeyGenerator.generateKeyPair(params);
         try {
-            byte[] kek = KeyAgreement.vkoGostR3410_2012_256(
-                    pair.getPrivate(), peer.getPublic(), BigInteger.ONE);
+            byte[] kek =
+                    KeyAgreement.vkoGostR3410_2012_256(
+                            pair.getPrivate(), peer.getPublic(), BigInteger.ONE);
             assertEquals(32, kek.length, "VKO результат всегда 32 байта");
         } finally {
             pair.getPrivate().destroy();
@@ -386,13 +399,12 @@ class KeyAgreementTest {
         KeyPair pairA = KeyGenerator.generateKeyPair(params);
         KeyPair pairB = KeyGenerator.generateKeyPair(params);
         try {
-            byte[] kekAB = KeyAgreement.vkoGostR3410_2012_256(
-                    pairA.getPrivate(), pairB.getPublic(), ukm);
-            byte[] kekBA = KeyAgreement.vkoGostR3410_2012_256(
-                    pairB.getPrivate(), pairA.getPublic(), ukm);
+            byte[] kekAB =
+                    KeyAgreement.vkoGostR3410_2012_256(pairA.getPrivate(), pairB.getPublic(), ukm);
+            byte[] kekBA =
+                    KeyAgreement.vkoGostR3410_2012_256(pairB.getPrivate(), pairA.getPublic(), ukm);
             assertEquals(32, kekAB.length, "VKO результат всегда 32 байта");
-            assertArrayEquals(kekAB, kekBA,
-                    "VKO должен быть симметричным: A·B == B·A");
+            assertArrayEquals(kekAB, kekBA, "VKO должен быть симметричным: A·B == B·A");
         } finally {
             pairA.getPrivate().destroy();
             pairB.getPrivate().destroy();
@@ -404,15 +416,17 @@ class KeyAgreementTest {
     // ========================================================================
 
     @Test
-    @DisplayName("VKO: UKM=null → IllegalArgumentException")
+    @DisplayName("VKO: UKM=null -> IllegalArgumentException")
     void vko_ukmNull() {
         ECParameters params = ECParameters.cryptoProA();
         KeyPair pair = KeyGenerator.generateKeyPair(params);
         KeyPair peer = KeyGenerator.generateKeyPair(params);
         try {
-            assertThrows(IllegalArgumentException.class,
-                    () -> KeyAgreement.vkoGostR3410_2012_256(
-                            pair.getPrivate(), peer.getPublic(), null),
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            KeyAgreement.vkoGostR3410_2012_256(
+                                    pair.getPrivate(), peer.getPublic(), null),
                     "UKM=null должен давать IllegalArgumentException");
         } finally {
             pair.getPrivate().destroy();
@@ -421,15 +435,17 @@ class KeyAgreementTest {
     }
 
     @Test
-    @DisplayName("VKO: UKM=0 → IllegalArgumentException")
+    @DisplayName("VKO: UKM=0 -> IllegalArgumentException")
     void vko_ukmZero() {
         ECParameters params = ECParameters.cryptoProA();
         KeyPair pair = KeyGenerator.generateKeyPair(params);
         KeyPair peer = KeyGenerator.generateKeyPair(params);
         try {
-            assertThrows(IllegalArgumentException.class,
-                    () -> KeyAgreement.vkoGostR3410_2012_256(
-                            pair.getPrivate(), peer.getPublic(), BigInteger.ZERO),
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            KeyAgreement.vkoGostR3410_2012_256(
+                                    pair.getPrivate(), peer.getPublic(), BigInteger.ZERO),
                     "UKM=0 должен давать IllegalArgumentException");
         } finally {
             pair.getPrivate().destroy();
@@ -438,15 +454,17 @@ class KeyAgreementTest {
     }
 
     @Test
-    @DisplayName("VKO: UKM=-1 → IllegalArgumentException")
+    @DisplayName("VKO: UKM=-1 -> IllegalArgumentException")
     void vko_ukmNegative() {
         ECParameters params = ECParameters.cryptoProA();
         KeyPair pair = KeyGenerator.generateKeyPair(params);
         KeyPair peer = KeyGenerator.generateKeyPair(params);
         try {
-            assertThrows(IllegalArgumentException.class,
-                    () -> KeyAgreement.vkoGostR3410_2012_256(
-                            pair.getPrivate(), peer.getPublic(), BigInteger.valueOf(-1)),
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            KeyAgreement.vkoGostR3410_2012_256(
+                                    pair.getPrivate(), peer.getPublic(), BigInteger.valueOf(-1)),
                     "UKM=-1 должен давать IllegalArgumentException");
         } finally {
             pair.getPrivate().destroy();
@@ -459,42 +477,48 @@ class KeyAgreementTest {
     // ========================================================================
 
     @Test
-    @DisplayName("VKO: null закрытый ключ → IllegalArgumentException")
+    @DisplayName("VKO: null закрытый ключ -> IllegalArgumentException")
     void vko_nullPrivate() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
-            assertThrows(IllegalArgumentException.class,
-                    () -> KeyAgreement.vkoGostR3410_2012_256(
-                            null, pair.getPublic(), BigInteger.ONE));
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            KeyAgreement.vkoGostR3410_2012_256(
+                                    null, pair.getPublic(), BigInteger.ONE));
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("VKO: null открытый ключ → IllegalArgumentException")
+    @DisplayName("VKO: null открытый ключ -> IllegalArgumentException")
     void vko_nullPublic() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
-            assertThrows(IllegalArgumentException.class,
-                    () -> KeyAgreement.vkoGostR3410_2012_256(
-                            pair.getPrivate(), null, BigInteger.ONE));
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            KeyAgreement.vkoGostR3410_2012_256(
+                                    pair.getPrivate(), null, BigInteger.ONE));
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("VKO: разные кривые → IllegalArgumentException")
+    @DisplayName("VKO: разные кривые -> IllegalArgumentException")
     void vko_curveMismatch() {
         ECParameters paramsA = ECParameters.cryptoProA();
         ECParameters paramsB = ECParameters.tc26a512();
         KeyPair pairA = KeyGenerator.generateKeyPair(paramsA);
         KeyPair pairB = KeyGenerator.generateKeyPair(paramsB);
         try {
-            assertThrows(IllegalArgumentException.class,
-                    () -> KeyAgreement.vkoGostR3410_2012_256(
-                            pairA.getPrivate(), pairB.getPublic(), BigInteger.ONE),
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            KeyAgreement.vkoGostR3410_2012_256(
+                                    pairA.getPrivate(), pairB.getPublic(), BigInteger.ONE),
                     "Разные кривые должны давать IllegalArgumentException");
         } finally {
             pairA.getPrivate().destroy();
@@ -503,26 +527,28 @@ class KeyAgreementTest {
     }
 
     @Test
-    @DisplayName("VKO: уничтоженный закрытый ключ → IllegalStateException")
+    @DisplayName("VKO: уничтоженный закрытый ключ -> IllegalStateException")
     void vko_destroyedPrivate() {
         ECParameters params = ECParameters.cryptoProA();
         PrivateKeyParameters priv = new PrivateKeyParameters(D_C_GC256B, params);
         PublicKeyParameters pub = decodePublicKeyLe(Q_S_LE_GC256B, params);
         priv.destroy();
-        assertThrows(IllegalStateException.class,
+        assertThrows(
+                IllegalStateException.class,
                 () -> KeyAgreement.vkoGostR3410_2012_256(priv, pub, BigInteger.ONE),
                 "Уничтоженный ключ должен давать IllegalStateException");
     }
 
     @Test
-    @DisplayName("VKO: точка на бесконечности → IllegalStateException")
+    @DisplayName("VKO: точка на бесконечности -> IllegalStateException")
     void vko_peerInfinity() {
         ECParameters params = ECParameters.cryptoProA();
         PrivateKeyParameters priv = new PrivateKeyParameters(D_C_GC256B, params);
         ECPoint infinity = ECPoint.infinity(params);
         PublicKeyParameters peerPub = new PublicKeyParameters(infinity, params);
         try {
-            assertThrows(IllegalStateException.class,
+            assertThrows(
+                    IllegalStateException.class,
                     () -> KeyAgreement.vkoGostR3410_2012_256(priv, peerPub, BigInteger.ONE),
                     "Точка на бесконечности должна давать IllegalStateException");
         } finally {
@@ -542,8 +568,7 @@ class KeyAgreementTest {
         System.arraycopy(qLe, hlen, yLe, 0, hlen);
         byte[] xBe = Pack.reverseBytes(xLe);
         byte[] yBe = Pack.reverseBytes(yLe);
-        ECPoint q = ECPoint.affine(
-                new BigInteger(1, xBe), new BigInteger(1, yBe), params);
+        ECPoint q = ECPoint.affine(new BigInteger(1, xBe), new BigInteger(1, yBe), params);
         return new PublicKeyParameters(q, params);
     }
 
@@ -557,8 +582,10 @@ class KeyAgreementTest {
         int len = cleaned.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(cleaned.charAt(i), 16) << 4)
-                    + Character.digit(cleaned.charAt(i + 1), 16));
+            data[i / 2] =
+                    (byte)
+                            ((Character.digit(cleaned.charAt(i), 16) << 4)
+                                    + Character.digit(cleaned.charAt(i + 1), 16));
         }
         return data;
     }

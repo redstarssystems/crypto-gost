@@ -1,23 +1,21 @@
 package org.rssys.gost.tls13.message;
 
-import org.rssys.gost.digest.Digest;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.util.CryptoRandom;
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.config.OIDFilter;
-import org.rssys.gost.tls13.crypto.HkdfStreebog;
-import org.rssys.gost.tls13.crypto.TlsKeySchedule;
-import org.rssys.gost.tls13.crypto.TlsSignatureCodec;
-
-import org.rssys.gost.tls13.TlsException;
-
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.rssys.gost.digest.Digest;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsException;
+import org.rssys.gost.tls13.config.OIDFilter;
+import org.rssys.gost.tls13.crypto.HkdfStreebog;
+import org.rssys.gost.tls13.crypto.TlsKeySchedule;
+import org.rssys.gost.tls13.crypto.TlsSignatureCodec;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * Сборка handshake-сообщений TLS 1.3 (RFC 8446 §4, RFC 9367).
@@ -37,7 +35,7 @@ public final class TlsMessageBuilder {
     private final int selectedNamedGroup;
     private int selectedSigScheme;
     private PrivateKeyParameters ourPrivateKey;
-    private List<TlsCertificate> ourCertificateChain;
+    private List<GostCertificate> ourCertificateChain;
     private int hashLen;
 
     // ALPN (RFC 7301): список протоколов клиента для включения в ClientHello
@@ -51,53 +49,43 @@ public final class TlsMessageBuilder {
 
     // Расширение supported_versions для ClientHello:
     // — вместо new byte[] + BAOS в buildCommonExtensions
-    private static final byte[] SV_CLIENT = new byte[]{
-            0x00, 0x2B, 0x00, 0x03, 0x02, 0x03, 0x04
-    };
+    private static final byte[] SV_CLIENT = new byte[] {0x00, 0x2B, 0x00, 0x03, 0x02, 0x03, 0x04};
 
     // Расширение supported_versions для ServerHello (без 0x02):
     // — отдельная константа, чтобы не аллоцировать byte[2] и не писать encodeExtension
-    private static final byte[] SV_SERVER = new byte[]{
-            0x00, 0x2B, 0x00, 0x02, 0x03, 0x04
-    };
+    private static final byte[] SV_SERVER = new byte[] {0x00, 0x2B, 0x00, 0x02, 0x03, 0x04};
 
     // Весь extension supported_groups в сборе (тип+длина+тело).
     // Список из 7 групп ГОСТ фиксирован — незачем собирать его через BAOS каждый раз.
-    private static final byte[] SUPPORTED_GROUPS_EXT = new byte[]{
-            0x00, 0x0A, 0x00, 0x10,
-            0x00, 0x0E,
-            0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25,
-            0x00, 0x26, 0x00, 0x27, 0x00, 0x28
-    };
+    private static final byte[] SUPPORTED_GROUPS_EXT =
+            new byte[] {
+                0x00, 0x0A, 0x00, 0x10, 0x00, 0x0E, 0x00, 0x22, 0x00, 0x23, 0x00, 0x24, 0x00, 0x25,
+                0x00, 0x26, 0x00, 0x27, 0x00, 0x28
+            };
 
     // Тело signature_algorithms (длина+список схем) без заголовка расширения.
     // Нужен отдельно для buildCertificateRequest, где используется encodeExtension.
-    private static final byte[] SIG_ALG_BODY = new byte[]{
-            0x00, 0x0E,
-            0x07, 0x09, 0x07, 0x0A, 0x07, 0x0B, 0x07, 0x0C,
-            0x07, 0x0D, 0x07, 0x0E, 0x07, 0x0F
-    };
+    private static final byte[] SIG_ALG_BODY =
+            new byte[] {
+                0x00, 0x0E, 0x07, 0x09, 0x07, 0x0A, 0x07, 0x0B, 0x07, 0x0C, 0x07, 0x0D, 0x07, 0x0E,
+                0x07, 0x0F
+            };
 
     // Весь extension signature_algorithms в сборе — чтобы не аллоцировать
     // BAOS + toByteArray() для семи uint16 на каждый handshake (вызывается 2 раза).
-    private static final byte[] SIG_ALG_EXT = new byte[]{
-            0x00, 0x0D, 0x00, 0x10,
-            0x00, 0x0E,
-            0x07, 0x09, 0x07, 0x0A, 0x07, 0x0B, 0x07, 0x0C,
-            0x07, 0x0D, 0x07, 0x0E, 0x07, 0x0F
-    };
+    private static final byte[] SIG_ALG_EXT =
+            new byte[] {
+                0x00, 0x0D, 0x00, 0x10, 0x00, 0x0E, 0x07, 0x09, 0x07, 0x0A, 0x07, 0x0B, 0x07, 0x0C,
+                0x07, 0x0D, 0x07, 0x0E, 0x07, 0x0F
+            };
 
     // psk_key_exchange_modes: режим PSK_DHE_KE фиксирован — BAOS ни к чему.
-    private static final byte[] PSK_DHE_KE_EXT = new byte[]{
-            0x00, 0x2D, 0x00, 0x02, 0x01, 0x01
-    };
+    private static final byte[] PSK_DHE_KE_EXT = new byte[] {0x00, 0x2D, 0x00, 0x02, 0x01, 0x01};
 
     // status_request: OCSP-степплинг с пустыми списками.
     // Статический литерал, потому что тело из 5 байт не меняется между handshake.
-    private static final byte[] STATUS_REQUEST_EXT = new byte[]{
-            0x00, 0x05, 0x00, 0x05,
-            0x01, 0x00, 0x00, 0x00, 0x00
-    };
+    private static final byte[] STATUS_REQUEST_EXT =
+            new byte[] {0x00, 0x05, 0x00, 0x05, 0x01, 0x00, 0x00, 0x00, 0x00};
 
     /**
      * @param ciphersuite           cipher suite (определяет AEAD, KDF, TLSTREE-константы)
@@ -108,13 +96,14 @@ public final class TlsMessageBuilder {
      * @param ourCertificateChain  цепочка сертификатов (leaf первый, root последний; null для клиента без аутентификации)
      * @param hashLen              32 для Streebog-256, 64 для Streebog-512
      */
-    public TlsMessageBuilder(TlsCiphersuite ciphersuite,
-                             List<Integer> offeredCipherSuiteIds,
-                             int selectedNamedGroup,
-                             int selectedSigScheme,
-                             PrivateKeyParameters ourPrivateKey,
-                             List<TlsCertificate> ourCertificateChain,
-                             int hashLen) {
+    public TlsMessageBuilder(
+            TlsCiphersuite ciphersuite,
+            List<Integer> offeredCipherSuiteIds,
+            int selectedNamedGroup,
+            int selectedSigScheme,
+            PrivateKeyParameters ourPrivateKey,
+            List<GostCertificate> ourCertificateChain,
+            int hashLen) {
         this.ciphersuite = ciphersuite;
         this.offeredCipherSuiteIds = offeredCipherSuiteIds;
         this.selectedNamedGroup = selectedNamedGroup;
@@ -151,8 +140,9 @@ public final class TlsMessageBuilder {
      * Находит согласованный ciphersuite: сначала предпочтительный suite сервера,
      * затем первое пересечение по приоритету сервера (RFC 8446 §4.1.1).
      */
-    private static TlsCiphersuite matchClientCiphersuite(byte[] chBody, List<Integer> offeredSuites,
-            TlsCiphersuite preferredSuite) throws TlsException {
+    private static TlsCiphersuite matchClientCiphersuite(
+            byte[] chBody, List<Integer> offeredSuites, TlsCiphersuite preferredSuite)
+            throws TlsException {
         try {
             int pos = 2 + TlsConstants.RANDOM_LENGTH;
             int sidLen = chBody[pos] & 0xFF;
@@ -181,8 +171,8 @@ public final class TlsMessageBuilder {
             }
             return null;
         } catch (IndexOutOfBoundsException e) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                    "Malformed ClientHello (cipher suites)");
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR, "Malformed ClientHello (cipher suites)");
         }
     }
 
@@ -205,7 +195,7 @@ public final class TlsMessageBuilder {
      * Заменяет цепочку сертификатов для Certificate.
      * Используется при выборе клиентского сертификата по oid_filters.
      */
-    public void setCertificateChain(List<TlsCertificate> chain) {
+    public void setCertificateChain(List<GostCertificate> chain) {
         this.ourCertificateChain = chain;
     }
 
@@ -250,7 +240,7 @@ public final class TlsMessageBuilder {
     /**
      * @return цепочка сертификатов сервера (leaf первый, root последний)
      */
-    public List<TlsCertificate> getCertificateChain() {
+    public List<GostCertificate> getCertificateChain() {
         return ourCertificateChain;
     }
 
@@ -290,7 +280,7 @@ public final class TlsMessageBuilder {
      * Собирает ClientHello с несколькими key_share entry (multi key_share, RFC 8446 §4.2.8).
      * Позволяет клиенту предложить несколько групп в первом сообщении, избегая HRR.
      *
-     * @param ecdhePoints карта: NamedGroup → закодированная точка X||Y
+     * @param ecdhePoints карта: NamedGroup -> закодированная точка X||Y
      * @param serverName  DNS-имя сервера для SNI (null = без расширения)
      * @return тело ClientHello (без handshake-заголовка)
      */
@@ -298,8 +288,8 @@ public final class TlsMessageBuilder {
         return buildClientHello(ecdhePoints, serverName, null);
     }
 
-    public byte[] buildClientHello(Map<Integer, byte[]> ecdhePoints, String serverName,
-                                    byte[] cookie) {
+    public byte[] buildClientHello(
+            Map<Integer, byte[]> ecdhePoints, String serverName, byte[] cookie) {
         byte[] preamble = buildClientHelloPreamble();
         ByteArrayOutputStream ext = new ByteArrayOutputStream();
         buildCommonExtensions(ext, ecdhePoints, serverName);
@@ -332,9 +322,8 @@ public final class TlsMessageBuilder {
      * @param obfuscatedTicketAge   obfuscated_ticket_age (uint32)
      * @return тело ClientHello с placeholder binder
      */
-    public byte[] buildClientHelloWithPsk(byte[] ecdhePoint,
-                                           byte[] pskIdentity,
-                                           long obfuscatedTicketAge) {
+    public byte[] buildClientHelloWithPsk(
+            byte[] ecdhePoint, byte[] pskIdentity, long obfuscatedTicketAge) {
         return buildClientHelloWithPsk(ecdhePoint, pskIdentity, obfuscatedTicketAge, null);
     }
 
@@ -350,24 +339,27 @@ public final class TlsMessageBuilder {
     /**
      * Собирает ClientHello с PSK и несколькими key_share entry (multi key_share).
      *
-     * @param ecdhePoints         карта: NamedGroup → закодированная точка X||Y
+     * @param ecdhePoints         карта: NamedGroup -> закодированная точка X||Y
      * @param pskIdentity         тикет (opaque ticket из NewSessionTicket)
      * @param obfuscatedTicketAge obfuscated_ticket_age (uint32)
      * @param serverName          DNS-имя сервера для SNI (null = без расширения)
      * @return тело ClientHello с placeholder binder
      */
-    public byte[] buildClientHelloWithPsk(Map<Integer, byte[]> ecdhePoints,
-                                            byte[] pskIdentity,
-                                            long obfuscatedTicketAge,
-                                            String serverName) {
-        return buildClientHelloWithPsk(ecdhePoints, pskIdentity, obfuscatedTicketAge, serverName, null);
+    public byte[] buildClientHelloWithPsk(
+            Map<Integer, byte[]> ecdhePoints,
+            byte[] pskIdentity,
+            long obfuscatedTicketAge,
+            String serverName) {
+        return buildClientHelloWithPsk(
+                ecdhePoints, pskIdentity, obfuscatedTicketAge, serverName, null);
     }
 
-    public byte[] buildClientHelloWithPsk(Map<Integer, byte[]> ecdhePoints,
-                                            byte[] pskIdentity,
-                                            long obfuscatedTicketAge,
-                                            String serverName,
-                                            byte[] cookie) {
+    public byte[] buildClientHelloWithPsk(
+            Map<Integer, byte[]> ecdhePoints,
+            byte[] pskIdentity,
+            long obfuscatedTicketAge,
+            String serverName,
+            byte[] cookie) {
         byte[] preamble = buildClientHelloPreamble();
         ByteArrayOutputStream ext = new ByteArrayOutputStream();
         buildCommonExtensions(ext, ecdhePoints, serverName);
@@ -397,7 +389,7 @@ public final class TlsMessageBuilder {
         pskExt[pos++] = (byte) obfuscatedTicketAge;
         pskExt[pos++] = (byte) ((1 + binderLen) >>> 8);
         pskExt[pos++] = (byte) (1 + binderLen);
-        pskExt[pos  ] = (byte) binderLen;
+        pskExt[pos] = (byte) binderLen;
         // pskExt заполнен нулями при аллокации — placeholder binder будет
         // вставлен после вычисления через TlsPskHelper.computeBinder
 
@@ -412,12 +404,13 @@ public final class TlsMessageBuilder {
         return out;
     }
 
-    public byte[] buildClientHelloWithPsk(byte[] ecdhePoint,
-                                           byte[] pskIdentity,
-                                           long obfuscatedTicketAge,
-                                           String serverName) {
-        return buildClientHelloWithPsk(Map.of(selectedNamedGroup, ecdhePoint),
-                pskIdentity, obfuscatedTicketAge, serverName);
+    public byte[] buildClientHelloWithPsk(
+            byte[] ecdhePoint, byte[] pskIdentity, long obfuscatedTicketAge, String serverName) {
+        return buildClientHelloWithPsk(
+                Map.of(selectedNamedGroup, ecdhePoint),
+                pskIdentity,
+                obfuscatedTicketAge,
+                serverName);
     }
 
     /**
@@ -443,7 +436,7 @@ public final class TlsMessageBuilder {
      * с selected_identity = 0 (RFC 8446 §4.2.11).
      *
      * @param ecdhePoint эфемерный публичный ключ сервера X || Y (little-endian)
-     * @param pskAccepted true → включить pre_shared_key extension
+     * @param pskAccepted true -> включить pre_shared_key extension
      * @return тело ServerHello (без handshake-заголовка)
      */
     public byte[] buildServerHello(byte[] ecdhePoint, boolean pskAccepted) {
@@ -457,7 +450,7 @@ public final class TlsMessageBuilder {
      * с selected_identity = 0 (RFC 8446 §4.2.11).
      *
      * @param ecdhePoint эфемерный публичный ключ сервера X || Y (little-endian)
-     * @param pskAccepted true → включить pre_shared_key extension
+     * @param pskAccepted true -> включить pre_shared_key extension
      * @param namedGroup  идентификатор именованной группы для key_share
      * @return тело ServerHello (без handshake-заголовка)
      */
@@ -496,8 +489,10 @@ public final class TlsMessageBuilder {
         TlsEncoding.encodeExtension(ext, TlsConstants.EXT_KEY_SHARE, ksEntry);
 
         if (pskAccepted) {
-            TlsEncoding.encodeExtension(ext, TlsConstants.EXT_PRE_SHARED_KEY,
-                    new byte[]{0x00, 0x00}); // selected_identity = 0
+            TlsEncoding.encodeExtension(
+                    ext,
+                    TlsConstants.EXT_PRE_SHARED_KEY,
+                    new byte[] {0x00, 0x00}); // selected_identity = 0
         }
 
         TlsEncoding.encodeUint16(out, ext.size());
@@ -510,11 +505,11 @@ public final class TlsMessageBuilder {
      * Собирает Certificate (RFC 8446 §4.4.2).
      * <p>
      * Формат: certificate_request_context(0) || CertificateEntry.
- * CertificateEntry: cert_len(3) || cert_der || extensions_len(2) || [].
- * Итерация по цепочке сертификатов; OCSP-степплинг включается
- * в extensions первого CertificateEntry при наличии.
- *
- * @return тело Certificate (без handshake-заголовка)
+     * CertificateEntry: cert_len(3) || cert_der || extensions_len(2) || [].
+     * Итерация по цепочке сертификатов; OCSP-степплинг включается
+     * в extensions первого CertificateEntry при наличии.
+     *
+     * @return тело Certificate (без handshake-заголовка)
      * @throws IllegalStateException если сертификат не установлен
      */
     public byte[] buildCertificateBody() {
@@ -536,7 +531,7 @@ public final class TlsMessageBuilder {
         }
         ByteArrayOutputStream list = new ByteArrayOutputStream();
         for (int i = 0; i < ourCertificateChain.size(); i++) {
-            byte[] certData = ourCertificateChain.get(i).getCertData();
+            byte[] certData = ourCertificateChain.get(i).getEncoded();
             TlsEncoding.encodeUint24(list, certData.length);
             list.write(certData, 0, certData.length);
             if (i == 0 && ocspResponse != null && ocspResponse.length > 0) {
@@ -568,7 +563,7 @@ public final class TlsMessageBuilder {
      */
     public byte[] buildEmptyCertificateBody() {
         // request_context = 0x00, certificate_list_length = 0x000000
-        return new byte[]{0x00, 0x00, 0x00, 0x00};
+        return new byte[] {0x00, 0x00, 0x00, 0x00};
     }
 
     /**
@@ -641,7 +636,7 @@ public final class TlsMessageBuilder {
         out[pos++] = TlsConstants.LEGACY_VERSION_MINOR;
         System.arraycopy(random, 0, out, pos, TlsConstants.RANDOM_LENGTH);
         pos += TlsConstants.RANDOM_LENGTH;
-        out[pos++] = 0;  // legacy_session_id length — всегда пусто в TLS 1.3
+        out[pos++] = 0; // legacy_session_id length — всегда пусто в TLS 1.3
 
         // cipher suites: длина(2) + N наборов × 2 байта
         out[pos++] = (byte) (suitesBytes >>> 8);
@@ -651,8 +646,8 @@ public final class TlsMessageBuilder {
             out[pos++] = (byte) id;
         }
 
-        out[pos++] = 0x01;  // длина списка методов сжатия (только null)
-        out[pos  ] = 0x00;  // null compression — RFC 8446 §4.1.2: MUST be present, single 0x00
+        out[pos++] = 0x01; // длина списка методов сжатия (только null)
+        out[pos] = 0x00; // null compression — RFC 8446 §4.1.2: MUST be present, single 0x00
         return out;
     }
 
@@ -678,12 +673,11 @@ public final class TlsMessageBuilder {
      * Собирает общий набор расширений ClientHello с несколькими key_share entry.
      *
      * @param ext         поток для записи расширений
-     * @param keyShares   карта: NamedGroup → закодированная точка X||Y
+     * @param keyShares   карта: NamedGroup -> закодированная точка X||Y
      * @param serverName  DNS-имя сервера для SNI (null = без расширения)
      */
-    private void buildCommonExtensions(ByteArrayOutputStream ext,
-                                        Map<Integer, byte[]> keyShares,
-                                        String serverName) {
+    private void buildCommonExtensions(
+            ByteArrayOutputStream ext, Map<Integer, byte[]> keyShares, String serverName) {
         // SNI: server_name extension (RFC 6066 §3, RFC 8446 §4.2.1)
         String normalized = normalizeHostname(serverName);
         if (normalized != null) {
@@ -731,11 +725,12 @@ public final class TlsMessageBuilder {
 
     private void addMaxFragmentLengthExtension(ByteArrayOutputStream ext) {
         if (clientMaxFragLen < 1 || clientMaxFragLen > 4) return;
-        byte[] body = new byte[]{(byte) clientMaxFragLen};
+        byte[] body = new byte[] {(byte) clientMaxFragLen};
         TlsEncoding.encodeExtension(ext, TlsConstants.EXT_MAX_FRAGMENT_LENGTH, body);
     }
 
-    private void buildCommonExtensions(ByteArrayOutputStream ext, byte[] ecdhePoint, String serverName) {
+    private void buildCommonExtensions(
+            ByteArrayOutputStream ext, byte[] ecdhePoint, String serverName) {
         buildCommonExtensions(ext, Map.of(selectedNamedGroup, ecdhePoint), serverName);
     }
 
@@ -758,7 +753,10 @@ public final class TlsMessageBuilder {
         ByteArrayOutputStream extData = new ByteArrayOutputStream();
         TlsEncoding.encodeUint16(extData, listBytes.length);
         extData.write(listBytes, 0, listBytes.length);
-        TlsEncoding.encodeExtension(ext, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION, extData.toByteArray());
+        TlsEncoding.encodeExtension(
+                ext,
+                TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION,
+                extData.toByteArray());
     }
 
     private static void addCookieExtension(ByteArrayOutputStream ext, byte[] cookie) {
@@ -870,23 +868,25 @@ public final class TlsMessageBuilder {
         boolean hasAlpn = selectedAlpnProtocol != null && !selectedAlpnProtocol.isEmpty();
         boolean hasMaxFrag = maxFragLen >= 1 && maxFragLen <= 4;
         if (!hasAlpn && !hasMaxFrag) {
-            return new byte[]{0x00, 0x00};
+            return new byte[] {0x00, 0x00};
         }
         ByteArrayOutputStream extBody = new ByteArrayOutputStream();
         if (hasAlpn) {
             byte[] nameBytes = selectedAlpnProtocol.getBytes(StandardCharsets.US_ASCII);
-            // WHY: RFC 7301 §3.1 требует ProtocolNameList с 2-байтовой длиной
+            // RFC 7301 §3.1 требует ProtocolNameList с 2-байтовой длиной
             // (listLength || nameLen || name). Используем encodeUint16, а не
             // ручное кодирование — (byte)(1+255) даёт переполнение.
             ByteArrayOutputStream alpnBody = new ByteArrayOutputStream();
             TlsEncoding.encodeUint16(alpnBody, 1 + nameBytes.length);
             alpnBody.write(nameBytes.length);
             alpnBody.write(nameBytes, 0, nameBytes.length);
-            TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION,
+            TlsEncoding.encodeExtension(
+                    extBody,
+                    TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION,
                     alpnBody.toByteArray());
         }
         if (hasMaxFrag) {
-            byte[] body = new byte[]{(byte) maxFragLen};
+            byte[] body = new byte[] {(byte) maxFragLen};
             TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_MAX_FRAGMENT_LENGTH, body);
         }
         byte[] extBodyBytes = extBody.toByteArray();
@@ -900,7 +900,7 @@ public final class TlsMessageBuilder {
     /**
      * Нормализует DNS-имя для SNI (RFC 6066 §3, RFC 8446 §4.2.1).
      * <p>
-     * Приводит к lowercase, удаляет завершающие точки (FQDN → relative),
+     * Приводит к lowercase, удаляет завершающие точки (FQDN -> relative),
      * проверяет что имя — чистый ASCII. Возвращает null при пустом/невалидном имени.
      * <p>
      * Используется и при сборке (TlsMessageBuilder) и при парсинге (TlsMessageParser).
@@ -930,8 +930,9 @@ public final class TlsMessageBuilder {
      */
     public static byte[] buildCertificateRequest() {
         byte[] out = new byte[23];
-        out[0] = 0;  // certificate_request_context
-        out[1] = 0; out[2] = 20;  // extensions length (SIG_ALG_EXT size)
+        out[0] = 0; // certificate_request_context
+        out[1] = 0;
+        out[2] = 20; // extensions length (SIG_ALG_EXT size)
         System.arraycopy(SIG_ALG_EXT, 0, out, 3, SIG_ALG_EXT.length);
         return out;
     }
@@ -973,7 +974,8 @@ public final class TlsMessageBuilder {
         // RFC 8446 §4.2.5: OIDFilter filters<0..2^16-1> — двухбайтовая длина списка
         TlsEncoding.encodeUint16(oidFilterExtData, filterBytes.length);
         oidFilterExtData.write(filterBytes, 0, filterBytes.length);
-        TlsEncoding.encodeExtension(extBody, TlsConstants.EXT_OID_FILTERS, oidFilterExtData.toByteArray());
+        TlsEncoding.encodeExtension(
+                extBody, TlsConstants.EXT_OID_FILTERS, oidFilterExtData.toByteArray());
         // Собираем CertificateRequest: context_byte(1) || extensions_len(2) || extensions
         byte[] extBytes = extBody.toByteArray();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -992,9 +994,8 @@ public final class TlsMessageBuilder {
      * @param transcript    Transcript-Hash от handshake-сообщений
      * @return verify_data (32 или 64 байта)
      */
-    public static byte[] buildFinished(TlsKeySchedule keySchedule,
-                                        byte[] trafficSecret,
-                                        byte[] transcript) {
+    public static byte[] buildFinished(
+            TlsKeySchedule keySchedule, byte[] trafficSecret, byte[] transcript) {
         return keySchedule.computeVerifyData(trafficSecret, transcript);
     }
 
@@ -1013,8 +1014,8 @@ public final class TlsMessageBuilder {
      * @param ticket         opaque ticket (1..65535 байт)
      * @return тело NewSessionTicket
      */
-    public static byte[] buildNewSessionTicket(long ticketLifetime, long ticketAgeAdd,
-                                                byte[] ticketNonce, byte[] ticket) {
+    public static byte[] buildNewSessionTicket(
+            long ticketLifetime, long ticketAgeAdd, byte[] ticketNonce, byte[] ticket) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         TlsEncoding.encodeUint32(out, ticketLifetime);
         TlsEncoding.encodeUint32(out, ticketAgeAdd);

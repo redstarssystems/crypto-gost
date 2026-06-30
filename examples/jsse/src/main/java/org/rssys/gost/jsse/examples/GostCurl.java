@@ -1,28 +1,27 @@
 package org.rssys.gost.jsse.examples;
 
-import okhttp3.*;
-import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.Security;
+import java.security.cert.X509Certificate;
+import java.util.*;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.X509TrustManager;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.List;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.Security;
-import java.util.*;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import okhttp3.*;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Консольный HTTP-клиент с поддержкой ГОСТ TLS 1.3 — gost-curl.
@@ -64,38 +63,40 @@ public final class GostCurl {
 
         SslSetup ssl = createSslSetup(opts);
         if (ssl == null) {
-            System.err.println("Ошибка: укажите --ca <файл> для проверки сертификата " +
-                    "или --insecure для пропуска проверки (только разработка)");
+            System.err.println(
+                    "Ошибка: укажите --ca <файл> для проверки сертификата "
+                            + "или --insecure для пропуска проверки (только разработка)");
             System.exit(1);
             return;
         }
 
-        OkHttpClient client = new OkHttpClient.Builder()
-                .sslSocketFactory(ssl.context.getSocketFactory(), ssl.trustManager)
-                // ConnectionSpec без фильтрации cipher suites — OkHttp по умолчанию
-                // разрешает только JDK-наборы, не пропуская ГОСТ.
-                .connectionSpecs(List.of(
-                        new ConnectionSpec.Builder(ConnectionSpec.RESTRICTED_TLS)
-                                .allEnabledCipherSuites()
-                                .tlsVersions(TlsVersion.TLS_1_3)
-                                .build()
-                ))
-                // Hostname verification выполняется GostX509TrustManager внутри
-                // TLS-handshake (verifyHostname). OkHttp-верификатор не знает
-                // ГОСТ-сертификаты — пропускаем.
-                .hostnameVerifier((host, session) -> true)
-                .connectTimeout(opts.connectTimeout, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .readTimeout(opts.readTimeout, java.util.concurrent.TimeUnit.MILLISECONDS)
-                .followRedirects(opts.followRedirects)
-                .build();
+        OkHttpClient client =
+                new OkHttpClient.Builder()
+                        .sslSocketFactory(ssl.context.getSocketFactory(), ssl.trustManager)
+                        // ConnectionSpec без фильтрации cipher suites — OkHttp по умолчанию
+                        // разрешает только JDK-наборы, не пропуская ГОСТ.
+                        .connectionSpecs(
+                                List.of(
+                                        new ConnectionSpec.Builder(ConnectionSpec.RESTRICTED_TLS)
+                                                .allEnabledCipherSuites()
+                                                .tlsVersions(TlsVersion.TLS_1_3)
+                                                .build()))
+                        // Hostname verification выполняется GostX509TrustManager внутри
+                        // TLS-handshake (verifyHostname). OkHttp-верификатор не знает
+                        // ГОСТ-сертификаты — пропускаем.
+                        .hostnameVerifier((host, session) -> true)
+                        .connectTimeout(
+                                opts.connectTimeout, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        .readTimeout(opts.readTimeout, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        .followRedirects(opts.followRedirects)
+                        .build();
 
-        RequestBody body = opts.body != null
-                ? RequestBody.create(opts.body, MediaType.get("application/octet-stream"))
-                : null;
+        RequestBody body =
+                opts.body != null
+                        ? RequestBody.create(opts.body, MediaType.get("application/octet-stream"))
+                        : null;
 
-        Request.Builder rb = new Request.Builder()
-                .url(opts.url)
-                .method(opts.method, body);
+        Request.Builder rb = new Request.Builder().url(opts.url).method(opts.method, body);
         for (Map.Entry<String, String> h : opts.headers.entrySet()) {
             rb.addHeader(h.getKey(), h.getValue());
         }
@@ -135,8 +136,9 @@ public final class GostCurl {
      */
     private static SslSetup createSslSetup(CliOptions opts) throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        SSLContext ctx = SSLContext.getInstance(
-                GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+        SSLContext ctx =
+                SSLContext.getInstance(
+                        GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         GostX509TrustManager tm;
 
         if (opts.insecure) {
@@ -149,38 +151,37 @@ public final class GostCurl {
 
         KeyManager[] keyManagers = null;
         if (opts.certFile != null && opts.keyFile != null) {
-            keyManagers = new KeyManager[]{loadClientKeyManager(opts)};
+            keyManagers = new KeyManager[] {loadClientKeyManager(opts)};
         } else if (opts.certFile != null || opts.keyFile != null) {
             System.err.println("Ошибка: --cert и --key должны быть указаны вместе");
             System.exit(1);
         }
 
-        ctx.init(keyManagers, new TrustManager[]{tm}, null);
+        ctx.init(keyManagers, new TrustManager[] {tm}, null);
         return new SslSetup(ctx, tm);
     }
 
     private static GostX509KeyManager loadClientKeyManager(CliOptions opts) throws Exception {
         byte[] certRaw = Files.readAllBytes(Path.of(opts.certFile));
         byte[] keyRaw = Files.readAllBytes(Path.of(opts.keyFile));
-        TlsCertificate clientCert = new TlsCertificate(pemToDer(certRaw));
-        PrivateKeyParameters clientKey = org.rssys.gost.jca.spec.GostDerCodec
-                .decodePrivateKey(pemToDer(keyRaw));
+        GostCertificate clientCert = new GostCertificate(pemToDer(certRaw));
+        PrivateKeyParameters clientKey =
+                org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(pemToDer(keyRaw));
         GostX509KeyManager km = new GostX509KeyManager();
-        km.addKeyEntry("client",
-                CertificateBridge.toJcaChain(clientCert), clientKey);
+        km.addKeyEntry(
+                "client", new X509Certificate[] {CertificateBridge.toJca(clientCert)}, clientKey);
         return km;
     }
 
     private static GostX509TrustManager createTrustManager(byte[] raw) throws Exception {
-        PublicKeyParameters caKey = new TlsCertificate(pemToDer(raw)).getPublicKey();
+        PublicKeyParameters caKey = new GostCertificate(pemToDer(raw)).getPublicKey();
         return new GostX509TrustManager(caKey, false);
     }
 
     private static byte[] pemToDer(byte[] raw) {
         String asStr = new String(raw, StandardCharsets.US_ASCII).trim();
         if (asStr.startsWith("-----BEGIN")) {
-            String b64 = asStr.replaceAll("-----[A-Z ]+-----", "")
-                    .replaceAll("\\s", "");
+            String b64 = asStr.replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
             return Base64.getDecoder().decode(b64);
         }
         return raw;
@@ -222,16 +223,17 @@ public final class GostCurl {
                     if ("GET".equals(opts.method)) opts.method = "POST";
                     break;
                 case "-H":
-                case "--header": {
-                    String hv = nextArg(args, i++, a);
-                    int colon = hv.indexOf(':');
-                    if (colon < 1) {
-                        die("Неверный формат заголовка: " + hv + " — ожидается Имя: Значение");
+                case "--header":
+                    {
+                        String hv = nextArg(args, i++, a);
+                        int colon = hv.indexOf(':');
+                        if (colon < 1) {
+                            die("Неверный формат заголовка: " + hv + " — ожидается Имя: Значение");
+                        }
+                        opts.headers.put(
+                                hv.substring(0, colon).trim(), hv.substring(colon + 1).trim());
+                        break;
                     }
-                    opts.headers.put(hv.substring(0, colon).trim(),
-                            hv.substring(colon + 1).trim());
-                    break;
-                }
                 case "--verbose":
                     opts.verboseLevel++;
                     break;
@@ -310,7 +312,8 @@ public final class GostCurl {
     // ========================================================================
 
     private static void printUsage() {
-        System.err.println("""
+        System.err.println(
+                """
                 gost-curl — консольный HTTP-клиент с поддержкой ГОСТ TLS 1.3
                 Использование: gost-curl [опции] <url>
 
@@ -338,8 +341,8 @@ public final class GostCurl {
                   gost-curl -k -L -o page.html https://gost-server.example/redirect""");
     }
 
-    private static void printRequest(String url, String method,
-                                     Map<String, String> headers, String body) {
+    private static void printRequest(
+            String url, String method, Map<String, String> headers, String body) {
         System.err.println("> " + method + " " + url);
         for (Map.Entry<String, String> h : headers.entrySet()) {
             System.err.println("> " + h.getKey() + ": " + h.getValue());

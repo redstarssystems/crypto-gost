@@ -1,23 +1,21 @@
 package org.rssys.gost.tls13.message;
 
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsException;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.config.OIDFilter;
-
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.nio.charset.StandardCharsets;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsException;
+import org.rssys.gost.tls13.config.OIDFilter;
 
 /**
  * Парсинг TLS 1.3 handshake-сообщений (RFC 8446, RFC 9367).
  */
 public final class TlsMessageParser {
 
-    private TlsMessageParser() {
-    }
+    private TlsMessageParser() {}
 
     @FunctionalInterface
     private interface ExtensionHandler {
@@ -37,8 +35,9 @@ public final class TlsMessageParser {
      * @param handler обработчик каждого расширения
      * @throws TlsException при выходе за границы массива
      */
-    private static void forEachExtension(byte[] body, int start, int end, String ctx,
-                                            ExtensionHandler handler) throws TlsException {
+    private static void forEachExtension(
+            byte[] body, int start, int end, String ctx, ExtensionHandler handler)
+            throws TlsException {
         int pos = start;
         while (pos < end) {
             checkBounds(body, pos, 4, ctx);
@@ -71,7 +70,13 @@ public final class TlsMessageParser {
          * @param ecdhePublicKeyRaw raw ECDHE public key (X||Y, little-endian)
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw) {
-            this(ecdhePublicKeyRaw, null, TlsConstants.GRP_GC256A, 0, new int[]{TlsConstants.GRP_GC256A}, 0);
+            this(
+                    ecdhePublicKeyRaw,
+                    null,
+                    TlsConstants.GRP_GC256A,
+                    0,
+                    new int[] {TlsConstants.GRP_GC256A},
+                    0);
         }
 
         /**
@@ -79,7 +84,13 @@ public final class TlsMessageParser {
          * @param serverName        запрошенное DNS-имя (SNI) или null
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName) {
-            this(ecdhePublicKeyRaw, serverName, TlsConstants.GRP_GC256A, 0, new int[]{TlsConstants.GRP_GC256A}, 0);
+            this(
+                    ecdhePublicKeyRaw,
+                    serverName,
+                    TlsConstants.GRP_GC256A,
+                    0,
+                    new int[] {TlsConstants.GRP_GC256A},
+                    0);
         }
 
         /**
@@ -88,7 +99,7 @@ public final class TlsMessageParser {
          * @param actualGroup       NamedGroup из key_share entry клиента
          */
         ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup) {
-            this(ecdhePublicKeyRaw, serverName, actualGroup, 0, new int[]{actualGroup}, 0);
+            this(ecdhePublicKeyRaw, serverName, actualGroup, 0, new int[] {actualGroup}, 0);
         }
 
         /**
@@ -98,13 +109,22 @@ public final class TlsMessageParser {
          * @param matchedSigScheme  схема подписи, согласованная из signature_algorithms
          * @param supportedGroups   список NamedGroup из supported_groups клиента
          */
-        ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup, int matchedSigScheme,
-                       int[] supportedGroups) {
+        ParsedKeyShare(
+                byte[] ecdhePublicKeyRaw,
+                String serverName,
+                int actualGroup,
+                int matchedSigScheme,
+                int[] supportedGroups) {
             this(ecdhePublicKeyRaw, serverName, actualGroup, matchedSigScheme, supportedGroups, 0);
         }
 
-        ParsedKeyShare(byte[] ecdhePublicKeyRaw, String serverName, int actualGroup, int matchedSigScheme,
-                       int[] supportedGroups, int clientMaxFragLen) {
+        ParsedKeyShare(
+                byte[] ecdhePublicKeyRaw,
+                String serverName,
+                int actualGroup,
+                int matchedSigScheme,
+                int[] supportedGroups,
+                int clientMaxFragLen) {
             this.ecdhePublicKeyRaw = ecdhePublicKeyRaw;
             this.serverName = serverName;
             this.actualGroup = actualGroup;
@@ -126,30 +146,50 @@ public final class TlsMessageParser {
         public final int cipherSuiteId;
         public final int actualGroup;
         public final byte[] random;
+
         /** Для HRR: группа, запрошенная сервером (== actualGroup).
          *  Для обычного SH: совпадает с actualGroup. */
         public final int requestedGroup;
+
         /** Cookie из HRR (RFC 8446 §4.2.2), null если не было. */
         public final byte[] cookie;
 
         ParsedServerHello(byte[] ecdhePublicKeyRaw, int cipherSuiteId) {
-            this(ecdhePublicKeyRaw, cipherSuiteId, TlsConstants.GRP_GC256A,
-                    new byte[TlsConstants.RANDOM_LENGTH], TlsConstants.GRP_GC256A, null);
+            this(
+                    ecdhePublicKeyRaw,
+                    cipherSuiteId,
+                    TlsConstants.GRP_GC256A,
+                    new byte[TlsConstants.RANDOM_LENGTH],
+                    TlsConstants.GRP_GC256A,
+                    null);
         }
 
         ParsedServerHello(byte[] ecdhePublicKeyRaw, int cipherSuiteId, int actualGroup) {
-            this(ecdhePublicKeyRaw, cipherSuiteId, actualGroup,
-                    new byte[TlsConstants.RANDOM_LENGTH], actualGroup, null);
+            this(
+                    ecdhePublicKeyRaw,
+                    cipherSuiteId,
+                    actualGroup,
+                    new byte[TlsConstants.RANDOM_LENGTH],
+                    actualGroup,
+                    null);
         }
 
-        ParsedServerHello(byte[] ecdhePublicKeyRaw, int cipherSuiteId,
-                          int actualGroup, byte[] random, int requestedGroup) {
+        ParsedServerHello(
+                byte[] ecdhePublicKeyRaw,
+                int cipherSuiteId,
+                int actualGroup,
+                byte[] random,
+                int requestedGroup) {
             this(ecdhePublicKeyRaw, cipherSuiteId, actualGroup, random, requestedGroup, null);
         }
 
-        ParsedServerHello(byte[] ecdhePublicKeyRaw, int cipherSuiteId,
-                          int actualGroup, byte[] random, int requestedGroup,
-                          byte[] cookie) {
+        ParsedServerHello(
+                byte[] ecdhePublicKeyRaw,
+                int cipherSuiteId,
+                int actualGroup,
+                byte[] random,
+                int requestedGroup,
+                byte[] cookie) {
             this.ecdhePublicKeyRaw = ecdhePublicKeyRaw;
             this.cipherSuiteId = cipherSuiteId;
             this.actualGroup = actualGroup;
@@ -174,7 +214,8 @@ public final class TlsMessageParser {
      */
     static void checkBounds(byte[] data, int pos, int needed, String context) throws TlsException {
         if (needed < 0 || pos < 0 || pos + needed > data.length) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, context + ": truncated message");
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR, context + ": truncated message");
         }
     }
 
@@ -267,41 +308,54 @@ public final class TlsMessageParser {
      * @return распарсенные расширения (поля null/0 если отсутствуют)
      * @throws TlsException при нарушении wire-формата
      */
-    public static ParsedEncryptedExtensions parseEncryptedExtensions(byte[] eeBody) throws TlsException {
+    public static ParsedEncryptedExtensions parseEncryptedExtensions(byte[] eeBody)
+            throws TlsException {
         if (eeBody.length < 2) return new ParsedEncryptedExtensions(null, 0);
         int extLen = ((eeBody[0] & 0xFF) << 8) | (eeBody[1] & 0xFF);
         if (extLen + 2 != eeBody.length) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "EncryptedExtensions: length mismatch");
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR, "EncryptedExtensions: length mismatch");
         }
         if (extLen == 0) return new ParsedEncryptedExtensions(null, 0);
         String[] alpnRef = new String[1];
         int[] maxFragRef = new int[1];
-        forEachExtension(eeBody, 2, 2 + extLen, "EncryptedExtensions", (extType, data, off, len) -> {
-            if (extType == TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION && alpnRef[0] == null) {
-                // WHY: RFC 7301 §3.2 — ProtocolNameList предварён 2-байтовой
-                // длиной списка. Без её пропуска парсинг обламывается на
-                // серверах, формирующих ALPN корректно по RFC (например,
-                // некоторые реализации ГОСТ TLS 1.3).
-                if (len < 3) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: extension too short");
-                }
-                int listLen = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
-                if (listLen < 1 || listLen + 2 != len) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: invalid list length");
-                }
-                int nameLen = data[off + 2] & 0xFF;
-                if (nameLen < 1 || nameLen + 3 > len) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "ALPN: invalid name length");
-                }
-                alpnRef[0] = new String(data, off + 3, nameLen, StandardCharsets.US_ASCII);
-            } else if (extType == TlsConstants.EXT_MAX_FRAGMENT_LENGTH && maxFragRef[0] == 0) {
-                if (len != 1 || (data[off] & 0xFF) < 1 || (data[off] & 0xFF) > 4) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                            "EncryptedExtensions: invalid max_fragment_length");
-                }
-                maxFragRef[0] = data[off] & 0xFF;
-            }
-        });
+        forEachExtension(
+                eeBody,
+                2,
+                2 + extLen,
+                "EncryptedExtensions",
+                (extType, data, off, len) -> {
+                    if (extType == TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION
+                            && alpnRef[0] == null) {
+                        // RFC 7301 §3.2 — ProtocolNameList предварён 2-байтовой
+                        // длиной списка. Без её пропуска парсинг обламывается на
+                        // серверах, формирующих ALPN корректно по RFC (например,
+                        // некоторые реализации ГОСТ TLS 1.3).
+                        if (len < 3) {
+                            throw new TlsException(
+                                    TlsConstants.ALERT_DECODE_ERROR, "ALPN: extension too short");
+                        }
+                        int listLen = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
+                        if (listLen < 1 || listLen + 2 != len) {
+                            throw new TlsException(
+                                    TlsConstants.ALERT_DECODE_ERROR, "ALPN: invalid list length");
+                        }
+                        int nameLen = data[off + 2] & 0xFF;
+                        if (nameLen < 1 || nameLen + 3 > len) {
+                            throw new TlsException(
+                                    TlsConstants.ALERT_DECODE_ERROR, "ALPN: invalid name length");
+                        }
+                        alpnRef[0] = new String(data, off + 3, nameLen, StandardCharsets.US_ASCII);
+                    } else if (extType == TlsConstants.EXT_MAX_FRAGMENT_LENGTH
+                            && maxFragRef[0] == 0) {
+                        if (len != 1 || (data[off] & 0xFF) < 1 || (data[off] & 0xFF) > 4) {
+                            throw new TlsException(
+                                    TlsConstants.ALERT_DECODE_ERROR,
+                                    "EncryptedExtensions: invalid max_fragment_length");
+                        }
+                        maxFragRef[0] = data[off] & 0xFF;
+                    }
+                });
         return new ParsedEncryptedExtensions(alpnRef[0], maxFragRef[0]);
     }
 
@@ -314,7 +368,8 @@ public final class TlsMessageParser {
      * @return ParsedKeyShare с ECDHE-ключом
      * @throws TlsException при нарушении протокола
      */
-    public static ParsedKeyShare parseClientHello(byte[] body, int expectedGroup) throws TlsException {
+    public static ParsedKeyShare parseClientHello(byte[] body, int expectedGroup)
+            throws TlsException {
         return parseClientHello(body, expectedGroup, (int[]) null, 0);
     }
 
@@ -327,8 +382,9 @@ public final class TlsMessageParser {
      * @return ParsedKeyShare с ECDHE-ключом
      * @throws TlsException при нарушении протокола
      */
-    public static ParsedKeyShare parseClientHello(byte[] body, int expectedGroup, int serverSigScheme) throws TlsException {
-        return parseClientHello(body, expectedGroup, new int[]{serverSigScheme}, 0);
+    public static ParsedKeyShare parseClientHello(
+            byte[] body, int expectedGroup, int serverSigScheme) throws TlsException {
+        return parseClientHello(body, expectedGroup, new int[] {serverSigScheme}, 0);
     }
 
     /**
@@ -341,11 +397,15 @@ public final class TlsMessageParser {
      * @param serverCipherSuite ожидаемый cipher suite (0 — не проверять)
      * @return ParsedKeyShare с ECDHE-ключом
      */
-    public static ParsedKeyShare parseClientHello(byte[] body, int expectedGroup, int[] acceptableSchemes, int serverCipherSuite) throws TlsException {
+    public static ParsedKeyShare parseClientHello(
+            byte[] body, int expectedGroup, int[] acceptableSchemes, int serverCipherSuite)
+            throws TlsException {
         String ctx = "ClientHello";
         checkBounds(body, 0, 2, ctx);
-        if ((body[0] & 0xFF) != 0x03 || (body[1] & 0xFF) != 0x03) {
-            throw new TlsException(TlsConstants.ALERT_ILLEGAL_PARAMETER,
+        if ((body[0] & 0xFF) != TlsConstants.LEGACY_VERSION_MAJOR
+                || (body[1] & 0xFF) != TlsConstants.LEGACY_VERSION_MINOR) {
+            throw new TlsException(
+                    TlsConstants.ALERT_ILLEGAL_PARAMETER,
                     "ClientHello: legacy_version must be 0x0303");
         }
 
@@ -364,10 +424,14 @@ public final class TlsMessageParser {
             boolean found = false;
             for (int i = 0; i < csLen; i += 2) {
                 int s = ((body[pos + 2 + i] & 0xFF) << 8) | (body[pos + 2 + i + 1] & 0xFF);
-                if (s == serverCipherSuite) { found = true; break; }
+                if (s == serverCipherSuite) {
+                    found = true;
+                    break;
+                }
             }
             if (!found) {
-                throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
+                throw new TlsException(
+                        TlsConstants.ALERT_HANDSHAKE_FAILURE,
                         "ClientHello: cipher suite not offered");
             }
         }
@@ -377,7 +441,8 @@ public final class TlsMessageParser {
         int compLen = body[pos] & 0xFF;
         checkBounds(body, pos + 1, compLen, ctx);
         if (compLen != 1 || (body[pos + 1] & 0xFF) != 0x00) {
-            throw new TlsException(TlsConstants.ALERT_ILLEGAL_PARAMETER,
+            throw new TlsException(
+                    TlsConstants.ALERT_ILLEGAL_PARAMETER,
                     "ClientHello: compression must be single null byte (0x00)");
         }
         pos += 1 + compLen;
@@ -394,7 +459,10 @@ public final class TlsMessageParser {
         boolean hasSignatureAlgorithms = false;
         boolean hasSupportedGroups = false;
         int matchedSigScheme = 0;
-        boolean needSigScheme = acceptableSchemes != null && acceptableSchemes.length > 0 && acceptableSchemes[0] != 0;
+        boolean needSigScheme =
+                acceptableSchemes != null
+                        && acceptableSchemes.length > 0
+                        && acceptableSchemes[0] != 0;
         String parsedServerName = null;
         int[] supportedGroupsList = null;
         int clientMaxFragLen = 0;
@@ -408,12 +476,13 @@ public final class TlsMessageParser {
 
             if (extType == TlsConstants.EXT_KEY_SHARE && ecdheKey == null) {
                 if (extDataLen < 2) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                            "ClientHello: empty key_share list");
+                    throw new TlsException(
+                            TlsConstants.ALERT_DECODE_ERROR, "ClientHello: empty key_share list");
                 }
                 int listLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
                 if (listLen + 2 != extDataLen) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    throw new TlsException(
+                            TlsConstants.ALERT_DECODE_ERROR,
                             "ClientHello: key_share list length mismatch");
                 }
                 int listOff = pos + 2;
@@ -422,7 +491,8 @@ public final class TlsMessageParser {
                 byte[] firstEntryKey = null;
                 int firstEntryGroup = 0;
                 while (listOff < ksEnd) {
-                    byte[] entryKey = parseKeyShareEntry(body, listOff, ksEnd - listOff, actualGroupRef);
+                    byte[] entryKey =
+                            parseKeyShareEntry(body, listOff, ksEnd - listOff, actualGroupRef);
                     int entryGroup = actualGroupRef[0];
                     int keyLen = ((body[listOff + 2] & 0xFF) << 8) | (body[listOff + 3] & 0xFF);
                     if (firstEntryKey == null) {
@@ -442,7 +512,8 @@ public final class TlsMessageParser {
                 }
             } else if (extType == TlsConstants.EXT_SUPPORTED_VERSIONS) {
                 hasSupportedVersions = checkSupportedVersions(body, pos, extDataLen);
-            } else if (extType == TlsConstants.EXT_SIGNATURE_ALGORITHMS && !hasSignatureAlgorithms) {
+            } else if (extType == TlsConstants.EXT_SIGNATURE_ALGORITHMS
+                    && !hasSignatureAlgorithms) {
                 hasSignatureAlgorithms = true;
                 if (needSigScheme && matchedSigScheme == 0) {
                     matchedSigScheme = matchSigAlgorithm(body, pos, extDataLen, acceptableSchemes);
@@ -454,7 +525,8 @@ public final class TlsMessageParser {
                 parsedServerName = parseServerNameExtension(body, pos, extDataLen);
             } else if (extType == TlsConstants.EXT_MAX_FRAGMENT_LENGTH && clientMaxFragLen == 0) {
                 if (extDataLen != 1 || (body[pos] & 0xFF) < 1 || (body[pos] & 0xFF) > 4) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    throw new TlsException(
+                            TlsConstants.ALERT_DECODE_ERROR,
                             "ClientHello: invalid max_fragment_length");
                 }
                 clientMaxFragLen = body[pos] & 0xFF;
@@ -463,21 +535,30 @@ public final class TlsMessageParser {
         }
 
         if (!hasSupportedVersions) {
-            throw new TlsException(TlsConstants.ALERT_MISSING_EXTENSION,
+            throw new TlsException(
+                    TlsConstants.ALERT_MISSING_EXTENSION,
                     "ClientHello: supported_versions extension required");
         }
         if (!hasSignatureAlgorithms) {
-            throw new TlsException(TlsConstants.ALERT_MISSING_EXTENSION,
+            throw new TlsException(
+                    TlsConstants.ALERT_MISSING_EXTENSION,
                     "ClientHello: signature_algorithms extension required");
         }
         if (ecdheKey == null) {
-            throw new TlsException(TlsConstants.ALERT_MISSING_EXTENSION,
+            throw new TlsException(
+                    TlsConstants.ALERT_MISSING_EXTENSION,
                     "ClientHello: key_share extension required");
         }
         if (supportedGroupsList == null) {
-            supportedGroupsList = new int[]{parsedGroup};
+            supportedGroupsList = new int[] {parsedGroup};
         }
-        return new ParsedKeyShare(ecdheKey, parsedServerName, parsedGroup, matchedSigScheme, supportedGroupsList, clientMaxFragLen);
+        return new ParsedKeyShare(
+                ecdheKey,
+                parsedServerName,
+                parsedGroup,
+                matchedSigScheme,
+                supportedGroupsList,
+                clientMaxFragLen);
     }
 
     /**
@@ -518,13 +599,13 @@ public final class TlsMessageParser {
      * @return true если TLS 1.3 присутствует
      * @throws TlsException при выходе за границы
      */
-    private static boolean checkSupportedVersions(byte[] data, int offset, int len) throws TlsException {
+    private static boolean checkSupportedVersions(byte[] data, int offset, int len)
+            throws TlsException {
         if (len < 1) return false;
         int versionsLen = data[offset] & 0xFF;
         if (versionsLen + 1 != len || (versionsLen & 1) != 0) return false;
         for (int i = 0; i < versionsLen; i += 2) {
-            int v = ((data[offset + 1 + i] & 0xFF) << 8)
-                    | (data[offset + 1 + i + 1] & 0xFF);
+            int v = ((data[offset + 1 + i] & 0xFF) << 8) | (data[offset + 1 + i + 1] & 0xFF);
             if (v == TlsConstants.PROTOCOL_TLS_1_3) return true;
         }
         return false;
@@ -542,7 +623,8 @@ public final class TlsMessageParser {
      * @return ParsedServerHello с ECDHE-ключом, cipher suite, actualGroup,
      *         random и requestedGroup
      */
-    public static ParsedServerHello parseServerHello(byte[] body, int expectedGroup) throws TlsException {
+    public static ParsedServerHello parseServerHello(byte[] body, int expectedGroup)
+            throws TlsException {
         String ctx = "ServerHello";
         checkBounds(body, 0, 2 + TlsConstants.RANDOM_LENGTH + 1, ctx);
         byte[] random = new byte[TlsConstants.RANDOM_LENGTH];
@@ -566,43 +648,56 @@ public final class TlsMessageParser {
         int[] actualGroupRef = new int[1];
         byte[][] cookieRef = new byte[1][];
 
-        forEachExtension(body, pos, extEnd, ctx, (extType, data, off, len) -> {
-            if (extType == TlsConstants.EXT_KEY_SHARE) {
-                if (len == 2) {
-                    // HRR (RFC 8446 §4.2.8): key_share содержит только NamedGroup,
-                    // без key_exchange. Парсить как KeyShareEntry нельзя — другая структура.
-                    int group = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
-                    actualGroupRef[0] = group;
-                    ecdheKeyRef[0] = new byte[0];
-                } else {
-                    ecdheKeyRef[0] = parseKeyShareEntry(data, off, len, actualGroupRef);
-                }
-            }
-            if (extType == TlsConstants.EXT_COOKIE) {
-                // opaque cookie<1..2^16-1> (RFC 8446 §4.2.2)
-                if (len < 3) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                            "HRR: cookie extension too short (" + len + ")");
-                }
-                int cookieLen = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
-                if (cookieLen < 1 || cookieLen > len - 2) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                            "HRR: cookie invalid length " + cookieLen);
-                }
-                cookieRef[0] = Arrays.copyOfRange(data, off + 2, off + 2 + cookieLen);
-            }
-        });
+        forEachExtension(
+                body,
+                pos,
+                extEnd,
+                ctx,
+                (extType, data, off, len) -> {
+                    if (extType == TlsConstants.EXT_KEY_SHARE) {
+                        if (len == 2) {
+                            // HRR (RFC 8446 §4.2.8): key_share содержит только NamedGroup,
+                            // без key_exchange. Парсить как KeyShareEntry нельзя — другая
+                            // структура.
+                            int group = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
+                            actualGroupRef[0] = group;
+                            ecdheKeyRef[0] = new byte[0];
+                        } else {
+                            ecdheKeyRef[0] = parseKeyShareEntry(data, off, len, actualGroupRef);
+                        }
+                    }
+                    if (extType == TlsConstants.EXT_COOKIE) {
+                        // opaque cookie<1..2^16-1> (RFC 8446 §4.2.2)
+                        if (len < 3) {
+                            throw new TlsException(
+                                    TlsConstants.ALERT_DECODE_ERROR,
+                                    "HRR: cookie extension too short (" + len + ")");
+                        }
+                        int cookieLen = ((data[off] & 0xFF) << 8) | (data[off + 1] & 0xFF);
+                        if (cookieLen < 1 || cookieLen > len - 2) {
+                            throw new TlsException(
+                                    TlsConstants.ALERT_DECODE_ERROR,
+                                    "HRR: cookie invalid length " + cookieLen);
+                        }
+                        cookieRef[0] = Arrays.copyOfRange(data, off + 2, off + 2 + cookieLen);
+                    }
+                });
 
         if (ecdheKeyRef[0] == null) {
-            // WHY: RFC 8446 §4.2.8 разрешает опускать key_share в HRR.
+            // RFC 8446 §4.2.8 разрешает опускать key_share в HRR.
             //      Клиент продолжает с той же группой, что и в CH1.
             //      actualGroupRef[0] остаётся 0 — handleHelloRetryRequest
             //      подставит selectedNamedGroup.
             ecdheKeyRef[0] = new byte[0];
         }
         int requestedGroup = actualGroupRef[0];
-        return new ParsedServerHello(ecdheKeyRef[0], cipherSuiteId, actualGroupRef[0],
-                random, requestedGroup, cookieRef[0]);
+        return new ParsedServerHello(
+                ecdheKeyRef[0],
+                cipherSuiteId,
+                actualGroupRef[0],
+                random,
+                requestedGroup,
+                cookieRef[0]);
     }
 
     /**
@@ -634,7 +729,8 @@ public final class TlsMessageParser {
     static byte[] parseKeyShareEntry(byte[] data, int offset, int extDataLen, int[] actualGroupOut)
             throws TlsException {
         if (extDataLen < 4) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR,
                     "key_share: entry too short (" + extDataLen + " bytes)");
         }
         int group = ((data[offset] & 0xFF) << 8) | (data[offset + 1] & 0xFF);
@@ -643,7 +739,8 @@ public final class TlsMessageParser {
         }
         int keyLen = ((data[offset + 2] & 0xFF) << 8) | (data[offset + 3] & 0xFF);
         if (keyLen < 0 || keyLen > extDataLen - 4) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR,
                     "key_share: invalid key length " + keyLen + " (extDataLen=" + extDataLen + ")");
         }
         byte[] key = new byte[keyLen];
@@ -665,7 +762,8 @@ public final class TlsMessageParser {
         try {
             String ctx = "ClientHello";
             checkBounds(chBody, 0, 2, ctx);
-            if ((chBody[0] & 0xFF) != 0x03 || (chBody[1] & 0xFF) != 0x03) return null;
+            if ((chBody[0] & 0xFF) != TlsConstants.LEGACY_VERSION_MAJOR
+                    || (chBody[1] & 0xFF) != TlsConstants.LEGACY_VERSION_MINOR) return null;
             int pos = 2 + TlsConstants.RANDOM_LENGTH;
             checkBounds(chBody, pos, 1, ctx);
             int sessionIdLen = chBody[pos] & 0xFF;
@@ -724,7 +822,8 @@ public final class TlsMessageParser {
         if (data[offset + 2] != 0x00) return null;
         int nameLen = ((data[offset + 3] & 0xFF) << 8) | (data[offset + 4] & 0xFF);
         if (3 + nameLen > listLen || nameLen == 0) return null;
-        String raw = new String(data, offset + 5, nameLen, java.nio.charset.StandardCharsets.US_ASCII);
+        String raw =
+                new String(data, offset + 5, nameLen, java.nio.charset.StandardCharsets.US_ASCII);
         return TlsMessageBuilder.normalizeHostname(raw);
     }
 
@@ -742,8 +841,9 @@ public final class TlsMessageParser {
         int count = listLen / 2;
         int[] groups = new int[count];
         for (int i = 0; i < count; i++) {
-            groups[i] = ((data[offset + 2 + i * 2] & 0xFF) << 8)
-                      | (data[offset + 2 + i * 2 + 1] & 0xFF);
+            groups[i] =
+                    ((data[offset + 2 + i * 2] & 0xFF) << 8)
+                            | (data[offset + 2 + i * 2 + 1] & 0xFF);
         }
         return groups;
     }
@@ -756,32 +856,36 @@ public final class TlsMessageParser {
      * @return список сертификатов (первый — leaf)
      * @throws TlsException при нарушении протокола
      */
-    public static List<TlsCertificate> parseCertificate(byte[] certBody) throws TlsException {
+    public static List<GostCertificate> parseCertificate(byte[] certBody) throws TlsException {
         // Certificate: request_context(0) + certificate_list<0..2^24-1>
         // CertificateEntry: cert_len(3) + cert_der + extensions_len(2) + extensions
         checkBounds(certBody, 0, 4, "Certificate");
         int pos = 1; // пропускаем request context
-        int listLen = ((certBody[pos] & 0xFF) << 16)
-                | ((certBody[pos + 1] & 0xFF) << 8)
-                | (certBody[pos + 2] & 0xFF);
+        int listLen =
+                ((certBody[pos] & 0xFF) << 16)
+                        | ((certBody[pos + 1] & 0xFF) << 8)
+                        | (certBody[pos + 2] & 0xFF);
         checkBounds(certBody, pos + 3, listLen, "Certificate");
         pos += 3;
         int listEnd = pos + listLen;
-        List<TlsCertificate> chain = new ArrayList<>();
+        List<GostCertificate> chain = new ArrayList<>();
         while (pos < listEnd) {
             // Ранний выход: не парсим больше MAX_CERT_CHAIN_LENGTH сертификатов —
-            // защита от CPU DoS (каждый TlsCertificate выполняет полный DER-парсинг).
+            // защита от CPU DoS (каждый GostCertificate выполняет полный DER-парсинг).
             if (chain.size() >= TlsConstants.MAX_CERT_CHAIN_LENGTH) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                throw new TlsException(
+                        TlsConstants.ALERT_BAD_CERTIFICATE,
                         "Certificate chain exceeds maximum length");
             }
             checkBounds(certBody, pos, 3, "Certificate");
-            int certLen = ((certBody[pos] & 0xFF) << 16)
-                    | ((certBody[pos + 1] & 0xFF) << 8)
-                    | (certBody[pos + 2] & 0xFF);
+            int certLen =
+                    ((certBody[pos] & 0xFF) << 16)
+                            | ((certBody[pos + 1] & 0xFF) << 8)
+                            | (certBody[pos + 2] & 0xFF);
             checkBounds(certBody, pos + 3, certLen, "Certificate");
             if (certLen > TlsConstants.MAX_CERT_SIZE) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                throw new TlsException(
+                        TlsConstants.ALERT_BAD_CERTIFICATE,
                         "Certificate too large: " + certLen + " bytes");
             }
             pos += 3;
@@ -794,22 +898,29 @@ public final class TlsMessageParser {
             checkBounds(certBody, pos, 2, "Certificate");
             int extLen = ((certBody[pos] & 0xFF) << 8) | (certBody[pos + 1] & 0xFF);
             checkBounds(certBody, pos + 2, extLen, "Certificate");
-            forEachExtension(certBody, pos + 2, pos + 2 + extLen, "Certificate", (extType, data, off, len) -> {
-                if (extType == TlsConstants.EXT_STATUS_REQUEST && ocspRef[0] == null) {
-                    // CertificateStatus: status_type(1) || OCSPResponse — strip status_type
-                    if (len > 1 && (data[off] & 0xFF) == 0x01) {
-                        ocspRef[0] = Arrays.copyOfRange(data, off + 1, off + len);
-                    }
-                }
-            });
+            forEachExtension(
+                    certBody,
+                    pos + 2,
+                    pos + 2 + extLen,
+                    "Certificate",
+                    (extType, data, off, len) -> {
+                        if (extType == TlsConstants.EXT_STATUS_REQUEST && ocspRef[0] == null) {
+                            // CertificateStatus: status_type(1) || OCSPResponse — strip status_type
+                            if (len > 1 && (data[off] & 0xFF) == 0x01) {
+                                ocspRef[0] = Arrays.copyOfRange(data, off + 1, off + len);
+                            }
+                        }
+                    });
             pos = pos + 2 + extLen;
 
-            TlsCertificate cert;
+            GostCertificate cert;
             try {
-                cert = new TlsCertificate(certDer);
+                cert = new GostCertificate(certDer);
             } catch (RuntimeException e) {
-                throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                        "Failed to parse certificate DER: " + e.getMessage(), e);
+                throw new TlsException(
+                        TlsConstants.ALERT_DECODE_ERROR,
+                        "Failed to parse certificate DER: " + e.getMessage(),
+                        e);
             }
             if (ocspRef[0] != null) {
                 cert.setOcspResponse(ocspRef[0]);
@@ -820,7 +931,8 @@ public final class TlsMessageParser {
         // прислать пустой certificate_list. Решение об обязательности сертификата
         // принимает engine (receiveClientCertificate), не общий парсер.
         if (chain.size() > TlsConstants.MAX_CERT_CHAIN_LENGTH) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate chain exceeds maximum length: " + chain.size());
         }
         return chain;
@@ -867,30 +979,36 @@ public final class TlsMessageParser {
             if (extType == TlsConstants.EXT_SIGNATURE_ALGORITHMS) {
                 hasSigAlgs = true;
                 if (extDataLen < 2) {
-                    throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
+                    throw new TlsException(
+                            TlsConstants.ALERT_HANDSHAKE_FAILURE,
                             "CertificateRequest: empty signature_algorithms");
                 }
                 int algLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
                 if (algLen + 2 != extDataLen || (algLen & 1) != 0) {
-                    throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                    throw new TlsException(
+                            TlsConstants.ALERT_DECODE_ERROR,
                             "CertificateRequest: malformed signature_algorithms");
                 }
                 boolean found = false;
                 int[] supported = {
-                        TlsConstants.SIG_GOST_TC26_A_256, TlsConstants.SIG_GOST_CRYPTOPRO_A,
-                        TlsConstants.SIG_GOST_CRYPTOPRO_B, TlsConstants.SIG_GOST_CRYPTOPRO_C,
-                        TlsConstants.SIG_GOST_TC26_512_A, TlsConstants.SIG_GOST_TC26_512_B,
-                        TlsConstants.SIG_GOST_TC26_512_C
+                    TlsConstants.SIG_GOST_TC26_A_256, TlsConstants.SIG_GOST_CRYPTOPRO_A,
+                    TlsConstants.SIG_GOST_CRYPTOPRO_B, TlsConstants.SIG_GOST_CRYPTOPRO_C,
+                    TlsConstants.SIG_GOST_TC26_512_A, TlsConstants.SIG_GOST_TC26_512_B,
+                    TlsConstants.SIG_GOST_TC26_512_C
                 };
                 for (int i = 0; i < algLen; i += 2) {
                     int scheme = ((body[pos + 2 + i] & 0xFF) << 8) | (body[pos + 2 + i + 1] & 0xFF);
                     for (int s : supported) {
-                        if (scheme == s) { found = true; break; }
+                        if (scheme == s) {
+                            found = true;
+                            break;
+                        }
                     }
                     if (found) break;
                 }
                 if (!found) {
-                    throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
+                    throw new TlsException(
+                            TlsConstants.ALERT_HANDSHAKE_FAILURE,
                             "CertificateRequest: no supported signature scheme");
                 }
             } else if (extType == TlsConstants.EXT_CERTIFICATE_AUTHORITIES) {
@@ -901,7 +1019,8 @@ public final class TlsMessageParser {
             pos += extDataLen;
         }
         if (!hasSigAlgs) {
-            throw new TlsException(TlsConstants.ALERT_MISSING_EXTENSION,
+            throw new TlsException(
+                    TlsConstants.ALERT_MISSING_EXTENSION,
                     "CertificateRequest: signature_algorithms extension is mandatory");
         }
         return new CertificateRequestInfo(acceptedCaDns, oidFilters);
@@ -931,9 +1050,8 @@ public final class TlsMessageParser {
             if (pos + 2 > end) break;
             int valLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
             if (pos + 2 + valLen > end) break;
-            byte[] values = valLen > 0
-                    ? Arrays.copyOfRange(body, pos + 2, pos + 2 + valLen)
-                    : new byte[0];
+            byte[] values =
+                    valLen > 0 ? Arrays.copyOfRange(body, pos + 2, pos + 2 + valLen) : new byte[0];
             pos += 2 + valLen;
             filters.add(new OIDFilter(oid, values));
         }
@@ -950,7 +1068,8 @@ public final class TlsMessageParser {
         checkBounds(body, pos, 2, ctx);
         int vecLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
         if (vecLen + 2 != extDataLen) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR,
                     ctx + ": malformed certificate_authorities extension length");
         }
         if (vecLen == 0) {
@@ -964,7 +1083,8 @@ public final class TlsMessageParser {
             int dnLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
             checkBounds(body, pos + 2, dnLen, ctx);
             if (dnLen < 1) {
-                throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                throw new TlsException(
+                        TlsConstants.ALERT_DECODE_ERROR,
                         ctx + ": empty DistinguishedName in certificate_authorities");
             }
             pos += 2;
@@ -1001,7 +1121,8 @@ public final class TlsMessageParser {
                 int identitiesLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
                 if (identitiesLen < 4) return null;
                 int identityLen = ((body[pos + 2] & 0xFF) << 8) | (body[pos + 3] & 0xFF);
-                if (2 + identitiesLen > extDataLen || identityLen < 1
+                if (2 + identitiesLen > extDataLen
+                        || identityLen < 1
                         || identityLen + 6 > identitiesLen) return null;
                 return Arrays.copyOfRange(body, pos + 4, pos + 4 + identityLen);
             }
@@ -1051,7 +1172,8 @@ public final class TlsMessageParser {
         String context = isServerHello ? "ServerHello" : "ClientHello";
         checkBounds(body, 0, 2, context);
         // legacy_version: MUST be 0x0303 for TLS 1.3 (или 0x0301/0x0302 для backwards)
-        if ((body[0] & 0xFF) != 0x03 || (body[1] & 0xFF) != 0x03) return -1;
+        if ((body[0] & 0xFF) != TlsConstants.LEGACY_VERSION_MAJOR
+                || (body[1] & 0xFF) != TlsConstants.LEGACY_VERSION_MINOR) return -1;
         int pos = 2 + TlsConstants.RANDOM_LENGTH;
         // legacy_session_id (RFC 8446 §4.1.2: может быть непустым для совместимости)
         checkBounds(body, pos, 1, context);
@@ -1093,8 +1215,8 @@ public final class TlsMessageParser {
          * @param ticketNonce    nonce для диверсификации PSK
          * @param ticket         opaque ticket
          */
-        ParsedNewSessionTicket(long ticketLifetime, long ticketAgeAdd,
-                               byte[] ticketNonce, byte[] ticket) {
+        ParsedNewSessionTicket(
+                long ticketLifetime, long ticketAgeAdd, byte[] ticketNonce, byte[] ticket) {
             this.ticketLifetime = ticketLifetime;
             this.ticketAgeAdd = ticketAgeAdd;
             this.ticketNonce = ticketNonce;
@@ -1116,14 +1238,16 @@ public final class TlsMessageParser {
     public static ParsedNewSessionTicket parseNewSessionTicket(byte[] body) throws TlsException {
         String ctx = "NewSessionTicket";
         checkBounds(body, 0, 8, ctx);
-        long ticketLifetime = ((long) (body[0] & 0xFF) << 24)
-                | ((long) (body[1] & 0xFF) << 16)
-                | ((long) (body[2] & 0xFF) << 8)
-                | (long) (body[3] & 0xFF);
-        long ticketAgeAdd = ((long) (body[4] & 0xFF) << 24)
-                | ((long) (body[5] & 0xFF) << 16)
-                | ((long) (body[6] & 0xFF) << 8)
-                | (long) (body[7] & 0xFF);
+        long ticketLifetime =
+                ((long) (body[0] & 0xFF) << 24)
+                        | ((long) (body[1] & 0xFF) << 16)
+                        | ((long) (body[2] & 0xFF) << 8)
+                        | (long) (body[3] & 0xFF);
+        long ticketAgeAdd =
+                ((long) (body[4] & 0xFF) << 24)
+                        | ((long) (body[5] & 0xFF) << 16)
+                        | ((long) (body[6] & 0xFF) << 8)
+                        | (long) (body[7] & 0xFF);
         int pos = 8;
         checkBounds(body, pos, 1, ctx);
         int nonceLen = body[pos] & 0xFF;

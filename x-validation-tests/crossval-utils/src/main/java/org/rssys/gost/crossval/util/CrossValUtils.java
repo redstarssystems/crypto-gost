@@ -2,7 +2,6 @@ package org.rssys.gost.crossval.util;
 
 import java.util.Arrays;
 
-
 /**
  * Утилиты кросс-валидации: сравнение байтовых массивов, hex-диагностика, логирование ошибок.
  */
@@ -40,8 +39,7 @@ public final class CrossValUtils {
         if (a == b) return -1;
         if (a == null || b == null) return 0;
         int len = Math.min(a.length, b.length);
-        for (int i = 0; i < len; i++)
-            if (a[i] != b[i]) return i;
+        for (int i = 0; i < len; i++) if (a[i] != b[i]) return i;
         return a.length == b.length ? -1 : len;
     }
 
@@ -71,7 +69,8 @@ public final class CrossValUtils {
         return sb.toString();
     }
 
-    private static void appendHexRange(StringBuilder sb, byte[] bytes, int start, int end, int idx) {
+    private static void appendHexRange(
+            StringBuilder sb, byte[] bytes, int start, int end, int idx) {
         for (int i = start; i < end; i++) {
             if (i == idx) sb.append('>');
             sb.append(String.format("%02x", bytes[i] & 0xff));

@@ -52,7 +52,7 @@ public class RecordProtectBench {
 
     @Benchmark
     public int unprotect() throws Exception {
-        // WHY: на каждой итерации сбрасываем seqNum, потому что unprotect
+        // на каждой итерации сбрасываем seqNum, потому что unprotect
         // читает один и тот же protectedRecord (зашифрован при seqNum=0).
         // Сброс — один long store (~1ns), погрешность << измеряемая операция (~µs).
         readerRecord.setSequenceNumber(0);

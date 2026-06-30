@@ -1,11 +1,12 @@
 package org.rssys.gost.jsse.bridge;
 
-import org.rssys.gost.tls13.TlsConstants;
 import static org.rssys.gost.jsse.GostJsseConstants.KEY_TYPE_ECGOST_256;
 import static org.rssys.gost.jsse.GostJsseConstants.KEY_TYPE_ECGOST_512;
 
+import org.rssys.gost.tls13.TlsConstants;
+
 /**
- * Маппинг signature scheme → JSSE keyType для X509KeyManager.
+ * Маппинг signature scheme -> JSSE keyType для X509KeyManager.
  */
 public final class IanaMapper {
 

@@ -1,31 +1,35 @@
 package org.rssys.gost.tls13.cert;
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsException;
-import org.rssys.gost.tls13.message.TlsMessageBuilder;
-import org.rssys.gost.tls13.message.TlsMessageParser;
-import org.rssys.gost.tls13.TlsTestHelper;
-import static org.rssys.gost.tls13.TlsTestHelper.*;
-import org.rssys.gost.tls13.GostOids;
-import org.rssys.gost.util.DerCodec;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.rssys.gost.tls13.TlsTestHelper.*;
+
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostCurves;
 import org.rssys.gost.jca.spec.GostDerCodec;
+import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostDerParser;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-
-import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.Date;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsException;
+import org.rssys.gost.tls13.TlsTestHelper;
+import org.rssys.gost.tls13.message.TlsMessageBuilder;
+import org.rssys.gost.tls13.message.TlsMessageParser;
+import org.rssys.gost.util.DerCodec;
 
 @DisplayName("TlsCertificate — X.509 сертификат с GOST ключами")
 class TlsCertificateTest {
@@ -37,40 +41,40 @@ class TlsCertificateTest {
     @Test
     @DisplayName("parseLength: короткая форма (однобайтовая)")
     void testparseLengthShortForm() {
-        byte[] data = new byte[]{0x05};
-        int[] result = TlsDerParser.parseLength(data, 0);
-        assertArrayEquals(new int[]{1, 5}, result);
+        byte[] data = new byte[] {0x05};
+        int[] result = GostDerParser.parseLength(data, 0);
+        assertArrayEquals(new int[] {1, 5}, result);
     }
 
     @Test
     @DisplayName("parseLength: короткая форма 0x7F")
     void testparseLengthShortFormMax() {
-        byte[] data = new byte[]{0x7F};
-        int[] result = TlsDerParser.parseLength(data, 0);
-        assertArrayEquals(new int[]{1, 127}, result);
+        byte[] data = new byte[] {0x7F};
+        int[] result = GostDerParser.parseLength(data, 0);
+        assertArrayEquals(new int[] {1, 127}, result);
     }
 
     @Test
     @DisplayName("parseLength: длинная форма 2 байта")
     void testparseLengthLongForm2() {
-        byte[] data = new byte[]{(byte) 0x82, 0x01, (byte) 0x00};
-        int[] result = TlsDerParser.parseLength(data, 0);
-        assertArrayEquals(new int[]{3, 256}, result);
+        byte[] data = new byte[] {(byte) 0x82, 0x01, (byte) 0x00};
+        int[] result = GostDerParser.parseLength(data, 0);
+        assertArrayEquals(new int[] {3, 256}, result);
     }
 
     @Test
     @DisplayName("parseLength: длинная форма 3 байта")
     void testparseLengthLongForm3() {
-        byte[] data = new byte[]{(byte) 0x83, 0x01, 0x00, 0x00};
-        int[] result = TlsDerParser.parseLength(data, 0);
-        assertArrayEquals(new int[]{4, 65536}, result);
+        byte[] data = new byte[] {(byte) 0x83, 0x01, 0x00, 0x00};
+        int[] result = GostDerParser.parseLength(data, 0);
+        assertArrayEquals(new int[] {4, 65536}, result);
     }
 
     @Test
-    @DisplayName("readTlv: INTEGER (tag 0x02)")
+    @DisplayName("readTlv: INTEGER (тег 0x02)")
     void testreadTlvInteger() {
-        byte[] data = new byte[]{0x02, 0x01, 0x2A};
-        int[] result = TlsDerParser.readTlv(data, 0);
+        byte[] data = new byte[] {0x02, 0x01, 0x2A};
+        int[] result = GostDerParser.readTlv(data, 0);
         assertEquals(3, result[1]);
         int contentLen = result[1] - result[0];
         assertEquals(1, contentLen);
@@ -78,10 +82,10 @@ class TlsCertificateTest {
     }
 
     @Test
-    @DisplayName("readTlv: SEQUENCE (tag 0x30)")
+    @DisplayName("readTlv: SEQUENCE (тег 0x30)")
     void testreadTlvSequence() {
-        byte[] data = new byte[]{0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02};
-        int[] result = TlsDerParser.readTlv(data, 0);
+        byte[] data = new byte[] {0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02};
+        int[] result = GostDerParser.readTlv(data, 0);
         assertEquals(8, result[1]);
         assertEquals(2, result[0]);
     }
@@ -89,8 +93,8 @@ class TlsCertificateTest {
     @Test
     @DisplayName("parseSequence: корректная SEQUENCE")
     void testparseSequenceValid() {
-        byte[] data = new byte[]{0x30, 0x02, 0x01, 0x00};
-        int[] result = TlsDerParser.parseSequence(data, 0);
+        byte[] data = new byte[] {0x30, 0x02, 0x01, 0x00};
+        int[] result = GostDerParser.parseSequence(data, 0);
         assertEquals(2, result[0]);
         assertEquals(4, result[1]);
     }
@@ -98,91 +102,83 @@ class TlsCertificateTest {
     @Test
     @DisplayName("parseSequence: не SEQUENCE бросает исключение")
     void testparseSequenceInvalidTag() {
-        byte[] data = new byte[]{0x02, 0x01, 0x00};
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsDerParser.parseSequence(data, 0));
+        byte[] data = new byte[] {0x02, 0x01, 0x00};
+        assertThrows(IllegalArgumentException.class, () -> GostDerParser.parseSequence(data, 0));
     }
 
     @Test
-    @DisplayName("null DER → исключение")
+    @DisplayName("null DER -> исключение")
     void testNullDerThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new TlsCertificate(null));
+        assertThrows(IllegalArgumentException.class, () -> new GostCertificate((byte[]) null));
     }
 
     @Test
-    @DisplayName("некорректный DER → исключение")
+    @DisplayName("некорректный DER -> исключение")
     void testInvalidDerThrows() {
-        byte[] invalid = new byte[]{0x01, 0x02, 0x03};
-        assertThrows(Exception.class,
-                () -> new TlsCertificate(invalid));
+        byte[] invalid = new byte[] {0x01, 0x02, 0x03};
+        assertThrows(Exception.class, () -> new GostCertificate(invalid));
     }
 
     @Test
-    @DisplayName("parseLength: 0x80 (Indefinite form) → IllegalArgumentException")
+    @DisplayName("parseLength: 0x80 (неопределённая форма) -> IllegalArgumentException")
     void testparseLengthIndefiniteForm() {
-        byte[] data = new byte[]{(byte) 0x80};
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsDerParser.parseLength(data, 0));
+        byte[] data = new byte[] {(byte) 0x80};
+        assertThrows(IllegalArgumentException.class, () -> GostDerParser.parseLength(data, 0));
     }
 
     @Test
-    @DisplayName("parseLength: numBytes=4, корректная 4-байтовая длина → OK")
+    @DisplayName("parseLength: numBytes=4, корректная 4-байтовая длина -> OK")
     void testparseLength4Byte() {
-        byte[] data = new byte[]{(byte) 0x84, 0x02, (byte) 0xB1, 0x1F, 0x34};
-        int[] result = TlsDerParser.parseLength(data, 0);
+        byte[] data = new byte[] {(byte) 0x84, 0x02, (byte) 0xB1, 0x1F, 0x34};
+        int[] result = GostDerParser.parseLength(data, 0);
         assertEquals(5, result[0]);
         assertEquals(0x02B11F34, result[1]);
     }
 
     @Test
-    @DisplayName("parseLength: numBytes=5 > 4 → IllegalArgumentException")
+    @DisplayName("parseLength: число байт длины = 5 > 4 -> IllegalArgumentException")
     void testparseLengthTooManyLengthBytes() {
-        byte[] data = new byte[]{(byte) 0x85, 0x01, 0x02, 0x03, 0x04, 0x05};
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsDerParser.parseLength(data, 0));
+        byte[] data = new byte[] {(byte) 0x85, 0x01, 0x02, 0x03, 0x04, 0x05};
+        assertThrows(IllegalArgumentException.class, () -> GostDerParser.parseLength(data, 0));
     }
 
     @Test
-    @DisplayName("readTlv: 4-байтовая длина с переполнением int → IllegalArgumentException")
+    @DisplayName("readTlv: 4-байтовая длина с переполнением int -> IllegalArgumentException")
     void testreadTlvOverflowLength() {
-        byte[] data = new byte[]{0x30, (byte) 0x84, (byte) 0x84, (byte) 0x84,
-                (byte) 0x84, (byte) 0x84};
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsDerParser.readTlv(data, 0));
+        byte[] data =
+                new byte[] {0x30, (byte) 0x84, (byte) 0x84, (byte) 0x84, (byte) 0x84, (byte) 0x84};
+        assertThrows(IllegalArgumentException.class, () -> GostDerParser.readTlv(data, 0));
     }
 
     @Test
-    @DisplayName("readTlv: 4-байтовая длина с переполнением valueStart+contentLen → IllegalArgumentException")
+    @DisplayName(
+            "readTlv: 4-байтовая длина с переполнением valueStart+contentLen -> IllegalArgumentException")
     void testreadTlvSumOverflowLength() {
-        byte[] data = new byte[]{0x30, (byte) 0x84, 0x7F, (byte) 0xFF,
-                (byte) 0xFF, (byte) 0xFF};
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsDerParser.readTlv(data, 0));
+        byte[] data = new byte[] {0x30, (byte) 0x84, 0x7F, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF};
+        assertThrows(IllegalArgumentException.class, () -> GostDerParser.readTlv(data, 0));
     }
 
     @Test
-    @DisplayName("parseLength: обрезанная длинная форма (нет байт длины) → IllegalArgumentException")
+    @DisplayName(
+            "parseLength: обрезанная длинная форма (нет байт длины) -> IllegalArgumentException")
     void testparseLengthTruncatedLongForm() {
-        byte[] data = new byte[]{(byte) 0x82};
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsDerParser.parseLength(data, 0));
+        byte[] data = new byte[] {(byte) 0x82};
+        assertThrows(IllegalArgumentException.class, () -> GostDerParser.parseLength(data, 0));
     }
 
     @Test
-    @DisplayName("parseTime: не-Z timezone → IllegalArgumentException")
+    @DisplayName("parseTime: не-Z timezone -> IllegalArgumentException")
     void testparseTimeNonUtcTimezone() {
-        byte[] data = new byte[]{0x17, 0x0C, '2', '5', '0', '1', '0', '1', '1', '2', '0', '0', '0', '0'};
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsDerParser.parseTime(data, 0));
+        byte[] data =
+                new byte[] {0x17, 0x0C, '2', '5', '0', '1', '0', '1', '1', '2', '0', '0', '0', '0'};
+        assertThrows(IllegalArgumentException.class, () -> GostDerParser.parseTime(data, 0));
     }
 
     @Test
-    @DisplayName("parseTime: неизвестный тег (BOOLEAN) → IllegalArgumentException")
+    @DisplayName("parseTime: неизвестный тег (BOOLEAN) -> IllegalArgumentException")
     void testparseTimeUnknownTag() {
-        byte[] data = new byte[]{0x01, 0x01, 'Z'};
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsDerParser.parseTime(data, 0));
+        byte[] data = new byte[] {0x01, 0x01, 'Z'};
+        assertThrows(IllegalArgumentException.class, () -> GostDerParser.parseTime(data, 0));
     }
 
     // -----------------------------------------------------------------------
@@ -193,7 +189,7 @@ class TlsCertificateTest {
     @DisplayName("самоподписанный сертификат 256-bit")
     void testselfSignedCertificate256() throws Exception {
         byte[] certDer = createSelfSignedCert();
-        TlsCertificate cert = new TlsCertificate(certDer);
+        GostCertificate cert = new GostCertificate(certDer);
 
         PublicKeyParameters pubKey = cert.getPublicKey();
         assertNotNull(pubKey);
@@ -204,36 +200,39 @@ class TlsCertificateTest {
     @DisplayName("verify самоподписанного сертификата")
     void testverifySelfSigned() throws Exception {
         byte[] certDer = createSelfSignedCert();
-        TlsCertificate cert = new TlsCertificate(certDer);
+        GostCertificate cert = new GostCertificate(certDer);
 
         // Для самоподписанного проверяем ключом из сертификата
-        assertTrue(cert.verify(cert.getPublicKey()));
+        assertTrue(cert.verifySignature(cert.getPublicKey()));
     }
 
     @Test
     @DisplayName("подмена tbsCertificate приводит к ошибке verify")
     void testtamperedCertFailsVerification() throws Exception {
         byte[] certDer = createSelfSignedCert();
-        TlsCertificate cert = new TlsCertificate(certDer);
+        GostCertificate cert = new GostCertificate(certDer);
 
         // Создаём сертификат с тем же public key, но подменённым TBSCertificate
         // Получаем public key, создаём новый сертификат с другими данными
         PublicKeyParameters pubKey = cert.getPublicKey();
 
         // Подпись от другого сообщения не пройдёт верификацию
-        TlsCertificate sameCert = new TlsCertificate(certDer);
-        assertTrue(sameCert.verify(pubKey));
+        GostCertificate sameCert = new GostCertificate(certDer);
+        assertTrue(sameCert.verifySignature(pubKey));
 
-        org.rssys.gost.api.KeyPair otherKp = KeyGenerator.generateKeyPair(ECParameters.cryptoProB());
-        assertFalse(cert.verify(otherKp.getPublic()));
+        org.rssys.gost.api.KeyPair otherKp =
+                KeyGenerator.generateKeyPair(ECParameters.cryptoProB());
+        assertFalse(cert.verifySignature(otherKp.getPublic()));
     }
 
     @Test
     @DisplayName("hasSignatureScheme корректно определяет схему")
     void testhasSignatureScheme() throws Exception {
         byte[] certDer256 = createSelfSignedCert();
-        TlsCertificate cert256 = new TlsCertificate(certDer256);
-        assertTrue(cert256.hasSignatureScheme(TlsConstants.SIG_GOST_TC26_A_256));
+        GostCertificate cert256 = new GostCertificate(certDer256);
+        assertTrue(
+                TlsCertUtils.hasSignatureScheme(
+                        cert256.getPublicKey(), TlsConstants.SIG_GOST_TC26_A_256));
     }
 
     @Test
@@ -256,12 +255,14 @@ class TlsCertificateTest {
         byte[] sigAlgCert = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
         byte[] certDer = derSequence(tbs, sigAlgCert, derBitString(sig));
 
-        TlsCertificate cert = new TlsCertificate(certDer);
+        GostCertificate cert = new GostCertificate(certDer);
         assertNotNull(cert.getPublicKey());
         assertEquals(32, cert.getPublicKey().getParams().hlen);
-        assertTrue(cert.verify(kp.getPublic()));
+        assertTrue(cert.verifySignature(kp.getPublic()));
         assertFalse(cert.isExpired());
-        assertTrue(cert.hasSignatureScheme(TlsConstants.SIG_GOST_TC26_A_256));
+        assertTrue(
+                TlsCertUtils.hasSignatureScheme(
+                        cert.getPublicKey(), TlsConstants.SIG_GOST_TC26_A_256));
     }
 
     @Test
@@ -274,16 +275,19 @@ class TlsCertificateTest {
     @Test
     @DisplayName("isExpired: сертификат с notAfter в прошлом просрочен")
     void testCertExpired() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "200101120000Z", "200201120000Z");
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(), "200101120000Z", "200201120000Z");
         assertTrue(bundle.cert.isExpired());
     }
 
     @Test
-    @DisplayName("UTCTime: год 99 → 1999 (RFC 5280 §4.1.2.5.1)")
+    @DisplayName("UTCTime: год 99 -> 1999 (RFC 5280 §4.1.2.5.1)")
     void testUtcTimeYear99() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "990101120000Z", "500101120000Z");
+        // 50 -> 1950, 99 -> 1999. Порядок notBefore < notAfter, оба в прошлом.
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(), "500101120000Z", "990101120000Z");
         assertTrue(bundle.cert.isExpired(), "1999 год должен быть просрочен");
     }
 
@@ -294,85 +298,129 @@ class TlsCertificateTest {
     @Test
     @DisplayName("verifyHostname: точное совпадение SAN")
     void testSanMatch() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"example.com"});
         assertTrue(bundle.cert.verifyHostname("example.com"));
         assertFalse(bundle.cert.verifyHostname("other.com"));
     }
 
     @Test
-    @DisplayName("verifyHostname: wildcard *.example.com → www.example.com")
+    @DisplayName("verifyHostname: шаблон *.example.com -> www.example.com")
     void testSanWildcard() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"*.example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"*.example.com"});
         assertTrue(bundle.cert.verifyHostname("www.example.com"));
         assertFalse(bundle.cert.verifyHostname("example.com"));
         assertFalse(bundle.cert.verifyHostname("a.b.example.com"));
     }
 
     @Test
-    @DisplayName("verifyHostname: wildcard case-insensitive")
+    @DisplayName("verifyHostname: шаблон нечувствителен к регистру")
     void testSanWildcardCase() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"*.EXAMPLE.COM"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"*.EXAMPLE.COM"});
         assertTrue(bundle.cert.verifyHostname("www.example.com"));
     }
 
     @Test
     @DisplayName("verifyHostname: частичный wildcard f* запрещён")
     void testSanWildcardPartial() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"f*.example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"f*.example.com"});
         assertFalse(bundle.cert.verifyHostname("foo.example.com"));
+    }
+
+    @Test
+    @DisplayName(
+            "verifyHostname: wildcard *.example.com не матчит .example.com (пустая первая метка)")
+    void testSanWildcardEmptyFirstLabel() {
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"*.example.com"});
+        assertFalse(bundle.cert.verifyHostname(".example.com"));
     }
 
     @Test
     @DisplayName("verifyHostname: несколько DNS-имён в SAN")
     void testSanMultipleDnsNames() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"a.com", "b.com", "c.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"a.com", "b.com", "c.com"});
         assertTrue(bundle.cert.verifyHostname("b.com"));
         assertFalse(bundle.cert.verifyHostname("d.com"));
     }
 
     @Test
-    @DisplayName("verifyHostname: SAN отсутствует → false")
+    @DisplayName("verifyHostname: SAN отсутствует -> false")
     void testSanNoSan() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256());
+        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         assertFalse(bundle.cert.verifyHostname("example.com"));
     }
 
     @Test
     @DisplayName("verifyHostname: IPv4 в SAN — совпадает")
     void testSanIpv4Match() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, null, new String[]{"192.168.1.1"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        new String[] {"192.168.1.1"});
         assertTrue(bundle.cert.verifyHostname("192.168.1.1"));
     }
 
     @Test
     @DisplayName("verifyHostname: IPv4 в SAN — не совпадает")
     void testSanIpv4Mismatch() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, null, new String[]{"10.0.0.1"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        new String[] {"10.0.0.1"});
         assertFalse(bundle.cert.verifyHostname("192.168.1.1"));
     }
 
     @Test
     @DisplayName("verifyHostname: DNS и IPv4 в SAN")
     void testSanMixedDnsIp() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"example.com"}, null, null,
-                new String[]{"10.0.0.1"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"example.com"},
+                        null,
+                        null,
+                        new String[] {"10.0.0.1"});
         assertTrue(bundle.cert.verifyHostname("example.com"));
         assertTrue(bundle.cert.verifyHostname("10.0.0.1"));
         assertFalse(bundle.cert.verifyHostname("other.com"));
@@ -381,19 +429,27 @@ class TlsCertificateTest {
     @Test
     @DisplayName("verifyHostname: IPv6 в SAN — совпадает")
     void testSanIpv6Match() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, null,
-                new String[]{"::1"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        new String[] {"::1"});
         assertTrue(bundle.cert.verifyHostname("::1"));
     }
 
     @Test
     @DisplayName("verifyHostname: DNS-имя при пустом SAN-IP")
     void testSanDnsOnlyWhenIpEmpty() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"example.com"});
         assertTrue(bundle.cert.verifyHostname("example.com"));
         assertFalse(bundle.cert.verifyHostname("10.0.0.1"));
     }
@@ -401,17 +457,16 @@ class TlsCertificateTest {
     @Test
     @DisplayName("verifyHostname: hostname не IP и не DNS -> false")
     void testSanInvalidHostname() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256());
+        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         assertFalse(bundle.cert.verifyHostname(""));
     }
 
     @Test
     @DisplayName("verifyHostname: malformed iPAddress (3 байта) игнорируется")
     void testSanMalformedLength() throws Exception {
-        byte[] garbageIp = TlsTestHelper.derTlv(0x87, new byte[]{0x01, 0x02, 0x03});
-        byte[] validIp = TlsTestHelper.derTlv(0x87,
-                java.net.InetAddress.getByName("10.0.0.1").getAddress());
+        byte[] garbageIp = TlsTestHelper.derTlv(0x87, new byte[] {0x01, 0x02, 0x03});
+        byte[] validIp =
+                TlsTestHelper.derTlv(0x87, java.net.InetAddress.getByName("10.0.0.1").getAddress());
         byte[] gnSeq = TlsTestHelper.derSequence(garbageIp, validIp);
         byte[] sanOid = TlsTestHelper.derOid("2.5.29.17");
         byte[] sanExt = TlsTestHelper.derSequence(sanOid, TlsTestHelper.derOctetString(gnSeq));
@@ -419,15 +474,23 @@ class TlsCertificateTest {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] dn = TlsTestHelper.buildDN("Test Cert");
-        byte[] tbs = TlsTestHelper.buildTbs(kp.getPublic(), params,
-                "20240501120000Z", "21060101120000Z",
-                null, null, sanExt, dn, dn);
+        byte[] tbs =
+                TlsTestHelper.buildTbs(
+                        kp.getPublic(),
+                        params,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        sanExt,
+                        dn,
+                        dn);
         byte[] hash = TlsTestHelper.doHash(tbs, params.hlen);
         byte[] sig = Signature.signHash(hash, kp.getPrivate());
         byte[] algId = TlsTestHelper.buildAlgId(params);
         byte[] sigBs = TlsTestHelper.derBitString(sig);
         byte[] certDer = TlsTestHelper.derSequence(tbs, algId, sigBs);
-        TlsCertificate cert = new TlsCertificate(certDer);
+        GostCertificate cert = new GostCertificate(certDer);
 
         assertTrue(cert.verifyHostname("10.0.0.1"));
         assertFalse(cert.verifyHostname("0.0.0.0"));
@@ -436,12 +499,19 @@ class TlsCertificateTest {
     @Test
     @DisplayName("verifyHostname: IPv4 vs IPv4-mapped IPv6 — не совпадают")
     void testSanCrossVersion() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, null, new String[]{"192.168.1.1"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        new String[] {"192.168.1.1"});
         // IPv4-mapped: 16 байт, не равен чистому IPv4 (4 байта)
-        byte[] ipv4Mapped = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (byte)0xFF, (byte)0xFF,
-                (byte)192, (byte)168, 1, 1};
+        byte[] ipv4Mapped = {
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (byte) 0xFF, (byte) 0xFF, (byte) 192, (byte) 168, 1, 1
+        };
         assertFalse(bundle.cert.verifyAddress(ipv4Mapped));
         assertTrue(bundle.cert.verifyHostname("192.168.1.1"));
     }
@@ -449,9 +519,15 @@ class TlsCertificateTest {
     @Test
     @DisplayName("verifyHostname: IPv6 vs IPv4 — не совпадают")
     void testSanCrossVersion2() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, null, new String[]{"::1"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        new String[] {"::1"});
         // IPv4 loopback: 4 байта, не равен IPv6 loopback (16 байт)
         byte[] ipv4Loopback = {127, 0, 0, 1};
         assertFalse(bundle.cert.verifyAddress(ipv4Loopback));
@@ -463,58 +539,83 @@ class TlsCertificateTest {
     void testParseCertificateOcspStapling() throws Exception {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         byte[] ocspBytes = TlsTestHelper.buildDummyOcspResponse();
-        TlsMessageBuilder builder = new TlsMessageBuilder(
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                        TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
-                0x0022, 0x0709, bundle.priv, List.of(bundle.cert), 32);
+        TlsMessageBuilder builder =
+                new TlsMessageBuilder(
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                        List.of(
+                                TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                                TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
+                        0x0022,
+                        0x0709,
+                        bundle.priv,
+                        List.of(bundle.cert),
+                        32);
         byte[] certBody = builder.buildCertificateBody(ocspBytes);
-        List<TlsCertificate> chain = TlsMessageParser.parseCertificate(certBody);
+        List<GostCertificate> chain = TlsMessageParser.parseCertificate(certBody);
         assertEquals(1, chain.size());
-        TlsCertificate parsed = chain.get(0);
+        GostCertificate parsed = chain.get(0);
         assertNotNull(parsed.getOcspResponse());
         assertArrayEquals(ocspBytes, parsed.getOcspResponse());
     }
 
     @Test
-    @DisplayName("verifyOcspResponse: nextUpdate просрочен → TlsException")
+    @DisplayName("verifyOcspResponse: nextUpdate просрочен -> TlsException")
     void testVerifyOcspExpired() throws Exception {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
-        byte[] ocsp = TlsTestHelper.buildOcspResponse(
-                bundle.cert.getSerialNumber(), bundle.priv,
-                bundle.cert.getPublicKey(), bundle.subjectDn, "20200101120000Z");
+        byte[] ocsp =
+                TlsTestHelper.buildOcspResponse(
+                        bundle.cert.getSerialNumber(),
+                        bundle.priv,
+                        bundle.cert.getPublicKey(),
+                        bundle.subjectDn,
+                        "20200101120000Z");
         bundle.cert.setOcspResponse(ocsp);
-        assertThrows(TlsException.class,
-                () -> bundle.cert.verifyOcspResponse(bundle.cert.getPublicKey()));
+        assertThrows(
+                TlsException.class,
+                () ->
+                        TlsCertUtils.verifyOcspResponse(
+                                bundle.cert, bundle.cert.getPublicKey(), null));
     }
 
     @Test
-    @DisplayName("verifyOcspResponse: нет nextUpdate → проходит")
+    @DisplayName("verifyOcspResponse: нет nextUpdate -> проходит")
     void testVerifyOcspNoNextUpdate() throws Exception {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
-        byte[] ocsp = TlsTestHelper.buildOcspResponse(
-                bundle.cert.getSerialNumber(), bundle.priv,
-                bundle.cert.getPublicKey(), bundle.subjectDn, null);
+        byte[] ocsp =
+                TlsTestHelper.buildOcspResponse(
+                        bundle.cert.getSerialNumber(),
+                        bundle.priv,
+                        bundle.cert.getPublicKey(),
+                        bundle.subjectDn,
+                        null);
         bundle.cert.setOcspResponse(ocsp);
-        assertDoesNotThrow(() ->
-                bundle.cert.verifyOcspResponse(bundle.cert.getPublicKey()));
+        assertDoesNotThrow(
+                () ->
+                        TlsCertUtils.verifyOcspResponse(
+                                bundle.cert, bundle.cert.getPublicKey(), null));
     }
 
     @Test
-    @DisplayName("verifyHostname: null → true")
+    @DisplayName("проверка hostname: null -> true")
     void testSanNullHostname() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"example.com"});
         assertTrue(bundle.cert.verifyHostname(null));
     }
 
     @Test
-    @DisplayName("verifyHostname: IP-адрес → false (не поддерживается)")
+    @DisplayName("verifyHostname: IP-адрес -> false (не поддерживается)")
     void testSanIpAddress() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"example.com"});
         assertFalse(bundle.cert.verifyHostname("192.168.1.1"));
         assertFalse(bundle.cert.verifyHostname("::1"));
     }
@@ -522,18 +623,24 @@ class TlsCertificateTest {
     @Test
     @DisplayName("verifyHostname: trailing dot в hostname нормализуется")
     void testSanTrailingDot() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"example.com"});
         assertTrue(bundle.cert.verifyHostname("example.com."));
     }
 
     @Test
     @DisplayName("verifyHostname: hostname с пробелами обрезается")
     void testSanHostnameTrim() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"example.com"});
         assertTrue(bundle.cert.verifyHostname("  example.com  "));
     }
 
@@ -576,127 +683,181 @@ class TlsCertificateTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("isKeyUsageValid: KU с digitalSignature → true")
+    @DisplayName("isKeyUsageValid: KU с digitalSignature -> true")
     void testKuWithDigitalSignature() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, new byte[]{(byte) 0x80}, null);
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        new byte[] {(byte) 0x80},
+                        null);
         assertTrue(bundle.cert.isKeyUsageValid());
     }
 
     @Test
-    @DisplayName("isKeyUsageValid: KU без digitalSignature → false")
+    @DisplayName("isKeyUsageValid: KU без digitalSignature -> false")
     void testKuWithoutDigitalSignature() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, new byte[]{(byte) 0x20}, null);
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        new byte[] {(byte) 0x20},
+                        null);
         assertFalse(bundle.cert.isKeyUsageValid());
     }
 
     @Test
-    @DisplayName("isKeyUsageValid: KU отсутствует → true")
+    @DisplayName("isKeyUsageValid: KU отсутствует -> true")
     void testKuAbsent() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         assertTrue(bundle.cert.isKeyUsageValid());
     }
 
     @Test
-    @DisplayName("isEkuValid: EKU с serverAuth → true")
+    @DisplayName("isEkuValid: EKU с serverAuth -> true")
     void testEkuWithServerAuth() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, new String[]{GostOids.EXT_SERVER_AUTH});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        new String[] {GostOids.EXT_SERVER_AUTH});
         assertTrue(bundle.cert.isEkuValidForServer());
     }
 
     @Test
-    @DisplayName("isEkuValid: EKU без serverAuth → false")
+    @DisplayName("isEkuValid: EKU без serverAuth -> false")
     void testEkuWithoutServerAuth() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, new String[]{"1.3.6.1.5.5.7.3.3"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        new String[] {"1.3.6.1.5.5.7.3.3"});
         assertFalse(bundle.cert.isEkuValidForServer());
     }
 
     @Test
-    @DisplayName("isEkuValid: EKU отсутствует → true")
+    @DisplayName("isEkuValid: EKU отсутствует -> true")
     void testEkuAbsent() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         assertTrue(bundle.cert.isEkuValidForServer());
     }
 
     @Test
-    @DisplayName("isEkuValid: EKU с serverAuth и codeSigning → true")
+    @DisplayName("isEkuValid: EKU с serverAuth и codeSigning -> true")
     void testEkuWithServerAuthAndOther() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, new String[]{"1.3.6.1.5.5.7.3.3", GostOids.EXT_SERVER_AUTH});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        new String[] {"1.3.6.1.5.5.7.3.3", GostOids.EXT_SERVER_AUTH});
         assertTrue(bundle.cert.isEkuValidForServer());
     }
 
     @Test
-    @DisplayName("isEkuValidForClient: EKU с clientAuth → true")
+    @DisplayName("isEkuValidForClient: EKU с clientAuth -> true")
     void testEkuClientAuthValid() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, new String[]{GostOids.EXT_CLIENT_AUTH});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        new String[] {GostOids.EXT_CLIENT_AUTH});
         assertTrue(bundle.cert.isEkuValidForClient());
     }
 
     @Test
-    @DisplayName("isEkuValidForClient: EKU без clientAuth → false")
+    @DisplayName("isEkuValidForClient: EKU без clientAuth -> false")
     void testEkuClientAuthMissing() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, new String[]{GostOids.EXT_SERVER_AUTH});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        new String[] {GostOids.EXT_SERVER_AUTH});
         assertFalse(bundle.cert.isEkuValidForClient());
     }
 
     @Test
-    @DisplayName("isEkuValidForClient: EKU отсутствует → true")
+    @DisplayName("isEkuValidForClient: EKU отсутствует -> true")
     void testEkuClientAuthAbsent() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         assertTrue(bundle.cert.isEkuValidForClient());
     }
 
     @Test
-    @DisplayName("isEkuValidForClient: EKU с clientAuth и serverAuth → true")
+    @DisplayName("isEkuValidForClient: EKU с clientAuth и serverAuth -> true")
     void testEkuClientAuthWithServerAuth() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                null, null, new String[]{GostOids.EXT_SERVER_AUTH, GostOids.EXT_CLIENT_AUTH});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        new String[] {GostOids.EXT_SERVER_AUTH, GostOids.EXT_CLIENT_AUTH});
         assertTrue(bundle.cert.isEkuValidForClient());
     }
 
     @Test
-    @DisplayName("verify: leaf подписан root → true")
+    @DisplayName("verify: leaf подписан root -> true")
     void testChainSignatureVerification() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
-                root.subjectDn,
-                "20240501120000Z", "21060101120000Z",
-                new String[]{"gost.example.com"},
-                new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_SERVER_AUTH},
-                false, null);
-        assertTrue(leaf.cert.verify(root.cert.getPublicKey()));
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"gost.example.com"},
+                        new byte[] {(byte) 0x80},
+                        new String[] {GostOids.EXT_SERVER_AUTH},
+                        false,
+                        null);
+        assertTrue(leaf.cert.verifySignature(root.cert.getPublicKey()));
     }
 
     @Test
-    @DisplayName("verify: leaf подписан root, чужим ключом → false")
+    @DisplayName("verify: leaf подписан root, чужим ключом -> false")
     void testChainSignatureWrongKey() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
-                root.subjectDn,
-                "20240501120000Z", "21060101120000Z",
-                null, null, null, false, null);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        false,
+                        null);
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
-        assertFalse(leaf.cert.verify(kp.getPublic()));
+        assertFalse(leaf.cert.verifySignature(kp.getPublic()));
     }
 
     @Test
-    @DisplayName("isCA: корневой CA → true, keyCertSign → true")
+    @DisplayName("isCA: корневой CA -> true, keyCertSign -> true")
     void testRootCAIsCA() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
         assertTrue(root.cert.isCA());
@@ -704,80 +865,129 @@ class TlsCertificateTest {
     }
 
     @Test
-    @DisplayName("isCA: leaf без BC → false, keyCertSign → false")
+    @DisplayName("isCA: leaf без BC -> false; keyCertSign без KU -> true (RFC 5280 §4.2.1.3)")
     void testLeafNotCA() throws Exception {
         TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         assertFalse(leaf.cert.isCA());
-        assertFalse(leaf.cert.isKeyCertSignSet());
+        // При отсутствии KeyUsage все использования разрешены — keyCertSign = true
+        assertTrue(leaf.cert.isKeyCertSignSet());
     }
 
     // -----------------------------------------------------------------------
-    // 3-сертификатная цепочка (leaf → intermediate → root)
+    // 3-сертификатная цепочка (leaf -> intermediate -> root)
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("3-cert: leaf подписан intermediate → true")
+    @DisplayName("3-cert: leaf подписан intermediate -> true")
     void testThreeCertLeafVerifiesByIntermediate() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
-        TlsTestHelper.CertBundle intermediate = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
-                root.subjectDn,
-                "20240501120000Z", "21060101120000Z", null,
-                new byte[]{(byte) 0x04}, null, true, 0);
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), intermediate.priv, intermediate.cert.getPublicKey(),
-                intermediate.subjectDn,
-                "20240501120000Z", "21060101120000Z", null,
-                new byte[]{(byte) 0x80}, null, false, null);
-        assertTrue(leaf.cert.verify(intermediate.cert.getPublicKey()));
+        TlsTestHelper.CertBundle intermediate =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        new byte[] {(byte) 0x04},
+                        null,
+                        true,
+                        0);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        intermediate.priv,
+                        intermediate.cert.getPublicKey(),
+                        intermediate.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        new byte[] {(byte) 0x80},
+                        null,
+                        false,
+                        null);
+        assertTrue(leaf.cert.verifySignature(intermediate.cert.getPublicKey()));
     }
 
     @Test
-    @DisplayName("3-cert: intermediate подписан root → true")
+    @DisplayName("3-cert: intermediate подписан root -> true")
     void testThreeCertIntermediateVerifiesByRoot() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
-        TlsTestHelper.CertBundle intermediate = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
-                root.subjectDn,
-                "20240501120000Z", "21060101120000Z", null,
-                new byte[]{(byte) 0x04}, null, true, 0);
-        assertTrue(intermediate.cert.verify(root.cert.getPublicKey()));
+        TlsTestHelper.CertBundle intermediate =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        new byte[] {(byte) 0x04},
+                        null,
+                        true,
+                        0);
+        assertTrue(intermediate.cert.verifySignature(root.cert.getPublicKey()));
     }
 
     @Test
-    @DisplayName("3-cert: leaf подписан root → false (прямая верификация через root не проходит)")
+    @DisplayName("3-cert: leaf подписан root -> false (прямая верификация через root не проходит)")
     void testThreeCertLeafDoesNotVerifyByRoot() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
-        TlsTestHelper.CertBundle intermediate = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
-                root.subjectDn,
-                "20240501120000Z", "21060101120000Z", null,
-                new byte[]{(byte) 0x04}, null, true, 0);
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), intermediate.priv, intermediate.cert.getPublicKey(),
-                intermediate.subjectDn,
-                "20240501120000Z", "21060101120000Z", null,
-                new byte[]{(byte) 0x80}, null, false, null);
-        assertFalse(leaf.cert.verify(root.cert.getPublicKey()));
+        TlsTestHelper.CertBundle intermediate =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        new byte[] {(byte) 0x04},
+                        null,
+                        true,
+                        0);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        intermediate.priv,
+                        intermediate.cert.getPublicKey(),
+                        intermediate.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        new byte[] {(byte) 0x80},
+                        null,
+                        false,
+                        null);
+        assertFalse(leaf.cert.verifySignature(root.cert.getPublicKey()));
     }
 
     @Test
-    @DisplayName("tampered: изменение 1 байта DER → verify возвращает false")
+    @DisplayName("tampered: изменение 1 байта DER -> verify возвращает false")
     void testTamperedCertFailsVerification() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
-                root.subjectDn,
-                "20240501120000Z", "21060101120000Z", null,
-                new byte[]{(byte) 0x80}, null, false, null);
-        byte[] tamperedDer = leaf.cert.getCertData().clone();
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        new byte[] {(byte) 0x80},
+                        null,
+                        false,
+                        null);
+        byte[] tamperedDer = leaf.cert.getEncoded().clone();
         tamperedDer[tamperedDer.length - 1] ^= 0x01;
-        TlsCertificate tampered = new TlsCertificate(tamperedDer);
-        assertFalse(tampered.verify(root.cert.getPublicKey()));
+        GostCertificate tampered = new GostCertificate(tamperedDer);
+        assertFalse(tampered.verifySignature(root.cert.getPublicKey()));
     }
 
     @Test
-    @DisplayName("algConsistent: разные signatureAlgorithm внутри и снаружи → false")
+    @DisplayName("algConsistent: разные signatureAlgorithm внутри и снаружи -> false")
     void testAlgMismatch() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
@@ -795,12 +1005,12 @@ class TlsCertificateTest {
         byte[] outerSigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_512));
         byte[] certDer = derSequence(tbs, outerSigAlg, derBitString(sig));
 
-        TlsCertificate cert = new TlsCertificate(certDer);
+        GostCertificate cert = new GostCertificate(certDer);
         assertFalse(cert.isAlgConsistent());
     }
 
     @Test
-    @DisplayName("hasUnknownCriticalExtension: неизвестный critical extension → true")
+    @DisplayName("hasUnknownCriticalExtension: неизвестный critical extension -> true")
     void testUnknownCriticalExtension() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
@@ -814,8 +1024,9 @@ class TlsCertificateTest {
         byte[] validity = derSequence(derTime("250101000000Z"), derTime("21060101120000Z"));
 
         byte[] unknownExtOid = derOid("1.2.3.4");
-        byte[] unknownExtValue = derOctetString(new byte[]{0x05, 0x00});
-        byte[] unknownExt = derSequence(unknownExtOid, new byte[]{0x01, 0x01, (byte) 0xFF}, unknownExtValue);
+        byte[] unknownExtValue = derOctetString(new byte[] {0x05, 0x00});
+        byte[] unknownExt =
+                derSequence(unknownExtOid, new byte[] {0x01, 0x01, (byte) 0xFF}, unknownExtValue);
         byte[] extensions = derContextExpl(3, derSequence(unknownExt));
 
         byte[] tbs = derSequence(version, serial, sigAlg, dn, validity, dn, spki, extensions);
@@ -823,7 +1034,7 @@ class TlsCertificateTest {
         byte[] outerSigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
         byte[] certDer = derSequence(tbs, outerSigAlg, derBitString(sig));
 
-        TlsCertificate cert = new TlsCertificate(certDer);
+        GostCertificate cert = new GostCertificate(certDer);
         assertTrue(cert.hasUnknownCriticalExtension());
     }
 
@@ -832,37 +1043,37 @@ class TlsCertificateTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("equals: одинаковые DER → true")
+    @DisplayName("equals: одинаковые DER -> true")
     void testEqualsSameDer() throws Exception {
         byte[] der = createSelfSignedCert();
-        TlsCertificate c1 = new TlsCertificate(der);
-        TlsCertificate c2 = new TlsCertificate(der);
+        GostCertificate c1 = new GostCertificate(der);
+        GostCertificate c2 = new GostCertificate(der);
         assertEquals(c1, c2);
         assertEquals(c1.hashCode(), c2.hashCode());
     }
 
     @Test
-    @DisplayName("equals: разные сертификаты → false")
+    @DisplayName("equals: разные сертификаты -> false")
     void testEqualsDifferentDer() throws Exception {
         byte[] der1 = createSelfSignedCert();
         byte[] der2 = createSelfSignedCert();
-        TlsCertificate c1 = new TlsCertificate(der1);
-        TlsCertificate c2 = new TlsCertificate(der2);
+        GostCertificate c1 = new GostCertificate(der1);
+        GostCertificate c2 = new GostCertificate(der2);
         assertNotEquals(c1, c2);
     }
 
     @Test
-    @DisplayName("equals: null → false")
+    @DisplayName("сравнение: null -> false")
     void testEqualsNull() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         assertNotNull(cert);
         assertNotEquals(null, cert);
     }
 
     @Test
-    @DisplayName("equals: другой тип → false")
+    @DisplayName("equals: другой тип -> false")
     void testEqualsDifferentType() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         assertNotEquals("string", cert);
     }
 
@@ -873,12 +1084,12 @@ class TlsCertificateTest {
     @Test
     @DisplayName("getVersion: v3 для createSelfSignedCert")
     void testVersionV3() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         assertEquals(3, cert.getVersion());
     }
 
     @Test
-    @DisplayName("getVersion: без [0] EXPLICIT → v1")
+    @DisplayName("getVersion: без [0] EXPLICIT -> v1")
     void testVersionV1() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
@@ -896,7 +1107,7 @@ class TlsCertificateTest {
         byte[] outerSigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
         byte[] certDer = derSequence(tbs, outerSigAlg, derBitString(sig));
 
-        TlsCertificate cert = new TlsCertificate(certDer);
+        GostCertificate cert = new GostCertificate(certDer);
         assertEquals(1, cert.getVersion());
     }
 
@@ -905,9 +1116,9 @@ class TlsCertificateTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("getSerialNumberBigInt: serial = 1 → BigInteger(1)")
+    @DisplayName("серийный номер: serial = 1 -> BigInteger(1)")
     void testSerialNumberBigInt() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         assertEquals(BigInteger.valueOf(1), cert.getSerialNumberBigInt());
     }
 
@@ -918,33 +1129,41 @@ class TlsCertificateTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("isSelfSigned: самоподписанный → true")
+    @DisplayName("isSelfSigned: самоподписанный -> true")
     void testIsSelfSignedTrue() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         assertTrue(cert.isSelfSigned());
     }
 
     @Test
-    @DisplayName("isSelfSigned: root CA → true")
+    @DisplayName("isSelfSigned: корневой УЦ -> true")
     void testIsSelfSignedRootCA() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
         assertTrue(root.cert.isSelfSigned());
     }
 
     @Test
-    @DisplayName("isSelfSigned: leaf подписан root → false")
+    @DisplayName("isSelfSigned: leaf подписан root -> false")
     void testIsSelfSignedLeaf() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
-                root.subjectDn,
-                "20240501120000Z", "21060101120000Z",
-                null, null, null, false, null);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        false,
+                        null);
         assertFalse(leaf.cert.isSelfSigned());
     }
 
     @Test
-    @DisplayName("isSelfIssued: issuer = subject → true")
+    @DisplayName("isSelfIssued: издатель = субъект -> true")
     void testIsSelfIssuedTrue() throws Exception {
         // createCertWithKey создаёт issuer = subject
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
@@ -952,14 +1171,22 @@ class TlsCertificateTest {
     }
 
     @Test
-    @DisplayName("isSelfIssued: issuer ≠ subject → false")
+    @DisplayName("isSelfIssued: издатель ≠ субъект -> false")
     void testIsSelfIssuedFalse() throws Exception {
         TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
-        TlsTestHelper.CertBundle leaf = TlsTestHelper.createCertSignedBy(
-                ECParameters.tc26a256(), root.priv, root.cert.getPublicKey(),
-                root.subjectDn,
-                "20240501120000Z", "21060101120000Z",
-                null, null, null, false, null);
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        false,
+                        null);
         assertFalse(leaf.cert.isSelfIssued());
     }
 
@@ -968,27 +1195,29 @@ class TlsCertificateTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("isValidAt: дата внутри периода → true")
+    @DisplayName("isValidAt: дата внутри периода -> true")
     void testIsValidAtWithin() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
-        assertTrue(bundle.cert.isValidAt(new Date()));
+        assertTrue(bundle.cert.isValidAt(Instant.now()));
     }
 
     @Test
-    @DisplayName("isValidAt: дата до notBefore → false")
+    @DisplayName("isValidAt: дата до notBefore -> false")
     void testIsValidAtBefore() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z");
-        Date past = new Date(0); // 1970-01-01
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z");
+        Instant past = Instant.EPOCH; // 1970-01-01
         assertFalse(bundle.cert.isValidAt(past));
     }
 
     @Test
-    @DisplayName("isValidAt: дата после notAfter → false")
+    @DisplayName("isValidAt: дата после notAfter -> false")
     void testIsValidAtAfter() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z");
-        Date farFuture = new Date(200 * 365 * 86400000L); // ~2170
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z");
+        Instant farFuture = Instant.ofEpochMilli(200 * 365 * 86400000L); // ~2170
         assertFalse(bundle.cert.isValidAt(farFuture));
     }
 
@@ -1009,78 +1238,27 @@ class TlsCertificateTest {
     // DN escape (RFC 4514) — escapeDnValue coverage
     // -----------------------------------------------------------------------
 
-    @Test
-    @DisplayName("DN: backslash в значении экранируется")
-    void testDnEscapeBackslash() throws Exception {
-        // CN=foo\bar → с экранированием: CN=foo\\bar
-        byte[] dn = buildDnWithCn("foo\\bar");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=foo\\\\bar", cert.getSubjectDn());
+    @ParameterizedTest
+    @MethodSource("dnEscapeCases")
+    @DisplayName("DN: экранирование спецсимволов по RFC 4514")
+    void testDnEscape(String input, String expectedDn) throws Exception {
+        byte[] dn = buildDnWithCn(input);
+        GostCertificate cert = certWithDn(dn);
+        assertEquals(expectedDn, cert.getSubjectDn());
     }
 
-    @Test
-    @DisplayName("DN: запятая в значении экранируется")
-    void testDnEscapeComma() throws Exception {
-        byte[] dn = buildDnWithCn("a,b");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=a\\,b", cert.getSubjectDn());
-    }
-
-    @Test
-    @DisplayName("DN: равно в значении экранируется")
-    void testDnEscapeEquals() throws Exception {
-        byte[] dn = buildDnWithCn("a=b");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=a\\=b", cert.getSubjectDn());
-    }
-
-    @Test
-    @DisplayName("DN: плюс в значении экранируется")
-    void testDnEscapePlus() throws Exception {
-        byte[] dn = buildDnWithCn("a+b");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=a\\+b", cert.getSubjectDn());
-    }
-
-    @Test
-    @DisplayName("DN: C0 control (0x01) экранируется как \\u0001")
-    void testDnEscapeC0Control() throws Exception {
-        byte[] dn = buildDnWithCn("a\u0001b");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=a\\u0001b", cert.getSubjectDn());
-    }
-
-    @Test
-    @DisplayName("DN: DEL (0x7F) экранируется как \\u007F")
-    void testDnEscapeDel() throws Exception {
-        byte[] dn = buildDnWithCn("a\u007Fb");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=a\\u007Fb", cert.getSubjectDn());
-    }
-
-    @Test
-    @DisplayName("DN: C1 control NEL (0x85) экранируется как \\u0085")
-    void testDnEscapeC1Control() throws Exception {
-        byte[] dn = buildDnWithCn("a\u0085b");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=a\\u0085b", cert.getSubjectDn());
-    }
-
-    @Test
-    @DisplayName("DN: NBSP (0xA0) НЕ экранируется — граница условия <0xA0")
-    void testDnEscapeNbspBoundary() throws Exception {
-        // NBSP = 0xA0, условие c < 0xA0 exclusive — не должен экранироваться
-        byte[] dn = buildDnWithCn("a\u00A0b");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=a\u00A0b", cert.getSubjectDn());
-    }
-
-    @Test
-    @DisplayName("DN: обычная строка без спецсимволов не меняется")
-    void testDnEscapePlainText() throws Exception {
-        byte[] dn = buildDnWithCn("example.com");
-        TlsCertificate cert = certWithDn(dn);
-        assertEquals("CN=example.com", cert.getSubjectDn());
+    static Stream<Arguments> dnEscapeCases() {
+        return Stream.of(
+                Arguments.of("foo\\bar", "CN=foo\\\\bar"),
+                Arguments.of("a,b", "CN=a\\,b"),
+                Arguments.of("a=b", "CN=a\\=b"),
+                Arguments.of("a+b", "CN=a\\+b"),
+                Arguments.of("a\u0001b", "CN=a\\u0001b"),
+                Arguments.of("a\u007Fb", "CN=a\\u007Fb"),
+                Arguments.of("a\u0085b", "CN=a\\u0085b"),
+                // NBSP (0xA0) — граница условия c < 0xA0 exclusive, не экранируется
+                Arguments.of("a\u00A0b", "CN=a\u00A0b"),
+                Arguments.of("example.com", "CN=example.com"));
     }
 
     @Test
@@ -1091,7 +1269,7 @@ class TlsCertificateTest {
     }
 
     @Test
-    @DisplayName("getSubjectDnField: CN → [\"Test Cert N\"]")
+    @DisplayName("поле субъекта DN: CN -> [\"Test Cert N\"]")
     void testSubjectDnFieldCn() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         String[] cns = bundle.cert.getSubjectDnField("2.5.4.3");
@@ -1100,7 +1278,7 @@ class TlsCertificateTest {
     }
 
     @Test
-    @DisplayName("getSubjectDnField: неизвестный OID → пустой массив")
+    @DisplayName("getSubjectDnField: неизвестный OID -> пустой массив")
     void testSubjectDnFieldUnknown() {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         String[] values = bundle.cert.getSubjectDnField("1.2.3.4");
@@ -1122,9 +1300,9 @@ class TlsCertificateTest {
     @Test
     @DisplayName("toString: содержит ключевые поля")
     void testToStringContainsFields() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         String s = cert.toString();
-        assertTrue(s.startsWith("TlsCertificate{"));
+        assertTrue(s.startsWith("GostCertificate{"));
         assertTrue(s.contains("serial=0x"));
         assertTrue(s.contains("subject=CN="));
         assertTrue(s.contains("issuer=CN="));
@@ -1141,9 +1319,12 @@ class TlsCertificateTest {
     @Test
     @DisplayName("getSanDnsNames: модификация массива не влияет на сертификат")
     void testSanDnsNamesDefensiveCopy() {
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(
-                ECParameters.tc26a256(), "20240501120000Z", "21060101120000Z",
-                new String[]{"example.com"});
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"example.com"});
         String[] dns = bundle.cert.getSanDnsNames();
         String orig = dns[0];
         dns[0] = "hacked.com";
@@ -1161,8 +1342,8 @@ class TlsCertificateTest {
     @DisplayName("equals: cross-loading — дважды загруженный DER даёт equals")
     void testCrossLoadingEquals() throws Exception {
         byte[] der = createSelfSignedCert();
-        TlsCertificate c1 = new TlsCertificate(der);
-        TlsCertificate c2 = new TlsCertificate(der.clone());
+        GostCertificate c1 = new GostCertificate(der);
+        GostCertificate c2 = new GostCertificate(der.clone());
         assertEquals(c1, c2);
     }
 
@@ -1172,66 +1353,77 @@ class TlsCertificateTest {
     // сертификата (tc26a256, самоподписанный, без SKI/AKI/AIA-расширений).
     // ------------------------------------------------------------------------
 
-    @Test @DisplayName("getSignatureAlgorithmOid: OID совпадает с GostCurves.OID_SIGN_256")
+    @Test
+    @DisplayName("getSignatureAlgorithmOid: OID совпадает с GostCurves.OID_SIGN_256")
     void testSignatureAlgorithmOid() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         // createSelfSignedCert использует sigOid = GostOids.SIG_WITH_DIGEST_256 (256-бит)
         assertEquals(GostCurves.OID_SIGN_256, cert.getSignatureAlgorithmOid());
     }
 
-    @Test @DisplayName("getKeySize: 256 бит")
+    @Test
+    @DisplayName("getKeySize: 256 бит")
     void testKeySize() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
-        // tc26a256 — 256-битная кривая (hlen=32 → 32*8=256)
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
+        // tc26a256 — 256-битная кривая (hlen=32 -> 32*8=256)
         assertEquals(256, cert.getKeySize());
     }
 
-    @Test @DisplayName("getNamedGroup: tc26a256 = GRP_GC256A")
+    @Test
+    @DisplayName("именованная группа: tc26a256 = GRP_GC256A")
     void testNamedGroup() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
-        // createSelfSignedCert использует tc26a256 → GRP_GC256A (0x0022)
-        assertEquals(TlsConstants.GRP_GC256A, cert.getNamedGroup());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
+        // createSelfSignedCert использует tc26a256 -> GRP_GC256A (0x0022)
+        assertEquals(TlsConstants.GRP_GC256A, TlsCertUtils.getNamedGroup(cert.getPublicKey()));
     }
 
-    @Test @DisplayName("getSubjectKeyIdentifier: null — тестовый сертификат без SKI-расширения")
+    @Test
+    @DisplayName("getSubjectKeyIdentifier: null — тестовый сертификат без SKI-расширения")
     void testSubjectKeyIdentifierNull() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         // buildTbsCertificate не добавляет SKI (2.5.29.14) — только SAN/KU/EKU/BC
         assertNull(cert.getSubjectKeyIdentifier());
     }
 
-    @Test @DisplayName("getAuthorityKeyIdentifier: null — тестовый сертификат без AKI-расширения")
+    @Test
+    @DisplayName("getAuthorityKeyIdentifier: null — тестовый сертификат без AKI-расширения")
     void testAuthorityKeyIdentifierNull() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         assertNull(cert.getAuthorityKeyIdentifier());
     }
 
-    @Test @DisplayName("getAiaUris: null — тестовый сертификат без AIA-расширения")
+    @Test
+    @DisplayName("getAiaUris: null — тестовый сертификат без AIA-расширения")
     void testAiaUrisNull() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         assertNull(cert.getAiaUris());
     }
 
-    @Test @DisplayName("matchesPrivateKey: свой ключ → true")
+    @Test
+    @DisplayName("matchesPrivateKey: свой ключ -> true")
     void testMatchesPrivateKeyTrue() {
         // Генерируем ключевую пару и сертификат через TlsTestHelper,
         // затем проверяем что matchesPrivateKey возвращает true для своего ключа
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.cryptoProA());
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(ECParameters.cryptoProA());
         assertTrue(bundle.cert.matchesPrivateKey(bundle.priv));
     }
 
-    @Test @DisplayName("matchesPrivateKey: null → false (NPE guard)")
+    @Test
+    @DisplayName("проверка ключа: null -> false (защита от NPE)")
     void testMatchesPrivateKeyNull() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         // matchesPrivateKey должен корректно обрабатывать null без NPE
         assertFalse(cert.matchesPrivateKey(null));
     }
 
-    @Test @DisplayName("matchesPrivateKey: чужой ключ → false")
+    @Test
+    @DisplayName("matchesPrivateKey: чужой ключ -> false")
     void testMatchesPrivateKeyWrongKey() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         // Сертификат на tc26a256, а ключ от cryptoProA — не совпадают
-        TlsTestHelper.CertBundle otherBundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle otherBundle =
+                TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         assertFalse(cert.matchesPrivateKey(otherBundle.priv));
     }
 
@@ -1241,39 +1433,44 @@ class TlsCertificateTest {
     // расширений, правильную длину подписи).
     // ------------------------------------------------------------------------
 
-    @Test @DisplayName("getSignatureValue: не пустой")
+    @Test
+    @DisplayName("getSignatureValue: не пустой")
     void testGetSignatureValue() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         // Подпись должна быть — проверяем что не null и не пустая
         assertNotNull(cert.getSignatureValue());
         assertTrue(cert.getSignatureValue().length > 0);
     }
 
-    @Test @DisplayName("getTBSCertificateBytes: не пустой")
+    @Test
+    @DisplayName("getTBSCertificateBytes: не пустой")
     void testGetTBSCertificateBytes() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         // TBS (TBSCertificate) — это всё кроме подписи, должен быть не пуст
         assertNotNull(cert.getTBSCertificateBytes());
         assertTrue(cert.getTBSCertificateBytes().length > 0);
     }
 
-    @Test @DisplayName("CDP: null — тестовый сертификат без CDP-расширения")
+    @Test
+    @DisplayName("CDP: null — тестовый сертификат без CDP-расширения")
     void testCdpUrisNull() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         // CRLDistributionPoints не добавляется в test buildTbsCertificate
         assertNull(cert.getCdpUris());
     }
 
-    @Test @DisplayName("CertificatePolicies: null — тестовый сертификат без CertificatePolicies")
+    @Test
+    @DisplayName("CertificatePolicies: null — тестовый сертификат без CertificatePolicies")
     void testCertificatePoliciesNull() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
         assertNull(cert.getCertificatePolicies());
     }
 
-    @Test @DisplayName("getSignatureValue: длина 64 байта для 256-битной кривой")
+    @Test
+    @DisplayName("getSignatureValue: длина 64 байта для 256-битной кривой")
     void testGetSignatureValueLength() throws Exception {
-        TlsCertificate cert = new TlsCertificate(createSelfSignedCert());
-        // tc26a256 → hlen=32 → r||s = 32+32 = 64 байта подписи
+        GostCertificate cert = new GostCertificate(createSelfSignedCert());
+        // tc26a256 -> hlen=32 -> r||s = 32+32 = 64 байта подписи
         assertEquals(64, cert.getSignatureValue().length);
     }
 
@@ -1283,7 +1480,7 @@ class TlsCertificateTest {
      * @param aiaUris URI для включения в AuthorityInfoAccess
      * @return TlsCertificate с AIA
      */
-    private static TlsCertificate createCertWithAia(String... aiaUris) throws Exception {
+    private static GostCertificate createCertWithAia(String... aiaUris) throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
         PublicKeyParameters pubKey = kp.getPublic();
@@ -1315,9 +1512,7 @@ class TlsCertificateTest {
         byte[] sigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
         byte[] cn = derSequence(derOid("2.5.4.3"), derUtf8String("Test"));
         byte[] dn = derSequence(derSet(cn));
-        byte[] validity = derSequence(
-                derTime("250101000000Z"),
-                derTime("21060101120000Z"));
+        byte[] validity = derSequence(derTime("250101000000Z"), derTime("21060101120000Z"));
         byte[] tbs = derSequence(version, serial, sigAlg, dn, validity, dn, spki, extensions);
 
         // Подпись
@@ -1325,7 +1520,7 @@ class TlsCertificateTest {
         byte[] sigAlgEncoded = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
         byte[] certDer = derSequence(tbs, sigAlgEncoded, derBitString(sig));
 
-        return new TlsCertificate(certDer);
+        return new GostCertificate(certDer);
     }
 
     /**
@@ -1350,17 +1545,15 @@ class TlsCertificateTest {
         byte[] cn = derSequence(derOid("2.5.4.3"), derUtf8String("Test"));
         byte[] dn = derSequence(derSet(cn));
 
-        byte[] validity = derSequence(
-                derTime("250101000000Z"),
-                derTime("21060101120000Z"));
+        byte[] validity = derSequence(derTime("250101000000Z"), derTime("21060101120000Z"));
 
         byte[] tbs = derSequence(version, serial, sigAlg, dn, validity, dn, spki);
         return tbs;
     }
 
     private static byte[] signTbs(byte[] tbs, PrivateKeyParameters privKey) throws Exception {
-        org.rssys.gost.api.Digest digest = new org.rssys.gost.api.Digest(
-                org.rssys.gost.api.Digest.Algorithm.STREEBOG_256);
+        org.rssys.gost.api.Digest digest =
+                new org.rssys.gost.api.Digest(org.rssys.gost.api.Digest.Algorithm.STREEBOG_256);
         digest.update(tbs, 0, tbs.length);
         byte[] hash = digest.digest();
         return Signature.signHash(hash, privKey);
@@ -1372,15 +1565,15 @@ class TlsCertificateTest {
 
     private static byte[] derInteger(int value) {
         if (value < 0x80) {
-            return derTlv(0x02, new byte[]{(byte) value});
+            return derTlv(0x02, new byte[] {(byte) value});
         }
         byte[] bytes;
         if (value < 0x100) {
-            bytes = new byte[]{(byte) value};
+            bytes = new byte[] {(byte) value};
         } else if (value < 0x10000) {
-            bytes = new byte[]{(byte) (value >> 8), (byte) value};
+            bytes = new byte[] {(byte) (value >> 8), (byte) value};
         } else {
-            bytes = new byte[]{(byte) (value >> 16), (byte) (value >> 8), (byte) value};
+            bytes = new byte[] {(byte) (value >> 16), (byte) (value >> 8), (byte) value};
         }
         return derTlv(0x02, bytes);
     }
@@ -1397,7 +1590,7 @@ class TlsCertificateTest {
 
     private static byte[] encodeOidBody(int[] arcs) {
         if (arcs.length < 2) {
-            throw new IllegalArgumentException("OID must have at least 2 arcs");
+            throw new IllegalArgumentException("OID должен содержать минимум 2 арки");
         }
         java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
         // Первые два компонента кодируются как 40*arcs[0] + arcs[1]
@@ -1471,15 +1664,15 @@ class TlsCertificateTest {
 
     private static byte[] derLength(int len) {
         if (len < 0x80) {
-            return new byte[]{(byte) len};
+            return new byte[] {(byte) len};
         }
         if (len < 0x100) {
-            return new byte[]{(byte) 0x81, (byte) len};
+            return new byte[] {(byte) 0x81, (byte) len};
         }
         if (len < 0x10000) {
-            return new byte[]{(byte) 0x82, (byte) (len >> 8), (byte) len};
+            return new byte[] {(byte) 0x82, (byte) (len >> 8), (byte) len};
         }
-        return new byte[]{(byte) 0x83, (byte) (len >> 16), (byte) (len >> 8), (byte) len};
+        return new byte[] {(byte) 0x83, (byte) (len >> 16), (byte) (len >> 8), (byte) len};
     }
 
     private static byte[] concat(byte[]... arrays) {
@@ -1501,22 +1694,30 @@ class TlsCertificateTest {
     private static byte[] buildDnWithCn(String value) {
         byte[] valueBytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         byte[] attr = derSequence(derOid("2.5.4.3"), derTlv(DerCodec.TAG_UTF8_STRING, valueBytes));
-        return derSequence(Set(attr));
+        return derSequence(encodeSet(attr));
     }
 
     /**
      * Создаёт минимальный самоподписанный сертификат с заданным subject/issuer DN.
      * Не добавляет расширений — сертификат годится только для тестов DN-парсинга.
      */
-    private static TlsCertificate certWithDn(byte[] dn) throws Exception {
+    private static GostCertificate certWithDn(byte[] dn) throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] tbs = buildTbs(kp.getPublic(), params, "20240501120000Z", "21060101120000Z",
-                null, null, null, dn, dn);
+        byte[] tbs =
+                buildTbs(
+                        kp.getPublic(),
+                        params,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        dn,
+                        dn);
         byte[] hash = doHash(tbs, params.hlen);
         byte[] sig = org.rssys.gost.api.Signature.signHash(hash, kp.getPrivate());
         byte[] certDer = derSequence(tbs, buildAlgId(params), derBitString(sig));
-        return new TlsCertificate(certDer);
+        return new GostCertificate(certDer);
     }
-
 }

@@ -29,8 +29,13 @@ public final class PskEntry {
      * <p>Все массивы клонируются — запись принимает владение данными.
      * Вызывающий код может затереть оригиналы.
      */
-    public PskEntry(byte[] ticket, long ticketLifetime, long ticketAgeAdd,
-                    byte[] ticketNonce, byte[] psk, long issueTime) {
+    public PskEntry(
+            byte[] ticket,
+            long ticketLifetime,
+            long ticketAgeAdd,
+            byte[] ticketNonce,
+            byte[] psk,
+            long issueTime) {
         this.ticket = ticket != null ? ticket.clone() : null;
         this.ticketLifetime = ticketLifetime;
         this.ticketAgeAdd = ticketAgeAdd;
@@ -39,12 +44,29 @@ public final class PskEntry {
         this.issueTime = issueTime;
     }
 
-    public byte[] getTicket() { return ticket != null ? ticket.clone() : null; }
-    public long getTicketLifetime() { return ticketLifetime; }
-    public long getTicketAgeAdd() { return ticketAgeAdd; }
-    public byte[] getTicketNonce() { return ticketNonce != null ? ticketNonce.clone() : null; }
-    public byte[] getPsk() { return psk != null ? psk.clone() : null; }
-    public long getIssueTime() { return issueTime; }
+    public byte[] getTicket() {
+        return ticket != null ? ticket.clone() : null;
+    }
+
+    public long getTicketLifetime() {
+        return ticketLifetime;
+    }
+
+    public long getTicketAgeAdd() {
+        return ticketAgeAdd;
+    }
+
+    public byte[] getTicketNonce() {
+        return ticketNonce != null ? ticketNonce.clone() : null;
+    }
+
+    public byte[] getPsk() {
+        return psk != null ? psk.clone() : null;
+    }
+
+    public long getIssueTime() {
+        return issueTime;
+    }
 
     /** @return true если тикет просрочен (относительно {@code now} в миллисекундах). */
     public boolean isExpired(long now) {

@@ -9,28 +9,28 @@ import org.rssys.gost.cipher.CipherParameters;
  * Корректность точки (нахождение на кривой) проверяется в {@link org.rssys.gost.signature.ECDSASigner#init}.
  */
 public final class PublicKeyParameters implements CipherParameters {
-  private final ECPoint q;
-  private final ECParameters params;
+    private final ECPoint q;
+    private final ECParameters params;
 
-  /**
-   * @param q      точка открытого ключа Q на эллиптической кривой
-   * @param params параметры кривой
-   * @throws IllegalArgumentException если {@code q} или {@code params} равны {@code null}
-   */
-  public PublicKeyParameters(ECPoint q, ECParameters params) {
-    if (q == null) throw new IllegalArgumentException("Q must not be null");
-    if (params == null) throw new IllegalArgumentException("params must not be null");
-    this.q = q;
-    this.params = params;
-  }
+    /**
+     * @param q      точка открытого ключа Q на эллиптической кривой
+     * @param params параметры кривой
+     * @throws IllegalArgumentException если {@code q} или {@code params} равны {@code null}
+     */
+    public PublicKeyParameters(ECPoint q, ECParameters params) {
+        if (q == null) throw new IllegalArgumentException("Q must not be null");
+        if (params == null) throw new IllegalArgumentException("params must not be null");
+        this.q = q;
+        this.params = params;
+    }
 
-  /** @return точка открытого ключа Q */
-  public ECPoint getQ() {
-    return q;
-  }
+    /** @return точка открытого ключа Q */
+    public ECPoint getQ() {
+        return q;
+    }
 
-  /** @return параметры кривой */
-  public ECParameters getParams() {
-    return params;
-  }
+    /** @return параметры кривой */
+    public ECParameters getParams() {
+        return params;
+    }
 }

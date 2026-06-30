@@ -1,12 +1,11 @@
 package org.rssys.gost.cipher;
 
-import org.rssys.gost.util.DataLengthException;
-import org.rssys.gost.util.OutputLengthException;
-
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 import java.util.Arrays;
+import org.rssys.gost.util.DataLengthException;
+import org.rssys.gost.util.OutputLengthException;
 
 /**
  * Реализация блочного шифра «Кузнечик» (Grasshopper) по ГОСТ Р 34.12-2015.
@@ -25,7 +24,7 @@ import java.util.Arrays;
  * байтовых операций.
  * <p>
  * Теперь: {@code T_HI_S[i][x]} и {@code T_LO_S[i][x]} хранят 8 байт результата как {@code long}.
- * На каждый раунд: 16 lookups → 32 long-XOR (вместо 256 байтовых). Таблицы ≈ 64 КБ —
+ * На каждый раунд: 16 lookups -> 32 long-XOR (вместо 256 байтовых). Таблицы ≈ 64 КБ —
  * укладываются в L2.
  *
  * <h3>PI встроен в T_HI_S / T_LO_S (только шифрование)</h3>
@@ -82,46 +81,78 @@ public final class Kuznyechik implements BlockCipher {
     // PI[x]     = S(x)    — прямая S-замена
     // PI_INV[x] = S⁻¹(x)  — обратная S-замена
     // Хранятся как int[] для удобства индексирования без знакового расширения.
-    private static final int[] PI     = new int[256];
+    private static final int[] PI = new int[256];
     private static final int[] PI_INV = new int[256];
 
     static {
         byte[] piBytes = {
-                (byte)0xFC,(byte)0xEE,(byte)0xDD,(byte)0x11,(byte)0xCF,(byte)0x6E,(byte)0x31,(byte)0x16,
-                (byte)0xFB,(byte)0xC4,(byte)0xFA,(byte)0xDA,(byte)0x23,(byte)0xC5,(byte)0x04,(byte)0x4D,
-                (byte)0xE9,(byte)0x77,(byte)0xF0,(byte)0xDB,(byte)0x93,(byte)0x2E,(byte)0x99,(byte)0xBA,
-                (byte)0x17,(byte)0x36,(byte)0xF1,(byte)0xBB,(byte)0x14,(byte)0xCD,(byte)0x5F,(byte)0xC1,
-                (byte)0xF9,(byte)0x18,(byte)0x65,(byte)0x5A,(byte)0xE2,(byte)0x5C,(byte)0xEF,(byte)0x21,
-                (byte)0x81,(byte)0x1C,(byte)0x3C,(byte)0x42,(byte)0x8B,(byte)0x01,(byte)0x8E,(byte)0x4F,
-                (byte)0x05,(byte)0x84,(byte)0x02,(byte)0xAE,(byte)0xE3,(byte)0x6A,(byte)0x8F,(byte)0xA0,
-                (byte)0x06,(byte)0x0B,(byte)0xED,(byte)0x98,(byte)0x7F,(byte)0xD4,(byte)0xD3,(byte)0x1F,
-                (byte)0xEB,(byte)0x34,(byte)0x2C,(byte)0x51,(byte)0xEA,(byte)0xC8,(byte)0x48,(byte)0xAB,
-                (byte)0xF2,(byte)0x2A,(byte)0x68,(byte)0xA2,(byte)0xFD,(byte)0x3A,(byte)0xCE,(byte)0xCC,
-                (byte)0xB5,(byte)0x70,(byte)0x0E,(byte)0x56,(byte)0x08,(byte)0x0C,(byte)0x76,(byte)0x12,
-                (byte)0xBF,(byte)0x72,(byte)0x13,(byte)0x47,(byte)0x9C,(byte)0xB7,(byte)0x5D,(byte)0x87,
-                (byte)0x15,(byte)0xA1,(byte)0x96,(byte)0x29,(byte)0x10,(byte)0x7B,(byte)0x9A,(byte)0xC7,
-                (byte)0xF3,(byte)0x91,(byte)0x78,(byte)0x6F,(byte)0x9D,(byte)0x9E,(byte)0xB2,(byte)0xB1,
-                (byte)0x32,(byte)0x75,(byte)0x19,(byte)0x3D,(byte)0xFF,(byte)0x35,(byte)0x8A,(byte)0x7E,
-                (byte)0x6D,(byte)0x54,(byte)0xC6,(byte)0x80,(byte)0xC3,(byte)0xBD,(byte)0x0D,(byte)0x57,
-                (byte)0xDF,(byte)0xF5,(byte)0x24,(byte)0xA9,(byte)0x3E,(byte)0xA8,(byte)0x43,(byte)0xC9,
-                (byte)0xD7,(byte)0x79,(byte)0xD6,(byte)0xF6,(byte)0x7C,(byte)0x22,(byte)0xB9,(byte)0x03,
-                (byte)0xE0,(byte)0x0F,(byte)0xEC,(byte)0xDE,(byte)0x7A,(byte)0x94,(byte)0xB0,(byte)0xBC,
-                (byte)0xDC,(byte)0xE8,(byte)0x28,(byte)0x50,(byte)0x4E,(byte)0x33,(byte)0x0A,(byte)0x4A,
-                (byte)0xA7,(byte)0x97,(byte)0x60,(byte)0x73,(byte)0x1E,(byte)0x00,(byte)0x62,(byte)0x44,
-                (byte)0x1A,(byte)0xB8,(byte)0x38,(byte)0x82,(byte)0x64,(byte)0x9F,(byte)0x26,(byte)0x41,
-                (byte)0xAD,(byte)0x45,(byte)0x46,(byte)0x92,(byte)0x27,(byte)0x5E,(byte)0x55,(byte)0x2F,
-                (byte)0x8C,(byte)0xA3,(byte)0xA5,(byte)0x7D,(byte)0x69,(byte)0xD5,(byte)0x95,(byte)0x3B,
-                (byte)0x07,(byte)0x58,(byte)0xB3,(byte)0x40,(byte)0x86,(byte)0xAC,(byte)0x1D,(byte)0xF7,
-                (byte)0x30,(byte)0x37,(byte)0x6B,(byte)0xE4,(byte)0x88,(byte)0xD9,(byte)0xE7,(byte)0x89,
-                (byte)0xE1,(byte)0x1B,(byte)0x83,(byte)0x49,(byte)0x4C,(byte)0x3F,(byte)0xF8,(byte)0xFE,
-                (byte)0x8D,(byte)0x53,(byte)0xAA,(byte)0x90,(byte)0xCA,(byte)0xD8,(byte)0x85,(byte)0x61,
-                (byte)0x20,(byte)0x71,(byte)0x67,(byte)0xA4,(byte)0x2D,(byte)0x2B,(byte)0x09,(byte)0x5B,
-                (byte)0xCB,(byte)0x9B,(byte)0x25,(byte)0xD0,(byte)0xBE,(byte)0xE5,(byte)0x6C,(byte)0x52,
-                (byte)0x59,(byte)0xA6,(byte)0x74,(byte)0xD2,(byte)0xE6,(byte)0xF4,(byte)0xB4,(byte)0xC0,
-                (byte)0xD1,(byte)0x66,(byte)0xAF,(byte)0xC2,(byte)0x39,(byte)0x4B,(byte)0x63,(byte)0xB6
+            (byte) 0xFC, (byte) 0xEE, (byte) 0xDD, (byte) 0x11, (byte) 0xCF, (byte) 0x6E,
+                    (byte) 0x31, (byte) 0x16,
+            (byte) 0xFB, (byte) 0xC4, (byte) 0xFA, (byte) 0xDA, (byte) 0x23, (byte) 0xC5,
+                    (byte) 0x04, (byte) 0x4D,
+            (byte) 0xE9, (byte) 0x77, (byte) 0xF0, (byte) 0xDB, (byte) 0x93, (byte) 0x2E,
+                    (byte) 0x99, (byte) 0xBA,
+            (byte) 0x17, (byte) 0x36, (byte) 0xF1, (byte) 0xBB, (byte) 0x14, (byte) 0xCD,
+                    (byte) 0x5F, (byte) 0xC1,
+            (byte) 0xF9, (byte) 0x18, (byte) 0x65, (byte) 0x5A, (byte) 0xE2, (byte) 0x5C,
+                    (byte) 0xEF, (byte) 0x21,
+            (byte) 0x81, (byte) 0x1C, (byte) 0x3C, (byte) 0x42, (byte) 0x8B, (byte) 0x01,
+                    (byte) 0x8E, (byte) 0x4F,
+            (byte) 0x05, (byte) 0x84, (byte) 0x02, (byte) 0xAE, (byte) 0xE3, (byte) 0x6A,
+                    (byte) 0x8F, (byte) 0xA0,
+            (byte) 0x06, (byte) 0x0B, (byte) 0xED, (byte) 0x98, (byte) 0x7F, (byte) 0xD4,
+                    (byte) 0xD3, (byte) 0x1F,
+            (byte) 0xEB, (byte) 0x34, (byte) 0x2C, (byte) 0x51, (byte) 0xEA, (byte) 0xC8,
+                    (byte) 0x48, (byte) 0xAB,
+            (byte) 0xF2, (byte) 0x2A, (byte) 0x68, (byte) 0xA2, (byte) 0xFD, (byte) 0x3A,
+                    (byte) 0xCE, (byte) 0xCC,
+            (byte) 0xB5, (byte) 0x70, (byte) 0x0E, (byte) 0x56, (byte) 0x08, (byte) 0x0C,
+                    (byte) 0x76, (byte) 0x12,
+            (byte) 0xBF, (byte) 0x72, (byte) 0x13, (byte) 0x47, (byte) 0x9C, (byte) 0xB7,
+                    (byte) 0x5D, (byte) 0x87,
+            (byte) 0x15, (byte) 0xA1, (byte) 0x96, (byte) 0x29, (byte) 0x10, (byte) 0x7B,
+                    (byte) 0x9A, (byte) 0xC7,
+            (byte) 0xF3, (byte) 0x91, (byte) 0x78, (byte) 0x6F, (byte) 0x9D, (byte) 0x9E,
+                    (byte) 0xB2, (byte) 0xB1,
+            (byte) 0x32, (byte) 0x75, (byte) 0x19, (byte) 0x3D, (byte) 0xFF, (byte) 0x35,
+                    (byte) 0x8A, (byte) 0x7E,
+            (byte) 0x6D, (byte) 0x54, (byte) 0xC6, (byte) 0x80, (byte) 0xC3, (byte) 0xBD,
+                    (byte) 0x0D, (byte) 0x57,
+            (byte) 0xDF, (byte) 0xF5, (byte) 0x24, (byte) 0xA9, (byte) 0x3E, (byte) 0xA8,
+                    (byte) 0x43, (byte) 0xC9,
+            (byte) 0xD7, (byte) 0x79, (byte) 0xD6, (byte) 0xF6, (byte) 0x7C, (byte) 0x22,
+                    (byte) 0xB9, (byte) 0x03,
+            (byte) 0xE0, (byte) 0x0F, (byte) 0xEC, (byte) 0xDE, (byte) 0x7A, (byte) 0x94,
+                    (byte) 0xB0, (byte) 0xBC,
+            (byte) 0xDC, (byte) 0xE8, (byte) 0x28, (byte) 0x50, (byte) 0x4E, (byte) 0x33,
+                    (byte) 0x0A, (byte) 0x4A,
+            (byte) 0xA7, (byte) 0x97, (byte) 0x60, (byte) 0x73, (byte) 0x1E, (byte) 0x00,
+                    (byte) 0x62, (byte) 0x44,
+            (byte) 0x1A, (byte) 0xB8, (byte) 0x38, (byte) 0x82, (byte) 0x64, (byte) 0x9F,
+                    (byte) 0x26, (byte) 0x41,
+            (byte) 0xAD, (byte) 0x45, (byte) 0x46, (byte) 0x92, (byte) 0x27, (byte) 0x5E,
+                    (byte) 0x55, (byte) 0x2F,
+            (byte) 0x8C, (byte) 0xA3, (byte) 0xA5, (byte) 0x7D, (byte) 0x69, (byte) 0xD5,
+                    (byte) 0x95, (byte) 0x3B,
+            (byte) 0x07, (byte) 0x58, (byte) 0xB3, (byte) 0x40, (byte) 0x86, (byte) 0xAC,
+                    (byte) 0x1D, (byte) 0xF7,
+            (byte) 0x30, (byte) 0x37, (byte) 0x6B, (byte) 0xE4, (byte) 0x88, (byte) 0xD9,
+                    (byte) 0xE7, (byte) 0x89,
+            (byte) 0xE1, (byte) 0x1B, (byte) 0x83, (byte) 0x49, (byte) 0x4C, (byte) 0x3F,
+                    (byte) 0xF8, (byte) 0xFE,
+            (byte) 0x8D, (byte) 0x53, (byte) 0xAA, (byte) 0x90, (byte) 0xCA, (byte) 0xD8,
+                    (byte) 0x85, (byte) 0x61,
+            (byte) 0x20, (byte) 0x71, (byte) 0x67, (byte) 0xA4, (byte) 0x2D, (byte) 0x2B,
+                    (byte) 0x09, (byte) 0x5B,
+            (byte) 0xCB, (byte) 0x9B, (byte) 0x25, (byte) 0xD0, (byte) 0xBE, (byte) 0xE5,
+                    (byte) 0x6C, (byte) 0x52,
+            (byte) 0x59, (byte) 0xA6, (byte) 0x74, (byte) 0xD2, (byte) 0xE6, (byte) 0xF4,
+                    (byte) 0xB4, (byte) 0xC0,
+            (byte) 0xD1, (byte) 0x66, (byte) 0xAF, (byte) 0xC2, (byte) 0x39, (byte) 0x4B,
+                    (byte) 0x63, (byte) 0xB6
         };
         for (int i = 0; i < 256; i++) {
-            PI[i]         = piBytes[i] & 0xFF;
+            PI[i] = piBytes[i] & 0xFF;
             PI_INV[PI[i]] = i;
         }
     }
@@ -133,8 +164,8 @@ public final class Kuznyechik implements BlockCipher {
     // Коэффициенты линейного преобразования L (вектор λ).
     // L реализуется как 16 применений регистра сдвига с обратной связью (R-шаг).
     private static final int[] L_FACTORS = {
-            0x94, 0x20, 0x85, 0x10, 0xC2, 0xC0, 0x01, 0xFB,
-            0x01, 0xC0, 0xC2, 0x10, 0x85, 0x20, 0x94, 0x01
+        0x94, 0x20, 0x85, 0x10, 0xC2, 0xC0, 0x01, 0xFB,
+        0x01, 0xC0, 0xC2, 0x10, 0x85, 0x20, 0x94, 0x01
     };
 
     // Неприводимый полином GF(2^8): x^8 + x^7 + x^6 + x + 1 = 0xC3
@@ -161,11 +192,11 @@ public final class Kuznyechik implements BlockCipher {
     //
     // Суммарный размер: ≈ 144 КБ — L2-resident на современных CPU.
     // -----------------------------------------------------------------------
-    private static final long[][] T_HI_S   = new long[16][256];
-    private static final long[][] T_LO_S   = new long[16][256];
+    private static final long[][] T_HI_S = new long[16][256];
+    private static final long[][] T_LO_S = new long[16][256];
     private static final long[][] T_INV_HI = new long[16][256];
     private static final long[][] T_INV_LO = new long[16][256];
-    private static final long[][] SI_HI    = new long[8][256];
+    private static final long[][] SI_HI = new long[8][256];
 
     static {
         buildAllTables();
@@ -211,7 +242,10 @@ public final class Kuznyechik implements BlockCipher {
 
     /** Полное L или L⁻¹ преобразование: 16 применений R или R⁻¹. */
     private static void applyL(byte[] a, boolean inv) {
-        for (int s = 0; s < 16; s++) { if (inv) applyRInv(a); else applyR(a); }
+        for (int s = 0; s < 16; s++) {
+            if (inv) applyRInv(a);
+            else applyR(a);
+        }
     }
 
     private static void buildAllTables() {
@@ -264,10 +298,14 @@ public final class Kuznyechik implements BlockCipher {
     private long encBufHi, encBufLo;
 
     /** Результат последнего {@link #encryptToFields}: старшие 8 байт зашифрованного блока. */
-    public long getEncBufHi() { return encBufHi; }
+    public long getEncBufHi() {
+        return encBufHi;
+    }
 
     /** Результат последнего {@link #encryptToFields}: младшие 8 байт зашифрованного блока. */
-    public long getEncBufLo() { return encBufLo; }
+    public long getEncBufLo() {
+        return encBufLo;
+    }
 
     @Override
     public String getAlgorithmName() {
@@ -280,7 +318,8 @@ public final class Kuznyechik implements BlockCipher {
     }
 
     @Override
-    public void init(boolean forEncryption, CipherParameters params) throws IllegalArgumentException {
+    public void init(boolean forEncryption, CipherParameters params)
+            throws IllegalArgumentException {
         if (!(params instanceof SymmetricKey sk)) {
             throw new IllegalArgumentException(
                     "invalid parameter passed to Kuznyechik.init - " + params.getClass().getName());
@@ -293,7 +332,7 @@ public final class Kuznyechik implements BlockCipher {
         Arrays.fill(skHi, 0L);
         Arrays.fill(skLo, 0L);
         this.keyInitialized = false;
-        this.forEncryption  = forEncryption;
+        this.forEncryption = forEncryption;
         generateSubKeys(key);
         this.keyInitialized = true;
     }
@@ -301,11 +340,12 @@ public final class Kuznyechik implements BlockCipher {
     @Override
     public int processBlock(byte[] in, int inOff, byte[] out, int outOff)
             throws DataLengthException, IllegalStateException {
-        if (!keyInitialized)           throw new IllegalStateException("Kuznyechik not initialized");
-        if (inOff  + BLOCK_SIZE > in.length)  throw new DataLengthException("input buffer too short");
-        if (outOff + BLOCK_SIZE > out.length) throw new OutputLengthException("output buffer too short");
+        if (!keyInitialized) throw new IllegalStateException("Kuznyechik not initialized");
+        if (inOff + BLOCK_SIZE > in.length) throw new DataLengthException("input buffer too short");
+        if (outOff + BLOCK_SIZE > out.length)
+            throw new OutputLengthException("output buffer too short");
         if (forEncryption) encryptBlockInlined(in, inOff, out, outOff);
-        else               decryptBlockInlined(in, inOff, out, outOff);
+        else decryptBlockInlined(in, inOff, out, outOff);
         return BLOCK_SIZE;
     }
 
@@ -331,7 +371,7 @@ public final class Kuznyechik implements BlockCipher {
     // -----------------------------------------------------------------------
     // Шифрование: 9 раундов LSX + финальный XOR с K9
     //
-    // LSX = XOR с ключом → S-замена (PI, встроена в T_HI_S/T_LO_S) → L-преобразование.
+    // LSX = XOR с ключом -> S-замена (PI, встроена в T_HI_S/T_LO_S) -> L-преобразование.
     // Весь граф раундов виден JIT в одном методе: hi/lo держатся в регистрах без spill,
     // 32 независимых XOR на раунд переупорядочиваются планировщиком.
     // -----------------------------------------------------------------------
@@ -347,14 +387,14 @@ public final class Kuznyechik implements BlockCipher {
         }
 
         // Финальный XOR с последним ключом (без S и L — ГОСТ Р 34.12-2015, §4.2)
-        LONG_BE.set(out, outOff,     hi ^ skHi[9]);
+        LONG_BE.set(out, outOff, hi ^ skHi[9]);
         LONG_BE.set(out, outOff + 8, lo ^ skLo[9]);
     }
 
     // -----------------------------------------------------------------------
     // Расшифрование: 9 раундов XSL⁻¹ + финальный XOR с K0
     //
-    // XSL⁻¹ = XOR с ключом → L⁻¹ (через T_INV) → S⁻¹ (через SI_HI).
+    // XSL⁻¹ = XOR с ключом -> L⁻¹ (через T_INV) -> S⁻¹ (через SI_HI).
     // Порядок S⁻¹ после L⁻¹ делает невозможным встраивание PI_INV в T_INV по входу
     // (в отличие от шифрования). SI_HI[p][b] хранит (long)PI_INV[b]
     // сдвинутый на позицию p — побайтовый OR собирает результат без shift-chains.
@@ -372,19 +412,29 @@ public final class Kuznyechik implements BlockCipher {
             long rlo = invLLo(xhi, xlo);
 
             // S⁻¹ через SI_HI: каждый байт вносит вклад на свою позицию в long
-            hi = SI_HI[0][(int)(rhi >>> 56) & 0xFF] | SI_HI[1][(int)(rhi >>> 48) & 0xFF]
-                    | SI_HI[2][(int)(rhi >>> 40) & 0xFF] | SI_HI[3][(int)(rhi >>> 32) & 0xFF]
-                    | SI_HI[4][(int)(rhi >>> 24) & 0xFF] | SI_HI[5][(int)(rhi >>> 16) & 0xFF]
-                    | SI_HI[6][(int)(rhi >>>  8) & 0xFF] | SI_HI[7][(int) rhi          & 0xFF];
+            hi =
+                    SI_HI[0][(int) (rhi >>> 56) & 0xFF]
+                            | SI_HI[1][(int) (rhi >>> 48) & 0xFF]
+                            | SI_HI[2][(int) (rhi >>> 40) & 0xFF]
+                            | SI_HI[3][(int) (rhi >>> 32) & 0xFF]
+                            | SI_HI[4][(int) (rhi >>> 24) & 0xFF]
+                            | SI_HI[5][(int) (rhi >>> 16) & 0xFF]
+                            | SI_HI[6][(int) (rhi >>> 8) & 0xFF]
+                            | SI_HI[7][(int) rhi & 0xFF];
 
-            lo = SI_HI[0][(int)(rlo >>> 56) & 0xFF] | SI_HI[1][(int)(rlo >>> 48) & 0xFF]
-                    | SI_HI[2][(int)(rlo >>> 40) & 0xFF] | SI_HI[3][(int)(rlo >>> 32) & 0xFF]
-                    | SI_HI[4][(int)(rlo >>> 24) & 0xFF] | SI_HI[5][(int)(rlo >>> 16) & 0xFF]
-                    | SI_HI[6][(int)(rlo >>>  8) & 0xFF] | SI_HI[7][(int) rlo          & 0xFF];
+            lo =
+                    SI_HI[0][(int) (rlo >>> 56) & 0xFF]
+                            | SI_HI[1][(int) (rlo >>> 48) & 0xFF]
+                            | SI_HI[2][(int) (rlo >>> 40) & 0xFF]
+                            | SI_HI[3][(int) (rlo >>> 32) & 0xFF]
+                            | SI_HI[4][(int) (rlo >>> 24) & 0xFF]
+                            | SI_HI[5][(int) (rlo >>> 16) & 0xFF]
+                            | SI_HI[6][(int) (rlo >>> 8) & 0xFF]
+                            | SI_HI[7][(int) rlo & 0xFF];
         }
 
         // Финальный XOR с K0
-        LONG_BE.set(out, outOff,     hi ^ skHi[0]);
+        LONG_BE.set(out, outOff, hi ^ skHi[0]);
         LONG_BE.set(out, outOff + 8, lo ^ skLo[0]);
     }
 
@@ -397,50 +447,82 @@ public final class Kuznyechik implements BlockCipher {
 
     /** Верхние 8 байт результата LSX(xhi, xlo): S-замена через T_HI_S + L. */
     private static long lsxHi(long xhi, long xlo) {
-        return T_HI_S[ 0][(int)(xhi >>> 56) & 0xFF] ^ T_HI_S[ 1][(int)(xhi >>> 48) & 0xFF]
-                ^ T_HI_S[ 2][(int)(xhi >>> 40) & 0xFF] ^ T_HI_S[ 3][(int)(xhi >>> 32) & 0xFF]
-                ^ T_HI_S[ 4][(int)(xhi >>> 24) & 0xFF] ^ T_HI_S[ 5][(int)(xhi >>> 16) & 0xFF]
-                ^ T_HI_S[ 6][(int)(xhi >>>  8) & 0xFF] ^ T_HI_S[ 7][(int) xhi          & 0xFF]
-                ^ T_HI_S[ 8][(int)(xlo >>> 56) & 0xFF] ^ T_HI_S[ 9][(int)(xlo >>> 48) & 0xFF]
-                ^ T_HI_S[10][(int)(xlo >>> 40) & 0xFF] ^ T_HI_S[11][(int)(xlo >>> 32) & 0xFF]
-                ^ T_HI_S[12][(int)(xlo >>> 24) & 0xFF] ^ T_HI_S[13][(int)(xlo >>> 16) & 0xFF]
-                ^ T_HI_S[14][(int)(xlo >>>  8) & 0xFF] ^ T_HI_S[15][(int) xlo          & 0xFF];
+        return T_HI_S[0][(int) (xhi >>> 56) & 0xFF]
+                ^ T_HI_S[1][(int) (xhi >>> 48) & 0xFF]
+                ^ T_HI_S[2][(int) (xhi >>> 40) & 0xFF]
+                ^ T_HI_S[3][(int) (xhi >>> 32) & 0xFF]
+                ^ T_HI_S[4][(int) (xhi >>> 24) & 0xFF]
+                ^ T_HI_S[5][(int) (xhi >>> 16) & 0xFF]
+                ^ T_HI_S[6][(int) (xhi >>> 8) & 0xFF]
+                ^ T_HI_S[7][(int) xhi & 0xFF]
+                ^ T_HI_S[8][(int) (xlo >>> 56) & 0xFF]
+                ^ T_HI_S[9][(int) (xlo >>> 48) & 0xFF]
+                ^ T_HI_S[10][(int) (xlo >>> 40) & 0xFF]
+                ^ T_HI_S[11][(int) (xlo >>> 32) & 0xFF]
+                ^ T_HI_S[12][(int) (xlo >>> 24) & 0xFF]
+                ^ T_HI_S[13][(int) (xlo >>> 16) & 0xFF]
+                ^ T_HI_S[14][(int) (xlo >>> 8) & 0xFF]
+                ^ T_HI_S[15][(int) xlo & 0xFF];
     }
 
     /** Нижние 8 байт результата LSX(xhi, xlo): S-замена через T_LO_S + L. */
     private static long lsxLo(long xhi, long xlo) {
-        return T_LO_S[ 0][(int)(xhi >>> 56) & 0xFF] ^ T_LO_S[ 1][(int)(xhi >>> 48) & 0xFF]
-                ^ T_LO_S[ 2][(int)(xhi >>> 40) & 0xFF] ^ T_LO_S[ 3][(int)(xhi >>> 32) & 0xFF]
-                ^ T_LO_S[ 4][(int)(xhi >>> 24) & 0xFF] ^ T_LO_S[ 5][(int)(xhi >>> 16) & 0xFF]
-                ^ T_LO_S[ 6][(int)(xhi >>>  8) & 0xFF] ^ T_LO_S[ 7][(int) xhi          & 0xFF]
-                ^ T_LO_S[ 8][(int)(xlo >>> 56) & 0xFF] ^ T_LO_S[ 9][(int)(xlo >>> 48) & 0xFF]
-                ^ T_LO_S[10][(int)(xlo >>> 40) & 0xFF] ^ T_LO_S[11][(int)(xlo >>> 32) & 0xFF]
-                ^ T_LO_S[12][(int)(xlo >>> 24) & 0xFF] ^ T_LO_S[13][(int)(xlo >>> 16) & 0xFF]
-                ^ T_LO_S[14][(int)(xlo >>>  8) & 0xFF] ^ T_LO_S[15][(int) xlo          & 0xFF];
+        return T_LO_S[0][(int) (xhi >>> 56) & 0xFF]
+                ^ T_LO_S[1][(int) (xhi >>> 48) & 0xFF]
+                ^ T_LO_S[2][(int) (xhi >>> 40) & 0xFF]
+                ^ T_LO_S[3][(int) (xhi >>> 32) & 0xFF]
+                ^ T_LO_S[4][(int) (xhi >>> 24) & 0xFF]
+                ^ T_LO_S[5][(int) (xhi >>> 16) & 0xFF]
+                ^ T_LO_S[6][(int) (xhi >>> 8) & 0xFF]
+                ^ T_LO_S[7][(int) xhi & 0xFF]
+                ^ T_LO_S[8][(int) (xlo >>> 56) & 0xFF]
+                ^ T_LO_S[9][(int) (xlo >>> 48) & 0xFF]
+                ^ T_LO_S[10][(int) (xlo >>> 40) & 0xFF]
+                ^ T_LO_S[11][(int) (xlo >>> 32) & 0xFF]
+                ^ T_LO_S[12][(int) (xlo >>> 24) & 0xFF]
+                ^ T_LO_S[13][(int) (xlo >>> 16) & 0xFF]
+                ^ T_LO_S[14][(int) (xlo >>> 8) & 0xFF]
+                ^ T_LO_S[15][(int) xlo & 0xFF];
     }
 
     /** Верхние 8 байт результата L⁻¹(xhi, xlo) через T_INV_HI (без S⁻¹). */
     private static long invLHi(long xhi, long xlo) {
-        return T_INV_HI[ 0][(int)(xhi >>> 56) & 0xFF] ^ T_INV_HI[ 1][(int)(xhi >>> 48) & 0xFF]
-                ^ T_INV_HI[ 2][(int)(xhi >>> 40) & 0xFF] ^ T_INV_HI[ 3][(int)(xhi >>> 32) & 0xFF]
-                ^ T_INV_HI[ 4][(int)(xhi >>> 24) & 0xFF] ^ T_INV_HI[ 5][(int)(xhi >>> 16) & 0xFF]
-                ^ T_INV_HI[ 6][(int)(xhi >>>  8) & 0xFF] ^ T_INV_HI[ 7][(int) xhi          & 0xFF]
-                ^ T_INV_HI[ 8][(int)(xlo >>> 56) & 0xFF] ^ T_INV_HI[ 9][(int)(xlo >>> 48) & 0xFF]
-                ^ T_INV_HI[10][(int)(xlo >>> 40) & 0xFF] ^ T_INV_HI[11][(int)(xlo >>> 32) & 0xFF]
-                ^ T_INV_HI[12][(int)(xlo >>> 24) & 0xFF] ^ T_INV_HI[13][(int)(xlo >>> 16) & 0xFF]
-                ^ T_INV_HI[14][(int)(xlo >>>  8) & 0xFF] ^ T_INV_HI[15][(int) xlo          & 0xFF];
+        return T_INV_HI[0][(int) (xhi >>> 56) & 0xFF]
+                ^ T_INV_HI[1][(int) (xhi >>> 48) & 0xFF]
+                ^ T_INV_HI[2][(int) (xhi >>> 40) & 0xFF]
+                ^ T_INV_HI[3][(int) (xhi >>> 32) & 0xFF]
+                ^ T_INV_HI[4][(int) (xhi >>> 24) & 0xFF]
+                ^ T_INV_HI[5][(int) (xhi >>> 16) & 0xFF]
+                ^ T_INV_HI[6][(int) (xhi >>> 8) & 0xFF]
+                ^ T_INV_HI[7][(int) xhi & 0xFF]
+                ^ T_INV_HI[8][(int) (xlo >>> 56) & 0xFF]
+                ^ T_INV_HI[9][(int) (xlo >>> 48) & 0xFF]
+                ^ T_INV_HI[10][(int) (xlo >>> 40) & 0xFF]
+                ^ T_INV_HI[11][(int) (xlo >>> 32) & 0xFF]
+                ^ T_INV_HI[12][(int) (xlo >>> 24) & 0xFF]
+                ^ T_INV_HI[13][(int) (xlo >>> 16) & 0xFF]
+                ^ T_INV_HI[14][(int) (xlo >>> 8) & 0xFF]
+                ^ T_INV_HI[15][(int) xlo & 0xFF];
     }
 
     /** Нижние 8 байт результата L⁻¹(xhi, xlo) через T_INV_LO (без S⁻¹). */
     private static long invLLo(long xhi, long xlo) {
-        return T_INV_LO[ 0][(int)(xhi >>> 56) & 0xFF] ^ T_INV_LO[ 1][(int)(xhi >>> 48) & 0xFF]
-                ^ T_INV_LO[ 2][(int)(xhi >>> 40) & 0xFF] ^ T_INV_LO[ 3][(int)(xhi >>> 32) & 0xFF]
-                ^ T_INV_LO[ 4][(int)(xhi >>> 24) & 0xFF] ^ T_INV_LO[ 5][(int)(xhi >>> 16) & 0xFF]
-                ^ T_INV_LO[ 6][(int)(xhi >>>  8) & 0xFF] ^ T_INV_LO[ 7][(int) xhi          & 0xFF]
-                ^ T_INV_LO[ 8][(int)(xlo >>> 56) & 0xFF] ^ T_INV_LO[ 9][(int)(xlo >>> 48) & 0xFF]
-                ^ T_INV_LO[10][(int)(xlo >>> 40) & 0xFF] ^ T_INV_LO[11][(int)(xlo >>> 32) & 0xFF]
-                ^ T_INV_LO[12][(int)(xlo >>> 24) & 0xFF] ^ T_INV_LO[13][(int)(xlo >>> 16) & 0xFF]
-                ^ T_INV_LO[14][(int)(xlo >>>  8) & 0xFF] ^ T_INV_LO[15][(int) xlo          & 0xFF];
+        return T_INV_LO[0][(int) (xhi >>> 56) & 0xFF]
+                ^ T_INV_LO[1][(int) (xhi >>> 48) & 0xFF]
+                ^ T_INV_LO[2][(int) (xhi >>> 40) & 0xFF]
+                ^ T_INV_LO[3][(int) (xhi >>> 32) & 0xFF]
+                ^ T_INV_LO[4][(int) (xhi >>> 24) & 0xFF]
+                ^ T_INV_LO[5][(int) (xhi >>> 16) & 0xFF]
+                ^ T_INV_LO[6][(int) (xhi >>> 8) & 0xFF]
+                ^ T_INV_LO[7][(int) xhi & 0xFF]
+                ^ T_INV_LO[8][(int) (xlo >>> 56) & 0xFF]
+                ^ T_INV_LO[9][(int) (xlo >>> 48) & 0xFF]
+                ^ T_INV_LO[10][(int) (xlo >>> 40) & 0xFF]
+                ^ T_INV_LO[11][(int) (xlo >>> 32) & 0xFF]
+                ^ T_INV_LO[12][(int) (xlo >>> 24) & 0xFF]
+                ^ T_INV_LO[13][(int) (xlo >>> 16) & 0xFF]
+                ^ T_INV_LO[14][(int) (xlo >>> 8) & 0xFF]
+                ^ T_INV_LO[15][(int) xlo & 0xFF];
     }
 
     // -----------------------------------------------------------------------
@@ -485,8 +567,10 @@ public final class Kuznyechik implements BlockCipher {
         long yhi = (long) LONG_BE.get(key, 16);
         long ylo = (long) LONG_BE.get(key, 24);
 
-        skHi[0] = xhi; skLo[0] = xlo;
-        skHi[1] = yhi; skLo[1] = ylo;
+        skHi[0] = xhi;
+        skLo[0] = xlo;
+        skHi[1] = yhi;
+        skLo[1] = ylo;
 
         // 4 итерации по 8 раундов функции Фейстеля F(C_n, x, y)
         byte[] cBuf = new byte[16];
@@ -503,11 +587,15 @@ public final class Kuznyechik implements BlockCipher {
                 long txhi = chi ^ xhi, txlo = clo ^ xlo;
                 long tmpHi = lsxHi(txhi, txlo) ^ yhi;
                 long tmpLo = lsxLo(txhi, txlo) ^ ylo;
-                yhi = xhi; ylo = xlo;
-                xhi = tmpHi; xlo = tmpLo;
+                yhi = xhi;
+                ylo = xlo;
+                xhi = tmpHi;
+                xlo = tmpLo;
             }
-            skHi[2 * i]     = xhi; skLo[2 * i]     = xlo;
-            skHi[2 * i + 1] = yhi; skLo[2 * i + 1] = ylo;
+            skHi[2 * i] = xhi;
+            skLo[2 * i] = xlo;
+            skHi[2 * i + 1] = yhi;
+            skLo[2 * i + 1] = ylo;
         }
     }
 }

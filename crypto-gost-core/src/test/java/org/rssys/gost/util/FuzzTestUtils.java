@@ -11,8 +11,7 @@ package org.rssys.gost.util;
  */
 public final class FuzzTestUtils {
 
-    private FuzzTestUtils() {
-    }
+    private FuzzTestUtils() {}
 
     /**
      * Перебрасывает RuntimeException, если это баг (AIOOBE, NPE,

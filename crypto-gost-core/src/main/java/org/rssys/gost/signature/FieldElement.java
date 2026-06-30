@@ -52,26 +52,31 @@ public final class FieldElement {
          * Модуль p в виде массива лимбов (little-endian, 64-бит).
          */
         final long[] p;
+
         /**
          * Число лимбов: 4 для 256-бит, 8 для 512-бит.
          */
         final int n;
+
         /**
          * Константа Монтгомери: {@code m0 = −p⁻¹ mod 2^64}.
          * Используется в inner loop алгоритма CIOS.
          */
         final long m0;
+
         /**
          * {@code R mod p = 2^(64n) mod p} — используется для конвертации в форму Монтгомери.
          * Хранится в виде лимбов.
          */
         final long[] rModP;
+
         /**
          * p − 2 — константа для инверсии через малую теорему Ферма a^(p−2) mod p.
          */
         final BigInteger expPMinus2;
+
         /**
-         * {@code R² mod p} — используется для конвертации {@code a → a·R mod p}
+         * {@code R² mod p} — используется для конвертации {@code a -> a·R mod p}
          * через одно {@code montMul(a, R²) = a·R² · R⁻¹ = a·R mod p}.
          */
         final long[] r2ModP;
@@ -80,6 +85,7 @@ public final class FieldElement {
          * Константы 2, 4, 8 в форме Монтгомери — для CT-реализации shiftLeft.
          */
         final long[] twoR;
+
         final long[] fourR;
         final long[] eightR;
 
@@ -94,7 +100,7 @@ public final class FieldElement {
             this.p = toLimbs(modulus, n);
 
             // m0 = −p⁻¹ mod 2^64
-            // p·p⁻¹ ≡ 1 (mod 2^64) → m0 = −p⁻¹ mod 2^64
+            // p·p⁻¹ ≡ 1 (mod 2^64) -> m0 = −p⁻¹ mod 2^64
             BigInteger mod64 = BigInteger.ONE.shiftLeft(64);
             BigInteger pMod64 = modulus.mod(mod64);
             BigInteger pInv = pMod64.modInverse(mod64);
@@ -126,6 +132,7 @@ public final class FieldElement {
      * Лимбы в форме Монтгомери: {@code value = a·R mod p}, little-endian.
      */
     private final long[] limbs;
+
     /**
      * Параметры Монтгомери для данного поля.
      */
@@ -220,13 +227,14 @@ public final class FieldElement {
             cswap(s0, s1, bit);
 
             long[] tmp0 = r0, tmp1 = r1;
-            r0 = s1; r1 = s0;
-            s0 = tmp0; s1 = tmp1;
+            r0 = s1;
+            r1 = s0;
+            s0 = tmp0;
+            s1 = tmp1;
         }
 
         return new FieldElement(r0, mp);
     }
-
 
     /**
      * Конвертирует из формы Монтгомери обратно в обычное представление.
@@ -257,7 +265,7 @@ public final class FieldElement {
      * Реализовано как {@code a + (p − b)}.
      */
     public FieldElement subtract(FieldElement other) {
-        long[] neg = subInternal(other.limbs, mp);  // p - b
+        long[] neg = subInternal(other.limbs, mp); // p - b
         return new FieldElement(addInternal(limbs, neg, mp), mp);
     }
 
@@ -274,8 +282,8 @@ public final class FieldElement {
         // nonZero = 1 если хотя бы один лимб != 0, иначе 0 — без ветвления
         long acc = 0;
         for (long l : limbs) acc |= l;
-        long nonZero = (acc | -acc) >>> 63;   // 1 если ненулевой, 0 если нулевой
-        long keepMask = -nonZero;              // 0xFFFF...F если ненулевой, 0 если нулевой
+        long nonZero = (acc | -acc) >>> 63; // 1 если ненулевой, 0 если нулевой
+        long keepMask = -nonZero; // 0xFFFF...F если ненулевой, 0 если нулевой
         long[] result = new long[mp.n];
         for (int i = 0; i < mp.n; i++) result[i] = neg[i] & keepMask;
         return new FieldElement(result, mp);
@@ -300,7 +308,6 @@ public final class FieldElement {
      * Сдвиг влево на {@code bits} позиций с редукцией по p.
      * Сдвиг влево на 1,2,3 реализован через умножение на предвычисленные константы, для остальных — через повторное сложение.
      */
-
     public FieldElement shiftLeft(int bits) {
         switch (bits) {
             case 1:
@@ -309,17 +316,17 @@ public final class FieldElement {
                 return new FieldElement(montMul(limbs, mp.fourR, mp), mp);
             case 3:
                 return new FieldElement(montMul(limbs, mp.eightR, mp), mp);
-            default: {
-                FieldElement result = this;
-                for (int i = 0; i < bits; i++) result = result.add(result);
-                return result;
-            }
+            default:
+                {
+                    FieldElement result = this;
+                    for (int i = 0; i < bits; i++) result = result.add(result);
+                    return result;
+                }
         }
     }
 
-
     /**
-     * Проверка на равенство нулю (в форме Монтгомери 0 → все лимбы = 0).
+     * Проверка на равенство нулю (в форме Монтгомери 0 -> все лимбы = 0).
      */
     public boolean isZero() {
         long acc = 0;
@@ -358,7 +365,7 @@ public final class FieldElement {
      * Алгоритм CIOS (Coarsely Integrated Operand Scanning) Монтгомери.
      * <p>
      * Вычисляет {@code a·b·R⁻¹ mod p} для a, b в форме Монтгомери.
-     * Стоимость: n² умножений 64×64→128 бит.
+     * Стоимость: n² умножений 64×64->128 бит.
      * <p>
      * Реализация следует алгоритму из:
      * Koç, Acar, Kaliski — «Analyzing and Comparing Montgomery Multiplication Algorithms»
@@ -485,7 +492,8 @@ public final class FieldElement {
             // Шаг 1: partial = a + b (может wrap); carry_ab = перенос из a+b.
             long partial = a[i] + b[i];
             long carryAb = Long.compareUnsigned(partial, a[i]) < 0 ? 1L : 0L;
-            // Шаг 2: sum = partial + carry_in (carry_in = 0 или 1, overflow невозможен если partial != MAX).
+            // Шаг 2: sum = partial + carry_in (carry_in = 0 или 1, overflow невозможен если partial
+            // != MAX).
             long s = partial + carry;
             long carryCin = Long.compareUnsigned(s, partial) < 0 ? 1L : 0L;
             carry = carryAb | carryCin;
@@ -537,7 +545,7 @@ public final class FieldElement {
         // ge = 1 если overflow, ИЛИ a > p, ИЛИ a == p
         long ge = overflowBit | gt | (1L ^ (lt | gt));
 
-        // mask: 0 → не вычитать, -1L (все биты 1) → вычитать
+        // mask: 0 -> не вычитать, -1L (все биты 1) -> вычитать
         long mask = -ge;
         long[] result = new long[n];
         long borrow = 0;
@@ -583,7 +591,6 @@ public final class FieldElement {
     // Вспомогательные методы
     // -------------------------------------------------------------------------
 
-
     /**
      * MethodHandle для {@code Math.unsignedMultiplyHigh(long, long)}, доступного с JDK 18.
      * {@code null} если метод недоступен (JDK 11–17) — тогда используется {@link #mulHighFallback}.
@@ -592,19 +599,18 @@ public final class FieldElement {
 
     private static MethodHandle resolveMulHigh() {
         try {
-            return MethodHandles.lookup().findStatic(
-                    Math.class,
-                    "unsignedMultiplyHigh",
-                    MethodType.methodType(long.class, long.class, long.class)
-            );
+            return MethodHandles.lookup()
+                    .findStatic(
+                            Math.class,
+                            "unsignedMultiplyHigh",
+                            MethodType.methodType(long.class, long.class, long.class));
         } catch (NoSuchMethodException | IllegalAccessException e) {
-            return null;  // JDK 11–17: метод недоступен, будет использован fallback
+            return null; // JDK 11–17: метод недоступен, будет использован fallback
         }
     }
 
-
     /*
-     * Беззнаковое умножение 64×64 → 128 бит. Возвращает {@code [hi, lo]}.
+     * Беззнаковое умножение 64×64 -> 128 бит. Возвращает {@code [hi, lo]}.
      * <p>
      * Стратегия выбирается один раз при загрузке класса через {@link #MUL_HIGH}:
      * <ul>
@@ -618,7 +624,7 @@ public final class FieldElement {
      * Младшие 64 бита произведения a·b (беззнаковое 64×64).
      */
     private static long mulLo(long a, long b) {
-        return a * b;  // Java long умножение — автоматически даёт lo-часть
+        return a * b; // Java long умножение — автоматически даёт lo-часть
     }
 
     /**
@@ -637,9 +643,8 @@ public final class FieldElement {
         return mulHighFallback(a, b);
     }
 
-
     /**
-     * Portable реализация старшего слова 64×64→128 через разбивку на 32-битные half.
+     * Portable реализация старшего слова 64×64->128 через разбивку на 32-битные half.
      * Корректна на любой JVM начиная с JDK 8. Используется на JDK 11–17.
      */
     private static long mulHighFallback(long a, long b) {
@@ -653,7 +658,6 @@ public final class FieldElement {
         return p3 + (p1 >>> 32) + (p2 >>> 32) + (mid >>> 32);
     }
 
-
     /**
      * Конвертирует {@link BigInteger} в массив лимбов little-endian.
      * Число должно быть неотрицательным и умещаться в {@code n} лимбов.
@@ -665,7 +669,7 @@ public final class FieldElement {
         int start = (bytes[0] == 0) ? 1 : 0;
         int len = bytes.length - start;
         for (int i = 0; i < len; i++) {
-            int byteIdx = len - 1 - i;           // байт с конца (little-endian)
+            int byteIdx = len - 1 - i; // байт с конца (little-endian)
             int limbIdx = i / 8;
             int bitShift = (i % 8) * 8;
             if (limbIdx < n) {
@@ -690,6 +694,3 @@ public final class FieldElement {
         return new BigInteger(1, bytes);
     }
 }
-
-
-

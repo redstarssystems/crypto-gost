@@ -2,23 +2,22 @@ package org.rssys.gost.jca.spi;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.jca.RssysGostProvider;
-import org.rssys.gost.jca.key.GostSecretKey;
-
-import javax.crypto.AEADBadTagException;
-import javax.crypto.BadPaddingException;
-import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.NoSuchPaddingException;
-import javax.crypto.spec.IvParameterSpec;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.Security;
 import java.util.Arrays;
+import javax.crypto.AEADBadTagException;
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.jca.RssysGostProvider;
+import org.rssys.gost.jca.key.GostSecretKey;
 
 /**
  * Fuzz-тесты для {@link GostCtrAcpkmCipherSpi#engineDoFinal}.
@@ -68,8 +67,8 @@ class GostCtrAcpkmCipherSpiFuzzTest {
     }
 
     /**
-     * WithOmac: произвольный ciphertext с тегом → engineDoFinal.
-     * Путь: engineDoFinal → проверка ctLen → processBytes → getMacTag →
+     * WithOmac: произвольный ciphertext с тегом -> engineDoFinal.
+     * Путь: engineDoFinal -> проверка ctLen -> processBytes -> getMacTag ->
      * MessageDigest.isEqual.
      * <p>
      * Ожидаем: AEADBadTagException на неверном теге, IllegalArgumentException
@@ -89,15 +88,18 @@ class GostCtrAcpkmCipherSpiFuzzTest {
             // Ожидаемо: неверные параметры
         } catch (IllegalBlockSizeException | BadPaddingException e) {
             // Ожидаемо: JCA-обёртка
-        } catch (NoSuchAlgorithmException | NoSuchProviderException | NoSuchPaddingException
-                | InvalidKeyException | InvalidAlgorithmParameterException e) {
+        } catch (NoSuchAlgorithmException
+                | NoSuchProviderException
+                | NoSuchPaddingException
+                | InvalidKeyException
+                | InvalidAlgorithmParameterException e) {
             // Ожидаемо: JCA-initialisation ошибки на битом входе
         }
     }
 
     /**
-     * WithoutOmac: произвольный ciphertext → engineDoFinal.
-     * Путь: engineDoFinal → mode.processBytes (чистое шифрование, без тега).
+     * WithoutOmac: произвольный ciphertext -> engineDoFinal.
+     * Путь: engineDoFinal -> mode.processBytes (чистое шифрование, без тега).
      * <p>
      * Ожидаем: IllegalArgumentException, IllegalBlockSizeException.
      * AEADBadTagException НЕ ожидается — WithoutOmac не проверяет тег.
@@ -114,8 +116,11 @@ class GostCtrAcpkmCipherSpiFuzzTest {
             // Ожидаемо: неверные параметры
         } catch (IllegalBlockSizeException | BadPaddingException e) {
             // Ожидаемо: JCA-обёртка
-        } catch (NoSuchAlgorithmException | NoSuchProviderException | NoSuchPaddingException
-                | InvalidKeyException | InvalidAlgorithmParameterException e) {
+        } catch (NoSuchAlgorithmException
+                | NoSuchProviderException
+                | NoSuchPaddingException
+                | InvalidKeyException
+                | InvalidAlgorithmParameterException e) {
             // Ожидаемо: JCA-initialisation ошибки
         }
     }

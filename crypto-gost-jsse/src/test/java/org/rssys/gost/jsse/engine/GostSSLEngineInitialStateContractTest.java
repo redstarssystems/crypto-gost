@@ -1,22 +1,21 @@
 package org.rssys.gost.jsse.engine;
-import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.ByteBuffer;
+import java.security.Security;
+import java.util.List;
+import javax.net.ssl.SSLEngineResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
-
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLEngineResult;
-import java.nio.ByteBuffer;
-import java.security.Security;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Проверяет JSSE-контракт для GostSSLEngine в INITIAL состоянии
@@ -37,13 +36,24 @@ class GostSSLEngineInitialStateContractTest {
         Security.addProvider(new RssysGostJsseProvider());
         ECParameters params = ECParameters.tc26a256();
         rootCa = TlsTestHelper.createRootCA(params);
-        serverCert = TlsTestHelper.createCertSignedBy(
-                params, rootCa.priv, rootCa.cert.getPublicKey(), rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
-                new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
-                false, null);
+        serverCert =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        rootCa.priv,
+                        rootCa.cert.getPublicKey(),
+                        rootCa.subjectDn,
+                        "240501120000Z",
+                        "290501120000Z",
+                        new String[] {"localhost"},
+                        new byte[] {(byte) 0x80},
+                        null,
+                        false,
+                        null);
         serverKm = new GostX509KeyManager();
-        serverKm.addKeyEntry("default", CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
+        serverKm.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
+                serverCert.priv);
     }
 
     @Test
@@ -52,10 +62,12 @@ class GostSSLEngineInitialStateContractTest {
         GostSSLEngine clientEng = createClientEngine();
         GostSSLEngine serverEng = createServerEngine();
 
-        assertEquals(SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
+        assertEquals(
+                SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
                 clientEng.getHandshakeStatus(),
                 "клиент INITIAL -> NOT_HANDSHAKING");
-        assertEquals(SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
+        assertEquals(
+                SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
                 serverEng.getHandshakeStatus(),
                 "сервер INITIAL -> NOT_HANDSHAKING");
     }
@@ -66,19 +78,20 @@ class GostSSLEngineInitialStateContractTest {
         GostSSLEngine engine = createClientEngine();
         var session = engine.getSession();
         assertNotNull(session, "session не должен быть null в INITIAL");
-        assertEquals(GostJsseConstants.SSL_NULL_CIPHER, session.getCipherSuite(),
+        assertEquals(
+                GostJsseConstants.SSL_NULL_CIPHER,
+                session.getCipherSuite(),
                 "cipher suite до handshake должен быть SSL_NULL_WITH_NULL_NULL");
-        assertTrue(session.getPacketBufferSize() > 0,
-                "packetBufferSize должен быть > 0");
-        assertTrue(session.getApplicationBufferSize() > 0,
-                "applicationBufferSize должен быть > 0");
+        assertTrue(session.getPacketBufferSize() > 0, "packetBufferSize должен быть > 0");
+        assertTrue(session.getApplicationBufferSize() > 0, "applicationBufferSize должен быть > 0");
     }
 
     @Test
     @DisplayName("getHandshakeSession() в INITIAL возвращает null")
     void testGetHandshakeSessionInInitial() {
         GostSSLEngine engine = createClientEngine();
-        assertNull(engine.getHandshakeSession(),
+        assertNull(
+                engine.getHandshakeSession(),
                 "getHandshakeSession() должен быть null до beginHandshake");
     }
 
@@ -86,8 +99,8 @@ class GostSSLEngineInitialStateContractTest {
     @DisplayName("getDelegatedTask() в INITIAL возвращает null")
     void testGetDelegatedTaskInInitial() {
         GostSSLEngine engine = createClientEngine();
-        assertNull(engine.getDelegatedTask(),
-                "getDelegatedTask() должен быть null до beginHandshake");
+        assertNull(
+                engine.getDelegatedTask(), "getDelegatedTask() должен быть null до beginHandshake");
     }
 
     @Test
@@ -145,7 +158,8 @@ class GostSSLEngineInitialStateContractTest {
         // Должен произвести ClientHello
         assertTrue(r.bytesProduced() > 0, "wrap должен произвести ClientHello");
         assertEquals(SSLEngineResult.Status.OK, r.getStatus());
-        assertEquals(SSLEngineResult.HandshakeStatus.NEED_UNWRAP,
+        assertEquals(
+                SSLEngineResult.HandshakeStatus.NEED_UNWRAP,
                 engine.getHandshakeStatus(),
                 "после implicit-start engine должен быть в HANDSHAKE");
     }
@@ -157,11 +171,11 @@ class GostSSLEngineInitialStateContractTest {
         ByteBuffer dst = ByteBuffer.allocate(16640);
         SSLEngineResult r = engine.wrap(ByteBuffer.allocate(0), dst);
 
-        assertEquals(SSLEngineResult.HandshakeStatus.NEED_UNWRAP,
+        assertEquals(
+                SSLEngineResult.HandshakeStatus.NEED_UNWRAP,
                 r.getHandshakeStatus(),
                 "серверный wrap в INITIAL должен вернуть NEED_UNWRAP");
-        assertEquals(0, r.bytesProduced(),
-                "серверный wrap в INITIAL должен произвести 0 байт");
+        assertEquals(0, r.bytesProduced(), "серверный wrap в INITIAL должен произвести 0 байт");
     }
 
     @Test
@@ -172,9 +186,12 @@ class GostSSLEngineInitialStateContractTest {
         ByteBuffer empty = ByteBuffer.allocate(0);
         ByteBuffer dst = ByteBuffer.allocate(16640);
         SSLEngineResult r = clientEng.unwrap(empty, dst);
-        assertEquals(SSLEngineResult.Status.BUFFER_UNDERFLOW, r.getStatus(),
+        assertEquals(
+                SSLEngineResult.Status.BUFFER_UNDERFLOW,
+                r.getStatus(),
                 "пустой unwrap на клиенте должен вернуть BUFFER_UNDERFLOW");
-        assertEquals(SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
+        assertEquals(
+                SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
                 r.getHandshakeStatus(),
                 "должен остаться NOT_HANDSHAKING");
 
@@ -183,9 +200,12 @@ class GostSSLEngineInitialStateContractTest {
         empty.clear();
         dst.clear();
         r = serverEng.unwrap(empty, dst);
-        assertEquals(SSLEngineResult.Status.BUFFER_UNDERFLOW, r.getStatus(),
+        assertEquals(
+                SSLEngineResult.Status.BUFFER_UNDERFLOW,
+                r.getStatus(),
                 "пустой unwrap на сервере должен вернуть BUFFER_UNDERFLOW");
-        assertEquals(SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
+        assertEquals(
+                SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
                 r.getHandshakeStatus(),
                 "не должен начинать handshake на пустом unwrap");
     }
@@ -205,17 +225,20 @@ class GostSSLEngineInitialStateContractTest {
         ByteBuffer serverDst = ByteBuffer.allocate(16640);
         SSLEngineResult unwrapR = serverEng.unwrap(dst, serverDst);
 
-        assertEquals(SSLEngineResult.Status.OK, unwrapR.getStatus(),
+        assertEquals(
+                SSLEngineResult.Status.OK,
+                unwrapR.getStatus(),
                 "сервер должен принять ClientHello");
-        assertTrue(unwrapR.bytesConsumed() > 0,
-                "сервер должен потребить ClientHello");
-        assertEquals(SSLEngineResult.HandshakeStatus.NEED_WRAP,
+        assertTrue(unwrapR.bytesConsumed() > 0, "сервер должен потребить ClientHello");
+        assertEquals(
+                SSLEngineResult.HandshakeStatus.NEED_WRAP,
                 serverEng.getHandshakeStatus(),
                 "сервер должен быть готов отправить ServerHello");
     }
 
     @Test
-    @DisplayName("closeOutbound() легален, closeInbound() без closeOutbound закрывает inbound (RFC 8446 §6.1)")
+    @DisplayName(
+            "closeOutbound() легален, closeInbound() без closeOutbound закрывает inbound (RFC 8446 §6.1)")
     void testCloseInInitial() throws Exception {
         GostSSLEngine engine = createClientEngine();
         // closeOutbound() всегда легален по JSSE-контракту
@@ -223,12 +246,13 @@ class GostSSLEngineInitialStateContractTest {
         assertTrue(engine.isOutboundDone(), "closeOutbound должен пометить outbound как done");
         assertFalse(engine.isInboundDone(), "inbound не должен быть закрыт на этом этапе");
 
-        // WHY: RFC 8446 §6.1 не требует closeSent перед closeInbound.
+        // RFC 8446 §6.1 не требует closeSent перед closeInbound.
         // Netty SslHandler вызывает closeInbound() при channelInactive
         // (обрыв TCP, таймаут) — без close_notify.
         GostSSLEngine engine2 = createClientEngine();
         engine2.closeInbound();
-        assertTrue(engine2.isInboundDone(),
+        assertTrue(
+                engine2.isInboundDone(),
                 "inbound должен быть done после closeInbound без closeOutbound");
 
         GostSSLEngine engine3 = createClientEngine();
@@ -252,5 +276,4 @@ class GostSSLEngineInitialStateContractTest {
         GostX509TrustManager tm = new GostX509TrustManager(null, false);
         return new GostSSLEngine(serverKm, tm, "localhost", 0, false);
     }
-
 }

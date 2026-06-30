@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       запас на пики.
  *       <br><b>Пример:</b> 10 новых handshake/сек, lifetime = 3600 сек,
  *       1 NST на handshake: {@code 10 × 3600 × 1 × 1.5 = 54 000}.
- *       <br>Каждая запись ~300-350 байт → 54 000 записей ≈ 18 МБ.</li>
+ *       <br>Каждая запись ~300-350 байт -> 54 000 записей ≈ 18 МБ.</li>
  *   <li><b>Мониторинг:</b> используйте {@link #size()} для наблюдения
  *       и корректировки.</li>
  * </ul>
@@ -62,21 +62,26 @@ public final class InMemoryPskStore implements PskStore {
         byte[] ticket = entry.getTicket();
         if (ticket == null || ticket.length < 1 || ticket.length > 65535) {
             throw new IllegalArgumentException(
-                    "ticket length must be 1..65535, got " + (ticket == null ? "null" : ticket.length));
+                    "ticket length must be 1..65535, got "
+                            + (ticket == null ? "null" : ticket.length));
         }
 
         // Soft cap: если превысили maxSize — вытесняем случайную запись.
         if (store.size() >= maxSize) {
-            store.keySet().stream().findAny().ifPresent(key ->
-                    store.computeIfPresent(key, (k, e) -> {
-                        e.destroy();
-                        return null;
-                    })
-            );
+            store.keySet().stream()
+                    .findAny()
+                    .ifPresent(
+                            key ->
+                                    store.computeIfPresent(
+                                            key,
+                                            (k, e) -> {
+                                                e.destroy();
+                                                return null;
+                                            }));
         }
 
         // Периодическая очистка просроченных записей (раз в ~1024 вставок).
-        // WHY: evictExpired на каждой вставке — O(n) на горячем пути handshake,
+        // evictExpired на каждой вставке — O(n) на горячем пути handshake,
         // где n растёт до maxSize. Периодический вызов снижает overhead до O(n/1024).
         if ((addCounter.incrementAndGet() & 0x3FF) == 0) {
             evictExpired();
@@ -115,13 +120,15 @@ public final class InMemoryPskStore implements PskStore {
     @Override
     public void evictExpired() {
         long now = System.currentTimeMillis();
-        store.values().removeIf(e -> {
-            if (e.isExpired(now)) {
-                e.destroy();
-                return true;
-            }
-            return false;
-        });
+        store.values()
+                .removeIf(
+                        e -> {
+                            if (e.isExpired(now)) {
+                                e.destroy();
+                                return true;
+                            }
+                            return false;
+                        });
     }
 
     @Override

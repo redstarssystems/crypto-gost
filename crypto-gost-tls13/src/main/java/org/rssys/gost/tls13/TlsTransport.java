@@ -3,7 +3,6 @@ package org.rssys.gost.tls13;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 
-
 /**
  * Интерфейс транспортного уровня для TLS 1.3.
  * Абстрагирует передачу записей (TCP socket, Pipe, Mock).

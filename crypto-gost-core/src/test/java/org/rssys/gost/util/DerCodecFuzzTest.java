@@ -28,7 +28,7 @@ class DerCodecFuzzTest {
     @FuzzTest
     void fuzzDecodeLength(FuzzedDataProvider data) {
         int offset = data.consumeInt(0, Integer.MAX_VALUE);
-        byte[] input = data.consumeRemainingAsBytes();
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
         if (input.length == 0) return;
         try {
             DerCodec.decodeLength(input, offset);
@@ -46,7 +46,7 @@ class DerCodecFuzzTest {
     @FuzzTest
     void fuzzParseSequenceContents(FuzzedDataProvider data) {
         int offset = data.consumeInt(0, Integer.MAX_VALUE);
-        byte[] input = data.consumeRemainingAsBytes();
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
         if (input.length == 0) return;
         try {
             DerCodec.parseSequenceContents(input, offset);
@@ -63,7 +63,7 @@ class DerCodecFuzzTest {
     @FuzzTest
     void fuzzParseBitString(FuzzedDataProvider data) {
         int offset = data.consumeInt(0, Integer.MAX_VALUE);
-        byte[] input = data.consumeRemainingAsBytes();
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
         if (input.length == 0) return;
         try {
             DerCodec.parseBitString(input, offset);
@@ -80,7 +80,7 @@ class DerCodecFuzzTest {
     @FuzzTest
     void fuzzParseOctetString(FuzzedDataProvider data) {
         int offset = data.consumeInt(0, Integer.MAX_VALUE);
-        byte[] input = data.consumeRemainingAsBytes();
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
         if (input.length == 0) return;
         try {
             DerCodec.parseOctetString(input, offset);
@@ -98,7 +98,7 @@ class DerCodecFuzzTest {
     @FuzzTest
     void fuzzParseOid(FuzzedDataProvider data) {
         int offset = data.consumeInt(0, Integer.MAX_VALUE);
-        byte[] input = data.consumeRemainingAsBytes();
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
         if (input.length == 0) return;
         try {
             DerCodec.parseOid(input, offset);
@@ -114,10 +114,101 @@ class DerCodecFuzzTest {
     @FuzzTest
     void fuzzParseInteger(FuzzedDataProvider data) {
         int offset = data.consumeInt(0, Integer.MAX_VALUE);
-        byte[] input = data.consumeRemainingAsBytes();
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
         if (input.length == 0) return;
         try {
             DerCodec.parseInteger(input, offset);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * findEoc — ищет EOC-маркер в BER indefinite-length контейнере.
+     * Новый структурный TLV-walk: decodeTag + decodeLength на каждом смещении,
+     * проверка границ при skip'е definite-length элементов.
+     * start передаётся consumeInt чтобы покрыть вылет за границы массива.
+     */
+    @FuzzTest
+    void fuzzFindEoc(FuzzedDataProvider data) {
+        int start = data.consumeInt(0, Integer.MAX_VALUE);
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
+        if (input.length == 0) return;
+        try {
+            DerCodec.findEoc(input, start);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * fuzz-последовательность с внедрёнными indefinite-маркерами (0x80)
+     * и EOC (0x00 0x00) для проверки устойчивости parseSequenceContents
+     * к структурно некорректному BER-входу.
+     */
+    @FuzzTest
+    void fuzzParseSequenceWithIndefinite(FuzzedDataProvider data) {
+        // Формируем массив, начинающийся с SEQUENCE-префикса
+        byte[] raw = data.consumeBytes(data.consumeInt(0, 65536));
+        if (raw.length < 4) return;
+        byte[] input = new byte[raw.length + 1];
+        input[0] = 0x30; // принудительно SEQUENCE тег
+        System.arraycopy(raw, 0, input, 1, raw.length);
+        int offset = 0;
+        try {
+            DerCodec.parseSequenceContents(input, offset);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * parseBoolean — разбирает BOOLEAN (tag 0x01). Обращается к data[contentOff]
+     * без проверки, что contentOff < data.length при длине контента 0
+     * после заголовка тэга и длины.
+     */
+    @FuzzTest
+    void fuzzParseBoolean(FuzzedDataProvider data) {
+        int offset = data.consumeInt(0, Integer.MAX_VALUE);
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
+        if (input.length == 0) return;
+        try {
+            DerCodec.parseBoolean(input, offset);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * parseGeneralizedTime — разбирает GeneralizedTime (tag 0x18).
+     * decodeLength может вернуть INDEFINITE_LENGTH (0x80) через
+     * indefinite-маркер → new String с отрицательной длиной →
+     * NegativeArraySizeException. Гигантский len → OOM.
+     */
+    @FuzzTest
+    void fuzzParseGeneralizedTime(FuzzedDataProvider data) {
+        int offset = data.consumeInt(0, Integer.MAX_VALUE);
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
+        if (input.length == 0) return;
+        try {
+            DerCodec.parseGeneralizedTime(input, offset);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * parseUTF8String — разбирает UTF8String (tag 0x0C).
+     * Аналогичный риск: decodeLength с INDEFINITE_LENGTH или
+     * гигантской длиной → OOM / NegativeArraySizeException.
+     */
+    @FuzzTest
+    void fuzzParseUTF8String(FuzzedDataProvider data) {
+        int offset = data.consumeInt(0, Integer.MAX_VALUE);
+        byte[] input = data.consumeBytes(data.consumeInt(0, 65536));
+        if (input.length == 0) return;
+        try {
+            DerCodec.parseUTF8String(input, offset);
         } catch (RuntimeException e) {
             FuzzTestUtils.rethrowIfBug(e);
         }

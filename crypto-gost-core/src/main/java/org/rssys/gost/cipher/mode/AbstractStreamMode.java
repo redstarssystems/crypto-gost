@@ -1,14 +1,13 @@
 package org.rssys.gost.cipher.mode;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import org.rssys.gost.cipher.BlockCipher;
 import org.rssys.gost.cipher.CipherParameters;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.util.DataLengthException;
 import org.rssys.gost.util.OutputLengthException;
-
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
-import java.nio.ByteOrder;
 
 /**
  * Абстрактный базовый класс для потоковых режимов блочного шифрования
@@ -57,7 +56,7 @@ abstract class AbstractStreamMode implements BlockCipher {
     // -----------------------------------------------------------------------
 
     protected AbstractStreamMode(BlockCipher cipher) {
-        this.cipher    = cipher;
+        this.cipher = cipher;
         this.blockSize = cipher.getBlockSize();
     }
 
@@ -107,11 +106,11 @@ abstract class AbstractStreamMode implements BlockCipher {
      * Вызывается из {@code init()} подкласса.
      */
     protected void initRegister(byte[] iv) {
-        this.m      = iv.length;
-        this.R      = new byte[m];
+        this.m = iv.length;
+        this.R = new byte[m];
         this.R_init = new byte[m];
         System.arraycopy(iv, 0, R_init, 0, m);
-        System.arraycopy(iv, 0, R,      0, m);
+        System.arraycopy(iv, 0, R, 0, m);
     }
 
     /**

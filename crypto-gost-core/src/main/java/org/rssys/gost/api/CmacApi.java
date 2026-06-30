@@ -1,10 +1,9 @@
 package org.rssys.gost.api;
 
+import java.security.MessageDigest;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.mac.Cmac;
-
-import java.security.MessageDigest;
 
 /**
  * API для имитовставки CMAC на шифре Кузнечик (ГОСТ Р 34.13-2015 §4.6).
@@ -146,7 +145,7 @@ public final class CmacApi {
     public static byte[] cmac(byte[] data, SymmetricKey key, int tagBytes) {
         if (tagBytes < 1 || tagBytes > CMAC_TAG_SIZE) {
             throw new IllegalArgumentException(
-                "CMAC tagBytes must be between 1 and " + CMAC_TAG_SIZE + ", got " + tagBytes);
+                    "CMAC tagBytes must be between 1 and " + CMAC_TAG_SIZE + ", got " + tagBytes);
         }
         Cmac c = new Cmac(new Kuznyechik(), tagBytes * 8);
         c.init(key);

@@ -1,15 +1,14 @@
 package org.rssys.gost.cipher.mode;
 
-import org.rssys.gost.cipher.CipherParameters;
-import org.rssys.gost.cipher.Kuznyechik;
-import org.rssys.gost.cipher.ParametersWithIV;
-import org.rssys.gost.util.AuthenticationException;
-
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 import java.security.MessageDigest;
 import java.util.Arrays;
+import org.rssys.gost.cipher.CipherParameters;
+import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.util.AuthenticationException;
 
 /**
  * Режим MGM (Multilinear Galois Mode) — аутентифицированное шифрование с
@@ -78,9 +77,9 @@ public final class Mgm {
 
     // Счётчики и аккумулятор — long-пары вместо byte[].
     // Семантика big-endian: hi = байты 0..7, lo = байты 8..15.
-    private long yHi, yLo;      // счётчик шифрования Y  (инкремент правой половины: yLo++)
-    private long zHi, zLo;      // счётчик аутентификации Z (инкремент левой половины: zHi++)
-    private long sumHi, sumLo;  // аккумулятор мультилинейной функции
+    private long yHi, yLo; // счётчик шифрования Y  (инкремент правой половины: yLo++)
+    private long zHi, zLo; // счётчик аутентификации Z (инкремент левой половины: zHi++)
+    private long sumHi, sumLo; // аккумулятор мультилинейной функции
 
     // Длины обработанных данных в битах (для финального шага MAC, RFC 9058 §4.1)
     private long aadBitLen;
@@ -90,8 +89,10 @@ public final class Mgm {
     private byte[] icn;
     private boolean forEncryption;
     private boolean initialized;
+
     /** Признак того, что обработка данных начата (AAD больше нельзя добавлять). */
     private boolean aadFinished;
+
     private boolean finished;
 
     // Scratch-буфер для неполных блоков AAD/CT — выделяется один раз в конструкторе
@@ -134,7 +135,7 @@ public final class Mgm {
             throw new IllegalArgumentException(
                     "MGM tag size must be 8.." + BLOCK + " bytes, got " + tagSize);
         }
-        this.cipher  = cipher;
+        this.cipher = cipher;
         this.tagSize = tagSize;
     }
 
@@ -163,7 +164,7 @@ public final class Mgm {
         }
 
         this.forEncryption = forEncryption;
-        this.icn           = Arrays.copyOf(iv, iv.length);
+        this.icn = Arrays.copyOf(iv, iv.length);
 
         // Инициализируем шифр ключом (E_K используется всегда в режиме шифрования блока)
         cipher.init(true, ivp.getParameters());
@@ -171,7 +172,7 @@ public final class Mgm {
         initCounters();
         this.initialized = true;
         this.aadFinished = false;
-        this.finished    = false;
+        this.finished = false;
     }
 
     /**
@@ -206,7 +207,7 @@ public final class Mgm {
         }
         this.icn = Arrays.copyOf(newIcn, newIcn.length);
         this.aadFinished = false;
-        this.finished    = false;
+        this.finished = false;
         initCounters();
     }
 
@@ -278,8 +279,7 @@ public final class Mgm {
      * @param outOff смещение в выходном буфере
      * @return количество записанных байт (равно len)
      */
-    public int processBytes(byte[] input, int inOff, int len,
-                            byte[] output, int outOff) {
+    public int processBytes(byte[] input, int inOff, int len, byte[] output, int outOff) {
         checkInitialized();
         ensureAadFinished();
         if (len == 0) return 0;
@@ -292,10 +292,10 @@ public final class Mgm {
             for (int b = 0; b < BATCH; b++) {
                 // Гамма = E(K, Y_i)
                 cipher.encryptToFields(yHi, yLo);
-                LONG_BE.set(gammaBuf, b * BLOCK,     cipher.getEncBufHi());
+                LONG_BE.set(gammaBuf, b * BLOCK, cipher.getEncBufHi());
                 LONG_BE.set(gammaBuf, b * BLOCK + 8, cipher.getEncBufLo());
                 yLo++; // incr_r: wraparound недостижим — ctBitLen (Math.addExact) сработает
-                       // при 2^60 байт, что на 8 порядков меньше 2^68 байт до переполнения
+                // при 2^60 байт, что на 8 порядков меньше 2^68 байт до переполнения
             }
             for (int b = 0; b < BATCH; b++) {
                 int off = pos + b * BLOCK;
@@ -305,7 +305,7 @@ public final class Mgm {
                 long glo = (long) LONG_BE.get(gammaBuf, b * BLOCK + 8);
                 long ohi = dhi ^ ghi;
                 long olo = dlo ^ glo;
-                LONG_BE.set(output, outOff + off,     ohi);
+                LONG_BE.set(output, outOff + off, ohi);
                 LONG_BE.set(output, outOff + off + 8, olo);
                 // MAC над шифртекстом (EtM: при шифровании над output, при расшифровании над input)
                 macStep(forEncryption ? ohi : dhi, forEncryption ? olo : dlo);
@@ -323,7 +323,7 @@ public final class Mgm {
             long ghi = cipher.getEncBufHi();
             long glo = cipher.getEncBufLo();
             yLo++; // incr_r: wraparound недостижим — ctBitLen (Math.addExact) сработает
-                   // при 2^60 байт, что на 8 порядков меньше 2^68 байт до переполнения
+            // при 2^60 байт, что на 8 порядков меньше 2^68 байт до переполнения
 
             long dhi, dlo;
             if (blen == BLOCK) {
@@ -341,7 +341,7 @@ public final class Mgm {
             long olo = dlo ^ glo;
 
             if (blen == BLOCK) {
-                LONG_BE.set(output, outOff + pos,     ohi);
+                LONG_BE.set(output, outOff + pos, ohi);
                 LONG_BE.set(output, outOff + pos + 8, olo);
             } else {
                 // Записываем только blen байт выходных данных
@@ -374,7 +374,8 @@ public final class Mgm {
      * @throws IllegalStateException если MGM не инициализирован или уже завершён
      */
     public int finishEncryption(byte[] output, int outOff) {
-        if (finished) throw new IllegalStateException("Already finished; call init() for new message");
+        if (finished)
+            throw new IllegalStateException("Already finished; call init() for new message");
         finished = true;
         checkInitialized();
         ensureAadFinished();
@@ -393,7 +394,8 @@ public final class Mgm {
      * @throws IllegalStateException   если MGM не инициализирован или уже завершён
      */
     public void finishDecryption(byte[] tag, int offset) throws AuthenticationException {
-        if (finished) throw new IllegalStateException("Already finished; call init() for new message");
+        if (finished)
+            throw new IllegalStateException("Already finished; call init() for new message");
         finished = true;
         checkInitialized();
         ensureAadFinished();
@@ -449,9 +451,10 @@ public final class Mgm {
         zHi = cipher.getEncBufHi();
         zLo = cipher.getEncBufLo();
 
-        sumHi = 0L; sumLo = 0L;
+        sumHi = 0L;
+        sumLo = 0L;
         aadBitLen = 0L;
-        ctBitLen  = 0L;
+        ctBitLen = 0L;
         aadBufLen = 0;
     }
 
@@ -464,7 +467,8 @@ public final class Mgm {
         if (aadFinished) return;
         aadFinished = true;
         if (aadBufLen > 0) {
-            // Дополняем нулями в aadBuf (последние BLOCK - aadBufLen байт уже 0 от предыдущего раза)
+            // Дополняем нулями в aadBuf (последние BLOCK - aadBufLen байт уже 0 от предыдущего
+            // раза)
             long bhi = (long) LONG_BE.get(aadBuf, 0);
             long blo = (long) LONG_BE.get(aadBuf, 8);
             macStep(bhi, blo);
@@ -512,7 +516,7 @@ public final class Mgm {
         long hlo = cipher.getEncBufLo();
 
         // finSum = sum ^ (H (*) lenBlock), где lenBlock = (aadBitLen || ctBitLen)
-        // Длины в битах помещаются в 64 бита → hi-части lenBlock = 0, используем только lo
+        // Длины в битах помещаются в 64 бита -> hi-части lenBlock = 0, используем только lo
         gf128MulTo(hhi, hlo, aadBitLen, ctBitLen);
         long fsHi = sumHi ^ mulResHi;
         long fsLo = sumLo ^ mulResLo;
@@ -548,7 +552,7 @@ public final class Mgm {
     // На каждом шаге: если бит == 1, XOR result с V; затем V = V · w.
     //
     // multiply-by-w в GF(2^128):
-    //   128-битный сдвиг влево: (vHi, vLo) → ((vHi<<1)|(vLo>>>63), vLo<<1)
+    //   128-битный сдвиг влево: (vHi, vLo) -> ((vHi<<1)|(vLo>>>63), vLo<<1)
     //   Если выдвинулся MSB vHi: XOR с редукционным полиномом 0x87 в LSB vLo.
     //
     // Это в ~4 раза эффективнее побайтового multiplyByW из исходной реализации:
@@ -570,7 +574,7 @@ public final class Mgm {
      * <p>Шаг 2 — Horner слева направо, от старшего nibble X к младшему:
      * <pre>
      *   result = 0
-     *   for n in nibbles(X):  // 32 nibbles, старший → младший
+     *   for n in nibbles(X):  // 32 nibbles, старший -> младший
      *       result = mulW4(result) ^ tab[n]
      * </pre>
      * {@code mulW4(r)} = r · w^4: 4 последовательных multiply-by-w,
@@ -578,7 +582,8 @@ public final class Mgm {
      */
     private void gf128MulTo(long xHi, long xLo, long yHi, long yLo) {
         // ---- Шаг 1: tab[k] = k · Y в scratch-полях mulTabHi/mulTabLo ----
-        mulTabHi[1] = yHi;  mulTabLo[1] = yLo;
+        mulTabHi[1] = yHi;
+        mulTabLo[1] = yLo;
         for (int k = 2; k < 16; k++) {
             if ((k & 1) == 0) {
                 long ph = mulTabHi[k >> 1], pl = mulTabLo[k >> 1];
@@ -596,22 +601,38 @@ public final class Mgm {
 
         for (int shift = 60; shift >= 0; shift -= 4) {
             long m, h, l;
-            m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
-            m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
-            m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            int n = (int)(xHi >>> shift) & 0xF;
+            m = rHi >>> 63;
+            h = (rHi << 1) | (rLo >>> 63);
+            l = (rLo << 1) ^ (GF128_POLY & -m);
+            m = h >>> 63;
+            rHi = (h << 1) | (l >>> 63);
+            rLo = (l << 1) ^ (GF128_POLY & -m);
+            m = rHi >>> 63;
+            h = (rHi << 1) | (rLo >>> 63);
+            l = (rLo << 1) ^ (GF128_POLY & -m);
+            m = h >>> 63;
+            rHi = (h << 1) | (l >>> 63);
+            rLo = (l << 1) ^ (GF128_POLY & -m);
+            int n = (int) (xHi >>> shift) & 0xF;
             rHi ^= mulTabHi[n];
             rLo ^= mulTabLo[n];
         }
 
         for (int shift = 60; shift >= 0; shift -= 4) {
             long m, h, l;
-            m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
-            m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            m = rHi >>> 63;  h = (rHi << 1) | (rLo >>> 63);  l = (rLo << 1) ^ (GF128_POLY & -m);
-            m = h   >>> 63;  rHi = (h << 1) | (l  >>> 63);   rLo = (l  << 1) ^ (GF128_POLY & -m);
-            int n = (int)(xLo >>> shift) & 0xF;
+            m = rHi >>> 63;
+            h = (rHi << 1) | (rLo >>> 63);
+            l = (rLo << 1) ^ (GF128_POLY & -m);
+            m = h >>> 63;
+            rHi = (h << 1) | (l >>> 63);
+            rLo = (l << 1) ^ (GF128_POLY & -m);
+            m = rHi >>> 63;
+            h = (rHi << 1) | (rLo >>> 63);
+            l = (rLo << 1) ^ (GF128_POLY & -m);
+            m = h >>> 63;
+            rHi = (h << 1) | (l >>> 63);
+            rLo = (l << 1) ^ (GF128_POLY & -m);
+            int n = (int) (xLo >>> shift) & 0xF;
             rHi ^= mulTabHi[n];
             rLo ^= mulTabLo[n];
         }
@@ -652,7 +673,11 @@ public final class Mgm {
      */
     public static byte[] gf128Mul(byte[] X, byte[] Y) {
         if (X.length != 16 || Y.length != 16) {
-            throw new IllegalArgumentException("gf128Mul: оба аргумента должны быть 16 байт");
+            throw new IllegalArgumentException(
+                    "gf128Mul: both arguments must be 16 bytes, got X.length="
+                            + X.length
+                            + ", Y.length="
+                            + Y.length);
         }
         long xHi = (long) LONG_BE.get(X, 0);
         long xLo = (long) LONG_BE.get(X, 8);
@@ -668,7 +693,7 @@ public final class Mgm {
             rHi ^= vHi & bit;
             rLo ^= vLo & bit;
 
-            long mask = -(vHi >>> 63);   // 0xFFFF...FF если MSB=1, иначе 0
+            long mask = -(vHi >>> 63); // 0xFFFF...FF если MSB=1, иначе 0
             vHi = (vHi << 1) | (vLo >>> 63);
             vLo = (vLo << 1) ^ (GF128_POLY & mask);
             x >>>= 1;
@@ -679,8 +704,8 @@ public final class Mgm {
             long bit = -(x & 1L);
             rHi ^= vHi & bit;
             rLo ^= vLo & bit;
-            
-            long mask = -(vHi >>> 63);   // 0xFFFF...FF если MSB=1, иначе 0
+
+            long mask = -(vHi >>> 63); // 0xFFFF...FF если MSB=1, иначе 0
             vHi = (vHi << 1) | (vLo >>> 63);
             vLo = (vLo << 1) ^ (GF128_POLY & mask);
             x >>>= 1;
@@ -699,9 +724,12 @@ public final class Mgm {
      */
     public void destroy() {
         cipher.destroy();
-        yHi = 0L; yLo = 0L;
-        zHi = 0L; zLo = 0L;
-        sumHi = 0L; sumLo = 0L;
+        yHi = 0L;
+        yLo = 0L;
+        zHi = 0L;
+        zLo = 0L;
+        sumHi = 0L;
+        sumLo = 0L;
         aadBitLen = 0L;
         ctBitLen = 0L;
         if (icn != null) {
@@ -714,7 +742,8 @@ public final class Mgm {
         Arrays.fill(gammaBuf, (byte) 0);
         Arrays.fill(mulTabHi, 0L);
         Arrays.fill(mulTabLo, 0L);
-        mulResHi = 0L; mulResLo = 0L;
+        mulResHi = 0L;
+        mulResLo = 0L;
         initialized = false;
         forEncryption = false;
         aadFinished = false;

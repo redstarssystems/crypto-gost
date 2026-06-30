@@ -1,5 +1,9 @@
 package org.rssys.gost.api;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.cipher.SymmetricKey;
@@ -7,17 +11,16 @@ import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 @DisplayName("Digest Tests")
 class DigestTest {
 
     private static final byte[] MSG = "hello gost".getBytes(StandardCharsets.UTF_8);
     private static final byte[] KEY_BYTES = new byte[32];
-    static { Arrays.fill(KEY_BYTES, (byte) 0x42); }
+
+    static {
+        Arrays.fill(KEY_BYTES, (byte) 0x42);
+    }
+
     private static final SymmetricKey KEY = new SymmetricKey(KEY_BYTES);
 
     // -----------------------------------------------------------------------
@@ -107,10 +110,11 @@ class DigestTest {
     void testStreamingDigest256() {
         byte[] expected = Digest.digest256(MSG);
 
-        byte[] actual = new Digest(Digest.Algorithm.STREEBOG_256)
-            .update(Arrays.copyOfRange(MSG, 0, 5))
-            .update(Arrays.copyOfRange(MSG, 5, MSG.length))
-            .digest();
+        byte[] actual =
+                new Digest(Digest.Algorithm.STREEBOG_256)
+                        .update(Arrays.copyOfRange(MSG, 0, 5))
+                        .update(Arrays.copyOfRange(MSG, 5, MSG.length))
+                        .digest();
 
         assertArrayEquals(expected, actual);
     }
@@ -120,10 +124,11 @@ class DigestTest {
     void testStreamingDigest512() {
         byte[] expected = Digest.digest512(MSG);
 
-        byte[] actual = new Digest(Digest.Algorithm.STREEBOG_512)
-            .update(MSG, 0, 3)
-            .update(MSG, 3, MSG.length - 3)
-            .digest();
+        byte[] actual =
+                new Digest(Digest.Algorithm.STREEBOG_512)
+                        .update(MSG, 0, 3)
+                        .update(MSG, 3, MSG.length - 3)
+                        .digest();
 
         assertArrayEquals(expected, actual);
     }
@@ -133,9 +138,7 @@ class DigestTest {
     void testStreamingHmac256() {
         byte[] expected = Digest.hmac256(MSG, KEY);
 
-        byte[] actual = new Digest(Digest.Algorithm.HMAC_256, KEY)
-            .update(MSG)
-            .digest();
+        byte[] actual = new Digest(Digest.Algorithm.HMAC_256, KEY).update(MSG).digest();
 
         assertArrayEquals(expected, actual);
     }
@@ -145,10 +148,11 @@ class DigestTest {
     void testStreamingHmac512() {
         byte[] expected = Digest.hmac512(MSG, KEY);
 
-        byte[] actual = new Digest(Digest.Algorithm.HMAC_512, KEY)
-            .update(Arrays.copyOfRange(MSG, 0, 4))
-            .update(Arrays.copyOfRange(MSG, 4, MSG.length))
-            .digest();
+        byte[] actual =
+                new Digest(Digest.Algorithm.HMAC_512, KEY)
+                        .update(Arrays.copyOfRange(MSG, 0, 4))
+                        .update(Arrays.copyOfRange(MSG, 4, MSG.length))
+                        .digest();
 
         assertArrayEquals(expected, actual);
     }
@@ -159,7 +163,8 @@ class DigestTest {
         Digest h = new Digest(Digest.Algorithm.STREEBOG_256);
         byte[] r1 = h.update(MSG).digest();
         byte[] r2 = h.update(MSG).digest();
-        assertArrayEquals(r1, r2, "После digest() инстанс должен быть готов к повторному использованию");
+        assertArrayEquals(
+                r1, r2, "После digest() инстанс должен быть готов к повторному использованию");
     }
 
     // -----------------------------------------------------------------------
@@ -167,17 +172,17 @@ class DigestTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("Digest(HMAC_256) без ключа → IllegalArgumentException")
+    @DisplayName("Digest(HMAC_256) без ключа -> IllegalArgumentException")
     void testStreamingMacWithoutKey() {
-        assertThrows(IllegalArgumentException.class,
-            () -> new Digest(Digest.Algorithm.HMAC_256));
+        assertThrows(IllegalArgumentException.class, () -> new Digest(Digest.Algorithm.HMAC_256));
     }
 
     @Test
-    @DisplayName("Digest(STREEBOG_256, key) с ключом → IllegalArgumentException")
+    @DisplayName("Digest(STREEBOG_256, key) с ключом -> IllegalArgumentException")
     void testStreamingDigestWithKey() {
-        assertThrows(IllegalArgumentException.class,
-            () -> new Digest(Digest.Algorithm.STREEBOG_256, KEY));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new Digest(Digest.Algorithm.STREEBOG_256, KEY));
     }
 
     // -----------------------------------------------------------------------
@@ -185,7 +190,7 @@ class DigestTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("digest256: разные данные → разные хэши")
+    @DisplayName("digest256: разные данные -> разные хэши")
     void testDigest256Sensitivity() {
         byte[] h1 = Digest.digest256("hello".getBytes(StandardCharsets.UTF_8));
         byte[] h2 = Digest.digest256("world".getBytes(StandardCharsets.UTF_8));
@@ -193,7 +198,7 @@ class DigestTest {
     }
 
     @Test
-    @DisplayName("hmac256: разные ключи → разные теги")
+    @DisplayName("hmac256: разные ключи -> разные теги")
     void testHmac256KeySensitivity() {
         SymmetricKey key2 = new SymmetricKey(new byte[32]);
         byte[] m1 = Digest.hmac256(MSG, KEY);

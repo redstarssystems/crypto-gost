@@ -3,7 +3,6 @@ package org.rssys.gost.tls13.crypto;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.record.TlsTrafficKeys;
 
@@ -71,8 +70,8 @@ public final class TlsKeySchedule {
         }
         byte[] early = getEarlySecret();
         byte[] emptyHash = computeEmptyHash();
-        byte[] derived = HkdfStreebog.deriveSecret(
-                early, HkdfStreebog.PREFIXED_DERIVED, emptyHash, hashLen);
+        byte[] derived =
+                HkdfStreebog.deriveSecret(early, HkdfStreebog.PREFIXED_DERIVED, emptyHash, hashLen);
         try {
             TlsUtils.wipeArray(handshakeSecret);
             handshakeSecret = HkdfStreebog.extract(derived, ecdheSharedSecret, hashLen);
@@ -89,11 +88,13 @@ public final class TlsKeySchedule {
     public void deriveMasterSecret() {
         checkNotDestroyed();
         if (handshakeSecret == null) {
-            throw new IllegalStateException("Handshake secret must be derived before master secret");
+            throw new IllegalStateException(
+                    "Handshake secret must be derived before master secret");
         }
         byte[] emptyHash = computeEmptyHash();
-        byte[] derived = HkdfStreebog.deriveSecret(
-                handshakeSecret, HkdfStreebog.PREFIXED_DERIVED, emptyHash, hashLen);
+        byte[] derived =
+                HkdfStreebog.deriveSecret(
+                        handshakeSecret, HkdfStreebog.PREFIXED_DERIVED, emptyHash, hashLen);
         try {
             byte[] zero = new byte[hashLen];
             masterSecret = HkdfStreebog.extract(derived, zero, hashLen);
@@ -104,8 +105,6 @@ public final class TlsKeySchedule {
         }
     }
 
-
-
     /**
      * @param transcriptHash хеш транскрипта
      * @return сырой handshake traffic secret (серверный) без обнуления.
@@ -115,8 +114,7 @@ public final class TlsKeySchedule {
      */
     public byte[] getServerHandshakeTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
-                handshakeSecret, HkdfStreebog.PREFIXED_S_HS_TRAFFIC,
-                transcriptHash, hashLen);
+                handshakeSecret, HkdfStreebog.PREFIXED_S_HS_TRAFFIC, transcriptHash, hashLen);
     }
 
     /**
@@ -128,11 +126,8 @@ public final class TlsKeySchedule {
      */
     public byte[] getClientHandshakeTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
-                handshakeSecret, HkdfStreebog.PREFIXED_C_HS_TRAFFIC,
-                transcriptHash, hashLen);
+                handshakeSecret, HkdfStreebog.PREFIXED_C_HS_TRAFFIC, transcriptHash, hashLen);
     }
-
-
 
     /**
      * @param transcriptHash хеш транскрипта
@@ -143,8 +138,7 @@ public final class TlsKeySchedule {
      */
     public byte[] getServerApplicationTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
-                masterSecret, HkdfStreebog.PREFIXED_S_AP_TRAFFIC,
-                transcriptHash, hashLen);
+                masterSecret, HkdfStreebog.PREFIXED_S_AP_TRAFFIC, transcriptHash, hashLen);
     }
 
     /**
@@ -156,13 +150,12 @@ public final class TlsKeySchedule {
      */
     public byte[] getClientApplicationTrafficSecret(byte[] transcriptHash) {
         return HkdfStreebog.deriveSecret(
-                masterSecret, HkdfStreebog.PREFIXED_C_AP_TRAFFIC,
-                transcriptHash, hashLen);
+                masterSecret, HkdfStreebog.PREFIXED_C_AP_TRAFFIC, transcriptHash, hashLen);
     }
 
     // ========================================================================
-        // Finished verify_data — чтобы не зависеть от порядка сообщений
-        // в транскрипте, пересылаем ключ напрямую (RFC 8446 §4.4.4)
+    // Finished verify_data — чтобы не зависеть от порядка сообщений
+    // в транскрипте, пересылаем ключ напрямую (RFC 8446 §4.4.4)
     // ========================================================================
 
     /**
@@ -176,9 +169,13 @@ public final class TlsKeySchedule {
      */
     public byte[] computeVerifyData(byte[] trafficSecret, byte[] transcript) {
         checkNotDestroyed();
-        byte[] finishedKey = HkdfStreebog.expandLabel(
-                trafficSecret, HkdfStreebog.PREFIXED_FINISHED, HkdfStreebog.EMPTY_CONTEXT,
-                hashLen, hashLen);
+        byte[] finishedKey =
+                HkdfStreebog.expandLabel(
+                        trafficSecret,
+                        HkdfStreebog.PREFIXED_FINISHED,
+                        HkdfStreebog.EMPTY_CONTEXT,
+                        hashLen,
+                        hashLen);
         Hmac hmac = HkdfStreebog.newHmac(hashLen);
         hmac.init(finishedKey);
         hmac.update(transcript, 0, transcript.length);
@@ -268,12 +265,20 @@ public final class TlsKeySchedule {
      * @return traffic keys (key + IV)
      */
     public TlsTrafficKeys deriveTrafficKeys(byte[] trafficSecret) {
-        byte[] key = HkdfStreebog.expandLabel(
-                trafficSecret, HkdfStreebog.PREFIXED_KEY, HkdfStreebog.EMPTY_CONTEXT,
-                ciphersuite.getKeyLen(), hashLen);
-        byte[] iv = HkdfStreebog.expandLabel(
-                trafficSecret, HkdfStreebog.PREFIXED_IV, HkdfStreebog.EMPTY_CONTEXT,
-                ciphersuite.getIvLen(), hashLen);
+        byte[] key =
+                HkdfStreebog.expandLabel(
+                        trafficSecret,
+                        HkdfStreebog.PREFIXED_KEY,
+                        HkdfStreebog.EMPTY_CONTEXT,
+                        ciphersuite.getKeyLen(),
+                        hashLen);
+        byte[] iv =
+                HkdfStreebog.expandLabel(
+                        trafficSecret,
+                        HkdfStreebog.PREFIXED_IV,
+                        HkdfStreebog.EMPTY_CONTEXT,
+                        ciphersuite.getIvLen(),
+                        hashLen);
         return new TlsTrafficKeys(key, iv);
     }
 

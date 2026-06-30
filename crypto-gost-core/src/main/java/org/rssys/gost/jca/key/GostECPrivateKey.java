@@ -1,14 +1,13 @@
 package org.rssys.gost.jca.key;
 
-import org.rssys.gost.jca.spec.GostDerCodec;
-import org.rssys.gost.signature.PrivateKeyParameters;
-
-import javax.security.auth.Destroyable;
 import java.io.IOException;
 import java.io.NotSerializableException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.security.PrivateKey;
+import javax.security.auth.Destroyable;
+import org.rssys.gost.jca.spec.GostDerCodec;
+import org.rssys.gost.signature.PrivateKeyParameters;
 
 /**
  * Закрытый ключ ГОСТ Р 34.10-2012, реализующий {@link PrivateKey}.

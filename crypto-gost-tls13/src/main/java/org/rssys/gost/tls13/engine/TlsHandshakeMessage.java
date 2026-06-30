@@ -1,8 +1,7 @@
 package org.rssys.gost.tls13.engine;
 
-import org.rssys.gost.tls13.TlsConstants;
-
 import java.util.Arrays;
+import org.rssys.gost.tls13.TlsConstants;
 
 /**
  * Сообщение handshake TLS 1.3 (RFC 8446 Section 4).
@@ -76,11 +75,14 @@ public final class TlsHandshakeMessage {
             throw new IllegalArgumentException(
                     "Handshake message truncated: expected "
                             + (TlsConstants.HANDSHAKE_HEADER_SIZE + len)
-                            + " but got " + data.length);
+                            + " but got "
+                            + data.length);
         }
-        byte[] body = Arrays.copyOfRange(data,
-                TlsConstants.HANDSHAKE_HEADER_SIZE,
-                TlsConstants.HANDSHAKE_HEADER_SIZE + len);
+        byte[] body =
+                Arrays.copyOfRange(
+                        data,
+                        TlsConstants.HANDSHAKE_HEADER_SIZE,
+                        TlsConstants.HANDSHAKE_HEADER_SIZE + len);
         return new TlsHandshakeMessage(type, body);
     }
 

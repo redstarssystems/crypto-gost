@@ -1,17 +1,23 @@
 package org.rssys.gost.tls13;
 
+import java.io.EOFException;
+import java.io.IOException;
+import java.nio.BufferOverflowException;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.util.AuthenticationException;
-import org.rssys.gost.util.CryptoRandom;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.tls13.cert.TlsCertUtils;
 import org.rssys.gost.tls13.cert.TlsCertificateValidator;
+import org.rssys.gost.tls13.config.ClientCertificateSelector;
+import org.rssys.gost.tls13.config.OIDFilter;
 import org.rssys.gost.tls13.config.SniCertificateSelector;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
-import org.rssys.gost.tls13.config.OIDFilter;
-import org.rssys.gost.tls13.config.ClientCertificateSelector;
 import org.rssys.gost.tls13.engine.HandshakeContext;
 import org.rssys.gost.tls13.engine.TlsHandshakeEngine;
 import org.rssys.gost.tls13.engine.TlsHandshakeMessage;
@@ -20,19 +26,11 @@ import org.rssys.gost.tls13.message.TlsMessageParser;
 import org.rssys.gost.tls13.psk.PskEntry;
 import org.rssys.gost.tls13.psk.PskStore;
 import org.rssys.gost.tls13.psk.TlsPskHelper;
-import org.rssys.gost.tls13.TlsUtils;
-import org.rssys.gost.tls13.record.TlsParsedRecord;
 import org.rssys.gost.tls13.record.TlsRecord;
 import org.rssys.gost.tls13.record.TlsTrafficKeys;
 import org.rssys.gost.tls13.record.UnprotectResult;
-import java.io.EOFException;
-import java.io.IOException;
-import java.nio.BufferOverflowException;
-import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-
+import org.rssys.gost.util.AuthenticationException;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * TLS 1.3 сессия с Kuznyechik-MGM-Streebog.
@@ -42,11 +40,12 @@ import java.util.List;
 public final class TlsSession implements AutoCloseable {
 
     private final TlsTransport transport;
-    private TlsCiphersuite ciphersuite;     // Меняется на клиенте после ServerHello если сервер выбрал другой suite
-    private final int hashLen;              // Оба Kuznyechik-MGM suite (L и S) имеют hashLen=32
+    private TlsCiphersuite
+            ciphersuite; // Меняется на клиенте после ServerHello если сервер выбрал другой suite
+    private final int hashLen; // Оба Kuznyechik-MGM suite (L и S) имеют hashLen=32
 
     // Аутентификация (долговременный ключ для CertificateVerify)
-    private final List<TlsCertificate> ourCertificateChain;
+    private final List<GostCertificate> ourCertificateChain;
     private final PrivateKeyParameters ourPrivateKey;
     private final List<PublicKeyParameters> caPublicKeys;
     private final String serverHostname;
@@ -68,7 +67,7 @@ public final class TlsSession implements AutoCloseable {
     // Состояние
     private boolean handshakeDone;
     private boolean closed;
-    private List<TlsCertificate> peerCertificates;
+    private List<GostCertificate> peerCertificates;
 
     // Буфер сборки handshake чтобы избежать GC pressure.
     private final GrowableBuffer handshakeBuffer = new GrowableBuffer();
@@ -76,10 +75,11 @@ public final class TlsSession implements AutoCloseable {
     // Переиспользуемые ByteBuffer-буферы для zero-alloc чтения. TlsRecord
     // скопирует данные в свой recordBuf (MGM принимает только byte[]), но
     // transport не аллоцирует промежуточные массивы.
-    private final ByteBuffer sessionRecordBuf = ByteBuffer.allocate(
-            TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH);
-    private final ByteBuffer sessionPlainBuf = ByteBuffer.allocate(
-            TlsConstants.MAX_PLAINTEXT_LENGTH);
+    private final ByteBuffer sessionRecordBuf =
+            ByteBuffer.allocate(
+                    TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+    private final ByteBuffer sessionPlainBuf =
+            ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
 
     // PSK-хранилище (session resumption)
     private PskStore pskStore;
@@ -126,35 +126,45 @@ public final class TlsSession implements AutoCloseable {
      * Закрывать transport нужно явно после session.close() (try-with-resources с правильным порядком).
      */
     public static TlsSession createClient(TlsClientConfig config, TlsTransport transport) {
-        TlsSession session = new TlsSession(transport, config.getCiphersuite(),
-                config.getClientCertificateChain(), config.getClientPrivateKey(),
-                config.getCaPublicKeys(), config.getServerHostname(),
-                config.isOcspRequired(), null);
+        TlsSession session =
+                new TlsSession(
+                        transport,
+                        config.getCiphersuite(),
+                        config.getClientCertificateChain(),
+                        config.getClientPrivateKey(),
+                        config.getCaPublicKeys(),
+                        config.getServerHostname(),
+                        config.isOcspRequired(),
+                        null);
         session.alpnProtocols = config.getAlpnProtocols();
         session.clientCertSelector = config.getClientCertificateSelector();
         return session;
     }
 
     /** Создаёт сессию для клиента (прямые параметры, без конфига). */
-    public static TlsSession createClient(TlsTransport transport,
-                                          TlsCiphersuite ciphersuite,
-                                          TlsCertificate ourCertificate,
-                                          PrivateKeyParameters ourPrivateKey) {
+    public static TlsSession createClient(
+            TlsTransport transport,
+            TlsCiphersuite ciphersuite,
+            GostCertificate ourCertificate,
+            PrivateKeyParameters ourPrivateKey) {
         return createClient(transport, ciphersuite, ourCertificate, ourPrivateKey, null);
     }
 
     /** Создаёт сессию для клиента с валидацией CA. */
-    public static TlsSession createClient(TlsTransport transport,
-                                          TlsCiphersuite ciphersuite,
-                                          TlsCertificate ourCertificate,
-                                          PrivateKeyParameters ourPrivateKey,
-                                          PublicKeyParameters caPublicKey) {
-        List<PublicKeyParameters> keys = caPublicKey != null
-                ? Collections.singletonList(caPublicKey) : null;
-        return createClient(new TlsClientConfig(ciphersuite)
-                .withClientCertificateChain(ourCertificate)
-                .withClientPrivateKey(ourPrivateKey)
-                .withCaPublicKeys(keys), transport);
+    public static TlsSession createClient(
+            TlsTransport transport,
+            TlsCiphersuite ciphersuite,
+            GostCertificate ourCertificate,
+            PrivateKeyParameters ourPrivateKey,
+            PublicKeyParameters caPublicKey) {
+        List<PublicKeyParameters> keys =
+                caPublicKey != null ? Collections.singletonList(caPublicKey) : null;
+        return createClient(
+                new TlsClientConfig(ciphersuite)
+                        .withClientCertificateChain(ourCertificate)
+                        .withClientPrivateKey(ourPrivateKey)
+                        .withCaPublicKeys(keys),
+                transport);
     }
 
     /**
@@ -166,9 +176,16 @@ public final class TlsSession implements AutoCloseable {
      * Caller владеет жизненным циклом transport: {@code TlsSession.close()} не закрывает transport.
      */
     public static TlsSession createServer(TlsServerConfig config, TlsTransport transport) {
-        TlsSession session = new TlsSession(transport, config.getCiphersuite(),
-                config.getServerCertificateChain(), config.getServerPrivateKey(),
-                config.getCaPublicKeys(), null, false, config.getOcspStaplingResponse());
+        TlsSession session =
+                new TlsSession(
+                        transport,
+                        config.getCiphersuite(),
+                        config.getServerCertificateChain(),
+                        config.getServerPrivateKey(),
+                        config.getCaPublicKeys(),
+                        null,
+                        false,
+                        config.getOcspStaplingResponse());
         session.sniSelector = config.getSniSelector();
         session.oidFilters = config.getOidFilters();
         session.alpnProtocols = config.getAlpnProtocols();
@@ -177,35 +194,40 @@ public final class TlsSession implements AutoCloseable {
         if (configNamedGroup != 0 && configNamedGroup != session.selectedNamedGroup) {
             session.selectedNamedGroup = configNamedGroup;
             session.selectedEcParams = TlsCiphersuite.namedGroupToParams(configNamedGroup);
-            session.messageBuilder = new TlsMessageBuilder(
-                    session.ciphersuite,
-                    session.messageBuilder.getOfferedCipherSuiteIds(),
-                    configNamedGroup,
-                    session.selectedSigScheme,
-                    session.ourPrivateKey,
-                    session.ourCertificateChain,
-                    session.hashLen);
+            session.messageBuilder =
+                    new TlsMessageBuilder(
+                            session.ciphersuite,
+                            session.messageBuilder.getOfferedCipherSuiteIds(),
+                            configNamedGroup,
+                            session.selectedSigScheme,
+                            session.ourPrivateKey,
+                            session.ourCertificateChain,
+                            session.hashLen);
         }
         return session;
     }
 
     /** Создаёт сессию для сервера (прямые параметры, без конфига). */
-    public static TlsSession createServer(TlsTransport transport,
-                                          TlsCiphersuite ciphersuite,
-                                          TlsCertificate ourCertificate,
-                                          PrivateKeyParameters ourPrivateKey) {
-        return createServer(new TlsServerConfig(ciphersuite,
-                Collections.singletonList(ourCertificate), ourPrivateKey), transport);
+    public static TlsSession createServer(
+            TlsTransport transport,
+            TlsCiphersuite ciphersuite,
+            GostCertificate ourCertificate,
+            PrivateKeyParameters ourPrivateKey) {
+        return createServer(
+                new TlsServerConfig(
+                        ciphersuite, Collections.singletonList(ourCertificate), ourPrivateKey),
+                transport);
     }
 
-    private TlsSession(TlsTransport transport,
-                       TlsCiphersuite ciphersuite,
-                       List<TlsCertificate> ourCertificateChain,
-                       PrivateKeyParameters ourPrivateKey,
-                       List<PublicKeyParameters> caPublicKeys,
-                       String serverHostname,
-                       boolean requireOcspStapling,
-                       byte[] ocspResponse) {
+    private TlsSession(
+            TlsTransport transport,
+            TlsCiphersuite ciphersuite,
+            List<GostCertificate> ourCertificateChain,
+            PrivateKeyParameters ourPrivateKey,
+            List<PublicKeyParameters> caPublicKeys,
+            String serverHostname,
+            boolean requireOcspStapling,
+            byte[] ocspResponse) {
         if (transport == null) throw new IllegalArgumentException("transport must not be null");
         if (ciphersuite == null) throw new IllegalArgumentException("ciphersuite must not be null");
         this.transport = transport;
@@ -217,16 +239,23 @@ public final class TlsSession implements AutoCloseable {
         this.serverHostname = serverHostname;
         this.requireOcspStapling = requireOcspStapling;
         this.ocspResponse = ocspResponse;
-        TlsCertificate leafCert = (ourCertificateChain != null && !ourCertificateChain.isEmpty())
-                ? ourCertificateChain.get(0) : null;
-        this.selectedSigScheme = leafCert != null
-                ? resolveSigScheme(leafCert)
-                : TlsConstants.SIG_GOST_TC26_A_256;
-        this.messageBuilder = new TlsMessageBuilder(ciphersuite,
-                List.of(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                        TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
-                selectedNamedGroup, selectedSigScheme,
-                ourPrivateKey, ourCertificateChain, hashLen);
+        GostCertificate leafCert =
+                (ourCertificateChain != null && !ourCertificateChain.isEmpty())
+                        ? ourCertificateChain.get(0)
+                        : null;
+        this.selectedSigScheme =
+                leafCert != null ? resolveSigScheme(leafCert) : TlsConstants.SIG_GOST_TC26_A_256;
+        this.messageBuilder =
+                new TlsMessageBuilder(
+                        ciphersuite,
+                        List.of(
+                                TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                                TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
+                        selectedNamedGroup,
+                        selectedSigScheme,
+                        ourPrivateKey,
+                        ourCertificateChain,
+                        hashLen);
     }
 
     // ========================================================================
@@ -254,8 +283,8 @@ public final class TlsSession implements AutoCloseable {
     /**
      * Единый движок handshake через {@link TlsHandshakeEngine}.
      * <p>
-     * Управляет циклом: receive → decrypt → assemble → engine.receive →
-     * poll → send → key changes → cert validation.
+     * Управляет циклом: receive -> decrypt -> assemble -> engine.receive ->
+     * poll -> send -> key changes -> cert validation.
      *
      * @param role роль участника handshake (CLIENT или SERVER)
      * @throws IOException при ошибке handshake
@@ -264,13 +293,23 @@ public final class TlsSession implements AutoCloseable {
         checkNotClosed();
         byte[] pskKey = null;
         try {
-            boolean requestClientAuth = (role == TlsHandshakeEngine.Role.SERVER
-                    && caPublicKeys != null && !caPublicKeys.isEmpty());
+            boolean requestClientAuth =
+                    (role == TlsHandshakeEngine.Role.SERVER
+                            && caPublicKeys != null
+                            && !caPublicKeys.isEmpty());
 
-            this.engine = new TlsHandshakeEngine(role, ciphersuite, messageBuilder,
-                    selectedEcParams, selectedNamedGroup, selectedSigScheme,
-                    hashLen, ocspResponse, requestClientAuth,
-                    sniSelector);
+            this.engine =
+                    new TlsHandshakeEngine(
+                            role,
+                            ciphersuite,
+                            messageBuilder,
+                            selectedEcParams,
+                            selectedNamedGroup,
+                            selectedSigScheme,
+                            hashLen,
+                            ocspResponse,
+                            requestClientAuth,
+                            sniSelector);
 
             // Передаём DNS-имя сервера для SNI (только клиент)
             if (role == TlsHandshakeEngine.Role.CLIENT && serverHostname != null) {
@@ -291,7 +330,9 @@ public final class TlsSession implements AutoCloseable {
             }
 
             // OID-фильтры для CertificateRequest (сервер)
-            if (role == TlsHandshakeEngine.Role.SERVER && oidFilters != null && !oidFilters.isEmpty()) {
+            if (role == TlsHandshakeEngine.Role.SERVER
+                    && oidFilters != null
+                    && !oidFilters.isEmpty()) {
                 engine.setOidFilters(oidFilters);
             }
             // Селектор сертификата клиента по oid_filters (клиент)
@@ -313,7 +354,7 @@ public final class TlsSession implements AutoCloseable {
                 }
             }
 
-            // Запуск: клиент → ClientHello, сервер → null
+            // Запуск: клиент -> ClientHello, сервер -> null
             byte[] firstOutgoing = engine.start();
             if (firstOutgoing != null) {
                 sendPlaintextRecord(TlsConstants.CT_HANDSHAKE, firstOutgoing);
@@ -324,14 +365,15 @@ public final class TlsSession implements AutoCloseable {
                 engine.setServerPskStore(pskStore);
             }
 
-            // Главный цикл: receive → assemble → engine.receive → poll → key changes → cert validation
+            // Главный цикл: receive -> assemble -> engine.receive -> poll -> key changes -> cert
+            // validation
             while (!engine.isDone() && !engine.isError()) {
                 sessionRecordBuf.clear();
                 try {
                     transport.receiveRecord(sessionRecordBuf);
                 } catch (BufferOverflowException e) {
-                    throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
-                            "Record too long", e);
+                    throw new TlsException(
+                            TlsConstants.ALERT_RECORD_OVERFLOW, "Record too long", e);
                 }
                 sessionRecordBuf.flip();
 
@@ -342,21 +384,28 @@ public final class TlsSession implements AutoCloseable {
                 }
 
                 if (readerRecord != null) {
-                    handshakeBuffer.ensureCapacity(handshakeBuffer.size + TlsConstants.MAX_PLAINTEXT_LENGTH);
-                    ByteBuffer dest = ByteBuffer.wrap(handshakeBuffer.buf, handshakeBuffer.size,
-                            handshakeBuffer.buf.length - handshakeBuffer.size);
+                    handshakeBuffer.ensureCapacity(
+                            handshakeBuffer.size + TlsConstants.MAX_PLAINTEXT_LENGTH);
+                    ByteBuffer dest =
+                            ByteBuffer.wrap(
+                                    handshakeBuffer.buf,
+                                    handshakeBuffer.size,
+                                    handshakeBuffer.buf.length - handshakeBuffer.size);
                     int destPosBefore = dest.position();
                     UnprotectResult r;
                     try {
                         r = readerRecord.unprotect(sessionRecordBuf, dest);
                     } catch (AuthenticationException e) {
-                        throw new TlsException(TlsConstants.ALERT_DECRYPT_ERROR,
-                                "Handshake record authentication failed", e);
+                        throw new TlsException(
+                                TlsConstants.ALERT_DECRYPT_ERROR,
+                                "Handshake record authentication failed",
+                                e);
                     }
                     if (r.contentType == TlsConstants.CT_ALERT) {
                         int alertLen = dest.position() - destPosBefore;
                         if (alertLen < 2) {
-                            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+                            throw new TlsException(
+                                    TlsConstants.ALERT_DECODE_ERROR,
                                     "Malformed alert during handshake");
                         }
                         // Per RFC 8446 §6: level field ignored, all alerts are fatal in TLS 1.3
@@ -364,11 +413,14 @@ public final class TlsSession implements AutoCloseable {
                         if (description == TlsConstants.CLOSE_NOTIFY) {
                             throw new EOFException("Peer closed connection during handshake");
                         }
-                        throw new TlsException(description,
-                                "Received fatal alert during handshake: code=" + (description & 0xFF));
+                        throw new TlsException(
+                                description,
+                                "Received fatal alert during handshake: code="
+                                        + (description & 0xFF));
                     }
                     if (r.contentType != TlsConstants.CT_HANDSHAKE) {
-                        throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                        throw new TlsException(
+                                TlsConstants.ALERT_UNEXPECTED_MESSAGE,
                                 "Expected handshake, got " + r.contentType);
                     }
                     handshakeBuffer.size += dest.position() - destPosBefore;
@@ -398,14 +450,22 @@ public final class TlsSession implements AutoCloseable {
                     if (engine.hasReadKeysChanged()) {
                         TlsTrafficKeys newKeys = engine.getReadKeys();
                         if (readerRecord != null) readerRecord.destroy();
-                        readerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                                ciphersuite.getTagLen(), ciphersuite);
+                        readerRecord =
+                                new TlsRecord(
+                                        newKeys.getKey(),
+                                        newKeys.getIv(),
+                                        ciphersuite.getTagLen(),
+                                        ciphersuite);
                     }
                     if (engine.hasWriteKeysChanged()) {
                         TlsTrafficKeys newKeys = engine.getWriteKeys();
                         if (writerRecord != null) writerRecord.destroy();
-                        writerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                                ciphersuite.getTagLen(), ciphersuite);
+                        writerRecord =
+                                new TlsRecord(
+                                        newKeys.getKey(),
+                                        newKeys.getIv(),
+                                        ciphersuite.getTagLen(),
+                                        ciphersuite);
                     }
                     if (engine.hasReadKeysChanged() || engine.hasWriteKeysChanged()) {
                         engine.acknowledgeKeyChange();
@@ -413,7 +473,7 @@ public final class TlsSession implements AutoCloseable {
 
                     // Обрабатываем валидацию сертификата
                     if (engine.needsCertificateValidation()) {
-                        List<TlsCertificate> certs = engine.getReceivedCertificates();
+                        List<GostCertificate> certs = engine.getReceivedCertificates();
                         try {
                             if (role == TlsHandshakeEngine.Role.SERVER) {
                                 checkClientCertificateChain(certs);
@@ -433,7 +493,8 @@ public final class TlsSession implements AutoCloseable {
             }
 
             if (engine.isError()) {
-                throw new TlsException(engine.getErrorAlertCode(),
+                throw new TlsException(
+                        engine.getErrorAlertCode(),
                         "Handshake failed: " + engine.getErrorMessage());
             }
 
@@ -441,14 +502,22 @@ public final class TlsSession implements AutoCloseable {
             if (engine.hasReadKeysChanged()) {
                 TlsTrafficKeys newKeys = engine.getReadKeys();
                 if (readerRecord != null) readerRecord.destroy();
-                readerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                        ciphersuite.getTagLen(), ciphersuite);
+                readerRecord =
+                        new TlsRecord(
+                                newKeys.getKey(),
+                                newKeys.getIv(),
+                                ciphersuite.getTagLen(),
+                                ciphersuite);
             }
             if (engine.hasWriteKeysChanged()) {
                 TlsTrafficKeys newKeys = engine.getWriteKeys();
                 if (writerRecord != null) writerRecord.destroy();
-                writerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                        ciphersuite.getTagLen(), ciphersuite);
+                writerRecord =
+                        new TlsRecord(
+                                newKeys.getKey(),
+                                newKeys.getIv(),
+                                ciphersuite.getTagLen(),
+                                ciphersuite);
             }
             if (engine.hasReadKeysChanged() || engine.hasWriteKeysChanged()) {
                 engine.acknowledgeKeyChange();
@@ -461,27 +530,36 @@ public final class TlsSession implements AutoCloseable {
             handshakeBuffer.reset();
 
             if (role == TlsHandshakeEngine.Role.SERVER) {
-                    for (int nst = 0; nst < ticketsToSend; nst++) {
-                        sendNewSessionTicket(nst);
-                    }
+                for (int nst = 0; nst < ticketsToSend; nst++) {
+                    sendNewSessionTicket(nst);
+                }
             }
         } catch (IOException e) {
             // Если writerRecord ещё не инициализирован, но handshake-ключи уже
-            // установлены (например, failure в receiveFinished после writeKeys = handshakeClientKeys),
+            // установлены (например, failure в receiveFinished после writeKeys =
+            // handshakeClientKeys),
             // создаём writerRecord для отправки зашифрованного alert (RFC 8446 §6).
             if (writerRecord == null && engine != null && engine.getWriteKeys() != null) {
-                writerRecord = new TlsRecord(
-                        engine.getWriteKeys().getKey(),
-                        engine.getWriteKeys().getIv(),
-                        ciphersuite.getTagLen(), ciphersuite);
+                writerRecord =
+                        new TlsRecord(
+                                engine.getWriteKeys().getKey(),
+                                engine.getWriteKeys().getIv(),
+                                ciphersuite.getTagLen(),
+                                ciphersuite);
             }
             sendAlert(alertDescription(e));
-            if (engine != null) { engine.destroy(); engine = null; }
+            if (engine != null) {
+                engine.destroy();
+                engine = null;
+            }
             destroyKeyMaterial();
             throw e;
         } catch (RuntimeException e) {
             sendAlert(alertDescription(e));
-            if (engine != null) { engine.destroy(); engine = null; }
+            if (engine != null) {
+                engine.destroy();
+                engine = null;
+            }
             destroyKeyMaterial();
             throw e;
         } finally {
@@ -502,10 +580,11 @@ public final class TlsSession implements AutoCloseable {
      * @param role   роль участника handshake
      * @throws IOException при ошибке отправки
      */
-    private void processEngineOutgoing(TlsHandshakeEngine engine,
-                                        TlsHandshakeEngine.Role role) throws IOException {
-        boolean isServerSendFlight = (role == TlsHandshakeEngine.Role.SERVER
-                && engine.getState() == TlsHandshakeEngine.State.SERVER_SEND_FLIGHT);
+    private void processEngineOutgoing(TlsHandshakeEngine engine, TlsHandshakeEngine.Role role)
+            throws IOException {
+        boolean isServerSendFlight =
+                (role == TlsHandshakeEngine.Role.SERVER
+                        && engine.getState() == TlsHandshakeEngine.State.SERVER_SEND_FLIGHT);
 
         if (isServerSendFlight) {
             // Сервер: первый фрейм — SH (plaintext)
@@ -513,18 +592,26 @@ public final class TlsSession implements AutoCloseable {
             if (sh != null) {
                 sendPlaintextRecord(TlsConstants.CT_HANDSHAKE, sh);
             }
-            // Подтверждаем write keys → создаём writerRecord для последующих зашифрованных фреймов
+            // Подтверждаем write keys -> создаём writerRecord для последующих зашифрованных фреймов
             if (engine.hasWriteKeysChanged()) {
                 TlsTrafficKeys newKeys = engine.getWriteKeys();
                 if (writerRecord != null) writerRecord.destroy();
-                writerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                        ciphersuite.getTagLen(), ciphersuite);
+                writerRecord =
+                        new TlsRecord(
+                                newKeys.getKey(),
+                                newKeys.getIv(),
+                                ciphersuite.getTagLen(),
+                                ciphersuite);
             }
             if (engine.hasReadKeysChanged()) {
                 TlsTrafficKeys newKeys = engine.getReadKeys();
                 if (readerRecord != null) readerRecord.destroy();
-                readerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                        ciphersuite.getTagLen(), ciphersuite);
+                readerRecord =
+                        new TlsRecord(
+                                newKeys.getKey(),
+                                newKeys.getIv(),
+                                ciphersuite.getTagLen(),
+                                ciphersuite);
             }
             if (engine.hasReadKeysChanged() || engine.hasWriteKeysChanged()) {
                 engine.acknowledgeKeyChange();
@@ -541,14 +628,22 @@ public final class TlsSession implements AutoCloseable {
         if (engine.hasReadKeysChanged()) {
             TlsTrafficKeys newKeys = engine.getReadKeys();
             if (readerRecord != null) readerRecord.destroy();
-            readerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                    ciphersuite.getTagLen(), ciphersuite);
+            readerRecord =
+                    new TlsRecord(
+                            newKeys.getKey(),
+                            newKeys.getIv(),
+                            ciphersuite.getTagLen(),
+                            ciphersuite);
         }
         if (engine.hasWriteKeysChanged()) {
             TlsTrafficKeys newKeys = engine.getWriteKeys();
             if (writerRecord != null) writerRecord.destroy();
-            writerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                    ciphersuite.getTagLen(), ciphersuite);
+            writerRecord =
+                    new TlsRecord(
+                            newKeys.getKey(),
+                            newKeys.getIv(),
+                            ciphersuite.getTagLen(),
+                            ciphersuite);
         }
         if (engine.hasReadKeysChanged() || engine.hasWriteKeysChanged()) {
             engine.acknowledgeKeyChange();
@@ -576,9 +671,10 @@ public final class TlsSession implements AutoCloseable {
      * @param maxFragLenCode код max_fragment_length (1=512, 2=1024, 3=2048, 4=4096), 0 = дефолт
      */
     public void setMaxSendFragment(int maxFragLenCode) {
-        this.maxPayload = (maxFragLenCode >= 1 && maxFragLenCode <= 4)
-                ? TlsConstants.MAX_FRAG_LEN_VALUES[maxFragLenCode] - 1
-                : TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
+        this.maxPayload =
+                (maxFragLenCode >= 1 && maxFragLenCode <= 4)
+                        ? TlsConstants.MAX_FRAG_LEN_VALUES[maxFragLenCode] - 1
+                        : TlsConstants.MAX_PLAINTEXT_LENGTH - 1;
     }
 
     /**
@@ -587,7 +683,8 @@ public final class TlsSession implements AutoCloseable {
      */
     public void setMaxFragmentLengthRequest(int code) {
         if (handshakeDone) {
-            throw new IllegalStateException("Cannot set max_fragment_length request after handshake completed");
+            throw new IllegalStateException(
+                    "Cannot set max_fragment_length request after handshake completed");
         }
         this.maxFragLenRequest = (code >= 1 && code <= 4) ? code : 0;
         if (messageBuilder != null) {
@@ -616,7 +713,8 @@ public final class TlsSession implements AutoCloseable {
         int offset = 0;
         while (offset < data.length) {
             int chunkLen = Math.min(data.length - offset, maxPayload);
-            byte[] record = writerRecord.protect(TlsConstants.CT_APPLICATION_DATA, data, offset, chunkLen);
+            byte[] record =
+                    writerRecord.protect(TlsConstants.CT_APPLICATION_DATA, data, offset, chunkLen);
             transport.sendRecord(record);
             offset += chunkLen;
         }
@@ -636,8 +734,7 @@ public final class TlsSession implements AutoCloseable {
             try {
                 transport.receiveRecord(sessionRecordBuf);
             } catch (BufferOverflowException e) {
-                throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
-                        "Record too long", e);
+                throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW, "Record too long", e);
             }
             sessionRecordBuf.flip();
 
@@ -646,8 +743,8 @@ public final class TlsSession implements AutoCloseable {
             try {
                 r = readerRecord.unprotect(sessionRecordBuf, sessionPlainBuf);
             } catch (AuthenticationException e) {
-                throw new TlsException(TlsConstants.ALERT_DECRYPT_ERROR,
-                        "Record authentication failed", e);
+                throw new TlsException(
+                        TlsConstants.ALERT_DECRYPT_ERROR, "Record authentication failed", e);
             }
             byte ct = r.contentType;
             sessionPlainBuf.flip();
@@ -674,17 +771,19 @@ public final class TlsSession implements AutoCloseable {
                 // Все post-handshake сообщения (KeyUpdate, NewSessionTicket)
                 // маршрутизируются через engine — это единственная точка входа
                 // для post-handshake, чтобы JSSE-модуль не дублировал логику.
-                TlsHandshakeEngine.PostHandshakeResult result =
-                        engine.receivePostHandshake(msg);
+                TlsHandshakeEngine.PostHandshakeResult result = engine.receivePostHandshake(msg);
                 switch (result.type) {
                     case KEY_UPDATE_HANDLED:
                         // Сначала reader — новые ключи применяются немедленно
                         if (engine.hasReadKeysChanged()) {
                             TlsTrafficKeys newKeys = engine.getReadKeys();
                             if (readerRecord != null) readerRecord.destroy();
-                            readerRecord = new TlsRecord(newKeys.getKey(),
-                                    newKeys.getIv(),
-                                    ciphersuite.getTagLen(), ciphersuite);
+                            readerRecord =
+                                    new TlsRecord(
+                                            newKeys.getKey(),
+                                            newKeys.getIv(),
+                                            ciphersuite.getTagLen(),
+                                            ciphersuite);
                         }
                         // Затем отложенный писатель: KU-ответ (если pending) —
                         // отправляется ДО подтверждения, через старый writerRecord
@@ -699,9 +798,12 @@ public final class TlsSession implements AutoCloseable {
                         if (engine.hasWriteKeysChanged()) {
                             TlsTrafficKeys newKeys = engine.getWriteKeys();
                             if (writerRecord != null) writerRecord.destroy();
-                            writerRecord = new TlsRecord(newKeys.getKey(),
-                                    newKeys.getIv(),
-                                    ciphersuite.getTagLen(), ciphersuite);
+                            writerRecord =
+                                    new TlsRecord(
+                                            newKeys.getKey(),
+                                            newKeys.getIv(),
+                                            ciphersuite.getTagLen(),
+                                            ciphersuite);
                         }
                         engine.acknowledgeKeyChange();
                         continue;
@@ -711,14 +813,15 @@ public final class TlsSession implements AutoCloseable {
                 }
             }
             if (ct != TlsConstants.CT_APPLICATION_DATA) {
-                throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
-                        "Unexpected content type: " + ct);
+                throw new TlsException(
+                        TlsConstants.ALERT_UNEXPECTED_MESSAGE, "Unexpected content type: " + ct);
             }
             byte[] result = new byte[sessionPlainBuf.remaining()];
             sessionPlainBuf.get(result);
             return result;
         }
-        throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+        throw new TlsException(
+                TlsConstants.ALERT_UNEXPECTED_MESSAGE,
                 "Too many consecutive post-handshake messages");
     }
 
@@ -731,8 +834,7 @@ public final class TlsSession implements AutoCloseable {
      */
     static byte parseAlertDescription(byte[] data) throws TlsException {
         if (data.length < 2) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                    "Truncated alert message");
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "Truncated alert message");
         }
         return data[1];
     }
@@ -748,9 +850,11 @@ public final class TlsSession implements AutoCloseable {
         closed = true;
         handshakeDone = false;
         try {
-            byte[] alertPayload = new byte[]{TlsConstants.ALERT_WARNING, TlsConstants.CLOSE_NOTIFY};
+            byte[] alertPayload =
+                    new byte[] {TlsConstants.ALERT_WARNING, TlsConstants.CLOSE_NOTIFY};
             transport.sendRecord(writerRecord.protect(TlsConstants.CT_ALERT, alertPayload));
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         if (engine != null) {
             engine.destroy();
             engine = null;
@@ -795,8 +899,12 @@ public final class TlsSession implements AutoCloseable {
         if (engine.hasWriteKeysChanged()) {
             TlsTrafficKeys newKeys = engine.getWriteKeys();
             if (writerRecord != null) writerRecord.destroy();
-            writerRecord = new TlsRecord(newKeys.getKey(), newKeys.getIv(),
-                    ciphersuite.getTagLen(), ciphersuite);
+            writerRecord =
+                    new TlsRecord(
+                            newKeys.getKey(),
+                            newKeys.getIv(),
+                            ciphersuite.getTagLen(),
+                            ciphersuite);
             engine.acknowledgeKeyChange();
         }
     }
@@ -804,7 +912,7 @@ public final class TlsSession implements AutoCloseable {
     /**
      * Обрабатывает NewSessionTicket от сервера (RFC 8446 §4.6.1).
      * <p>
-     * Парсит тело тикета, вырабатывает PSK через HKDF-Expand-Label(nonce → resumption_master_secret)
+     * Парсит тело тикета, вырабатывает PSK через HKDF-Expand-Label(nonce -> resumption_master_secret)
      * и сохраняет в PskStore для последующего session resumption.
      *
      * @param body тело NewSessionTicket
@@ -819,9 +927,14 @@ public final class TlsSession implements AutoCloseable {
         byte[] psk = TlsPskHelper.derivePsk(rms, nst.ticketNonce, hashLen);
         // RuntimeException от PskStore (например RedisException) не ломает handshake
         try {
-            pskStore.onTicketReceived(new PskEntry(
-                    nst.ticket, nst.ticketLifetime, nst.ticketAgeAdd, nst.ticketNonce, psk,
-                    System.currentTimeMillis()));
+            pskStore.onTicketReceived(
+                    new PskEntry(
+                            nst.ticket,
+                            nst.ticketLifetime,
+                            nst.ticketAgeAdd,
+                            nst.ticketNonce,
+                            psk,
+                            System.currentTimeMillis()));
         } catch (RuntimeException e) {
             // Silent catch by design: вызывающий код владеет PskStore, и если его реализация
             // кидает RuntimeException — это не ошибка handshake. Resumption будет
@@ -839,7 +952,7 @@ public final class TlsSession implements AutoCloseable {
      * @throws IOException при ошибке отправки
      */
     private void sendNewSessionTicket(int nstIndex) throws IOException {
-        byte[] ticket = new byte[32];
+        byte[] ticket = new byte[TlsConstants.RANDOM_LENGTH];
         // Монотонный nonce: ticket_nonce = 8-байтовый big-endian индекс
         // (RFC 8446 §4.6.1: MUST be unique across all tickets on this connection)
         byte[] ticketNonce = new byte[8];
@@ -850,9 +963,10 @@ public final class TlsSession implements AutoCloseable {
         int ageAddRaw = CryptoRandom.INSTANCE.nextInt();
         long ticketAgeAdd = ageAddRaw & 0xFFFFFFFFL;
         CryptoRandom.INSTANCE.nextBytes(ticket);
-        byte[] body = TlsMessageBuilder.buildNewSessionTicket(86400, ticketAgeAdd, ticketNonce, ticket);
-        byte[] framed = new TlsHandshakeMessage(
-                TlsConstants.HT_NEW_SESSION_TICKET, body).encode();
+        byte[] body =
+                TlsMessageBuilder.buildNewSessionTicket(
+                        TlsConstants.DEFAULT_SESSION_TIMEOUT, ticketAgeAdd, ticketNonce, ticket);
+        byte[] framed = new TlsHandshakeMessage(TlsConstants.HT_NEW_SESSION_TICKET, body).encode();
         sendEncryptedRecord(TlsConstants.CT_HANDSHAKE, framed);
         // Resumption Master Secret живёт в engine
         byte[] rms = engine != null ? engine.getResumptionMasterSecret() : null;
@@ -860,9 +974,14 @@ public final class TlsSession implements AutoCloseable {
             byte[] psk = TlsPskHelper.derivePsk(rms, ticketNonce, hashLen);
             // RuntimeException от PskStore не ломает handshake
             try {
-                pskStore.onTicketReceived(new PskEntry(
-                        ticket, 86400, ticketAgeAdd, ticketNonce, psk,
-                        System.currentTimeMillis()));
+                pskStore.onTicketReceived(
+                        new PskEntry(
+                                ticket,
+                                TlsConstants.DEFAULT_SESSION_TIMEOUT,
+                                ticketAgeAdd,
+                                ticketNonce,
+                                psk,
+                                System.currentTimeMillis()));
             } catch (RuntimeException e) {
                 // Silent catch by design: вызывающий код владеет PskStore, и если его реализация
                 // кидает RuntimeException — это не ошибка handshake. Resumption будет
@@ -905,20 +1024,27 @@ public final class TlsSession implements AutoCloseable {
      * @param readerKeys ключи для чтения (decrypt)
      * @param writerKeys ключи для записи (encrypt)
      */
-    static TlsSession createForTest(TlsTransport transport, TlsCiphersuite cs,
-                                     TlsTrafficKeys readerKeys,
-                                     TlsTrafficKeys writerKeys) {
+    static TlsSession createForTest(
+            TlsTransport transport,
+            TlsCiphersuite cs,
+            TlsTrafficKeys readerKeys,
+            TlsTrafficKeys writerKeys) {
         TlsSession s = new TlsSession(transport, cs, null, null, null, null, false, null);
-        s.readerRecord = new TlsRecord(readerKeys.getKey(), readerKeys.getIv(),
-                cs.getTagLen(), cs);
-        s.writerRecord = new TlsRecord(writerKeys.getKey(), writerKeys.getIv(),
-                cs.getTagLen(), cs);
+        s.readerRecord = new TlsRecord(readerKeys.getKey(), readerKeys.getIv(), cs.getTagLen(), cs);
+        s.writerRecord = new TlsRecord(writerKeys.getKey(), writerKeys.getIv(), cs.getTagLen(), cs);
         // Минимальный engine в POST_HANDSHAKE — нужен для read() с post-handshake сообщениями
-        s.engine = new TlsHandshakeEngine(
-                TlsHandshakeEngine.Role.CLIENT,
-                cs, s.messageBuilder,
-                s.selectedEcParams, s.selectedNamedGroup, s.selectedSigScheme,
-                s.hashLen, null, false, null);
+        s.engine =
+                new TlsHandshakeEngine(
+                        TlsHandshakeEngine.Role.CLIENT,
+                        cs,
+                        s.messageBuilder,
+                        s.selectedEcParams,
+                        s.selectedNamedGroup,
+                        s.selectedSigScheme,
+                        s.hashLen,
+                        null,
+                        false,
+                        null);
         s.engine.initForTesting(new byte[cs.getHashLen()], new byte[cs.getHashLen()]);
         s.handshakeDone = true;
         return s;
@@ -932,20 +1058,23 @@ public final class TlsSession implements AutoCloseable {
      * Engine инициализируется через initForTesting() — устанавливаются
      * app traffic secrets и состояние POST_HANDSHAKE.
      */
-    static void setAppTrafficSecrets(TlsSession session,
-                                      byte[] serverSecret, byte[] clientSecret,
-                                      boolean isServer) {
+    static void setAppTrafficSecrets(
+            TlsSession session, byte[] serverSecret, byte[] clientSecret, boolean isServer) {
         if (session.engine == null) {
-            session.engine = new TlsHandshakeEngine(
-                    isServer ? TlsHandshakeEngine.Role.SERVER : TlsHandshakeEngine.Role.CLIENT,
-                    session.ciphersuite,
-                    session.messageBuilder,
-                    session.selectedEcParams,
-                    session.selectedNamedGroup,
-                    session.selectedSigScheme,
-                    session.hashLen,
-                    null, false,
-                    null); // sniSelector — тестовый engine, selector не нужен
+            session.engine =
+                    new TlsHandshakeEngine(
+                            isServer
+                                    ? TlsHandshakeEngine.Role.SERVER
+                                    : TlsHandshakeEngine.Role.CLIENT,
+                            session.ciphersuite,
+                            session.messageBuilder,
+                            session.selectedEcParams,
+                            session.selectedNamedGroup,
+                            session.selectedSigScheme,
+                            session.hashLen,
+                            null,
+                            false,
+                            null); // sniSelector — тестовый engine, selector не нужен
         }
         session.engine.initForTesting(serverSecret, clientSecret);
     }
@@ -963,13 +1092,18 @@ public final class TlsSession implements AutoCloseable {
             closed = true;
             handshakeDone = false;
             try {
-                byte[] alertPayload = new byte[]{TlsConstants.ALERT_WARNING, TlsConstants.CLOSE_NOTIFY};
+                byte[] alertPayload =
+                        new byte[] {TlsConstants.ALERT_WARNING, TlsConstants.CLOSE_NOTIFY};
                 if (writerRecord != null) {
                     transport.sendRecord(writerRecord.protect(TlsConstants.CT_ALERT, alertPayload));
                 } else {
-                    transport.sendRecord(TlsMessageBuilder.buildPlaintextRecord(TlsConstants.CT_ALERT, alertPayload));
+                    transport.sendRecord(
+                            TlsMessageBuilder.buildPlaintextRecord(
+                                    TlsConstants.CT_ALERT, alertPayload));
                 }
-            } catch (Exception ignored) { /* best-effort согласно RFC 8446 §6.1 */ }
+            } catch (Exception ignored) {
+                /* best-effort согласно RFC 8446 §6.1 */
+            }
             if (engine != null) {
                 engine.destroy();
                 engine = null;
@@ -1050,7 +1184,7 @@ public final class TlsSession implements AutoCloseable {
     }
 
     /** @return сертификаты пира (null, если handshake не завершён или PSK) */
-    public List<TlsCertificate> getPeerCertificates() {
+    public List<GostCertificate> getPeerCertificates() {
         return peerCertificates;
     }
 
@@ -1079,7 +1213,7 @@ public final class TlsSession implements AutoCloseable {
      *
      * @throws TlsException при ошибке валидации
      */
-    void checkServerCertificateChain(List<TlsCertificate> chain) throws TlsException {
+    void checkServerCertificateChain(List<GostCertificate> chain) throws TlsException {
         TlsCertificateValidator.checkServerCertificateChain(
                 chain, serverHostname, requireOcspStapling, caPublicKeys);
     }
@@ -1094,7 +1228,7 @@ public final class TlsSession implements AutoCloseable {
      *
      * @throws TlsException при ошибке валидации
      */
-    void checkClientCertificateChain(List<TlsCertificate> chain) throws TlsException {
+    void checkClientCertificateChain(List<GostCertificate> chain) throws TlsException {
         TlsCertificateValidator.checkClientCertificateChain(chain, caPublicKeys);
     }
 
@@ -1115,9 +1249,9 @@ public final class TlsSession implements AutoCloseable {
      * @return true если подпись верна
      * @throws IOException при ошибке верификации
      */
-    void verifyCertificateVerify(byte[] cvBody, TlsCertificate cert,
-                                           byte[] hsTranscript,
-                                           boolean isServer) throws IOException {
+    void verifyCertificateVerify(
+            byte[] cvBody, GostCertificate cert, byte[] hsTranscript, boolean isServer)
+            throws IOException {
         TlsCertificateValidator.verifyCertificateVerify(cvBody, cert, hsTranscript, isServer);
     }
 
@@ -1162,11 +1296,13 @@ public final class TlsSession implements AutoCloseable {
      */
     private void sendAlert(byte description) {
         try {
-            byte[] alertPayload = new byte[]{TlsConstants.ALERT_FATAL, description};
+            byte[] alertPayload = new byte[] {TlsConstants.ALERT_FATAL, description};
             if (writerRecord != null) {
                 transport.sendRecord(writerRecord.protect(TlsConstants.CT_ALERT, alertPayload));
             } else {
-                transport.sendRecord(TlsMessageBuilder.buildPlaintextRecord(TlsConstants.CT_ALERT, alertPayload));
+                transport.sendRecord(
+                        TlsMessageBuilder.buildPlaintextRecord(
+                                TlsConstants.CT_ALERT, alertPayload));
             }
         } catch (Exception ignored) {
         }
@@ -1174,7 +1310,7 @@ public final class TlsSession implements AutoCloseable {
 
     /**
      * Маппинг IOException на код TLS-алерта.
-     * TlsException несёт собственный alertCode; остальные → ALERT_HANDSHAKE_FAILURE.
+     * TlsException несёт собственный alertCode; остальные -> ALERT_HANDSHAKE_FAILURE.
      *
      * @param e исключение
      * @return код alert-описания
@@ -1232,29 +1368,33 @@ public final class TlsSession implements AutoCloseable {
      *
      * @throws IOException при ошибке чтения или дешифрации
      */
-        void readNextHandshakeRecord() throws IOException {
+    void readNextHandshakeRecord() throws IOException {
         sessionRecordBuf.clear();
         try {
             transport.receiveRecord(sessionRecordBuf);
         } catch (BufferOverflowException e) {
-            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
-                    "Record too long", e);
+            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW, "Record too long", e);
         }
         sessionRecordBuf.flip();
         try {
-            handshakeBuffer.ensureCapacity(handshakeBuffer.size + TlsConstants.MAX_PLAINTEXT_LENGTH);
-            ByteBuffer dest = ByteBuffer.wrap(handshakeBuffer.buf, handshakeBuffer.size,
-                    handshakeBuffer.buf.length - handshakeBuffer.size);
+            handshakeBuffer.ensureCapacity(
+                    handshakeBuffer.size + TlsConstants.MAX_PLAINTEXT_LENGTH);
+            ByteBuffer dest =
+                    ByteBuffer.wrap(
+                            handshakeBuffer.buf,
+                            handshakeBuffer.size,
+                            handshakeBuffer.buf.length - handshakeBuffer.size);
             int destPosBefore = dest.position();
             UnprotectResult r = readerRecord.unprotect(sessionRecordBuf, dest);
             if (r.contentType != TlsConstants.CT_HANDSHAKE) {
-                throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                throw new TlsException(
+                        TlsConstants.ALERT_UNEXPECTED_MESSAGE,
                         "Expected handshake, got " + r.contentType);
             }
             handshakeBuffer.size += dest.position() - destPosBefore;
         } catch (AuthenticationException e) {
-            throw new TlsException(TlsConstants.ALERT_DECRYPT_ERROR,
-                    "Handshake record authentication failed", e);
+            throw new TlsException(
+                    TlsConstants.ALERT_DECRYPT_ERROR, "Handshake record authentication failed", e);
         }
     }
 
@@ -1294,14 +1434,15 @@ public final class TlsSession implements AutoCloseable {
      * Определяет схему подписи по named group сертификата.
      *
      * <p>Раньше перебирал 7 известных ГОСТ-схем через hasSignatureScheme().
-     * Теперь — прямая конверсия: getNamedGroup() → namedGroupToSignatureScheme(),
+     * Теперь — прямая конверсия: TlsCertUtils.getNamedGroup() -> namedGroupToSignatureScheme(),
      * что делает ровно то же самое без цикла.</p>
      *
      * @param cert сертификат для определения схемы подписи
      * @return идентификатор схемы подписи
      */
-    private static int resolveSigScheme(TlsCertificate cert) {
-        return TlsCiphersuite.namedGroupToSignatureScheme(cert.getNamedGroup());
+    private static int resolveSigScheme(GostCertificate cert) {
+        return TlsCiphersuite.namedGroupToSignatureScheme(
+                TlsCertUtils.getNamedGroup(cert.getPublicKey()));
     }
 
     /**
@@ -1382,5 +1523,4 @@ public final class TlsSession implements AutoCloseable {
             }
         }
     }
-
 }

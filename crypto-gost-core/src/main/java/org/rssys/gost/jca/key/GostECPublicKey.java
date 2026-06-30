@@ -1,13 +1,12 @@
 package org.rssys.gost.jca.key;
 
-import org.rssys.gost.jca.spec.GostDerCodec;
-import org.rssys.gost.signature.PublicKeyParameters;
-
 import java.io.IOException;
 import java.io.NotSerializableException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.security.PublicKey;
+import org.rssys.gost.jca.spec.GostDerCodec;
+import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Открытый ключ ГОСТ Р 34.10-2012, реализующий {@link PublicKey}.

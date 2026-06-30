@@ -1,9 +1,9 @@
 package org.rssys.gost.jsse.crl;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit-тесты для {@link CrlPolicy}.

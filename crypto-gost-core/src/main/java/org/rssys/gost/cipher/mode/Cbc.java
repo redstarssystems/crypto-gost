@@ -33,7 +33,8 @@ public class Cbc extends AbstractStreamMode {
     }
 
     @Override
-    public void init(boolean forEncryption, CipherParameters params) throws IllegalArgumentException {
+    public void init(boolean forEncryption, CipherParameters params)
+            throws IllegalArgumentException {
         reset();
         ParametersWithIV ivParams = requireIV(params, "CBC");
         byte[] iv = ivParams.getIV();
@@ -62,8 +63,9 @@ public class Cbc extends AbstractStreamMode {
         checkInitialized();
         checkInputBounds(in, inOff, blockSize);
         checkOutputBounds(out, outOff, blockSize);
-        return forEncryption ? encryptBlock(in, inOff, out, outOff)
-                             : decryptBlock(in, inOff, out, outOff);
+        return forEncryption
+                ? encryptBlock(in, inOff, out, outOff)
+                : decryptBlock(in, inOff, out, outOff);
     }
 
     // CBC не является потоковым режимом — calculateByte не используется
@@ -78,10 +80,10 @@ public class Cbc extends AbstractStreamMode {
             // fast path: zero-alloc через encryptToFields
             long inHi = (long) LONG_BE.get(in, inOff);
             long inLo = (long) LONG_BE.get(in, inOff + 8);
-            long rHi  = (long) LONG_BE.get(R, 0);
-            long rLo  = (long) LONG_BE.get(R, 8);
+            long rHi = (long) LONG_BE.get(R, 0);
+            long rLo = (long) LONG_BE.get(R, 8);
             kuz.encryptToFields(inHi ^ rHi, inLo ^ rLo);
-            LONG_BE.set(out, outOff,     kuz.getEncBufHi());
+            LONG_BE.set(out, outOff, kuz.getEncBufHi());
             LONG_BE.set(out, outOff + 8, kuz.getEncBufLo());
         } else {
             // fallback для не-Kuznyechik шифров (CMAC): scratchBuf уже предзадан
@@ -101,7 +103,7 @@ public class Cbc extends AbstractStreamMode {
         cipher.processBlock(in, inOff, scratchBuf, 0);
         long dHi = (long) LONG_BE.get(scratchBuf, 0);
         long dLo = (long) LONG_BE.get(scratchBuf, 8);
-        LONG_BE.set(out, outOff,     dHi ^ rHi);
+        LONG_BE.set(out, outOff, dHi ^ rHi);
         LONG_BE.set(out, outOff + 8, dLo ^ rLo);
         shiftRegister(in, inOff, blockSize);
         return blockSize;

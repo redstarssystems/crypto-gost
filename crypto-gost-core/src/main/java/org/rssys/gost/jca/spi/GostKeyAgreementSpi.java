@@ -1,5 +1,14 @@
 package org.rssys.gost.jca.spi;
 
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.Key;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
+import javax.crypto.KeyAgreementSpi;
+import javax.crypto.SecretKey;
+import javax.crypto.ShortBufferException;
 import org.rssys.gost.api.KeyAgreement;
 import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jca.key.GostECPublicKey;
@@ -7,20 +16,10 @@ import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
-import javax.crypto.KeyAgreementSpi;
-import javax.crypto.SecretKey;
-import javax.crypto.ShortBufferException;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.Key;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.security.spec.AlgorithmParameterSpec;
-
 /**
  * JCA {@link KeyAgreementSpi} для алгоритма ECDH (ГОСТ Р 34.10-2012).
  *
- * <p>Поддерживает однофазный ECDH: {@code engineInit(privKey)} → {@code engineDoPhase(pubKey, true)} →
+ * <p>Поддерживает однофазный ECDH: {@code engineInit(privKey)} -> {@code engineDoPhase(pubKey, true)} ->
  * {@code engineGenerateSecret()}.
  *
  * <p>Delegates to {@link KeyAgreement#computeSharedSecret(PrivateKeyParameters, PublicKeyParameters)}.
@@ -44,7 +43,8 @@ public final class GostKeyAgreementSpi extends KeyAgreementSpi {
     @Override
     protected void engineInit(Key key, SecureRandom random) throws InvalidKeyException {
         if (!(key instanceof GostECPrivateKey)) {
-            throw new InvalidKeyException("Expected GostECPrivateKey, got: " + key.getClass().getName());
+            throw new InvalidKeyException(
+                    "Expected GostECPrivateKey, got: " + key.getClass().getName());
         }
         GostECPrivateKey gostKey = (GostECPrivateKey) key;
         this.myPriv = gostKey.toPrivateKeyParameters();
@@ -86,7 +86,8 @@ public final class GostKeyAgreementSpi extends KeyAgreementSpi {
                     "ECDH requires exactly one phase (lastPhase must be true)");
         }
         if (!(key instanceof GostECPublicKey)) {
-            throw new InvalidKeyException("Expected GostECPublicKey, got: " + key.getClass().getName());
+            throw new InvalidKeyException(
+                    "Expected GostECPublicKey, got: " + key.getClass().getName());
         }
         this.peerPub = ((GostECPublicKey) key).toPublicKeyParameters();
         return null;

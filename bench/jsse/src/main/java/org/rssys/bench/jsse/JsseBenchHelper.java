@@ -102,7 +102,7 @@ class JsseBenchHelper {
     /** Switch-based SSLEngine handshake pump (один шаг на итерацию). */
     private static void pumpLoop(SSLEngine engine,
                                   org.rssys.gost.tls13.TlsTransport transport) throws Exception {
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
 
         for (int i = 0; i < 200; i++) {

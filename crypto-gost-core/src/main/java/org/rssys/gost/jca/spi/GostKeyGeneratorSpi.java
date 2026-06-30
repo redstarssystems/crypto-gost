@@ -1,13 +1,12 @@
 package org.rssys.gost.jca.spi;
 
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.jca.key.GostSecretKey;
-
-import javax.crypto.KeyGeneratorSpi;
-import javax.crypto.SecretKey;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.SecureRandom;
 import java.security.spec.AlgorithmParameterSpec;
+import javax.crypto.KeyGeneratorSpi;
+import javax.crypto.SecretKey;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.util.CryptoRandom;
 
 /**
@@ -53,16 +52,15 @@ public final class GostKeyGeneratorSpi extends KeyGeneratorSpi {
     protected void engineInit(AlgorithmParameterSpec params, SecureRandom random)
             throws InvalidAlgorithmParameterException {
         throw new InvalidAlgorithmParameterException(
-            "Kuznyechik key generator does not accept AlgorithmParameterSpec. "
-            + "Key size is fixed at 256 bits");
+                "Kuznyechik key generator does not accept AlgorithmParameterSpec. "
+                        + "Key size is fixed at 256 bits");
     }
-
 
     @Override
     protected void engineInit(int keysize, SecureRandom random) {
         if (keysize != KEY_SIZE_BITS) {
             throw new InvalidParameterException(
-                "Kuznyechik key size must be 256 bits, got " + keysize);
+                    "Kuznyechik key size must be 256 bits, got " + keysize);
         }
         this.random = (random != null) ? random : CryptoRandom.INSTANCE;
     }
@@ -76,7 +74,6 @@ public final class GostKeyGeneratorSpi extends KeyGeneratorSpi {
     protected SecretKey engineGenerateKey() {
         return new GostSecretKey("Kuznyechik", KeyGenerator.generateSymmetricKey(random));
     }
-
 
     private static final class InvalidParameterException extends RuntimeException {
         InvalidParameterException(String msg) {

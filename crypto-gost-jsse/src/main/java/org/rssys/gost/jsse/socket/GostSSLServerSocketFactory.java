@@ -1,14 +1,13 @@
 package org.rssys.gost.jsse.socket;
-import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.engine.GostSSLEngine;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 
-import javax.net.ssl.SSLServerSocketFactory;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.ServerSocket;
+import javax.net.ssl.SSLServerSocketFactory;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
 
 /**
  * SSLServerSocketFactory для ГОСТ TLS 1.3.
@@ -21,9 +20,10 @@ public final class GostSSLServerSocketFactory extends SSLServerSocketFactory {
     private final GostX509TrustManager trustManager;
     private final GostSSLSessionContext sessionContext;
 
-    public GostSSLServerSocketFactory(GostX509KeyManager keyManager,
-                                      GostX509TrustManager trustManager,
-                                      GostSSLSessionContext sessionContext) {
+    public GostSSLServerSocketFactory(
+            GostX509KeyManager keyManager,
+            GostX509TrustManager trustManager,
+            GostSSLSessionContext sessionContext) {
         this.keyManager = keyManager;
         this.trustManager = trustManager;
         this.sessionContext = sessionContext;
@@ -50,7 +50,9 @@ public final class GostSSLServerSocketFactory extends SSLServerSocketFactory {
     }
 
     @Override
-    public ServerSocket createServerSocket(int port, int backlog, InetAddress ifAddr) throws IOException {
-        return new GostSSLServerSocket(port, backlog, ifAddr, keyManager, trustManager, sessionContext);
+    public ServerSocket createServerSocket(int port, int backlog, InetAddress ifAddr)
+            throws IOException {
+        return new GostSSLServerSocket(
+                port, backlog, ifAddr, keyManager, trustManager, sessionContext);
     }
 }

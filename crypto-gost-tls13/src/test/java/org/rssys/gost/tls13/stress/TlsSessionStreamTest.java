@@ -1,5 +1,20 @@
 package org.rssys.gost.tls13.stress;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.EOFException;
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -15,22 +30,6 @@ import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.transport.SocketTlsTransport;
 import org.rssys.gost.util.CryptoRandom;
-
-import java.io.EOFException;
-import java.io.IOException;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @DisplayName("Пропускная способность TlsSession через реальный TCP — однопоточный write")
 @Tag("stress")
@@ -66,7 +65,8 @@ class TlsSessionStreamTest {
     }
 
     @Test
-    @DisplayName("Непрерывная запись 16383-байтовых блоков без ожидания echo — 5 прогонов с медианой")
+    @DisplayName(
+            "Непрерывная запись 16383-байтовых блоков без ожидания echo — 5 прогонов с медианой")
     void throughput() throws Exception {
         List<Double> validResults = new ArrayList<>();
 
@@ -78,47 +78,56 @@ class TlsSessionStreamTest {
             AtomicBoolean serverFailed = new AtomicBoolean(false);
             CountDownLatch accepted = new CountDownLatch(1);
 
-            Thread srv = Thread.ofVirtual().name("stream-srv-" + iter).start(() -> {
-                Socket raw = null;
-                try {
-                    accepted.countDown();
-                    raw = serverSocket.accept();
-                    raw.setSoTimeout(SO_TIMEOUT_MS);
-                    try (TlsTransport t = new SocketTlsTransport(raw);
-                         TlsSession s = TlsSession.createServer(serverConfig, t)) {
-                        s.handshakeAsServer();
-                        while (true) {
-                            byte[] data = s.read();
-                            if (measuring.get()) {
-                                if (measureStart[0] == Long.MIN_VALUE)
-                                    measureStart[0] = System.nanoTime();
-                                measureBytes.addAndGet(data.length);
-                                lastByteNs.set(System.nanoTime());
-                            }
-                        }
-                    } catch (EOFException e) {
-                        // нормальное завершение — close_notify получен
-                    } catch (IOException e) {
-                        // таймаут (soTimeout) или socket error — прогон бракуется
-                    }
-                } catch (IOException e) {
-                    serverFailed.set(true);
-                } finally {
-                    if (raw != null) {
-                        try { raw.close(); } catch (IOException ignored) { }
-                    }
-                }
-            });
+            Thread srv =
+                    Thread.ofVirtual()
+                            .name("stream-srv-" + iter)
+                            .start(
+                                    () -> {
+                                        Socket raw = null;
+                                        try {
+                                            accepted.countDown();
+                                            raw = serverSocket.accept();
+                                            raw.setSoTimeout(SO_TIMEOUT_MS);
+                                            try (TlsTransport t = new SocketTlsTransport(raw);
+                                                    TlsSession s =
+                                                            TlsSession.createServer(
+                                                                    serverConfig, t)) {
+                                                s.handshakeAsServer();
+                                                while (true) {
+                                                    byte[] data = s.read();
+                                                    if (measuring.get()) {
+                                                        if (measureStart[0] == Long.MIN_VALUE)
+                                                            measureStart[0] = System.nanoTime();
+                                                        measureBytes.addAndGet(data.length);
+                                                        lastByteNs.set(System.nanoTime());
+                                                    }
+                                                }
+                                            } catch (EOFException e) {
+                                                // нормальное завершение — close_notify получен
+                                            } catch (IOException e) {
+                                                // таймаут (soTimeout) или socket error — прогон
+                                                // бракуется
+                                            }
+                                        } catch (IOException e) {
+                                            serverFailed.set(true);
+                                        } finally {
+                                            if (raw != null) {
+                                                try {
+                                                    raw.close();
+                                                } catch (IOException ignored) {
+                                                }
+                                            }
+                                        }
+                                    });
 
-            assertTrue(accepted.await(10, TimeUnit.SECONDS),
-                    "Сервер не принял соединение за 10 с");
+            assertTrue(accepted.await(10, TimeUnit.SECONDS), "Сервер не принял соединение за 10 с");
 
             byte[] chunk = new byte[CHUNK_SIZE];
             CryptoRandom.INSTANCE.nextBytes(chunk);
 
             try (Socket raw = new Socket("localhost", port);
-                 TlsTransport t = new SocketTlsTransport(raw);
-                 TlsSession s = TlsSession.createClient(clientConfig, t)) {
+                    TlsTransport t = new SocketTlsTransport(raw);
+                    TlsSession s = TlsSession.createClient(clientConfig, t)) {
                 s.handshakeAsClient();
 
                 long deadline = System.nanoTime() + WARMUP_MS * 1_000_000L;
@@ -155,14 +164,16 @@ class TlsSessionStreamTest {
         assertFalse(validResults.isEmpty(), "Нет валидных прогонов");
         Collections.sort(validResults);
         int n = validResults.size();
-        double median = (n % 2 == 0)
-                ? (validResults.get(n / 2 - 1) + validResults.get(n / 2)) / 2.0
-                : validResults.get(n / 2);
+        double median =
+                (n % 2 == 0)
+                        ? (validResults.get(n / 2 - 1) + validResults.get(n / 2)) / 2.0
+                        : validResults.get(n / 2);
         double min = validResults.get(0);
         double max = validResults.get(n - 1);
 
         System.out.printf("[RESULT] Valid runs: %d (of %d)%n", validResults.size(), RUNS);
-        System.out.printf("[RESULT] Min: %.1f MB/s, Max: %.1f MB/s, Median: %.1f MB/s%n", min, max, median);
+        System.out.printf(
+                "[RESULT] Min: %.1f MB/s, Max: %.1f MB/s, Median: %.1f MB/s%n", min, max, median);
 
         assertTrue(median > 0.0, "Медианный throughput = 0 — ошибка измерения");
     }

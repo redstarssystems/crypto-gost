@@ -1,5 +1,15 @@
 package org.rssys.gost.jsse.examples.socket;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.Security;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,17 +23,6 @@ import org.rssys.gost.jsse.socket.GostSSLSocket;
 import org.rssys.gost.jsse.testkit.GostTestCerts;
 import org.rssys.gost.jsse.testkit.GostTestCerts.CertChain;
 import org.rssys.gost.tls13.TlsCiphersuite;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
-import java.security.Security;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Тесты close/reconnect для GostSSLSocket под нагрузкой.
@@ -93,33 +92,37 @@ class GostSSLSocketReconnectTest {
         AtomicReference<String> serverError = new AtomicReference<>(null);
 
         // Серверный поток: принимает n соединений, каждое читает и отвечает
-        Thread serverThread = new Thread(() -> {
-            try {
-                for (int i = 0; i < n; i++) {
-                    try (GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept()) {
-                        accepted.startHandshake();
-                        accepted.setSoTimeout(TIMEOUT_MS);
-                        InputStream in = accepted.getInputStream();
-                        OutputStream out = accepted.getOutputStream();
-                        byte[] buf = new byte[1024];
-                        int len = in.read(buf);
-                        if (len > 0) {
-                            out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
-                            out.flush();
-                        }
-                    }
-                    serverDone.countDown();
-                }
-            } catch (Exception e) {
-                serverError.compareAndSet(null, e.getMessage());
-            }
-        }, "server-accept");
+        Thread serverThread =
+                new Thread(
+                        () -> {
+                            try {
+                                for (int i = 0; i < n; i++) {
+                                    try (GostSSLSocket accepted =
+                                            (GostSSLSocket) serverSocket.accept()) {
+                                        accepted.startHandshake();
+                                        accepted.setSoTimeout(TIMEOUT_MS);
+                                        InputStream in = accepted.getInputStream();
+                                        OutputStream out = accepted.getOutputStream();
+                                        byte[] buf = new byte[1024];
+                                        int len = in.read(buf);
+                                        if (len > 0) {
+                                            out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
+                                            out.flush();
+                                        }
+                                    }
+                                    serverDone.countDown();
+                                }
+                            } catch (Exception e) {
+                                serverError.compareAndSet(null, e.getMessage());
+                            }
+                        },
+                        "server-accept");
         serverThread.start();
 
         // Клиент: n соединений, каждое отправляет PING и проверяет PONG
         for (int i = 0; i < n; i++) {
-            GostSSLSocket client = new GostSSLSocket("localhost", port,
-                    clientKm, clientTm, clientSessionCtx);
+            GostSSLSocket client =
+                    new GostSSLSocket("localhost", port, clientKm, clientTm, clientSessionCtx);
             client.setSoTimeout(TIMEOUT_MS);
             try {
                 OutputStream out = client.getOutputStream();
@@ -130,7 +133,8 @@ class GostSSLSocketReconnectTest {
                 byte[] buf = new byte[1024];
                 int len = in.read(buf);
                 String response = new String(buf, 0, len, StandardCharsets.UTF_8).trim();
-                assertTrue(response.contains("PONG"),
+                assertTrue(
+                        response.contains("PONG"),
                         "Итерация " + i + ": ожидался PONG, получено: " + response);
             } finally {
                 client.close();
@@ -141,7 +145,8 @@ class GostSSLSocketReconnectTest {
         if (serverError.get() != null) {
             throw new AssertionError("Серверная ошибка: " + serverError.get());
         }
-        assertTrue(serverDone.await(0, TimeUnit.MILLISECONDS),
+        assertTrue(
+                serverDone.await(0, TimeUnit.MILLISECONDS),
                 "Сервер должен обработать все " + n + " соединений");
     }
 
@@ -152,7 +157,8 @@ class GostSSLSocketReconnectTest {
         pskConnectionHelper();
         // После первого соединения клиент должен получить NST от сервера.
         // Проверяем что PSK действительно сохранён в клиентском контексте.
-        assertTrue(clientSessionCtx.getPskStore().size() > 0,
+        assertTrue(
+                clientSessionCtx.getPskStore().size() > 0,
                 "PSK должен быть сохранён после первого соединения");
         // Второе соединение с тем же clientSessionCtx — должно использовать PSK.
         // Прямое доказательство (engine.handshakeType == PSK) требует доступа
@@ -169,31 +175,35 @@ class GostSSLSocketReconnectTest {
         CountDownLatch serverReady = new CountDownLatch(1);
 
         // Серверный поток: одно соединение
-        Thread serverThread = new Thread(() -> {
-            try {
-                try (GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept()) {
-                    accepted.startHandshake();
-                    accepted.setSoTimeout(TIMEOUT_MS);
-                    InputStream in = accepted.getInputStream();
-                    OutputStream out = accepted.getOutputStream();
-                    byte[] buf = new byte[1024];
-                    int len = in.read(buf);
-                    if (len > 0) {
-                        out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
-                        out.flush();
-                    }
-                }
-                serverReady.countDown();
-            } catch (Exception e) {
-                serverError.compareAndSet(null, e.getMessage());
-            }
-        }, "server-psk");
+        Thread serverThread =
+                new Thread(
+                        () -> {
+                            try {
+                                try (GostSSLSocket accepted =
+                                        (GostSSLSocket) serverSocket.accept()) {
+                                    accepted.startHandshake();
+                                    accepted.setSoTimeout(TIMEOUT_MS);
+                                    InputStream in = accepted.getInputStream();
+                                    OutputStream out = accepted.getOutputStream();
+                                    byte[] buf = new byte[1024];
+                                    int len = in.read(buf);
+                                    if (len > 0) {
+                                        out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
+                                        out.flush();
+                                    }
+                                }
+                                serverReady.countDown();
+                            } catch (Exception e) {
+                                serverError.compareAndSet(null, e.getMessage());
+                            }
+                        },
+                        "server-psk");
         serverThread.start();
 
         try {
             // Клиент: отправляет PING, проверяет PONG
-            GostSSLSocket client = new GostSSLSocket("localhost", port,
-                    clientKm, clientTm, clientSessionCtx);
+            GostSSLSocket client =
+                    new GostSSLSocket("localhost", port, clientKm, clientTm, clientSessionCtx);
             client.setSoTimeout(TIMEOUT_MS);
             try {
                 OutputStream out = client.getOutputStream();
@@ -204,8 +214,7 @@ class GostSSLSocketReconnectTest {
                 byte[] buf = new byte[1024];
                 int len = in.read(buf);
                 String response = new String(buf, 0, len, StandardCharsets.UTF_8).trim();
-                assertTrue(response.contains("PONG"),
-                        "Ожидался PONG, получено: " + response);
+                assertTrue(response.contains("PONG"), "Ожидался PONG, получено: " + response);
             } finally {
                 client.close();
             }
@@ -227,25 +236,28 @@ class GostSSLSocketReconnectTest {
         // но не NullPointerException или другой internal error.
         CountDownLatch serverAccept = new CountDownLatch(1);
         CountDownLatch serverClosed = new CountDownLatch(1);
-        Thread serverThread = new Thread(() -> {
-            try {
-                GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept();
-                serverAccept.countDown();
-                accepted.startHandshake();
-                // Читаем PING
-                InputStream sis = accepted.getInputStream();
-                byte[] srvBuf = new byte[1024];
-                sis.read(srvBuf);
-                // Закрываем сокет с close_notify
-                accepted.close();
-                serverClosed.countDown();
-            } catch (Exception ignored) {
-            }
-        }, "server-rst");
+        Thread serverThread =
+                new Thread(
+                        () -> {
+                            try {
+                                GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept();
+                                serverAccept.countDown();
+                                accepted.startHandshake();
+                                // Читаем PING
+                                InputStream sis = accepted.getInputStream();
+                                byte[] srvBuf = new byte[1024];
+                                sis.read(srvBuf);
+                                // Закрываем сокет с close_notify
+                                accepted.close();
+                                serverClosed.countDown();
+                            } catch (Exception ignored) {
+                            }
+                        },
+                        "server-rst");
         serverThread.start();
 
-        GostSSLSocket client = new GostSSLSocket("localhost", port,
-                clientKm, clientTm, clientSessionCtx);
+        GostSSLSocket client =
+                new GostSSLSocket("localhost", port, clientKm, clientTm, clientSessionCtx);
         client.setSoTimeout(5000);
         assertTrue(serverAccept.await(5, TimeUnit.SECONDS));
 
@@ -288,29 +300,32 @@ class GostSSLSocketReconnectTest {
         // Любой вариант приемлем, если не NullPointerException.
         CountDownLatch serverAccept = new CountDownLatch(1);
         CountDownLatch serverRead = new CountDownLatch(1);
-        Thread serverThread = new Thread(() -> {
-            try {
-                GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept();
-                serverAccept.countDown();
-                accepted.startHandshake();
-                // Читаем PING
-                InputStream sis = accepted.getInputStream();
-                byte[] srvBuf = new byte[1024];
-                sis.read(srvBuf);
-                serverRead.countDown();
-                // Отвечаем PONG
-                OutputStream sos = accepted.getOutputStream();
-                sos.write("PONG\n".getBytes(StandardCharsets.UTF_8));
-                sos.flush();
-                // Закрываем с close_notify
-                accepted.close();
-            } catch (Exception ignored) {
-            }
-        }, "server-close");
+        Thread serverThread =
+                new Thread(
+                        () -> {
+                            try {
+                                GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept();
+                                serverAccept.countDown();
+                                accepted.startHandshake();
+                                // Читаем PING
+                                InputStream sis = accepted.getInputStream();
+                                byte[] srvBuf = new byte[1024];
+                                sis.read(srvBuf);
+                                serverRead.countDown();
+                                // Отвечаем PONG
+                                OutputStream sos = accepted.getOutputStream();
+                                sos.write("PONG\n".getBytes(StandardCharsets.UTF_8));
+                                sos.flush();
+                                // Закрываем с close_notify
+                                accepted.close();
+                            } catch (Exception ignored) {
+                            }
+                        },
+                        "server-close");
         serverThread.start();
 
-        GostSSLSocket client = new GostSSLSocket("localhost", port,
-                clientKm, clientTm, clientSessionCtx);
+        GostSSLSocket client =
+                new GostSSLSocket("localhost", port, clientKm, clientTm, clientSessionCtx);
         client.setSoTimeout(5000);
         assertTrue(serverAccept.await(5, TimeUnit.SECONDS));
 
@@ -325,8 +340,7 @@ class GostSSLSocketReconnectTest {
         byte[] buf = new byte[1024];
         int len = in.read(buf);
         String response = new String(buf, 0, len, StandardCharsets.UTF_8).trim();
-        assertTrue(response.contains("PONG"),
-                "Ожидался PONG, получено: " + response);
+        assertTrue(response.contains("PONG"), "Ожидался PONG, получено: " + response);
 
         // write() после прочтения PONG — может упасть, может нет
         // В любом случае не NPE и не зависание
@@ -346,29 +360,33 @@ class GostSSLSocketReconnectTest {
     void sequentialPingPong100() throws Exception {
         int n = 100;
 
-        Thread serverThread = new Thread(() -> {
-            try {
-                for (int i = 0; i < n; i++) {
-                    try (GostSSLSocket accepted = (GostSSLSocket) serverSocket.accept()) {
-                        accepted.startHandshake();
-                        InputStream in = accepted.getInputStream();
-                        OutputStream out = accepted.getOutputStream();
-                        byte[] buf = new byte[1024];
-                        int len = in.read(buf);
-                        if (len > 0) {
-                            out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
-                            out.flush();
-                        }
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-        }, "server-seq");
+        Thread serverThread =
+                new Thread(
+                        () -> {
+                            try {
+                                for (int i = 0; i < n; i++) {
+                                    try (GostSSLSocket accepted =
+                                            (GostSSLSocket) serverSocket.accept()) {
+                                        accepted.startHandshake();
+                                        InputStream in = accepted.getInputStream();
+                                        OutputStream out = accepted.getOutputStream();
+                                        byte[] buf = new byte[1024];
+                                        int len = in.read(buf);
+                                        if (len > 0) {
+                                            out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
+                                            out.flush();
+                                        }
+                                    }
+                                }
+                            } catch (Exception ignored) {
+                            }
+                        },
+                        "server-seq");
         serverThread.start();
 
         for (int i = 0; i < n; i++) {
-            try (GostSSLSocket client = new GostSSLSocket("localhost", port,
-                    clientKm, clientTm, clientSessionCtx)) {
+            try (GostSSLSocket client =
+                    new GostSSLSocket("localhost", port, clientKm, clientTm, clientSessionCtx)) {
                 client.setSoTimeout(TIMEOUT_MS);
                 OutputStream out = client.getOutputStream();
                 out.write("PING\n".getBytes(StandardCharsets.UTF_8));
@@ -378,7 +396,8 @@ class GostSSLSocketReconnectTest {
                 byte[] buf = new byte[1024];
                 int len = in.read(buf);
                 String response = new String(buf, 0, len, StandardCharsets.UTF_8).trim();
-                assertTrue(response.contains("PONG"),
+                assertTrue(
+                        response.contains("PONG"),
                         "Итерация " + i + ": ожидался PONG, получено: " + response);
             }
         }

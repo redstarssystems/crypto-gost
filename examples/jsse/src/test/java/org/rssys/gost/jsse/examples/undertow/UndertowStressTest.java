@@ -1,21 +1,12 @@
 package org.rssys.gost.jsse.examples.undertow;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import io.undertow.Undertow;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
-import org.junit.jupiter.api.*;
-import org.rssys.gost.jsse.engine.GostSSLSessionContext;
-import org.rssys.gost.jsse.examples.ExamplesCertHelper;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.util.CryptoRandom;
-import org.rssys.gost.jsse.GostJsseConstants;
-
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLSessionContext;
-import javax.net.ssl.SSLSocket;
-import java.io.ByteArrayOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
@@ -31,16 +22,17 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+import org.junit.jupiter.api.*;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * Стресс-тест Undertow + ГОСТ TLS 1.3: HTTP-профили под смешанной нагрузкой.
@@ -66,6 +58,7 @@ class UndertowStressTest {
     private static final AtomicLong[] profileRequests = new AtomicLong[5];
     private static final AtomicLong[] profileErrors = new AtomicLong[5];
     private static final AtomicLong bytesSent = new AtomicLong(0);
+
     static {
         for (int i = 0; i < 5; i++) {
             profileRequests[i] = new AtomicLong(0);
@@ -82,7 +75,8 @@ class UndertowStressTest {
             if (b < 0) throw new IOException("Соединение закрыто во время чтения HTTP-заголовков");
             headers.append((char) b);
             int len = headers.length();
-            if (len >= 4 && headers.charAt(len - 4) == '\r'
+            if (len >= 4
+                    && headers.charAt(len - 4) == '\r'
                     && headers.charAt(len - 3) == '\n'
                     && headers.charAt(len - 2) == '\r'
                     && headers.charAt(len - 1) == '\n') break;
@@ -94,8 +88,9 @@ class UndertowStressTest {
         while (total < contentLen) {
             int want = (int) Math.min(buf.length, contentLen - total);
             int n = in.read(buf, 0, want);
-            if (n < 0) throw new IOException("Connection closed: "
-                    + total + " из " + contentLen + " байт тела");
+            if (n < 0)
+                throw new IOException(
+                        "Connection closed: " + total + " из " + contentLen + " байт тела");
             total += n;
         }
     }
@@ -110,25 +105,40 @@ class UndertowStressTest {
         srvCtx = (GostSSLSessionContext) serverCtx.getServerSessionContext();
         srvCtx.setSessionCacheSize(5000);
 
-        server = Undertow.builder()
-                .addHttpsListener(0, "0.0.0.0", serverCtx)
-                .setHandler(new HttpHandler() {
-                    @Override
-                    public void handleRequest(HttpServerExchange exchange) throws Exception {
-                        exchange.getRequestReceiver().receiveFullBytes((ex, bytes) -> {
-                            ex.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/octet-stream");
-                            ex.getResponseHeaders().put(Headers.CONTENT_LENGTH, bytes.length);
-                            ex.getResponseSender().send(ByteBuffer.wrap(bytes));
-                        });
-                    }
-                })
-                .build();
+        server =
+                Undertow.builder()
+                        .addHttpsListener(0, "0.0.0.0", serverCtx)
+                        .setHandler(
+                                new HttpHandler() {
+                                    @Override
+                                    public void handleRequest(HttpServerExchange exchange)
+                                            throws Exception {
+                                        exchange.getRequestReceiver()
+                                                .receiveFullBytes(
+                                                        (ex, bytes) -> {
+                                                            ex.getResponseHeaders()
+                                                                    .put(
+                                                                            Headers.CONTENT_TYPE,
+                                                                            "application/octet-stream");
+                                                            ex.getResponseHeaders()
+                                                                    .put(
+                                                                            Headers.CONTENT_LENGTH,
+                                                                            bytes.length);
+                                                            ex.getResponseSender()
+                                                                    .send(ByteBuffer.wrap(bytes));
+                                                        });
+                                    }
+                                })
+                        .build();
         server.start();
-        port = ((java.net.InetSocketAddress)
-                server.getListenerInfo().get(0).getAddress()).getPort();
+        port =
+                ((java.net.InetSocketAddress) server.getListenerInfo().get(0).getAddress())
+                        .getPort();
 
-        clientCtx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
-        clientCtx.init(null, new javax.net.ssl.TrustManager[]{helper.createTrustManager()}, null);
+        clientCtx =
+                SSLContext.getInstance(
+                        GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+        clientCtx.init(null, new javax.net.ssl.TrustManager[] {helper.createTrustManager()}, null);
     }
 
     @AfterAll
@@ -149,37 +159,51 @@ class UndertowStressTest {
         ScheduledExecutorService monitor = Executors.newSingleThreadScheduledExecutor();
         List<Long> heapSamples = new ArrayList<>();
         long gcCountStart = totalGcCount();
-        String dumpFile = System.getProperty("user.dir")
-                + "/build/reports/undertow-stress-dump-"
-                + Instant.now().toString().replace(":", "-") + ".txt";
+        String dumpFile =
+                System.getProperty("user.dir")
+                        + "/build/reports/undertow-stress-dump-"
+                        + Instant.now().toString().replace(":", "-")
+                        + ".txt";
 
-        monitor.scheduleAtFixedRate(() -> {
-            if (!running) return;
-            long used = Runtime.getRuntime().totalMemory()
-                    - Runtime.getRuntime().freeMemory();
-            long max = Runtime.getRuntime().maxMemory();
-            int pct = (int) (used * 100 / max);
-            heapSamples.add(used);
+        monitor.scheduleAtFixedRate(
+                () -> {
+                    if (!running) return;
+                    long used =
+                            Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+                    long max = Runtime.getRuntime().maxMemory();
+                    int pct = (int) (used * 100 / max);
+                    heapSamples.add(used);
 
-            int sessionCount = countIds(srvCtx);
-            long gcNow = totalGcCount();
+                    int sessionCount = countIds(srvCtx);
+                    long gcNow = totalGcCount();
 
-            System.out.printf("[JM] Heap: %dMB/%dMB (%d%%), Session ids: %d, "
-                            + "GC: +%d, Reqs: [1=%d 2=%d 3=%d 4=%d], Err: [1=%d 2=%d 3=%d 4=%d]%n",
-                    used / 1024 / 1024, max / 1024 / 1024, pct,
-                    sessionCount, gcNow - gcCountStart,
-                    profileRequests[1].get(), profileRequests[2].get(),
-                    profileRequests[3].get(), profileRequests[4].get(),
-                    profileErrors[1].get(), profileErrors[2].get(),
-                    profileErrors[3].get(), profileErrors[4].get());
+                    System.out.printf(
+                            "[JM] Heap: %dMB/%dMB (%d%%), Session ids: %d, "
+                                    + "GC: +%d, Reqs: [1=%d 2=%d 3=%d 4=%d], Err: [1=%d 2=%d 3=%d 4=%d]%n",
+                            used / 1024 / 1024,
+                            max / 1024 / 1024,
+                            pct,
+                            sessionCount,
+                            gcNow - gcCountStart,
+                            profileRequests[1].get(),
+                            profileRequests[2].get(),
+                            profileRequests[3].get(),
+                            profileRequests[4].get(),
+                            profileErrors[1].get(),
+                            profileErrors[2].get(),
+                            profileErrors[3].get(),
+                            profileErrors[4].get());
 
-            if (heapSamples.size() >= 3) {
-                long prev = heapSamples.get(heapSamples.size() - 3);
-                if (used > prev * 1.5 && pct > HEAP_WARN_PCT) {
-                    dumpThreads(dumpFile);
-                }
-            }
-        }, 0, 30, TimeUnit.SECONDS);
+                    if (heapSamples.size() >= 3) {
+                        long prev = heapSamples.get(heapSamples.size() - 3);
+                        if (used > prev * 1.5 && pct > HEAP_WARN_PCT) {
+                            dumpThreads(dumpFile);
+                        }
+                    }
+                },
+                0,
+                30,
+                TimeUnit.SECONDS);
 
         for (int i = 0; i < 30; i++)
             workers.add(Thread.ofVirtual().name("short-" + i).unstarted(this::profileShort));
@@ -197,28 +221,28 @@ class UndertowStressTest {
         for (Thread t : workers) t.join(10000);
 
         long reqs2 = profileRequests[2].get();
-        assertTrue(reqs2 > 0,
-                "Профиль 2: должен быть хотя бы один успешный запрос");
+        assertTrue(reqs2 > 0, "Профиль 2: должен быть хотя бы один успешный запрос");
         long reqs3 = profileRequests[3].get();
-        assertEquals(0, profileErrors[3].get(),
-                "Профиль 3: ошибок быть не должно");
+        assertEquals(0, profileErrors[3].get(), "Профиль 3: ошибок быть не должно");
         long reqs1 = profileRequests[1].get();
-        assertTrue(reqs1 > 0,
-                "Профиль 1: должен быть хотя бы один запрос");
+        assertTrue(reqs1 > 0, "Профиль 1: должен быть хотя бы один запрос");
         long errs1 = profileErrors[1].get();
         long total1 = reqs1 + errs1;
-        assertTrue(errs1 * 100 < total1,
-                "Профиль 1: ошибок более 1% (" + errs1
-                + " из " + total1 + ")");
+        assertTrue(
+                errs1 * 100 < total1,
+                "Профиль 1: ошибок более 1% (" + errs1 + " из " + total1 + ")");
 
-        System.out.printf("[RESULT] Profile 1: %d req, %d err%n",
+        System.out.printf(
+                "[RESULT] Profile 1: %d req, %d err%n",
                 profileRequests[1].get(), profileErrors[1].get());
-        System.out.printf("[RESULT] Profile 2: %d req, %d err%n",
+        System.out.printf(
+                "[RESULT] Profile 2: %d req, %d err%n",
                 profileRequests[2].get(), profileErrors[2].get());
-        System.out.printf("[RESULT] Profile 3: %d req, %d err, %d KB sent%n",
-                profileRequests[3].get(), profileErrors[3].get(),
-                bytesSent.get() / 1024);
-        System.out.printf("[RESULT] Profile 4: %d req, %d err (expected)%n",
+        System.out.printf(
+                "[RESULT] Profile 3: %d req, %d err, %d KB sent%n",
+                profileRequests[3].get(), profileErrors[3].get(), bytesSent.get() / 1024);
+        System.out.printf(
+                "[RESULT] Profile 4: %d req, %d err (expected)%n",
                 profileRequests[4].get(), profileErrors[4].get());
     }
 
@@ -228,13 +252,12 @@ class UndertowStressTest {
 
     private void profileShort() {
         int profileId = 1;
-        byte[] httpReq = buildHttpPost("/echo", "application/octet-stream",
-                generatePayload(1024), false);
+        byte[] httpReq =
+                buildHttpPost("/echo", "application/octet-stream", generatePayload(1024), false);
         while (running) {
             SSLSocket s = null;
             try {
-                s = (SSLSocket) clientCtx.getSocketFactory()
-                        .createSocket("localhost", port);
+                s = (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port);
                 s.setSoTimeout(15000);
                 OutputStream out = s.getOutputStream();
                 out.write(httpReq);
@@ -245,7 +268,11 @@ class UndertowStressTest {
                 profileErrors[profileId].incrementAndGet();
                 System.err.println("[PROFILE1_ERR] " + e);
             } finally {
-                if (s != null) try { s.close(); } catch (Exception ignored) {}
+                if (s != null)
+                    try {
+                        s.close();
+                    } catch (Exception ignored) {
+                    }
             }
         }
     }
@@ -257,8 +284,7 @@ class UndertowStressTest {
             long deadline = System.currentTimeMillis() + sessionDuration;
             SSLSocket s = null;
             try {
-                s = (SSLSocket) clientCtx.getSocketFactory()
-                        .createSocket("localhost", port);
+                s = (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port);
                 s.setSoTimeout(15000);
                 OutputStream out = s.getOutputStream();
                 InputStream in = s.getInputStream();
@@ -278,7 +304,11 @@ class UndertowStressTest {
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
             } finally {
-                if (s != null) try { s.close(); } catch (Exception ignored) {}
+                if (s != null)
+                    try {
+                        s.close();
+                    } catch (Exception ignored) {
+                    }
             }
         }
     }
@@ -291,8 +321,7 @@ class UndertowStressTest {
         while (running) {
             SSLSocket s = null;
             try {
-                s = (SSLSocket) clientCtx.getSocketFactory()
-                        .createSocket("localhost", port);
+                s = (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port);
                 s.setSoTimeout(30000);
                 OutputStream out = s.getOutputStream();
                 InputStream in = s.getInputStream();
@@ -307,7 +336,11 @@ class UndertowStressTest {
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
             } finally {
-                if (s != null) try { s.close(); } catch (Exception ignored) {}
+                if (s != null)
+                    try {
+                        s.close();
+                    } catch (Exception ignored) {
+                    }
             }
         }
     }
@@ -319,8 +352,11 @@ class UndertowStressTest {
             SSLSocket ssl = null;
             try {
                 raw = new Socket("localhost", port);
-                ssl = (SSLSocket) clientCtx.getSocketFactory()
-                        .createSocket(raw, "localhost", port, true);
+                ssl =
+                        (SSLSocket)
+                                clientCtx
+                                        .getSocketFactory()
+                                        .createSocket(raw, "localhost", port, true);
                 ssl.setSoTimeout(5000);
                 ssl.startHandshake();
                 Thread.sleep(CryptoRandom.INSTANCE.nextInt(2001));
@@ -328,8 +364,14 @@ class UndertowStressTest {
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
             } finally {
-                try { if (ssl != null) ssl.close(); } catch (Exception ignored) {}
-                try { if (raw != null) raw.close(); } catch (Exception ignored) {}
+                try {
+                    if (ssl != null) ssl.close();
+                } catch (Exception ignored) {
+                }
+                try {
+                    if (raw != null) raw.close();
+                } catch (Exception ignored) {
+                }
             }
         }
     }
@@ -338,8 +380,8 @@ class UndertowStressTest {
     // Хелперы
     // ========================================================================
 
-    private static byte[] buildHttpPost(String path, String contentType,
-                                         byte[] body, boolean useChunked) {
+    private static byte[] buildHttpPost(
+            String path, String contentType, byte[] body, boolean useChunked) {
         StringBuilder headers = new StringBuilder();
         headers.append("POST ").append(path).append(" HTTP/1.1\r\n");
         headers.append("Host: localhost\r\n");
@@ -348,7 +390,8 @@ class UndertowStressTest {
             headers.append("Transfer-Encoding: chunked\r\n");
         } else {
             headers.append("Content-Length: ")
-                    .append(body != null ? body.length : 0).append("\r\n");
+                    .append(body != null ? body.length : 0)
+                    .append("\r\n");
         }
         headers.append("Connection: keep-alive\r\n");
         headers.append("\r\n");
@@ -405,13 +448,22 @@ class UndertowStressTest {
     private static void dumpThreads(String path) {
         try (PrintWriter pw = new PrintWriter(new FileWriter(path, true))) {
             pw.println("=== Thread dump at " + Instant.now() + " ===");
-            Thread.getAllStackTraces().forEach((t, stack) -> {
-                pw.println(t.threadId() + " \"" + t.getName() + "\" [" + t.getState() + "]");
-                for (StackTraceElement e : stack) {
-                    pw.println("\tat " + e);
-                }
-                pw.println();
-            });
-        } catch (Exception ignored) {}
+            Thread.getAllStackTraces()
+                    .forEach(
+                            (t, stack) -> {
+                                pw.println(
+                                        t.threadId()
+                                                + " \""
+                                                + t.getName()
+                                                + "\" ["
+                                                + t.getState()
+                                                + "]");
+                                for (StackTraceElement e : stack) {
+                                    pw.println("\tat " + e);
+                                }
+                                pw.println();
+                            });
+        } catch (Exception ignored) {
+        }
     }
 }

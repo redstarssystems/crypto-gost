@@ -1,12 +1,11 @@
 package org.rssys.gost.jsse.crl;
 
-import org.rssys.gost.tls13.cert.TlsCrlVerifier;
-
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
-import java.util.Date;
+import java.time.Instant;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import org.rssys.gost.pkix.cert.CrlVerifier;
 
 /**
  * Кэш CRL-ответов с инвалидацией по nextUpdate (RFC 5280 §5.1.2.4).
@@ -56,9 +55,9 @@ public final class CrlCache {
         Objects.requireNonNull(crlDer);
         long expiresAt;
         try {
-            Date nextUpdate = TlsCrlVerifier.extractNextUpdate(crlDer);
+            Instant nextUpdate = CrlVerifier.extractNextUpdate(crlDer);
             if (nextUpdate != null) {
-                expiresAt = nextUpdate.getTime() + GRACE_MS;
+                expiresAt = nextUpdate.toEpochMilli() + GRACE_MS;
             } else {
                 expiresAt = System.currentTimeMillis() + DEFAULT_TTL_MS;
             }
@@ -69,7 +68,11 @@ public final class CrlCache {
         if (cache.size() > MAX_ENTRIES) {
             cache.keySet().stream().findAny().ifPresent(cache::remove);
         }
-        LOG.log(Level.DEBUG, "CRL cached for {0}, expires at {1}", crlUri, new Date(expiresAt));
+        LOG.log(
+                Level.DEBUG,
+                "CRL cached for {0}, expires at {1}",
+                crlUri,
+                Instant.ofEpochMilli(expiresAt));
     }
 
     /**

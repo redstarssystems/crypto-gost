@@ -1,7 +1,7 @@
 package org.rssys.gost.cipher;
 
-import javax.security.auth.Destroyable;
 import java.util.Arrays;
+import javax.security.auth.Destroyable;
 
 /**
  * Симметричный ключ шифрования в виде защищённой обёртки над {@code byte[]}.
@@ -68,5 +68,4 @@ public class SymmetricKey implements CipherParameters, Destroyable {
     public boolean isDestroyed() {
         return destroyed;
     }
-
 }

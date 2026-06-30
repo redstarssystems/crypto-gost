@@ -78,326 +78,633 @@
     Все криптографические операции выполняются встроенными средствами
     библиотеки — без внешних зависимостей.
 
-## Быстрый старт
+## Быстрый старт — примеры для начинающих
 
-Сервер из PKCS12:
+Примеры ниже используют только публичное API модулей `crypto-gost-core`
+и `crypto-gost-pkix`. Код компилируется и работает сразу после
+добавления `crypto-gost-jsse` в зависимости проекта.
+
+### Генерация тестовых сертификатов
+
+Для примеров нужны сертификаты: CA и серверный сертификат для
+`localhost`. В production сертификаты получают через УЦ и загружают как
+PKCS12 (см. ниже).
+
+    import org.rssys.gost.api.KeyGenerator;
+    import org.rssys.gost.signature.ECParameters;
+    import org.rssys.gost.pkix.cert.*;
+    import org.rssys.gost.jca.spec.GostDerCodec;
+
+    ECParameters params = ECParameters.tc26a256();
+
+    // CA (самоподписанный, BasicConstraints:CA)
+    var caKp = KeyGenerator.generateKeyPair(params);
+    byte[] caDn = GostDnParser.encodeDn("CN=Test CA");
+    GostCertificate ca = GostCertificateBuilder.create(params, caDn)
+        .publicKey(caKp.getPublic())
+        .notBefore("20250101120000Z").notAfter("21250101120000Z")
+        .basicConstraints(true, null)   // 
+        .assembleCert(caKp.getPrivate());
+
+    // Серверный сертификат (подписан CA, SAN=localhost)
+    var srvKp = KeyGenerator.generateKeyPair(params);
+    byte[] srvDn = GostDnParser.encodeDn("CN=localhost");
+    GostCertificate server = GostCertificateBuilder.create(params, srvDn)
+        .publicKey(srvKp.getPublic())
+        .issuerDn(caDn)                  // 
+        .notBefore("20250101120000Z").notAfter("21250101120000Z")
+        .sanDns("localhost")             // 
+        .assembleCert(caKp.getPrivate());
+
+- `isCA=true, pathLen=null` — CA без ограничения длины цепочки.
+
+- Издатель — наш CA, а не сам субъект.
+
+- Subject Alternative Name `dNSName=localhost` для совместимости с
+  браузерами.
+
+Экспорт в PEM-файлы для использования в `GostSsl.builder()`:
+
+    import org.rssys.gost.pkix.cert.GostPemUtils;
+    import java.nio.charset.StandardCharsets;
+    import java.nio.file.Files;
+    import java.nio.file.Paths;
+
+    Files.writeString(Paths.get("ca.pem"), ca.toPem());
+    Files.writeString(Paths.get("server.pem"), server.toPem());
+    byte[] keyDer = GostDerCodec.encodePrivateKey(srvKp.getPrivate());
+    Files.write(Paths.get("server-key.pem"),
+        GostPemUtils.toPem(keyDer, "PRIVATE KEY").getBytes(StandardCharsets.US_ASCII));
+
+### Эхо-сервер
+
+Сервер принимает соединение, читает строку, возвращает `ECHO: <строка>`.
 
     import org.rssys.gost.jsse.GostSsl;
     import javax.net.ssl.SSLContext;
     import javax.net.ssl.SSLServerSocket;
     import javax.net.ssl.SSLSocket;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
+    import java.nio.charset.StandardCharsets;
 
-    byte[] p12Bytes = Files.readAllBytes(Paths.get("server.p12"));
-    byte[] caDer    = Files.readAllBytes(Paths.get("ca.der"));
+    SSLContext ctx = GostSsl.builder()
+        .certificate(                             // 
+            Files.readAllBytes(Paths.get("server.pem")),
+            Files.readAllBytes(Paths.get("server-key.pem")))
+        .trustCa(Files.readAllBytes(Paths.get("ca.pem"))) // 
+        .buildServerContext();
 
-    SSLContext  srv = GostSsl.serverContext(p12Bytes, "password".toCharArray(), caDer);
+    try (SSLServerSocket ss = GostSsl.serverSocket(8443, ctx)) {
+        while (true) {
+            try (SSLSocket s = (SSLSocket) ss.accept()) {
+                s.startHandshake();               // 
+                byte[] buf = new byte[1024];
+                int n = s.getInputStream().read(buf);
+                String msg = new String(buf, 0, n, StandardCharsets.UTF_8);
+                s.getOutputStream().write(
+                    ("ECHO: " + msg).getBytes(StandardCharsets.UTF_8));
+            }
+        }
+    }
+
+- `.certificate(byte[], byte[])` — авто-определение PEM/DER для
+  сертификата и ключа.
+
+- `.trustCa(byte[])` — авто-определение формата: одиночный PEM,
+  PEM-цепочка или DER.
+
+- Для `SSLSocket` handshake запускается автоматически при первом
+  read/write. Явный `startHandshake()` — идиоматичный контроль.
+
+### Клиент
+
+    SSLContext ctx = GostSsl.builder()
+        .trustCa(Files.readAllBytes(Paths.get("ca.pem")))
+        .buildClientContext();
+
+    SSLSocket s = GostSsl.socket("localhost", 8443, ctx); // 
+    s.getOutputStream().write("PING".getBytes(StandardCharsets.UTF_8));
+    byte[] buf = new byte[1024];
+    int n = s.getInputStream().read(buf);
+    System.out.println(new String(buf, 0, n, StandardCharsets.UTF_8)); // ECHO: PING
+    s.close();
+
+- `GostSsl.socket()` создаёт `SSLSocket` и выполняет handshake.
+
+### Взаимная аутентификация (mTLS)
+
+Клиент предоставляет свой сертификат — сервер проверяет его по тому же
+CA. Переменные `params`, `caDn`, `serverPem`, `serverKeyPem`, `caPem` —
+из раздела «Генерация тестовых сертификатов» выше.
+
+    // Сервер: требует клиентский сертификат
+    SSLContext srv = GostSsl.builder()
+        .certificate(serverPem, serverKeyPem)
+        .trustCa(caPem)               // CA, выпустивший клиентские сертификаты
+        .buildServerContext();
     SSLServerSocket ss = GostSsl.serverSocket(8443, srv);
-    SSLSocket client = (SSLSocket) ss.accept();
-    client.startHandshake();
-    // read/write через client.getInputStream()/getOutputStream()
+    ss.setNeedClientAuth(true);       // сервер требует клиентский сертификат
 
-Клиент с проверкой сервера:
+    // Клиент: предоставляет свой сертификат
+    var clientKp = KeyGenerator.generateKeyPair(params);
+    GostCertificate clientCert = GostCertificateBuilder.create(params,
+            GostDnParser.encodeDn("CN=Test Client"))
+        .publicKey(clientKp.getPublic())
+        .issuerDn(caDn)
+        .notBefore("20250101120000Z").notAfter("21250101120000Z")
+        .assembleCert(caKp.getPrivate());
 
-    SSLContext cli = GostSsl.clientContext(caDer);
-    SSLSocket   s  = GostSsl.socket("localhost", 8443, cli);
-    // read/write через s.getInputStream()/getOutputStream()
+    SSLContext cli = GostSsl.builder()
+        .certificate(clientCert.getEncoded(),       // DER-байты сертификата
+            GostDerCodec.encodePrivateKey(clientKp.getPrivate()))
+        .trustCa(caPem)
+        .buildClientContext();
+    SSLSocket s = GostSsl.socket("localhost", 8443, cli);
 
-mTLS (клиент с сертификатом):
+### PKCS12 (production)
 
-    SSLContext cli = GostSsl.clientContext(p12Client, "pass".toCharArray(), caDer);
+В production сертификаты и ключи хранятся в PKCS12-контейнере.
 
-Разработка (без проверки сертификата сервера):
+    byte[] p12 = Files.readAllBytes(Paths.get("server.p12"));
+    SSLContext ctx = GostSsl.builder()
+        .certificate(p12, "password".toCharArray())
+        .trustCa(p12Ca, "password".toCharArray())  // 
+        .buildServerContext();
+
+- `.trustCa(pfx, pwd)` извлекает все CA-сертификаты (isCA=true) из PFX.
+
+### Режим разработки
+
+Для отладки — клиент без проверки сертификата сервера. Не для
+production.
 
     import org.rssys.gost.jsse.GostSslDev;
-    import javax.net.ssl.SSLContext;
 
     SSLContext dev = GostSslDev.trustAllClientContextInsecure();
 
-Полный API — в секции ниже.
+Или через builder:
 
-## API
+    SSLContext dev = GostSsl.builder()
+        .certificate(serverPem, serverKeyPem)
+        .trustAll()                                 // 
+        .buildServerContext();
 
-Модуль `crypto-gost-jsse` предоставляет три уровня API для интеграции:
+- `trustAll()` — только для разработки и изолированных сетей.
 
-**Socket API** — `GostSSLSocket / GostSSLServerSocket` — верхний
-уровень. Стандартный Java I/O через `InputStream`/`OutputStream`.
-Handshake запускается автоматически при первом read/write или явно через
-`startHandshake()`. Подходит для большинства приложений.
+### Loopback-проверка
 
-**Engine API** — `GostSSLEngine` — низкоуровневый API для неблокирующего
-I/O (NIO, Netty). Ручное управление handshake через wrap/unwrap, буферы
-`ByteBuffer`. Требует больше кода, но даёт полный контроль.
+Проверка работоспособности TLS без написания серверного и клиентского
+кода.
 
-**Context API** — `GostSSLContextSpi` — создание engine- и
-socket-фабрик. Точка входа для интеграции с серверами приложений.
-
-`GostSSLEngine` разрешает параллельные вызовы `wrap()` и `unwrap()` из
-разных потоков (два отдельных `ReentrantLock` для inbound/outbound).
-Запрещено вызывать `wrap()` из двух потоков одновременно.
-`GostX509TrustManager` thread-safe.
+    // mTLS: обе стороны с сертификатами
+    GostSsl.verify(serverCertPem, serverKeyPem, clientCertPem, clientKeyPem, caPem);
+    // Односторонний TLS: сервер с сертификатом, клиент только проверяет сервер
+    GostSsl.verifyServer(serverCertPem, serverKeyPem, caPem);
 
 ## GostSsl — упрощённый API
 
 Статический фасад `GostSsl` — один вызов, готовый `SSLContext`. Никаких
 KeyManagerFactory, TrustManagerFactory, JKS.
 
-### Форматы входных данных
+### Статические методы
 
-PKCS12 (production)  
-`GostSsl.serverContext(p12Bytes, password, caDer)`
+Все методы возвращают `SSLContext` или создают сокет. Каждый метод —
+одна строка.
 
-PEM (openssl-совместимый)  
-`GostSsl.serverContext(certPem, keyPem, caPem)`
+Серверные контексты:
 
-DER X.509 / PKCS#8  
-`GostSsl.clientContext(certDer, keyDer, caDer)`
+    // PKCS12
+    SSLContext srv = GostSsl.serverContext(p12Bytes, "password".toCharArray(), caDer);
+    // PEM-строки
+    SSLContext srv = GostSsl.serverContext(certPem, keyPem, caPem);
+    // DER-байты
+    SSLContext srv = GostSsl.serverContext(certDer, keyDer, caDer);
 
-### Loopback-проверка TLS
+Клиентские контексты:
 
-    // mTLS: обе стороны с сертификатами
-    GostSsl.verify(serverCertPem, serverKeyPem, clientCertPem, clientKeyPem, caPem);
-    // Односторонний: сервер с сертификатом, клиент только проверяет сервер
-    GostSsl.verifyServer(serverCertPem, serverKeyPem, caPem);
+    // Без клиентского сертификата — только проверка сервера
+    SSLContext cli = GostSsl.clientContext(caDer);
+    // mTLS: PKCS12
+    SSLContext cli = GostSsl.clientContext(p12Bytes, "password".toCharArray(), caDer);
+    // mTLS: PEM-строки
+    SSLContext cli = GostSsl.clientContext(certPem, keyPem, caPem);
+    // mTLS: DER-байты
+    SSLContext cli = GostSsl.clientContext(certDer, keyDer, caDer);
 
-### Builder для OCSP и session cache
+Создание сокетов:
 
+    // Клиентский SSLSocket с автоматическим handshake
+    SSLSocket s = GostSsl.socket("localhost", 8443, ctx);
+    // SSLServerSocket
+    SSLServerSocket ss = GostSsl.serverSocket(8443, ctx);
+    // С backlog
+    SSLServerSocket ss = GostSsl.serverSocket(8443, 100, ctx);
+    // С backlog и адресом
+    SSLServerSocket ss = GostSsl.serverSocket(8443, 100,
+        InetAddress.getByName("0.0.0.0"), ctx);
+
+### Загрузка закрытого ключа
+
+    // Незашифрованный PEM- или DER-ключ — авто-определение формата
+    PrivateKeyParameters key = GostSsl.loadPrivateKey(
+        Files.readAllBytes(Paths.get("server-key.pem")));
+    // Зашифрованный ключ (GOST PBES2)
+    PrivateKeyParameters key = GostSsl.loadPrivateKey(
+        Files.readAllBytes(Paths.get("encrypted-key.pem")),
+        "password".toCharArray());
+
+### GostSslBuilder — fluent API
+
+Полный перечень методов строителя. Терминальные методы —
+`buildServerContext()` и `buildClientContext()`.
+
+    SSLContext ctx = GostSsl.builder()
+        .certificate(certData, keyData)     // сертификат + ключ (авто PEM/DER)
+        .certificate(p12Data, password)     // или из PKCS12 (только один вариант)
+        .trustCa(caData)                    // CA: PEM, PEM-цепочка или DER (можно многократно)
+        .trustCa(pfxData, pfxPassword)      // CA из PKCS12 (извлекает isCA=true)
+        .trustCaFromPem(pemChain)           // CA из PEM-цепочки
+        .ocsp(true)                         // включить OCSP-степплинг
+        .sessionCacheSize(5000)             // размер кэша сессий (0=без ограничения)
+        .trustAll()                         // отключить проверку (только dev)
+        .buildServerContext();              // или buildClientContext()
+
+Примеры:
+
+    // Минимальный сервер
     SSLContext srv = GostSsl.builder()
-        .certificate(p12Data, password)
-        .trustCa(caDer)
+        .certificate(serverPem, serverKeyPem)
+        .trustCa(caPem)
+        .buildServerContext();
+
+    // Клиент без своего сертификата
+    SSLContext cli = GostSsl.builder()
+        .trustCa(caPem)
+        .buildClientContext();
+
+    // Сервер с OCSP и большим кэшем сессий
+    SSLContext srv = GostSsl.builder()
+        .certificate(serverP12, "pwd".toCharArray())
+        .trustCa(caP12, "pwd".toCharArray())
         .ocsp(true)
         .sessionCacheSize(5000)
         .buildServerContext();
 
-PEM-версия с авто-определением формата:
+### Ограничения GostSsl
 
-    SSLContext ctx = GostSsl.builder()
-        .certificate(
-            Files.readAllBytes(Paths.get("server.pem")),       // авто PEM/DER
-            Files.readAllBytes(Paths.get("server-key.pem")))   // авто PEM/DER
-        .trustCaFromPem(Files.readAllBytes(Paths.get("ca-chain.pem")))
-        .ocsp(true)
-        .buildServerContext();
-
-### Ограничения
-
-- PKCS12 с GOST PBE поддерживается нативно (PBKDF2-HMAC-Streebog +
-  Кузнечик CTR-ACPKM).
+- Только один сертификат на контекст — для SNI (multi-tenant)
+  используйте `GostX509KeyManager` напрямую (см. ниже).
 
 - `GostX509TrustManager` принимает список CA-ключей
   (`List<PublicKeyParameters>`) — все переданные CA участвуют в проверке
   цепочки.
 
-- `selfSignedContext` не реализован — используйте PKCS12 с тестовым
-  сертификатом.
+- PKCS12 с GOST PBE поддерживается нативно (PBKDF2-HMAC-Streebog +
+  Кузнечик CTR-ACPKM).
 
-## Конфигурация сервера
+## API — уровни интеграции
 
-Если вам не нужен тонкий контроль — используйте `GostSsl`. Ниже описан
-полный API для ручной настройки.
+Модуль предоставляет три уровня:
 
-Сервер использует `GostX509KeyManager` для хранения сертификата и
-закрытого ключа.
+**Socket API** — `GostSSLSocket / GostSSLServerSocket` — стандартный
+Java I/O. Handshake запускается автоматически при первом read/write или
+явно через `startHandshake()`.
+
+**Engine API** — `GostSSLEngine` — низкоуровневый API для неблокирующего
+I/O (NIO, Netty). Ручное управление handshake через `wrap()`/`unwrap()`.
+
+**Context API** — `GostSSLContextSpi` — фабрика engine и сокетов, точка
+входа для интеграции с серверами приложений (см. раздел «Интеграция»).
+
+`GostSSLEngine` разрешает параллельные `wrap()` и `unwrap()` из разных
+потоков. Запрещено вызывать `wrap()` из двух потоков одновременно.
+`GostX509TrustManager` thread-safe.
+
+## Конфигурация сервера — ручная настройка
+
+Если вам нужен SNI (несколько сертификатов), тонкая настройка OCSP/CRL
+или интеграция с фреймворком — используйте ручную сборку `SSLContext`.
+Для большинства случаев достаточно `GostSsl.builder()` (см. выше).
 
 ### Загрузка сертификата и ключа
 
-Через PKCS12 (рекомендуется для production — ключ и цепочка в одном
-файле):
+Три способа загрузки. Рекомендуется PKCS12 для production.
 
-    import org.rssys.gost.tls13.cert.GostPkcs12Loader;
-    import org.rssys.gost.signature.PrivateKeyParameters;
-    import org.rssys.gost.tls13.cert.TlsCertificate;
+PKCS12 (ключ и цепочка в одном файле):
+
+    import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+    import org.rssys.gost.pkix.cert.GostCertificate;
     import org.rssys.gost.jsse.bridge.CertificateBridge;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
-    import java.util.List;
 
     GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(
-            Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray());
+        Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray(), true);
     PrivateKeyParameters privateKey = p12.getPrivateKey();
-    List<TlsCertificate> tlsChain  = p12.getCertificateChain();
-    java.security.cert.X509Certificate[] jcaChain =
-            CertificateBridge.toJca(tlsChain);
+    X509Certificate[] chain = CertificateBridge.toJca(p12.getCertificateChain());
 
-GOST PBE — нативная поддержка (PBKDF2-HMAC-Streebog + Кузнечик
-CTR-ACPKM).
+DER-файлы:
 
-Через DER-файлы:
-
-    import org.rssys.gost.tls13.cert.TlsCertificate;
-    import org.rssys.gost.jsse.bridge.CertificateBridge;
-    import org.rssys.gost.signature.PrivateKeyParameters;
+    import org.rssys.gost.pkix.cert.GostCertificate;
     import org.rssys.gost.jca.spec.GostDerCodec;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
+    import org.rssys.gost.jsse.bridge.CertificateBridge;
 
     byte[] certDer = Files.readAllBytes(Paths.get("server.der"));
     byte[] keyDer  = Files.readAllBytes(Paths.get("server.key"));
-    byte[] caDer   = Files.readAllBytes(Paths.get("intermediate.der"));
-
-    TlsCertificate serverCert = new TlsCertificate(certDer);
-    TlsCertificate caCert     = new TlsCertificate(caDer);
     PrivateKeyParameters priv = GostDerCodec.decodePrivateKey(keyDer);
-
-    java.security.cert.X509Certificate[] chain = {
-        CertificateBridge.toJca(serverCert),
-        CertificateBridge.toJca(caCert)
+    X509Certificate[] chain = {
+        CertificateBridge.toJca(new GostCertificate(certDer))
     };
 
-Через PEM-файлы с авто-определением формата:
+PEM-файлы (авто-определение формата):
 
     import org.rssys.gost.jsse.GostSsl;
-    import org.rssys.gost.signature.PrivateKeyParameters;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
 
     PrivateKeyParameters key = GostSsl.loadPrivateKey(
-            Files.readAllBytes(Paths.get("server-key.pem")));
-    // Для зашифрованного PEM-ключа:
-    PrivateKeyParameters keyEnc = GostSsl.loadPrivateKey(
-            Files.readAllBytes(Paths.get("encrypted-key.pem")),
-            "password".toCharArray());
-
-`loadPrivateKey` авто-определяет PEM или DER и поддерживает расшифровку
-зашифрованных ключей по ГОСТ PBES2 без ручного pemToDer.
+        Files.readAllBytes(Paths.get("server-key.pem")));
+    // Зашифрованный ключ:
+    PrivateKeyParameters key = GostSsl.loadPrivateKey(
+        Files.readAllBytes(Paths.get("encrypted-key.pem")), "password".toCharArray());
 
 ### GostX509KeyManager
 
     import org.rssys.gost.jsse.manager.GostX509KeyManager;
-    import org.rssys.gost.signature.PrivateKeyParameters;
 
     GostX509KeyManager km = new GostX509KeyManager();
-    km.addKeyEntry("default", jcaChain, privateKey);
-    // Для SNI (multi-tenant): несколько записей с разными hostname
-    km.addKeyEntry("api", apiChain, apiPrivateKey);
+    km.addKeyEntry("default", chain, privateKey);
+    // SNI (multi-tenant): несколько записей
+    km.addKeyEntry("api", apiChain, apiKey);
 
-Для SNI-выбора сертификата сервер автоматически вызывает
-`GostX509KeyManager.asSniSelector()`, который выбирает запись по
-`SubjectAltName/dNSName` сертификата.
+Сервер автоматически вызывает `asSniSelector()` — выбор сертификата по
+`SubjectAltName/dNSName`.
 
 ### GostX509TrustManager
 
-    import org.rssys.gost.jsse.manager.GostX509TrustManager;
-    import org.rssys.gost.signature.PublicKeyParameters;
-    import org.rssys.gost.tls13.cert.TlsCertificate;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
+Конструкторы `GostX509TrustManager` покрывают все комбинации проверок.
 
-    // Вариант А: проверка цепочки + срок действия (без OCSP)
+Проверка цепочки + срок действия (без OCSP/CRL):
+
+    import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.pkix.cert.GostCertificate;
+
     byte[] caDer = Files.readAllBytes(Paths.get("ca.der"));
-    PublicKeyParameters caKey = new TlsCertificate(caDer).getPublicKey();
+    PublicKeyParameters caKey = new GostCertificate(caDer).getPublicKey();
     GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
 
-    // Вариант Б: + OCSP stapling / client-side fetch
+С одним CA + OCSP (stapling или client-side fetch):
+
     import org.rssys.gost.jsse.ocsp.OcspPolicy;
     import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
 
     GostX509TrustManager tm = new GostX509TrustManager(
-            caKey,
-            OcspPolicy.STAPLING_OR_FETCH,
-            new JdkHttpOcspFetcher());
+        caKey,
+        OcspPolicy.STAPLING_OR_FETCH,   // 
+        new JdkHttpOcspFetcher());
 
-    // Вариант В: + OCSP + CRL (client-side fetch)
+- Политика: `STAPLING_OR_FETCH` — если нет staple-ответа, клиент сам
+  сходит на OCSP-responder. Также доступны: `DISABLED`, `IF_PRESENT`,
+  `STAPLING_REQUIRED`.
+
+С несколькими CA + OCSP:
+
+    GostX509TrustManager tm = new GostX509TrustManager(
+        List.of(caKey1, caKey2),          // 
+        OcspPolicy.STAPLING_OR_FETCH,
+        new JdkHttpOcspFetcher());
+
+- Все переданные CA участвуют в проверке цепочки. Порядок не важен.
+
+Полный конструктор: CA + OCSP + CRL:
+
     import org.rssys.gost.jsse.crl.CrlPolicy;
     import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
 
     GostX509TrustManager tm = new GostX509TrustManager(
-            List.of(caKey1, caKey2),
-            OcspPolicy.STAPLING_OR_FETCH,
-            new JdkHttpOcspFetcher(),
-            CrlPolicy.IF_CDP_PRESENT,
-            new JdkHttpCrlFetcher());
+        List.of(caKey1, caKey2),
+        OcspPolicy.STAPLING_OR_FETCH,
+        new JdkHttpOcspFetcher(),
+        CrlPolicy.IF_CDP_PRESENT,         // 
+        new JdkHttpCrlFetcher());
 
-    // Для разработки/тестов — trust-all (без проверки CA):
-    GostX509TrustManager tmAll = new GostX509TrustManager(null, false);
+- `CrlPolicy`: `DISABLED` (не проверять), `IF_CDP_PRESENT` (проверять
+  если CRL DP в сертификате), `REQUIRE` (требовать CRL всегда).
 
-Trust-all (`caKey = null`) отключает проверку сертификата пира.
-Используйте только для разработки. В production всегда задавайте
-CA-ключ.
+Trust-all (только для разработки):
 
-### Создание серверного SSLContext
+    GostX509TrustManager tm = new GostX509TrustManager(null, false);
 
-    import javax.net.ssl.KeyManager;
-    import javax.net.ssl.TrustManager;
-    import javax.net.ssl.SSLContext;
-    import java.security.Security;
+`caKey = null` — проверка сертификата пира отключена. Только для
+разработки.
+
+### Создание SSLContext
+
     import org.rssys.gost.jsse.RssysGostJsseProvider;
 
-    Security.addProvider(new RssysGostJsseProvider());
-
+    Security.addProvider(new RssysGostJsseProvider());          // 
     SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
     ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
 
-    // Серверный SSLEngine
-    javax.net.ssl.SSLEngine serverEngine = ctx.createSSLEngine();
-    serverEngine.setUseClientMode(false);
+    // Серверный SSLEngine (для NIO)
+    SSLEngine engine = ctx.createSSLEngine();
+    engine.setUseClientMode(false);
 
-    // Или через socket factory:
-    javax.net.ssl.SSLServerSocketFactory ssf = ctx.getServerSocketFactory();
+    // Или socket factory
+    SSLServerSocketFactory ssf = ctx.getServerSocketFactory();
+
+- `Security.addProvider()` — один раз при старте приложения.
 
 ## Конфигурация клиента
 
-    import javax.net.ssl.SSLContext;
-    import javax.net.ssl.TrustManager;
-    import java.security.Security;
     import org.rssys.gost.jsse.RssysGostJsseProvider;
     import org.rssys.gost.jsse.manager.GostX509TrustManager;
 
     Security.addProvider(new RssysGostJsseProvider());
 
-    // TrustManager с проверкой сертификата сервера
+    // TrustManager с проверкой сервера
     GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
-
-    GostX509KeyManager km = new GostX509KeyManager(); // пустой — без клиентского сертификата
+    // Пустой KeyManager — без клиентского сертификата
+    GostX509KeyManager km = new GostX509KeyManager();
 
     SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
     ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
 
-    // Клиентский SSLEngine для NIO/integration
-    javax.net.ssl.SSLEngine clientEngine = ctx.createSSLEngine("host", 8443);
-    clientEngine.setUseClientMode(true);
+    // Клиентский SSLEngine
+    SSLEngine engine = ctx.createSSLEngine("host", 8443);
+    engine.setUseClientMode(true);
+    // Или socket factory
+    SSLSocketFactory sf = ctx.getSocketFactory();
 
-    // Или через socket factory:
-    javax.net.ssl.SSLSocketFactory sf = ctx.getSocketFactory();
+mTLS — клиент предоставляет свой сертификат:
 
-Для взаимной аутентификации (mTLS) клиент должен предоставить свой
-сертификат:
-
-    GostX509KeyManager clientKm = new GostX509KeyManager();
-    clientKm.addKeyEntry("client", clientChain, clientPrivateKey);
+    GostX509KeyManager km = new GostX509KeyManager();
+    km.addKeyEntry("client", clientChain, clientPrivateKey);
 
     SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
-    ctx.init(new KeyManager[]{clientKm}, new TrustManager[]{tm}, null);
+    ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
 
-Для endpoint identification (проверка hostname) установите
+Для проверки hostname установите
 `SSLParameters.setEndpointIdentificationAlgorithm("HTTPS")`.
-`GostX509TrustManager` проверит dNSName/iPAddress сертификата по RFC
-6125.
+`GostX509TrustManager` проверяет `dNSName`/`iPAddress` сертификата по
+RFC 6125.
 
 ### Выбор клиентского сертификата по OID-фильтрам (oid\_filters)
 
 Если сервер включил `oid_filters` (RFC 8446 §4.2.5) в
 `CertificateRequest`, `GostX509KeyManager.asClientCertificateSelector()`
-автоматически выбирает подходящий сертификат из KeyStore:
+выбирает подходящий сертификат:
 
     import org.rssys.gost.jsse.manager.GostX509KeyManager;
     import org.rssys.gost.tls13.config.ClientCertificateSelector;
 
-    // KeyManager с несколькими сертификатами
     GostX509KeyManager km = new GostX509KeyManager();
-    km.addKeyEntry("ukep",   ukepChain,   ukepKey);   // EKU: clientAuth + УКЭП
-    km.addKeyEntry("simple", simpleChain, simpleKey); // EKU: clientAuth
+    km.addKeyEntry("kc1", kc1Chain, kc1Key);   // EKU: clientAuth
+    km.addKeyEntry("simple", simpleChain, simpleKey);
 
     ClientCertificateSelector selector = km.asClientCertificateSelector();
 
-    // Передать selector в GostSSLEngine
     GostSSLEngine engine = GostSSLEngine.createForClient(km, tm, "host", 8443, sessionCtx);
-    // При получении CertificateRequest с oid_filters selector вызывается автоматически
+    // При CertificateRequest с oid_filters selector вызывается автоматически
 
-Записи перебираются в порядке добавления через `addKeyEntry()`.
-Возвращается первая, удовлетворяющая **всем** фильтрам одновременно.
-Фильтрация по `certificate_authorities` (DN эмитента) не реализована.
+Записи перебираются в порядке добавления. Возвращается первая,
+удовлетворяющая всем фильтрам.
+
+## OCSP API
+
+API для проверки статуса сертификатов через OCSP (RFC 6960).
+
+### OcspRequestBuilder
+
+Fluent-построитель DER-закодированного OCSP-запроса с поддержкой nonce
+(RFC 8954).
+
+    import org.rssys.gost.jsse.ocsp.OcspRequestBuilder;
+    import org.rssys.gost.jsse.ocsp.OcspRequest;
+
+    // Базовый запрос (без подписи)
+    OcspRequest req = OcspRequestBuilder.create()
+        .targetCert(certDer)            // проверяемый сертификат (DER) — обязателен
+        .issuerCert(issuerDer)          // сертификат издателя (DER) — обязателен
+        .hashLen(32)                    // 32=Streebog-256 (по умол.), 64=Streebog-512
+        .build();
+
+    byte[] ocspRequestDer = req.der();   // DER-байты OCSPRequest для отправки на респондер
+    byte[] nonce = req.nonce();          // nonce для сверки с ответом
+
+    // Запрос с подписью
+    OcspRequest signedReq = OcspRequestBuilder.create()
+        .targetCert(certDer)
+        .issuerCert(issuerDer)
+        .signKey(privateKey)            // ключ для подписи (опционально)
+        .params(ECParameters.tc26a256())// параметры кривой (обязательно с signKey)
+        .build();
+
+### OcspPolicy
+
+Перечисление политик проверки OCSP, передаётся в `GostX509TrustManager`.
+
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<tbody>
+<tr>
+<td style="text-align: left;"><p>Константа</p></td>
+<td style="text-align: left;"><p>Поведение</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>DISABLED</code></p></td>
+<td style="text-align: left;"><p>OCSP не проверяется</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>IF_PRESENT</code></p></td>
+<td style="text-align: left;"><p>Проверить OCSP-ответ, если сервер его
+предоставил (не фатально при отсутствии)</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>STAPLING_REQUIRED</code></p></td>
+<td style="text-align: left;"><p>Требовать OCSP stapling в handshake —
+fail-closed при отсутствии</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>STAPLING_OR_FETCH</code></p></td>
+<td style="text-align: left;"><p>Использовать stapling, если есть; иначе
+клиент сам сходит на респондер</p></td>
+</tr>
+</tbody>
+</table>
+
+### JdkHttpOcspFetcher
+
+Реализация `OcspFetcher` на JDK HttpClient — vthread-friendly.
+
+    import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
+    import java.time.Duration;
+
+    // С настройками по умолчанию: таймаут 5 с, лимит ответа 64 КБ
+    OcspFetcher fetcher = new JdkHttpOcspFetcher();
+    // Кастомные настройки
+    OcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(10), 131072);
+
+Использование через TrustManager:
+
+    GostX509TrustManager tm = new GostX509TrustManager(
+        caKey,
+        OcspPolicy.STAPLING_OR_FETCH,
+        new JdkHttpOcspFetcher());
+
+OCSP-ответы кэшируются в `GostX509TrustManager` на 1 час (TTL
+настраивается через `setOcspCacheTtlMs()`).
+
+## CRL API
+
+API для проверки сертификатов через CRL (Certificate Revocation List).
+
+### CrlPolicy
+
+Перечисление политик проверки CRL, передаётся в `GostX509TrustManager`.
+
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<tbody>
+<tr>
+<td style="text-align: left;"><p>Константа</p></td>
+<td style="text-align: left;"><p>Поведение</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>DISABLED</code></p></td>
+<td style="text-align: left;"><p>CRL не проверяется (по
+умолчанию)</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>IF_CDP_PRESENT</code></p></td>
+<td style="text-align: left;"><p>Проверить CRL, если в сертификате есть
+CRL Distribution Points</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>REQUIRE</code></p></td>
+<td style="text-align: left;"><p>Требовать CRL всегда — fail-closed при
+отсутствии CDP</p></td>
+</tr>
+</tbody>
+</table>
+
+### JdkHttpCrlFetcher
+
+Реализация `CrlFetcher` на JDK HttpClient. Имеет защиту от SSRF.
+
+    import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
+    import org.rssys.gost.jsse.crl.CrlPolicy;
+
+    GostX509TrustManager tm = new GostX509TrustManager(
+        List.of(caKey),
+        OcspPolicy.IF_PRESENT,
+        null,                                // без OCSP
+        CrlPolicy.IF_CDP_PRESENT,
+        new JdkHttpCrlFetcher());
+
+CRL-ответы кэшируются до `nextUpdate`, с grace-периодом 1 час (перекос
+часов).
 
 ## GostSSLEngine (низкоуровневый API)
 
@@ -445,8 +752,8 @@ GostPkcs12Loader):
     import org.rssys.gost.jsse.bridge.CertificateBridge;
     import org.rssys.gost.signature.PrivateKeyParameters;
     import org.rssys.gost.signature.PublicKeyParameters;
-    import org.rssys.gost.tls13.cert.GostPkcs12Loader;
-    import org.rssys.gost.tls13.cert.TlsCertificate;
+    import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+    import org.rssys.gost.pkix.cert.GostCertificate;
 
     import javax.net.ssl.KeyManager;
     import javax.net.ssl.SSLContext;
@@ -461,9 +768,9 @@ GostPkcs12Loader):
 
     // Шаг 2: загрузка сертификата и ключа через PKCS12
     GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(
-            Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray());
+            Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray(), true);
     PrivateKeyParameters privateKey = p12.getPrivateKey();
-    List<TlsCertificate> tlsChain  = p12.getCertificateChain();
+    List<GostCertificate> tlsChain  = p12.getCertificateChain();
     java.security.cert.X509Certificate[] jcaChain =
             CertificateBridge.toJca(tlsChain);
 
@@ -473,7 +780,7 @@ GostPkcs12Loader):
 
     // Шаг 4: TrustManager — загрузка CA
     byte[] caDer = Files.readAllBytes(Paths.get("ca.der"));
-    PublicKeyParameters caKey = new TlsCertificate(caDer).getPublicKey();
+    PublicKeyParameters caKey = new GostCertificate(caDer).getPublicKey();
     GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
 
     // Шаг 5: SSLContext
@@ -978,7 +1285,7 @@ mTLS: внутри `ConnectorCustomizer` добавьте
     import org.rssys.gost.jsse.manager.GostX509TrustManager;
     import org.rssys.gost.jsse.manager.GostX509KeyManager;
     import org.rssys.gost.signature.PublicKeyParameters;
-    import org.rssys.gost.tls13.cert.TlsCertificate;
+    import org.rssys.gost.pkix.cert.GostCertificate;
 
     import javax.net.ssl.SSLContext;
     import javax.net.ssl.KeyManager;
@@ -991,7 +1298,7 @@ mTLS: внутри `ConnectorCustomizer` добавьте
 
     // CA для проверки клиентских сертификатов
     byte[] clientCaDer = Files.readAllBytes(Paths.get("client-ca.der"));
-    PublicKeyParameters clientCaKey = new TlsCertificate(clientCaDer).getPublicKey();
+    PublicKeyParameters clientCaKey = new GostCertificate(clientCaDer).getPublicKey();
     GostX509TrustManager tm = new GostX509TrustManager(clientCaKey, false);
 
     // Серверный KeyManager — свой сертификат
@@ -1067,12 +1374,12 @@ LRU-эвiction.
 
 ## Загрузка сертификата
 
-Для production рекомендуется PKCS12 (см. раздел «Загрузка сертификата и
-ключа»).
+Для production рекомендуется PKCS12 (см. раздел «Конфигурация сервера»).
 
-Методы `CertificateBridge.toJca()` / `CertificateBridge.toTls()`
-конвертируют между `TlsCertificate` (ядро tls13) и
-`java.security.cert.X509Certificate` (JCA/JSSE). Импорт:
+`CertificateBridge.toJca()` и `CertificateBridge.toGost()` конвертируют
+между `GostCertificate` и `java.security.cert.X509Certificate`.
+`toJca()` принимает `GostCertificate` / `List<GostCertificate>`,
+`toGost()` — `X509Certificate` / `X509Certificate[]`.
 
     import org.rssys.gost.jsse.bridge.CertificateBridge;
 
@@ -1102,6 +1409,8 @@ LRU-эвiction.
 
 - KeyManagerFactory — только алгоритм `GostX509` (не `PKIX`, не
   `NewSunX509`).
+
+- Проверка nonce в OCSP-ответах — ответственность приложения (RFC 8954).
 
 ## Примеры интеграции с серверами приложений
 
@@ -1202,10 +1511,10 @@ Maven прогоняет только их — автоматически для
 
 Для удобства есть Makefile-цели:
 
-    # Один модуль, 30 минут (DUR в секундах). Можно указывать модули: core, tls13, jsse :
+    # Один модуль, 30 минут (DUR в секундах). Можно указывать модули: core, pkix, tls13, jsse :
     make fuzz MODULE=tls13 DUR=1800 JOBS=4
 
-    # Все три модуля параллельно, логи в fuzz-*.log, 1 час:
+    # Все 4 модуля параллельно, логи в fuzz-*.log, 1 час:
     make fuzz-all DUR=3600 JOBS=4
 
 ## Поддержать проект

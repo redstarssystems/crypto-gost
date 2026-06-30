@@ -1,15 +1,9 @@
 package org.rssys.gost.jsse.engine;
-import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.socket.GostSSLSocketFactory;
-import org.rssys.gost.jsse.socket.GostSSLServerSocketFactory;
 
-import org.rssys.gost.tls13.TlsCiphersuite;
-
-import javax.net.ssl.KeyManager;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.security.SecureRandom;
+import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContextSpi;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLParameters;
@@ -17,7 +11,12 @@ import javax.net.ssl.SSLServerSocketFactory;
 import javax.net.ssl.SSLSessionContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
-import java.security.SecureRandom;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.jsse.socket.GostSSLServerSocketFactory;
+import org.rssys.gost.jsse.socket.GostSSLSocketFactory;
+import org.rssys.gost.tls13.TlsCiphersuite;
 
 /**
  * SSLContextSpi для ГОСТ TLS 1.3.
@@ -61,9 +60,10 @@ public final class GostSSLContextSpi extends SSLContextSpi {
             }
         }
         if (this.trustManager == null) {
-            LOG.log(Level.WARNING,
+            LOG.log(
+                    Level.WARNING,
                     "GostX509TrustManager created without CA key - certificate chain validation disabled. "
-                  + "For production use, pass caPublicKey to GostX509TrustManager.");
+                            + "For production use, pass caPublicKey to GostX509TrustManager.");
             this.trustManager = new GostX509TrustManager(null, false);
         }
 
@@ -82,15 +82,21 @@ public final class GostSSLContextSpi extends SSLContextSpi {
     @Override
     protected SSLEngine engineCreateSSLEngine() {
         checkInitialized();
-        return new GostSSLEngine(keyManager, trustManager, "", -1, true,
-                clientSessionContext, serverSessionContext);
+        return new GostSSLEngine(
+                keyManager, trustManager, "", -1, true, clientSessionContext, serverSessionContext);
     }
 
     @Override
     protected SSLEngine engineCreateSSLEngine(String host, int port) {
         checkInitialized();
-        return new GostSSLEngine(keyManager, trustManager, host, port, true,
-                clientSessionContext, serverSessionContext);
+        return new GostSSLEngine(
+                keyManager,
+                trustManager,
+                host,
+                port,
+                true,
+                clientSessionContext,
+                serverSessionContext);
     }
 
     @Override
@@ -108,7 +114,8 @@ public final class GostSSLContextSpi extends SSLContextSpi {
     // Создаёт серверный GostSSLEngine с serverSessionContext.
     // Используется GostSSLServerSocket и будет полезен для Netty-адаптера в фазе 5.
     GostSSLEngine createServerEngine(String host, int port) {
-        return GostSSLEngine.createForServer(keyManager, trustManager, host, port, serverSessionContext);
+        return GostSSLEngine.createForServer(
+                keyManager, trustManager, host, port, serverSessionContext);
     }
 
     @Override

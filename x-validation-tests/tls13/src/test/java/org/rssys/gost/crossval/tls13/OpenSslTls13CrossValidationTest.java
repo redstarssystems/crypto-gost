@@ -12,19 +12,22 @@ import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.GostOids;
+import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostDerParser;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsSession;
 import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.cert.GostPkcs12Loader;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.cert.TlsDerParser;
+import org.rssys.gost.tls13.cert.TlsCertUtils;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.config.OIDFilter;
 import org.rssys.gost.tls13.transport.SocketTlsTransport;
 
+import java.util.List;
+import java.util.stream.Collectors;
 import java.io.ByteArrayOutputStream;
 import java.net.InetAddress;
 import java.nio.file.Files;
@@ -41,7 +44,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@DisplayName("TLS 1.3: кросс-валидация crypto-gost ↔ OpenSSL")
+@DisplayName("TLS 1.3: кросс-валидация crypto-gost <-> OpenSSL")
 class OpenSslTls13CrossValidationTest {
 
     private static final String SUITE_L = "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L";
@@ -76,7 +79,7 @@ class OpenSslTls13CrossValidationTest {
             SUITE_L + "; " + SUITE_L_ID + "; GC256B",
             SUITE_S + "; " + SUITE_S_ID + "; GC256B"
     })
-    @DisplayName("сервер crypto-gost + s_client: handshake + GET → INTEROP_OK")
+    @DisplayName("сервер crypto-gost + s_client: handshake + GET -> INTEROP_OK")
     void testServerRoundtrip(String suiteName, int suiteId, String curveName) throws Exception {
         runServerTest(suiteName, suiteId, curveName, false, 0);
     }
@@ -101,10 +104,10 @@ class OpenSslTls13CrossValidationTest {
         TempDirUtils.withTempDir("tls13-oidf-", tmpDir -> {
             TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(curve.params);
 
-            // Клиентский сертификат Java API с УКЭП EKU
+            // Клиентский сертификат Java API с KC1 в CertificatePolicies
             TlsTestHelper.CertBundle clientBundle = TlsTestHelper.createCertWithKey(
                     curve.params, "20240101120000Z", "21060101120000Z",
-                    null, new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_CLIENT_AUTH, GostOids.EKU_UKEP});
+                    null, new byte[]{(byte) 0x80}, new String[]{GostOids.EXT_CLIENT_AUTH}, null, new String[]{GostOids.POLICY_KC1});
             Path clientCertPem = tmpDir.resolve("client-cert.pem");
             Path clientKeyPem = tmpDir.resolve("client-key.pem");
             Files.writeString(clientCertPem, clientBundle.cert.toPem());
@@ -112,10 +115,10 @@ class OpenSslTls13CrossValidationTest {
                     OpenSslTls13Helper.privateKeyToPem(
                             GostDerCodec.encodePrivateKey(clientBundle.priv)));
 
-            // OID filter: УКЭП (filterOid = EKU 2.5.29.37, value = { 1.2.643.100.113.1 })
-            byte[] ukepFilterValues = buildEkuFilterValues(TlsDerParser.UKEP_OID_BYTES);
-            OIDFilter ukepFilter = new OIDFilter(TlsDerParser.EKU_OID_BYTES, ukepFilterValues);
-            List<OIDFilter> filters = Collections.singletonList(ukepFilter);
+            // OID filter: KC1 (filterOid = CertificatePolicies 2.5.29.32, value = { 1.2.643.100.113.1 })
+            byte[] kc1FilterValues = buildEkuFilterValues(GostDerParser.KC1_OID_BYTES);
+            OIDFilter kc1Filter = new OIDFilter(GostDerParser.CP_OID_BYTES, kc1FilterValues);
+            List<OIDFilter> filters = Collections.singletonList(kc1Filter);
 
             startJavaServerWithOidFilters(port, SUITE_L_ID, curve, bundle.cert, bundle.priv,
                     filters, clientBundle.cert.getPublicKey());
@@ -139,16 +142,16 @@ class OpenSslTls13CrossValidationTest {
     @Test
     @DisplayName("сервер crypto-gost + s_client: mTLS (взаимная аутентификация)")
     void testServerMtls() throws Exception {
-        AtomicReference<List<TlsCertificate>> peerCerts = new AtomicReference<>();
+        AtomicReference<List<GostCertificate>> peerCerts = new AtomicReference<>();
         runServerTest(SUITE_L, SUITE_L_ID, "GC256B", true, 0, peerCerts);
-        // Проверяем что сертификат клиента удовлетворяет УКЭП фильтру
-        List<TlsCertificate> certs = peerCerts.get();
+        // Проверяем что сертификат клиента удовлетворяет KC1 фильтру
+        List<GostCertificate> certs = peerCerts.get();
         assertNotNull(certs, "Должен быть peer-сертификат");
         assertFalse(certs.isEmpty(), "Peer-сертификаты не пусты");
-        byte[] ukepFilterValues = buildEkuFilterValues(TlsDerParser.UKEP_OID_BYTES);
-        OIDFilter ukepFilter = new OIDFilter(TlsDerParser.EKU_OID_BYTES, ukepFilterValues);
-        assertTrue(certs.get(0).matchesOidFilter(ukepFilter),
-                "Клиентский сертификат должен удовлетворять УКЭП фильтру");
+        byte[] kc1FilterValues = buildEkuFilterValues(GostDerParser.KC1_OID_BYTES);
+        OIDFilter kc1Filter = new OIDFilter(GostDerParser.CP_OID_BYTES, kc1FilterValues);
+        assertTrue(TlsCertUtils.matchesOidFilter(certs.get(0), kc1Filter),
+                "Клиентский сертификат должен удовлетворять KC1 фильтру");
     }
 
     @ParameterizedTest
@@ -170,7 +173,7 @@ class OpenSslTls13CrossValidationTest {
             SUITE_L + "; " + SUITE_L_ID + "; GC256B",
             SUITE_S + "; " + SUITE_S_ID + "; GC256B"
     })
-    @DisplayName("s_server + клиент crypto-gost: handshake + GET → статус")
+    @DisplayName("s_server + клиент crypto-gost: handshake + GET -> статус")
     void testClientRoundtrip(String suiteName, int suiteId, String curveName) throws Exception {
         runClientTest(suiteName, suiteId, curveName);
     }
@@ -189,7 +192,7 @@ class OpenSslTls13CrossValidationTest {
 
     private void runServerTest(String suiteName, int suiteId, String curveName,
                                boolean mTls, int serverGroup,
-                               AtomicReference<List<TlsCertificate>> peerCerts) throws Exception {
+                                      AtomicReference<List<GostCertificate>> peerCerts) throws Exception {
         CurveSpec curve = findCurve(curveName);
         int port = OpenSslTls13Helper.findFreePort();
 
@@ -198,14 +201,15 @@ class OpenSslTls13CrossValidationTest {
                 // Серверный PFX: OpenSSL (проверка wire-формата)
                 OpenSslTls13Helper.MtlsPkiResult pki = OpenSslTls13Helper.generateMtlsPKI(
                         tmpDir, curve.algo, curve.paramset);
-                GostPkcs12Loader.Result r = GostPkcs12Loader.load(pki.serverPfx, pki.password);
-                List<TlsCertificate> chain = r.getCertificateChain();
+                GostPkcs12Loader.Result r = GostPkcs12Loader.load(pki.serverPfx, pki.password, true);
+                List<GostCertificate> chain = r.getCertificateChain();
+                // GostPkcs12Loader уже возвращает List<GostCertificate>
 
                 // Клиент: самоподписанный сертификат (обходит "ca md too weak" в OpenSSL 3.6.0)
                 byte[] cliKu = new byte[]{(byte) 0x80}; // digitalSignature
                 TlsTestHelper.CertBundle clientBundle = TlsTestHelper.createCertWithKey(
                         curve.params, "20240101120000Z", "21060101120000Z",
-                        null, cliKu, new String[]{GostOids.EXT_CLIENT_AUTH, GostOids.EKU_UKEP});
+                        null, cliKu, new String[]{GostOids.EXT_CLIENT_AUTH}, null, new String[]{GostOids.POLICY_KC1});
                 Path clientCertPem = tmpDir.resolve("client-cert.pem");
                 Path clientKeyPem = tmpDir.resolve("client-key.pem");
                 Files.writeString(clientCertPem, clientBundle.cert.toPem());
@@ -231,7 +235,7 @@ class OpenSslTls13CrossValidationTest {
     }
 
     private void runServerTestInner(int port, int suiteId, CurveSpec curve,
-                                     TlsCertificate serverCert, PrivateKeyParameters serverPriv,
+                                     GostCertificate serverCert, PrivateKeyParameters serverPriv,
                                      PublicKeyParameters caPub, int serverGroup,
                                      List<String> clientExtraArgs) throws Exception {
         runServerTestInner(port, suiteId, curve, serverCert, serverPriv, caPub,
@@ -239,10 +243,10 @@ class OpenSslTls13CrossValidationTest {
     }
 
     private void runServerTestInner(int port, int suiteId, CurveSpec curve,
-                                     TlsCertificate serverCert, PrivateKeyParameters serverPriv,
+                                     GostCertificate serverCert, PrivateKeyParameters serverPriv,
                                      PublicKeyParameters caPub, int serverGroup,
                                      List<String> clientExtraArgs,
-                                     AtomicReference<List<TlsCertificate>> peerCerts) throws Exception {
+                                     AtomicReference<List<GostCertificate>> peerCerts) throws Exception {
         AtomicReference<Throwable> serverError = new AtomicReference<>();
         CountDownLatch handshakeDone = new CountDownLatch(1);
 
@@ -373,7 +377,7 @@ class OpenSslTls13CrossValidationTest {
     }
 
     private static Thread startJavaServer(int port, int suiteId, CurveSpec curve,
-                                            TlsCertificate cert, PrivateKeyParameters priv,
+                                            GostCertificate cert, PrivateKeyParameters priv,
                                             PublicKeyParameters caPub, int serverGroup,
                                             AtomicReference<Throwable> errorRef,
                                             CountDownLatch handshakeDone) {
@@ -382,11 +386,11 @@ class OpenSslTls13CrossValidationTest {
     }
 
     private static Thread startJavaServer(int port, int suiteId, CurveSpec curve,
-                                            TlsCertificate cert, PrivateKeyParameters priv,
-                                            PublicKeyParameters caPub, int serverGroup,
-                                            AtomicReference<Throwable> errorRef,
-                                            CountDownLatch handshakeDone,
-                                            AtomicReference<List<TlsCertificate>> peerCerts) {
+                                             GostCertificate cert, PrivateKeyParameters priv,
+                                             PublicKeyParameters caPub, int serverGroup,
+                                             AtomicReference<Throwable> errorRef,
+                                             CountDownLatch handshakeDone,
+                                             AtomicReference<List<GostCertificate>> peerCerts) {
         Thread t = new Thread(() -> {
             try (ServerSocket ss = new ServerSocket(port)) {
                 ss.setSoTimeout(15000);
@@ -437,7 +441,7 @@ class OpenSslTls13CrossValidationTest {
      * Запускает Java-сервер с OID-фильтрами для проверки wire-формата oid_filters.
      */
     private static void startJavaServerWithOidFilters(int port, int suiteId, CurveSpec curve,
-                                                       TlsCertificate cert, PrivateKeyParameters priv,
+                                                       GostCertificate cert, PrivateKeyParameters priv,
                                                        List<OIDFilter> oidFilters,
                                                        PublicKeyParameters caPubKey) {
         new Thread(() -> {
@@ -477,7 +481,7 @@ class OpenSslTls13CrossValidationTest {
 
     /**
      * Строит DER-кодированное значение для EKU фильтра: SEQUENCE { OID }.
-     * oidBytes — OID value (без тега/длины), например UKEP_OID_BYTES.
+     * oidBytes — OID value (без тега/длины), например KC1_OID_BYTES.
      */
     private static byte[] buildEkuFilterValues(byte[] oidBytes) {
         byte[] oidTlv = new byte[2 + oidBytes.length];

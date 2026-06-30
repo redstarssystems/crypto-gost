@@ -1,6 +1,13 @@
 package org.rssys.gost.tls13.cert;
 
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 import org.rssys.gost.digest.Digest;
+import org.rssys.gost.pkix.cert.ChainValidator;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostOcspResponse;
+import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
@@ -8,17 +15,14 @@ import org.rssys.gost.tls13.crypto.HkdfStreebog;
 import org.rssys.gost.tls13.crypto.TlsSignatureCodec;
 import org.rssys.gost.tls13.message.TlsEncoding;
 
-import java.io.IOException;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
-
 /**
- * Валидация цепочек сертификатов и CertificateVerify (RFC 5280, RFC 8446 §4.4.2.2).
+ * TLS-обёртка для валидации цепочек сертификатов и CertificateVerify.
  * <p>
- * Вынесена из {@link TlsSession} для unit-тестирования и возможной замены.
- * <p>
- * Все методы package-private — вызываются только из {@code TlsSession}.
+ * Делегирует чистую PKIX-валидацию цепочки в {@link ChainValidator},
+ * добавляя TLS-специфику: OCSP-степплинг, проверку hostname, KU/EKU в
+ * контексте TLS, а также {@link #verifyCertificateVerify(byte[], GostCertificate, byte[], boolean)}.
+ * Все PKIX-ошибки ({@link PkixException}) оборачиваются в {@link TlsException}
+ * с соответствующим alert-кодом.
  */
 public final class TlsCertificateValidator {
 
@@ -39,82 +43,100 @@ public final class TlsCertificateValidator {
      *                           при chain.size() > 1 OCSP верифицируется ключом issuer-сертификата)
      * @throws TlsException при ошибке валидации
      */
-    public static void checkServerCertificateChain(List<TlsCertificate> chain,
-                                               String serverHostname,
-                                               boolean requireOcspStapling,
-                                               List<PublicKeyParameters> caPublicKeys) throws TlsException {
+    public static void checkServerCertificateChain(
+            List<GostCertificate> chain,
+            String serverHostname,
+            boolean requireOcspStapling,
+            List<PublicKeyParameters> caPublicKeys)
+            throws TlsException {
         // Defense-in-depth: engine перехватывает пустой chain раньше (receiveCertificate),
-        // но IndexOutOfBounds здесь недопустим — RFC 8446 §4.4.2 требует непустой список от сервера.
+        // но IndexOutOfBounds здесь недопустим — RFC 8446 §4.4.2 требует непустой список от
+        // сервера.
         if (chain == null || chain.isEmpty()) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                    "Empty server certificate chain");
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR, "Empty server certificate chain");
         }
-        TlsCertificate leaf = chain.get(0);
+        GostCertificate leaf = chain.get(0);
 
         if (leaf.isExpired()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "Server certificate expired");
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE, "Server certificate expired");
         }
         if (leaf.hasUnknownCriticalExtension()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate chain: unknown critical extension in leaf");
         }
         if (!leaf.isAlgConsistent()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate chain: algorithm mismatch in leaf");
         }
         if (serverHostname != null && !leaf.verifyHostname(serverHostname)) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate hostname mismatch: " + serverHostname);
         }
         if (!leaf.isKeyUsageValid()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate KeyUsage missing digitalSignature");
         }
         if (!leaf.isEkuValidForServer()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate ExtendedKeyUsage missing serverAuth");
         }
         if (requireOcspStapling && !leaf.hasOcspResponse()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Server did not provide OCSP stapling response");
         }
         boolean hasCaKeys = caPublicKeys != null && !caPublicKeys.isEmpty();
         boolean canVerifyOcsp = hasCaKeys || chain.size() > 1;
         if (leaf.hasOcspResponse() && canVerifyOcsp) {
-            PublicKeyParameters ocspKey = chain.size() > 1
-                    ? chain.get(1).getPublicKey()
-                    : caPublicKeys.get(0);
-            TlsCertificate issuer = chain.size() > 1 ? chain.get(1) : null;
+            PublicKeyParameters ocspKey =
+                    chain.size() > 1 ? chain.get(1).getPublicKey() : caPublicKeys.get(0);
+            GostCertificate issuer = chain.size() > 1 ? chain.get(1) : null;
             try {
-                leaf.verifyOcspResponse(ocspKey, issuer);
+                TlsCertUtils.verifyOcspResponse(leaf, ocspKey, issuer);
             } catch (TlsException e) {
                 // Если подпись OCSP не совпала с issuer-ключом — пробуем
                 // делегированные responder-сертификаты из поля certs BasicOCSPResponse
-                List<byte[]> delegatedCerts = TlsOcspVerifier.extractDelegatedCerts(
-                        leaf.getOcspResponse());
+                List<byte[]> delegatedCerts;
+                try {
+                    delegatedCerts =
+                            new GostOcspResponse(leaf.getOcspResponse()).getDelegatedCertificates();
+                } catch (PkixException pe) {
+                    throw new TlsException(
+                            TlsConstants.ALERT_BAD_CERTIFICATE,
+                            "OCSP delegated certs extraction failed: " + pe.getMessage());
+                }
                 if (!delegatedCerts.isEmpty()) {
                     boolean verified = false;
                     for (byte[] dcDer : delegatedCerts) {
-                        TlsCertificate dc = new TlsCertificate(dcDer);
+                        GostCertificate dc = new GostCertificate(dcDer);
                         // 4 pre-checks для delegated responder (RFC 6960 §4.2.2.2):
-                        // дёшево → дорого: validity, EKU, KU, signature
+                        // дёшево -> дорого: validity, EKU, KU, signature
                         if (dc.isExpired()) continue;
                         if (!dc.isOcspSigning()) continue;
                         if (!dc.isKeyUsageValid()) continue;
                         boolean delegValid;
                         if (issuer != null) {
-                            delegValid = dc.verify(issuer.getPublicKey());
+                            delegValid = dc.verifySignature(issuer.getPublicKey());
                         } else {
                             delegValid = false;
                             for (PublicKeyParameters k : caPublicKeys) {
-                                if (dc.verify(k)) { delegValid = true; break; }
+                                if (dc.verifySignature(k)) {
+                                    delegValid = true;
+                                    break;
+                                }
                             }
                         }
                         if (!delegValid) continue;
                         PublicKeyParameters dcKey = dc.getPublicKey();
                         try {
-                            leaf.verifyOcspResponse(dcKey, issuer);
+                            TlsCertUtils.verifyOcspResponse(leaf, dcKey, issuer);
                             verified = true;
                             break;
                         } catch (TlsException ignored) {
@@ -133,10 +155,10 @@ public final class TlsCertificateValidator {
         // RFC 6960 не обязывает проверять OCSP для intermediate в TLS, но если ответ есть —
         // он должен быть корректным.
         for (int i = 1; i < chain.size() - 1; i++) {
-            TlsCertificate ic = chain.get(i);
+            GostCertificate ic = chain.get(i);
             if (ic.hasOcspResponse()) {
-                TlsCertificate icIssuer = chain.get(i + 1);
-                ic.verifyOcspResponse(icIssuer.getPublicKey(), icIssuer);
+                GostCertificate icIssuer = chain.get(i + 1);
+                TlsCertUtils.verifyOcspResponse(ic, icIssuer.getPublicKey(), icIssuer);
             }
         }
 
@@ -155,35 +177,39 @@ public final class TlsCertificateValidator {
      * @param caPublicKeys список доверенных ключей CA (null или пустой = не проверять цепочку)
      * @throws TlsException при ошибке валидации
      */
-    public static void checkClientCertificateChain(List<TlsCertificate> chain,
-                                               List<PublicKeyParameters> caPublicKeys) throws TlsException {
+    public static void checkClientCertificateChain(
+            List<GostCertificate> chain, List<PublicKeyParameters> caPublicKeys)
+            throws TlsException {
         // Defense-in-depth: engine перехватывает пустой chain раньше (receiveClientCertificate),
         // но если сюда дойдёт пустой список — IndexOutOfBounds недопустим.
         // certificate_required семантически корректен: сервер требует сертификат клиента.
         if (chain == null || chain.isEmpty()) {
-            throw new TlsException(TlsConstants.ALERT_CERTIFICATE_REQUIRED,
-                    "Empty client certificate chain");
+            throw new TlsException(
+                    TlsConstants.ALERT_CERTIFICATE_REQUIRED, "Empty client certificate chain");
         }
-        TlsCertificate leaf = chain.get(0);
+        GostCertificate leaf = chain.get(0);
 
         if (leaf.isExpired()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "Client certificate expired");
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE, "Client certificate expired");
         }
         if (leaf.hasUnknownCriticalExtension()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Client certificate: unknown critical extension");
         }
         if (!leaf.isAlgConsistent()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "Client certificate: algorithm mismatch");
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE, "Client certificate: algorithm mismatch");
         }
         if (!leaf.isKeyUsageValid()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Client certificate: KeyUsage missing digitalSignature");
         }
         if (!leaf.isEkuValidForClient()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Client certificate: ExtendedKeyUsage missing clientAuth");
         }
 
@@ -210,69 +236,24 @@ public final class TlsCertificateValidator {
      * @param caPublicKeys список доверенных ключей CA (не пустой, не null)
      * @throws TlsException при ошибке валидации цепочки
      */
-    public static void validateChain(List<TlsCertificate> chain,
-                                List<PublicKeyParameters> caPublicKeys) throws TlsException {
-        int n = chain.size();
-        for (int i = 0; i < n - 1; i++) {
-            TlsCertificate cert = chain.get(i);
-            if (cert.isExpired()) {
-                throw new TlsException(TlsConstants.ALERT_CERTIFICATE_EXPIRED,
-                        "Certificate chain: cert[" + i + "] is expired or not yet valid");
+    public static void validateChain(
+            List<GostCertificate> chain, List<PublicKeyParameters> caPublicKeys)
+            throws TlsException {
+        try {
+            ChainValidator.validateChain(chain, caPublicKeys);
+        } catch (PkixException e) {
+            int alert;
+            switch (e.reason()) {
+                case EXPIRED:
+                    alert = TlsConstants.ALERT_CERTIFICATE_EXPIRED;
+                    break;
+                case ROOT_NOT_SIGNED:
+                    alert = TlsConstants.ALERT_UNKNOWN_CA;
+                    break;
+                default:
+                    alert = TlsConstants.ALERT_BAD_CERTIFICATE;
             }
-            TlsCertificate issuer = chain.get(i + 1);
-            if (!cert.verify(issuer.getPublicKey())) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "Certificate chain: cert[" + i + "] signature verification failed");
-            }
-            if (!Arrays.equals(cert.getIssuerDnBytes(), issuer.getSubjectDnBytes())) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "Certificate chain: DN mismatch at cert[" + i + "]");
-            }
-            if (i > 0 && !cert.isCA()) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "Certificate chain: cert[" + i + "] is not a CA");
-            }
-            if (i > 0 && !cert.isKeyCertSignSet()) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "Certificate chain: cert[" + i + "] missing keyCertSign");
-            }
-            int pl = cert.getPathLen();
-            // i-1: сколько intermediate CA между cert[i] и leaf[0]
-            // (n-i-2 было бы неверно — считает CAs к root, не к leaf)
-            int remaining = i - 1;
-            if (pl >= 0 && remaining > pl) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "Certificate chain: pathLen constraint exceeded at cert[" + i + "]");
-            }
-            if (!cert.isAlgConsistent()) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "Certificate chain: algorithm mismatch at cert[" + i + "]");
-            }
-            if (cert.hasUnknownCriticalExtension()) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                        "Certificate chain: unknown critical extension at cert[" + i + "]");
-            }
-        }
-        TlsCertificate root = chain.get(n - 1);
-        if (root.isExpired()) {
-            throw new TlsException(TlsConstants.ALERT_CERTIFICATE_EXPIRED,
-                    "Certificate chain: root is expired or not yet valid");
-        }
-        boolean rootVerified = false;
-        for (PublicKeyParameters key : caPublicKeys) {
-            if (root.verify(key)) { rootVerified = true; break; }
-        }
-        if (!rootVerified) {
-            throw new TlsException(TlsConstants.ALERT_UNKNOWN_CA,
-                    "Certificate chain: root not signed by any trusted CA");
-        }
-        if (!root.isAlgConsistent()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "Certificate chain: algorithm mismatch at root");
-        }
-        if (root.hasUnknownCriticalExtension()) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "Certificate chain: unknown critical extension at root");
+            throw new TlsException((byte) alert, e.getMessage());
         }
     }
 
@@ -289,28 +270,32 @@ public final class TlsCertificateValidator {
      * @param isServer     true — серверный CertificateVerify, false — клиентский
      * @throws IOException при ошибке верификации
      */
-    public static void verifyCertificateVerify(byte[] cvBody, TlsCertificate cert,
-                                          byte[] hsTranscript,
-                                          boolean isServer) throws IOException {
+    public static void verifyCertificateVerify(
+            byte[] cvBody, GostCertificate cert, byte[] hsTranscript, boolean isServer)
+            throws IOException {
         if (cvBody.length < 4) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR,
                     "CertificateVerify body too short: " + cvBody.length);
         }
         int scheme = ((cvBody[0] & 0xFF) << 8) | (cvBody[1] & 0xFF);
-        if (!cert.hasSignatureScheme(scheme)) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+        if (!TlsCertUtils.hasSignatureScheme(cert.getPublicKey(), scheme)) {
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate key type does not match signature scheme " + scheme);
         }
         int sigLen = ((cvBody[2] & 0xFF) << 8) | (cvBody[3] & 0xFF);
         if (4 + sigLen > cvBody.length) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR,
                     "CertificateVerify: sigLen " + sigLen + " exceeds message body");
         }
         byte[] sig = Arrays.copyOfRange(cvBody, 4, 4 + sigLen);
 
-        String context = isServer
-                ? TlsConstants.SERVER_CERTIFICATE_VERIFY_CTX
-                : TlsConstants.CLIENT_CERTIFICATE_VERIFY_CTX;
+        String context =
+                isServer
+                        ? TlsConstants.SERVER_CERTIFICATE_VERIFY_CTX
+                        : TlsConstants.CLIENT_CERTIFICATE_VERIFY_CTX;
         byte[] sigContent = TlsEncoding.buildSigContent(hsTranscript, context);
 
         int sigHashLen = cert.getPublicKey().getParams().hlen;
@@ -320,7 +305,8 @@ public final class TlsCertificateValidator {
         d.doFinal(hash, 0);
         int rolen = sigHashLen;
         if (!TlsSignatureCodec.verify(hash, sig, cert.getPublicKey(), rolen)) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+            throw new TlsException(
+                    TlsConstants.ALERT_BAD_CERTIFICATE,
                     "CertificateVerify signature verification failed");
         }
     }

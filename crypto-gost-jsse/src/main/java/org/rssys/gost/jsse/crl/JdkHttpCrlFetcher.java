@@ -58,8 +58,11 @@ public final class JdkHttpCrlFetcher implements CrlFetcher {
             return null;
         }
         if (!crlUri.startsWith("http://") && !crlUri.startsWith("https://")) {
-            LOG.log(Level.WARNING, "CRL fetch skipped: URI scheme not supported: {0}"
-                    + " — only http:// and https:// are supported", crlUri);
+            LOG.log(
+                    Level.WARNING,
+                    "CRL fetch skipped: URI scheme not supported: {0}"
+                            + " — only http:// and https:// are supported",
+                    crlUri);
             return null;
         }
 
@@ -71,36 +74,41 @@ public final class JdkHttpCrlFetcher implements CrlFetcher {
         }
 
         if (!skipSsrfCheck && isPrivateAddress(uri)) {
-            LOG.log(Level.WARNING, "CRL fetch skipped: private/reserved IP resolved from {0}", crlUri);
+            LOG.log(
+                    Level.WARNING,
+                    "CRL fetch skipped: private/reserved IP resolved from {0}",
+                    crlUri);
             return null;
         }
 
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(uri)
-                    .timeout(timeout)
-                    .GET()
-                    .build();
+            HttpRequest request = HttpRequest.newBuilder().uri(uri).timeout(timeout).GET().build();
 
-            HttpResponse<InputStream> response = client.send(request,
-                    HttpResponse.BodyHandlers.ofInputStream());
+            HttpResponse<InputStream> response =
+                    client.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
             if (response.statusCode() != 200) {
                 response.body().close();
-                LOG.log(Level.WARNING, "CRL fetch failed: HTTP {0} for {1}",
-                        response.statusCode(), crlUri);
+                LOG.log(
+                        Level.WARNING,
+                        "CRL fetch failed: HTTP {0} for {1}",
+                        response.statusCode(),
+                        crlUri);
                 return null;
             }
 
             try (InputStream is = response.body();
-                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                 byte[] buf = new byte[8192];
                 int total = 0;
                 int n;
                 while ((n = is.read(buf)) != -1) {
                     if (total > maxResponseSize - n) {
-                        LOG.log(Level.WARNING, "CRL fetch aborted: response exceeds {0} bytes for {1}",
-                                maxResponseSize, crlUri);
+                        LOG.log(
+                                Level.WARNING,
+                                "CRL fetch aborted: response exceeds {0} bytes for {1}",
+                                maxResponseSize,
+                                crlUri);
                         return null;
                     }
                     total += n;
@@ -121,8 +129,10 @@ public final class JdkHttpCrlFetcher implements CrlFetcher {
         String host = uri.getHost();
         if (host == null) return true;
         // Локальные имена (localhost, loopback) без резолва
-        if ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host)
-                || "[::1]".equals(host) || "0.0.0.0".equals(host)) {
+        if ("localhost".equalsIgnoreCase(host)
+                || "127.0.0.1".equals(host)
+                || "[::1]".equals(host)
+                || "0.0.0.0".equals(host)) {
             return true;
         }
         try {

@@ -1,18 +1,12 @@
 package org.rssys.gost.tls13.examples;
 
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.api.KeyPair;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.*;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.config.TlsClientConfig;
-import org.rssys.gost.tls13.config.TlsServerConfig;
-import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
-
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.concurrent.*;
+import org.rssys.gost.tls13.*;
+import org.rssys.gost.tls13.config.TlsClientConfig;
+import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
 /**
  * Взаимная аутентификация (mTLS).
@@ -26,37 +20,44 @@ public final class MutualTls {
     public static void main(String[] args) throws Exception {
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
 
-        // 1. Генерируем корневой CA
-        TlsCertificate ca = ExampleUtils.createRootCA();
-        PrivateKeyParameters caPriv = null; // в примере CA ключ не нужен после подписания
+        // 1. Создаём корневой CA (bundle хранит сертификат + ключи)
+        ExampleUtils.CertBundle caBundle = ExampleUtils.createRootCABundle();
 
         // 2. Сертификат сервера (подписан CA)
-        KeyPair serverKp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
-        PrivateKeyParameters serverPriv = serverKp.getPrivate();
-        TlsCertificate serverCert = ExampleUtils.createServerCert(ca, serverPriv, serverKp.getPublic());
+        ExampleUtils.CertBundle serverBundle = ExampleUtils.createServerCertBundle(caBundle);
 
         // 3. Сертификат клиента (подписан тем же CA)
-        KeyPair clientKp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
-        PrivateKeyParameters clientPriv = clientKp.getPrivate();
-        TlsCertificate clientCert = ExampleUtils.createClientCert(ca, clientPriv, clientKp.getPublic());
+        ExampleUtils.CertBundle clientBundle = ExampleUtils.createClientCertBundle(caBundle);
 
         // 4. Создаём пару транспортов
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
         try (InMemoryTlsTransport serverTp = pair.getServerTransport();
-             InMemoryTlsTransport clientTp = pair.getClientTransport();
-             TlsSession server = TlsSession.createServer(
-                     new TlsServerConfig(cs, Collections.singletonList(serverCert), serverPriv)
-                             .withCaPublicKey(ca.getPublicKey()), serverTp);
-             TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(cs)
-                             .withServerHostname("localhost")
-                             .withCaPublicKey(ca.getPublicKey())
-                              .withClientCertificateChain(clientCert)
-                             .withClientPrivateKey(clientPriv), clientTp)) {
+                InMemoryTlsTransport clientTp = pair.getClientTransport();
+                TlsSession server =
+                        TlsSession.createServer(
+                                new TlsServerConfig(
+                                                cs,
+                                                Collections.singletonList(serverBundle.cert()),
+                                                serverBundle.priv())
+                                        .withCaPublicKey(caBundle.cert().getPublicKey()),
+                                serverTp);
+                TlsSession client =
+                        TlsSession.createClient(
+                                new TlsClientConfig(cs)
+                                        .withServerHostname("localhost")
+                                        .withCaPublicKey(caBundle.cert().getPublicKey())
+                                        .withClientCertificateChain(clientBundle.cert())
+                                        .withClientPrivateKey(clientBundle.priv()),
+                                clientTp)) {
 
             ExecutorService exec = Executors.newSingleThreadExecutor();
             try {
-                Future<Void> sf = exec.submit(() -> { server.handshakeAsServer(); return null; });
+                Future<Void> sf =
+                        exec.submit(
+                                () -> {
+                                    server.handshakeAsServer();
+                                    return null;
+                                });
                 client.handshakeAsClient();
                 sf.get(15, TimeUnit.SECONDS);
 
@@ -66,7 +67,10 @@ public final class MutualTls {
                 System.out.println("SUCCESS");
             } finally {
                 exec.shutdown();
-                try { exec.awaitTermination(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) {}
+                try {
+                    exec.awaitTermination(5, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                }
             }
         }
     }

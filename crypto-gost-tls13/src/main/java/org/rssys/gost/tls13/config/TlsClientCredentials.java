@@ -1,9 +1,8 @@
 package org.rssys.gost.tls13.config;
 
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-
 import java.util.List;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.signature.PrivateKeyParameters;
 
 /**
  * Учётные данные клиента для mTLS.
@@ -14,7 +13,7 @@ import java.util.List;
  * @param chain      цепочка сертификатов клиента (leaf-first)
  * @param privateKey закрытый ключ для CertificateVerify
  */
-public record TlsClientCredentials(List<TlsCertificate> chain, PrivateKeyParameters privateKey) {
+public record TlsClientCredentials(List<GostCertificate> chain, PrivateKeyParameters privateKey) {
 
     public TlsClientCredentials {
         if (chain == null || chain.isEmpty()) {

@@ -1,14 +1,13 @@
 package org.rssys.gost.kdf;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.mac.Hmac;
-
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Тесты KDF_TREE_GOSTR3411_2012_256 (RFC 7836 §4.5, RFC 9337 §5.1.1).
@@ -36,17 +35,14 @@ class KdfTreeGostR3411_2012_256Test {
     }
 
     private static byte[] intToBytes(int value) {
-        return new byte[]{
-                (byte) (value >> 24),
-                (byte) (value >> 16),
-                (byte) (value >> 8),
-                (byte) value
+        return new byte[] {
+            (byte) (value >> 24), (byte) (value >> 16), (byte) (value >> 8), (byte) value
         };
     }
 
     /** Строит буфер KDF_TREE и вычисляет эталонный HMAC. */
-    private static byte[] computeKdfTreeBlock(byte[] kin, byte[] label, byte[] seed,
-                                               int i, int keyLen) {
+    private static byte[] computeKdfTreeBlock(
+            byte[] kin, byte[] label, byte[] seed, int i, int keyLen) {
         byte[] buf = new byte[label.length + 1 + seed.length + 4 + 4];
         System.arraycopy(label, 0, buf, 0, label.length);
         buf[label.length] = 0;
@@ -117,10 +113,12 @@ class KdfTreeGostR3411_2012_256Test {
         byte[] kin = fill(32, 0x01);
         byte[] seed = fill(8, (byte) 0xAA);
 
-        byte[] r1 = KdfTreeGostR3411_2012_256.generate(
-                kin, "labelA".getBytes(StandardCharsets.US_ASCII), seed, 1, 32);
-        byte[] r2 = KdfTreeGostR3411_2012_256.generate(
-                kin, "labelB".getBytes(StandardCharsets.US_ASCII), seed, 1, 32);
+        byte[] r1 =
+                KdfTreeGostR3411_2012_256.generate(
+                        kin, "labelA".getBytes(StandardCharsets.US_ASCII), seed, 1, 32);
+        byte[] r2 =
+                KdfTreeGostR3411_2012_256.generate(
+                        kin, "labelB".getBytes(StandardCharsets.US_ASCII), seed, 1, 32);
         assertFalse(Arrays.equals(r1, r2));
     }
 
@@ -155,8 +153,9 @@ class KdfTreeGostR3411_2012_256Test {
     void testCountOne() {
         byte[] kin = fill(32, 0x01);
         byte[] seed = fill(8, (byte) 0xAB);
-        byte[] result = KdfTreeGostR3411_2012_256.generate(
-                kin, "test".getBytes(StandardCharsets.US_ASCII), seed, 1, 32);
+        byte[] result =
+                KdfTreeGostR3411_2012_256.generate(
+                        kin, "test".getBytes(StandardCharsets.US_ASCII), seed, 1, 32);
         assertEquals(32, result.length);
         assertFalse(allZero(result));
     }
@@ -164,11 +163,13 @@ class KdfTreeGostR3411_2012_256Test {
     @Test
     @DisplayName("count=255: максимальное значение, без исключения")
     void testCountMax() {
-        byte[] result = KdfTreeGostR3411_2012_256.generate(
-                fill(32, (byte) 0x01),
-                "t".getBytes(StandardCharsets.US_ASCII),
-                fill(8, (byte) 0xAB),
-                255, 32);
+        byte[] result =
+                KdfTreeGostR3411_2012_256.generate(
+                        fill(32, (byte) 0x01),
+                        "t".getBytes(StandardCharsets.US_ASCII),
+                        fill(8, (byte) 0xAB),
+                        255,
+                        32);
         assertEquals(255 * 32, result.length);
         assertFalse(allZero(result));
     }
@@ -176,22 +177,26 @@ class KdfTreeGostR3411_2012_256Test {
     @Test
     @DisplayName("keyLen=1: минимум, копируется 1 байт из HMAC")
     void testKeyLenMin() {
-        byte[] result = KdfTreeGostR3411_2012_256.generate(
-                fill(32, (byte) 0x01),
-                "t".getBytes(StandardCharsets.US_ASCII),
-                fill(8, (byte) 0xAB),
-                1, 1);
+        byte[] result =
+                KdfTreeGostR3411_2012_256.generate(
+                        fill(32, (byte) 0x01),
+                        "t".getBytes(StandardCharsets.US_ASCII),
+                        fill(8, (byte) 0xAB),
+                        1,
+                        1);
         assertEquals(1, result.length);
     }
 
     @Test
     @DisplayName("keyLen=32: максимум по ограничению HASH_LEN")
     void testKeyLenMax() {
-        byte[] result = KdfTreeGostR3411_2012_256.generate(
-                fill(32, (byte) 0x01),
-                "t".getBytes(StandardCharsets.US_ASCII),
-                fill(8, (byte) 0xAB),
-                1, 32);
+        byte[] result =
+                KdfTreeGostR3411_2012_256.generate(
+                        fill(32, (byte) 0x01),
+                        "t".getBytes(StandardCharsets.US_ASCII),
+                        fill(8, (byte) 0xAB),
+                        1,
+                        32);
         assertEquals(32, result.length);
     }
 
@@ -202,57 +207,65 @@ class KdfTreeGostR3411_2012_256Test {
     @Test
     @DisplayName("kin=null -> IllegalArgumentException")
     void testNullKin() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KdfTreeGostR3411_2012_256.generate(
-                        null, new byte[0], new byte[0], 1, 32));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> KdfTreeGostR3411_2012_256.generate(null, new byte[0], new byte[0], 1, 32));
     }
 
     @Test
     @DisplayName("label=null -> IllegalArgumentException")
     void testNullLabel() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KdfTreeGostR3411_2012_256.generate(
-                        new byte[32], null, new byte[0], 1, 32));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> KdfTreeGostR3411_2012_256.generate(new byte[32], null, new byte[0], 1, 32));
     }
 
     @Test
     @DisplayName("seed=null -> IllegalArgumentException")
     void testNullSeed() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KdfTreeGostR3411_2012_256.generate(
-                        new byte[32], new byte[0], null, 1, 32));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> KdfTreeGostR3411_2012_256.generate(new byte[32], new byte[0], null, 1, 32));
     }
 
     @Test
     @DisplayName("count=0 -> IllegalArgumentException")
     void testCountZero() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KdfTreeGostR3411_2012_256.generate(
-                        new byte[32], new byte[0], new byte[0], 0, 32));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        KdfTreeGostR3411_2012_256.generate(
+                                new byte[32], new byte[0], new byte[0], 0, 32));
     }
 
     @Test
     @DisplayName("count=256 -> IllegalArgumentException (превышение 255)")
     void testCountOverMax() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KdfTreeGostR3411_2012_256.generate(
-                        new byte[32], new byte[0], new byte[0], 256, 32));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        KdfTreeGostR3411_2012_256.generate(
+                                new byte[32], new byte[0], new byte[0], 256, 32));
     }
 
     @Test
     @DisplayName("keyLen=0 -> IllegalArgumentException")
     void testKeyLenZero() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KdfTreeGostR3411_2012_256.generate(
-                        new byte[32], new byte[0], new byte[0], 1, 0));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        KdfTreeGostR3411_2012_256.generate(
+                                new byte[32], new byte[0], new byte[0], 1, 0));
     }
 
     @Test
     @DisplayName("keyLen=33 -> IllegalArgumentException (превышение HASH_LEN=32)")
     void testKeyLenOverMax() {
-        assertThrows(IllegalArgumentException.class,
-                () -> KdfTreeGostR3411_2012_256.generate(
-                        new byte[32], new byte[0], new byte[0], 1, 33));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        KdfTreeGostR3411_2012_256.generate(
+                                new byte[32], new byte[0], new byte[0], 1, 33));
     }
 
     // ========================================================================

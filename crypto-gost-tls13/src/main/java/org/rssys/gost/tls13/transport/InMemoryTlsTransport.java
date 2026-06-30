@@ -1,10 +1,9 @@
 package org.rssys.gost.tls13.transport;
 
-import org.rssys.gost.tls13.TlsTransport;
-
 import java.io.IOException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import org.rssys.gost.tls13.TlsTransport;
 
 /**
  * Транспорт TLS 1.3 в памяти — однонаправленный или парный.
@@ -120,20 +119,22 @@ public class InMemoryTlsTransport implements TlsTransport {
         LinkedBlockingQueue<byte[]> c2s = new LinkedBlockingQueue<>();
         LinkedBlockingQueue<byte[]> s2c = new LinkedBlockingQueue<>();
 
-        InMemoryTlsTransport clientTransport = new InMemoryTlsTransport(s2c) {
-            @Override
-            public void sendRecord(byte[] record) throws IOException {
-                if (closed) throw new IOException("Transport closed");
-                c2s.add(record.clone());
-            }
-        };
-        InMemoryTlsTransport serverTransport = new InMemoryTlsTransport(c2s) {
-            @Override
-            public void sendRecord(byte[] record) throws IOException {
-                if (closed) throw new IOException("Transport closed");
-                s2c.add(record.clone());
-            }
-        };
+        InMemoryTlsTransport clientTransport =
+                new InMemoryTlsTransport(s2c) {
+                    @Override
+                    public void sendRecord(byte[] record) throws IOException {
+                        if (closed) throw new IOException("Transport closed");
+                        c2s.add(record.clone());
+                    }
+                };
+        InMemoryTlsTransport serverTransport =
+                new InMemoryTlsTransport(c2s) {
+                    @Override
+                    public void sendRecord(byte[] record) throws IOException {
+                        if (closed) throw new IOException("Transport closed");
+                        s2c.add(record.clone());
+                    }
+                };
 
         return new Pair(clientTransport, serverTransport, c2s, s2c);
     }
@@ -147,8 +148,11 @@ public class InMemoryTlsTransport implements TlsTransport {
         private final LinkedBlockingQueue<byte[]> c2s;
         private final LinkedBlockingQueue<byte[]> s2c;
 
-        Pair(InMemoryTlsTransport clientTransport, InMemoryTlsTransport serverTransport,
-             LinkedBlockingQueue<byte[]> c2s, LinkedBlockingQueue<byte[]> s2c) {
+        Pair(
+                InMemoryTlsTransport clientTransport,
+                InMemoryTlsTransport serverTransport,
+                LinkedBlockingQueue<byte[]> c2s,
+                LinkedBlockingQueue<byte[]> s2c) {
             this.clientTransport = clientTransport;
             this.serverTransport = serverTransport;
             this.c2s = c2s;
@@ -165,12 +169,12 @@ public class InMemoryTlsTransport implements TlsTransport {
             return serverTransport;
         }
 
-        /** @return очередь клиент→сервер (для тестов) */
+        /** @return очередь клиент->сервер (для тестов) */
         public LinkedBlockingQueue<byte[]> getClientToServerQueue() {
             return c2s;
         }
 
-        /** @return очередь сервер→клиент (для тестов) */
+        /** @return очередь сервер->клиент (для тестов) */
         public LinkedBlockingQueue<byte[]> getServerToClientQueue() {
             return s2c;
         }

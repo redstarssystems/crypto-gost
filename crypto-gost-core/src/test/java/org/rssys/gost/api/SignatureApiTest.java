@@ -1,22 +1,21 @@
 package org.rssys.gost.api;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.rssys.gost.api.Digest;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
-import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 @DisplayName("Signature API Tests")
 class SignatureApiTest {
 
-    private static final byte[] MSG = "тестовое сообщение для ГОСТ подписи".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] MSG =
+            "тестовое сообщение для ГОСТ подписи".getBytes(StandardCharsets.UTF_8);
 
     // -----------------------------------------------------------------------
     // Roundtrip — CryptoPro-A (256 бит)
@@ -28,8 +27,9 @@ class SignatureApiTest {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
             byte[] sig = Signature.sign(MSG, pair.getPrivate());
-            assertTrue(Signature.verify(MSG, sig, pair.getPublic()),
-                "Подпись должна верифицироваться");
+            assertTrue(
+                    Signature.verify(MSG, sig, pair.getPublic()),
+                    "Подпись должна верифицироваться");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -73,8 +73,9 @@ class SignatureApiTest {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.tc26a512());
         try {
             byte[] sig = Signature.sign(MSG, pair.getPrivate());
-            assertTrue(Signature.verify(MSG, sig, pair.getPublic()),
-                "Подпись должна верифицироваться для 512-бит кривой");
+            assertTrue(
+                    Signature.verify(MSG, sig, pair.getPublic()),
+                    "Подпись должна верифицироваться для 512-бит кривой");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -97,7 +98,7 @@ class SignatureApiTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("sign: детерминированность — одни данные + один ключ → одна подпись")
+    @DisplayName("sign: детерминированность — одни данные + один ключ -> одна подпись")
     void testSignDeterministic() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
@@ -114,45 +115,48 @@ class SignatureApiTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("verify: подменённые данные → false")
+    @DisplayName("verify: подменённые данные -> false")
     void testVerifyTamperedData() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
             byte[] sig = Signature.sign(MSG, pair.getPrivate());
             byte[] tampered = MSG.clone();
             tampered[0] ^= 0x01;
-            assertFalse(Signature.verify(tampered, sig, pair.getPublic()),
-                "Подменённые данные должны отвергаться");
+            assertFalse(
+                    Signature.verify(tampered, sig, pair.getPublic()),
+                    "Подменённые данные должны отвергаться");
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("verify: подменённая подпись → false")
+    @DisplayName("verify: подменённая подпись -> false")
     void testVerifyTamperedSignature() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
             byte[] sig = Signature.sign(MSG, pair.getPrivate());
             byte[] tampered = sig.clone();
             tampered[0] ^= 0x01;
-            assertFalse(Signature.verify(MSG, tampered, pair.getPublic()),
-                "Подменённая подпись должна отвергаться");
+            assertFalse(
+                    Signature.verify(MSG, tampered, pair.getPublic()),
+                    "Подменённая подпись должна отвергаться");
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("verify: чужой открытый ключ → false")
+    @DisplayName("verify: чужой открытый ключ -> false")
     void testVerifyWrongKey() {
         ECParameters params = ECParameters.cryptoProA();
         KeyPair pair1 = KeyGenerator.generateKeyPair(params);
         KeyPair pair2 = KeyGenerator.generateKeyPair(params);
         try {
             byte[] sig = Signature.sign(MSG, pair1.getPrivate());
-            assertFalse(Signature.verify(MSG, sig, pair2.getPublic()),
-                "Чужой ключ должен отвергать подпись");
+            assertFalse(
+                    Signature.verify(MSG, sig, pair2.getPublic()),
+                    "Чужой ключ должен отвергать подпись");
         } finally {
             pair1.getPrivate().destroy();
             pair2.getPrivate().destroy();
@@ -186,8 +190,9 @@ class SignatureApiTest {
         try {
             byte[] sig = Signature.sign(MSG, pair.getPrivate());
             PublicKeyParameters derived = Signature.derivePublicKey(pair.getPrivate());
-            assertTrue(Signature.verify(MSG, sig, derived),
-                "Производный открытый ключ должен верифицировать подпись");
+            assertTrue(
+                    Signature.verify(MSG, sig, derived),
+                    "Производный открытый ключ должен верифицировать подпись");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -214,9 +219,11 @@ class SignatureApiTest {
             KeyPair pair = KeyGenerator.generateKeyPair(params);
             try {
                 byte[] sig = Signature.sign(MSG, pair.getPrivate());
-                assertTrue(Signature.verify(MSG, sig, pair.getPublic()),
-                    "Roundtrip должен проходить для кривой: " +
-                    params.p.toString(16).substring(0, 8) + "...");
+                assertTrue(
+                        Signature.verify(MSG, sig, pair.getPublic()),
+                        "Roundtrip должен проходить для кривой: "
+                                + params.p.toString(16).substring(0, 8)
+                                + "...");
             } finally {
                 pair.getPrivate().destroy();
             }
@@ -236,8 +243,9 @@ class SignatureApiTest {
 
             byte[] sig = Signature.signHash(hash, pair.getPrivate());
             assertEquals(64, sig.length, "Подпись для 256-битной кривой = 64 байта");
-            assertTrue(Signature.verifyHash(hash, sig, pair.getPublic()),
-                "verifyHash должен верифицировать подпись готового хэша");
+            assertTrue(
+                    Signature.verifyHash(hash, sig, pair.getPublic()),
+                    "verifyHash должен верифицировать подпись готового хэша");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -253,69 +261,75 @@ class SignatureApiTest {
             byte[] sigFromData = Signature.sign(MSG, pair.getPrivate());
             byte[] sigFromHash = Signature.signHash(hash, pair.getPrivate());
 
-            assertArrayEquals(sigFromData, sigFromHash,
-                "signHash(digest256(data)) должен давать ту же подпись что и sign(data)");
+            assertArrayEquals(
+                    sigFromData,
+                    sigFromHash,
+                    "signHash(digest256(data)) должен давать ту же подпись что и sign(data)");
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("sign + verifyHash: кросс-совместимость (sign → verifyHash)")
+    @DisplayName("sign + verifyHash: кросс-совместимость (sign -> verifyHash)")
     void testSignThenVerifyHash() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
-            byte[] sig  = Signature.sign(MSG, pair.getPrivate());
+            byte[] sig = Signature.sign(MSG, pair.getPrivate());
             byte[] hash = Digest.digest256(MSG);
 
-            assertTrue(Signature.verifyHash(hash, sig, pair.getPublic()),
-                "verifyHash должен принимать подпись, созданную через sign");
+            assertTrue(
+                    Signature.verifyHash(hash, sig, pair.getPublic()),
+                    "verifyHash должен принимать подпись, созданную через sign");
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("signHash + verify: кросс-совместимость (signHash → verify)")
+    @DisplayName("signHash + verify: кросс-совместимость (signHash -> verify)")
     void testSignHashThenVerify() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
             byte[] hash = Digest.digest256(MSG);
-            byte[] sig  = Signature.signHash(hash, pair.getPrivate());
+            byte[] sig = Signature.signHash(hash, pair.getPrivate());
 
-            assertTrue(Signature.verify(MSG, sig, pair.getPublic()),
-                "verify должен принимать подпись, созданную через signHash");
+            assertTrue(
+                    Signature.verify(MSG, sig, pair.getPublic()),
+                    "verify должен принимать подпись, созданную через signHash");
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("signHash: неверная длина хэша → IllegalArgumentException")
+    @DisplayName("signHash: неверная длина хэша -> IllegalArgumentException")
     void testSignHashWrongLength() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
             byte[] wrongHash = new byte[16]; // ожидается 32
-            assertThrows(IllegalArgumentException.class,
-                () -> Signature.signHash(wrongHash, pair.getPrivate()),
-                "Хэш неверной длины должен вызывать IllegalArgumentException");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> Signature.signHash(wrongHash, pair.getPrivate()),
+                    "Хэш неверной длины должен вызывать IllegalArgumentException");
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("verifyHash: подменённый хэш → false")
+    @DisplayName("verifyHash: подменённый хэш -> false")
     void testVerifyHashTamperedHash() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
-            byte[] hash    = Digest.digest256(MSG);
-            byte[] sig     = Signature.signHash(hash, pair.getPrivate());
+            byte[] hash = Digest.digest256(MSG);
+            byte[] sig = Signature.signHash(hash, pair.getPrivate());
             byte[] tampered = hash.clone();
             tampered[0] ^= 0x01;
 
-            assertFalse(Signature.verifyHash(tampered, sig, pair.getPublic()),
-                "Подменённый хэш должен отвергаться");
+            assertFalse(
+                    Signature.verifyHash(tampered, sig, pair.getPublic()),
+                    "Подменённый хэш должен отвергаться");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -330,8 +344,9 @@ class SignatureApiTest {
 
             byte[] sig = Signature.signHash(hash, pair.getPrivate());
             assertEquals(128, sig.length, "Подпись для 512-битной кривой = 128 байт");
-            assertTrue(Signature.verifyHash(hash, sig, pair.getPublic()),
-                "verifyHash должен верифицировать подпись для 512-бит кривой");
+            assertTrue(
+                    Signature.verifyHash(hash, sig, pair.getPublic()),
+                    "verifyHash должен верифицировать подпись для 512-бит кривой");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -354,8 +369,7 @@ class SignatureApiTest {
 
         try {
             byte[] sig = Signature.sign(MSG, priv);
-            assertTrue(Signature.verify(MSG, sig, pub),
-                "d=1: подпись должна верифицироваться");
+            assertTrue(Signature.verify(MSG, sig, pub), "d=1: подпись должна верифицироваться");
         } finally {
             priv.destroy();
         }
@@ -375,15 +389,14 @@ class SignatureApiTest {
 
         try {
             byte[] sig = Signature.sign(MSG, priv);
-            assertTrue(Signature.verify(MSG, sig, pub),
-                "d=n-1: подпись должна верифицироваться");
+            assertTrue(Signature.verify(MSG, sig, pub), "d=n-1: подпись должна верифицироваться");
         } finally {
             priv.destroy();
         }
     }
 
     @Test
-    @DisplayName("d=1: подпись с другим ключом → false (чужой Q)")
+    @DisplayName("d=1: подпись с другим ключом -> false (чужой Q)")
     void testSignVerifyEdgeD1WrongKey() {
         ECParameters params = ECParameters.cryptoProA();
         PrivateKeyParameters priv = new PrivateKeyParameters(BigInteger.ONE, params);
@@ -391,8 +404,9 @@ class SignatureApiTest {
         KeyPair other = KeyGenerator.generateKeyPair(params);
         try {
             byte[] sig = Signature.sign(MSG, priv);
-            assertFalse(Signature.verify(MSG, sig, other.getPublic()),
-                "d=1: чужой ключ должен отвергать подпись");
+            assertFalse(
+                    Signature.verify(MSG, sig, other.getPublic()),
+                    "d=1: чужой ключ должен отвергать подпись");
         } finally {
             priv.destroy();
             other.getPrivate().destroy();

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.rssys</groupId>
+        <artifactId>crypto-gost</artifactId>
+        <version>${revision}</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>cms-crossval</artifactId>
+    <packaging>jar</packaging>
+
+    <name>cms-crossval</name>
+    <description>Кросс-валидационные тесты CMS с КриптоПРО и OpenSSL</description>
+
+    <properties>
+        <skipTests>false</skipTests>
+        <openssl.binary>/opt/openssl-3.6.0-gost/bin/openssl</openssl.binary>
+        <cryptcp.binary>/opt/cprocsp/bin/amd64/cryptcp</cryptcp.binary>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-pkix</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>gost-crossval-utils</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <openssl.binary>${openssl.binary}</openssl.binary>
+                        <cryptcp.binary>${cryptcp.binary}</cryptcp.binary>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

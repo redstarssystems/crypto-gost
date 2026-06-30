@@ -1,5 +1,11 @@
 package org.rssys.gost.jca.spi;
 
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.Key;
+import java.security.spec.AlgorithmParameterSpec;
+import javax.crypto.MacSpi;
+import javax.crypto.SecretKey;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.digest.Streebog256;
@@ -8,13 +14,6 @@ import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.mac.Cmac;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.mac.Mac;
-
-import javax.crypto.MacSpi;
-import javax.crypto.SecretKey;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.Key;
-import java.security.spec.AlgorithmParameterSpec;
 
 /**
  * Реализация {@link MacSpi} для MAC-алгоритмов ГОСТ.
@@ -65,7 +64,7 @@ public abstract class GostMacSpi extends MacSpi {
             throws InvalidKeyException, InvalidAlgorithmParameterException {
         if (params != null) {
             throw new InvalidAlgorithmParameterException(
-                "No algorithm parameters supported for GOST MAC");
+                    "No algorithm parameters supported for GOST MAC");
         }
         SymmetricKey keyParam = extractSymmetricKey(key);
         // Создаём свежий делегат при каждой инициализации
@@ -132,8 +131,9 @@ public abstract class GostMacSpi extends MacSpi {
             return new SymmetricKey(encoded);
         }
         throw new InvalidKeyException(
-            "Unsupported key type: " + key.getClass().getName()
-            + ". Expected GostSecretKey or SecretKey with RAW format");
+                "Unsupported key type: "
+                        + key.getClass().getName()
+                        + ". Expected GostSecretKey or SecretKey with RAW format");
     }
 
     private void checkInitialized() {

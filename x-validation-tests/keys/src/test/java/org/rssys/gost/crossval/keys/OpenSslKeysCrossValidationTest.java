@@ -26,8 +26,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Кросс-валидация ключей: crypto-gost -> OpenSSL engine gost.
  *
  * Для каждой кривой, совместимой с OpenSSL (CryptoPro-A/B/C, TC26-A/B/C-512):
- * — OpenSSL genpkey → crypto-gost читает DER → Q = d·G;
- * — crypto-gost gen → DER → openssl pkey читает DER.
+ * — OpenSSL genpkey -> crypto-gost читает DER -> Q = d·G;
+ * — crypto-gost gen -> DER -> openssl pkey читает DER.
  * Тест пропускается, если OpenSSL или engine gost недоступны.
  */
 class OpenSslKeysCrossValidationTest {
@@ -54,7 +54,7 @@ class OpenSslKeysCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("opensslCurveParams")
-    @DisplayName("OpenSSL gen→crypto-gost: genpkey → gost decode → Q = d·G")
+    @DisplayName("OpenSSL gen->crypto-gost: genpkey -> gost decode -> Q = d·G")
     void crossValidateGenToGost(TestData.CurveSpec spec) throws Exception {
         TempDirUtils.withTempDir("ossl-key-", tmpDir -> {
             Path privFile = tmpDir.resolve("priv.der");
@@ -77,7 +77,7 @@ class OpenSslKeysCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("opensslReadParams")
-    @DisplayName("crypto-gost→OpenSSL pkey: gost gen → DER → openssl pkey")
+    @DisplayName("crypto-gost->OpenSSL pkey: gost gen -> DER -> openssl pkey")
     void crossValidateGostToPkey(TestData.CurveSpec spec) throws Exception {
         ECParameters params = spec.paramsFn().get();
         TempDirUtils.withTempDir("ossl-pkey-", tmpDir -> {

@@ -1,15 +1,13 @@
 package org.rssys.gost.api;
 
-import org.rssys.gost.cipher.SymmetricKey;
+import java.security.MessageDigest;
+import java.util.Arrays;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.mode.Ctr;
 import org.rssys.gost.mac.Cmac;
 import org.rssys.gost.util.AuthenticationException;
-
-import java.security.MessageDigest;
-import java.util.Arrays;
-
 import org.rssys.gost.util.CryptoRandom;
 
 /**
@@ -44,8 +42,7 @@ public final class AuthenticatedCipher {
      */
     static final int MIN_PACKET_LEN = IV_LEN + TAG_LEN;
 
-    private AuthenticatedCipher() {
-    }
+    private AuthenticatedCipher() {}
 
     /**
      * Шифрует данные с аутентификацией (Encrypt-then-MAC).
@@ -91,13 +88,16 @@ public final class AuthenticatedCipher {
             throws AuthenticationException {
         if (encryptedData == null || encryptedData.length < MIN_PACKET_LEN) {
             throw new AuthenticationException(
-                    "Packet too short: expected at least " + MIN_PACKET_LEN +
-                            " bytes, got " + (encryptedData == null ? 0 : encryptedData.length));
+                    "Packet too short: expected at least "
+                            + MIN_PACKET_LEN
+                            + " bytes, got "
+                            + (encryptedData == null ? 0 : encryptedData.length));
         }
 
         byte[] iv = Arrays.copyOfRange(encryptedData, 0, IV_LEN);
         byte[] tag = Arrays.copyOfRange(encryptedData, IV_LEN, IV_LEN + TAG_LEN);
-        byte[] ciphertext = Arrays.copyOfRange(encryptedData, IV_LEN + TAG_LEN, encryptedData.length);
+        byte[] ciphertext =
+                Arrays.copyOfRange(encryptedData, IV_LEN + TAG_LEN, encryptedData.length);
 
         // CMAC(IV || ciphertext) — верификация ДО расшифрования
         byte[] expected = computeCmac(iv, ciphertext, key);
@@ -111,8 +111,8 @@ public final class AuthenticatedCipher {
             Arrays.fill(tag, (byte) 0);
             Arrays.fill(iv, (byte) 0);
             throw new AuthenticationException(
-                    "Integrity violation: CMAC mismatch. " +
-                            "Data corrupted, tampered, or wrong key used.");
+                    "Integrity violation: CMAC mismatch. "
+                            + "Data corrupted, tampered, or wrong key used.");
         }
 
         // Только после успешной верификации — расшифрование

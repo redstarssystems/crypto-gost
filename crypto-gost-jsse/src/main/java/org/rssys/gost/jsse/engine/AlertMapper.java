@@ -1,12 +1,10 @@
 package org.rssys.gost.jsse.engine;
 
-import org.rssys.gost.tls13.TlsConstants;
-
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLProtocolException;
-import java.io.EOFException;
+import org.rssys.gost.tls13.TlsConstants;
 
 /**
  * Маппинг TLS-alert кода на соответствующий подкласс SSLException.

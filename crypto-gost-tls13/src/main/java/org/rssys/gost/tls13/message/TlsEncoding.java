@@ -1,16 +1,15 @@
 package org.rssys.gost.tls13.message;
 
+import java.io.ByteArrayOutputStream;
+import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.util.Pack;
-
-import java.io.ByteArrayOutputStream;
-import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 
 /**
  * Утилиты кодирования для TLS 1.3 с ГОСТ (RFC 9367).
@@ -19,8 +18,7 @@ import java.util.Arrays;
  */
 public final class TlsEncoding {
 
-    private TlsEncoding() {
-    }
+    private TlsEncoding() {}
 
     /**
      * Кодирует публичный ключ в TLS wire format.
@@ -48,11 +46,16 @@ public final class TlsEncoding {
      * @return публичный ключ
      * @throws TlsException если точка не на кривой
      */
-    public static PublicKeyParameters decodePoint(byte[] encoded, ECParameters params) throws TlsException {
+    public static PublicKeyParameters decodePoint(byte[] encoded, ECParameters params)
+            throws TlsException {
         int hlen = params.hlen;
         if (encoded.length < 2 * hlen) {
-            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR,
-                    "ECDHE key too short: " + encoded.length + " bytes, expected at least " + (2 * hlen));
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR,
+                    "ECDHE key too short: "
+                            + encoded.length
+                            + " bytes, expected at least "
+                            + (2 * hlen));
         }
         byte[] xLe = new byte[hlen];
         byte[] yLe = new byte[hlen];
@@ -64,7 +67,8 @@ public final class TlsEncoding {
         BigInteger y = new BigInteger(1, yBe);
         ECPoint q = ECPoint.affine(x, y, params);
         if (!q.isOnCurve()) {
-            throw new TlsException(TlsConstants.ALERT_HANDSHAKE_FAILURE,
+            throw new TlsException(
+                    TlsConstants.ALERT_HANDSHAKE_FAILURE,
                     "ECDHE public key point is not on the curve");
         }
         return new PublicKeyParameters(q, params);
@@ -165,7 +169,12 @@ public final class TlsEncoding {
         Arrays.fill(sigContent, 0, CV_PADDING_LEN, (byte) 0x20);
         System.arraycopy(ctx, 0, sigContent, CV_PADDING_LEN, ctx.length);
         sigContent[CV_PADDING_LEN + ctx.length] = 0;
-        System.arraycopy(transcriptHash, 0, sigContent, CV_PADDING_LEN + ctx.length + 1, transcriptHash.length);
+        System.arraycopy(
+                transcriptHash,
+                0,
+                sigContent,
+                CV_PADDING_LEN + ctx.length + 1,
+                transcriptHash.length);
         return sigContent;
     }
 }

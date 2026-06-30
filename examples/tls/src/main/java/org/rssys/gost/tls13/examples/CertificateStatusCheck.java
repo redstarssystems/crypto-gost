@@ -1,12 +1,5 @@
 package org.rssys.gost.tls13.examples;
 
-import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
-import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
-import org.rssys.gost.jsse.ocsp.OcspFetchResult;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.cert.TlsCrlVerifier;
-import org.rssys.gost.tls13.cert.TlsOcspVerifier;
-
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -15,6 +8,13 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
+import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
+import org.rssys.gost.jsse.ocsp.OcspFetchResult;
+import org.rssys.gost.pkix.cert.CrlVerifier;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostOcspResponse;
+import org.rssys.gost.pkix.cert.OcspVerifier;
 
 /**
  * Пример проверки статуса сертификата ГОСТ Р 34.10-2012
@@ -27,11 +27,11 @@ import java.time.Duration;
  *   <li>извлечение OCSP-uri, caIssuers-uri и CDP-uri из расширений;</li>
  *   <li>автоматическое скачивание CA из caIssuers (RFC 5280 §4.2.2.1);</li>
  *   <li>OCSP-запрос с nonce (RFC 8954) через {@link JdkHttpOcspFetcher}
- *       и верификация ответа {@link TlsOcspVerifier}: проверка подписи,
+ *       и верификация ответа {@link OcspVerifier}: проверка подписи,
  *       CertID (issuerNameHash + issuerKeyHash), nonce, статуса (good/revoked/unknown),
  *       а также извлечение сертификата делегированного OCSP-responder'а;</li>
  *   <li>загрузка CRL через {@link JdkHttpCrlFetcher} с failover по всем
- *       CDP-точкам и верификация {@link TlsCrlVerifier}: подпись CRL,
+ *       CDP-точкам и верификация {@link CrlVerifier}: подпись CRL,
  *       срок действия, поиск серийного номера в списке отозванных.</li>
  * </ul>
  *
@@ -42,9 +42,9 @@ import java.time.Duration;
  *   -Dexec.args="/путь/к/сертификату.der /путь/к/ca.der"
  * </pre>
  *
- * @see TlsCertificate
- * @see TlsOcspVerifier
- * @see TlsCrlVerifier
+ * @see GostCertificate
+ * @see OcspVerifier
+ * @see CrlVerifier
  * @see JdkHttpOcspFetcher
  * @see JdkHttpCrlFetcher
  */
@@ -59,8 +59,8 @@ public final class CertificateStatusCheck {
         byte[] certDer = Files.readAllBytes(Path.of(args[0]));
         byte[] caDer = Files.readAllBytes(Path.of(args[1]));
 
-        TlsCertificate cert = TlsCertificate.fromDer(certDer);
-        TlsCertificate caCert = TlsCertificate.fromDer(caDer);
+        GostCertificate cert = new GostCertificate(certDer);
+        GostCertificate caCert = new GostCertificate(caDer);
 
         System.out.println("Субъект: " + cert.getSubjectDn());
         System.out.println("Издатель: " + cert.getIssuerDn());
@@ -90,14 +90,17 @@ public final class CertificateStatusCheck {
         System.out.println();
 
         // Скачиваем CA из caIssuers, если указан
-        TlsCertificate caFromIssuer = null;
+        GostCertificate caFromIssuer = null;
         if (caIssuersUris != null && caIssuersUris.length > 0) {
             try {
                 HttpClient http = HttpClient.newHttpClient();
-                HttpRequest req = HttpRequest.newBuilder(URI.create(caIssuersUris[0]))
-                        .timeout(Duration.ofSeconds(10)).GET().build();
+                HttpRequest req =
+                        HttpRequest.newBuilder(URI.create(caIssuersUris[0]))
+                                .timeout(Duration.ofSeconds(10))
+                                .GET()
+                                .build();
                 byte[] caDer2 = http.send(req, HttpResponse.BodyHandlers.ofByteArray()).body();
-                caFromIssuer = TlsCertificate.fromDer(caDer2);
+                caFromIssuer = new GostCertificate(caDer2);
                 System.out.println("CA скачан из caIssuers: " + caFromIssuer.getSubjectDn());
             } catch (Exception e) {
                 System.out.println("Не удалось скачать CA из caIssuers: " + e.getMessage());
@@ -113,17 +116,23 @@ public final class CertificateStatusCheck {
             if (result.response() != null) {
                 System.out.println("OCSP-ответ получен (" + result.response().length + " байт)");
                 try {
-                    TlsOcspVerifier.verify(result.response(), cert.getSerialNumber(),
-                            caCert.getPublicKey());
+                    OcspVerifier.verify(
+                            result.response(), cert.getSerialNumber(), caCert.getPublicKey());
                     System.out.println("OCSP: сертификат действителен (good)");
                 } catch (Exception e) {
                     System.out.println("OCSP (по ключу CA): " + e.getMessage());
                 }
 
-                // Пробуем с проверкой имени издателя (subject DN CA)
+                // Пробуем с проверкой имени издателя (subject DN CA) и nonce
                 try {
-                    TlsOcspVerifier.verify(result.response(), cert.getSerialNumber(),
-                            caCert.getPublicKey(), caCert.getSubjectDnBytes(), caDer);
+                    OcspVerifier.verify(
+                            result.response(),
+                            cert.getSerialNumber(),
+                            caCert.getPublicKey(),
+                            caCert.getSubjectDnBytes(),
+                            caDer,
+                            result.nonce(),
+                            false);
                     System.out.println("OCSP (с проверкой DN издателя): сертификат действителен");
                 } catch (Exception e) {
                     System.out.println("OCSP (с проверкой DN издателя): " + e.getMessage());
@@ -132,34 +141,37 @@ public final class CertificateStatusCheck {
                 // Если скачали CA из caIssuers — пробуем и с ним
                 if (caFromIssuer != null) {
                     try {
-                        TlsOcspVerifier.verify(result.response(), cert.getSerialNumber(),
-                                caFromIssuer.getPublicKey());
-                        System.out.println("OCSP (по ключу CA из caIssuers): сертификат действителен");
+                        OcspVerifier.verify(
+                                result.response(),
+                                cert.getSerialNumber(),
+                                caFromIssuer.getPublicKey(),
+                                null,
+                                null,
+                                result.nonce(),
+                                false);
+                        System.out.println(
+                                "OCSP (по ключу CA из caIssuers): сертификат действителен");
                     } catch (Exception e) {
                         System.out.println("OCSP (по ключу CA из caIssuers): " + e.getMessage());
                     }
                 }
 
-                if (result.nonce() != null) {
-                    try {
-                        TlsOcspVerifier.verifyNonce(result.response(), result.nonce(), false);
-                        System.out.println("OCSP: nonce совпадает");
-                    } catch (Exception e) {
-                        System.out.println("OCSP: nonce не совпадает (" + e.getMessage() + ")");
-                    }
-                }
-
                 // Пробуем извлечь сертификат делегированного OCSP-responder'а
                 try {
-                    var delegated = TlsOcspVerifier.extractDelegatedCerts(result.response());
+                    var delegated =
+                            new GostOcspResponse(result.response()).getDelegatedCertificates();
                     if (!delegated.isEmpty()) {
-                        TlsCertificate dc = TlsCertificate.fromDer(delegated.get(0));
+                        GostCertificate dc = new GostCertificate(delegated.get(0));
                         System.out.println("OCSP: делегированный responder: " + dc.getSubjectDn());
                     } else {
-                        System.out.println("OCSP: делегированных сертификатов responder'а нет, подписано тем же CA");
+                        System.out.println(
+                                "OCSP: делегированных сертификатов responder'а нет, подписано тем же CA");
                     }
                 } catch (Exception e) {
-                    System.out.println("OCSP: ошибка разбора делегированных сертификатов (" + e.getMessage() + ")");
+                    System.out.println(
+                            "OCSP: ошибка разбора делегированных сертификатов ("
+                                    + e.getMessage()
+                                    + ")");
                 }
             } else {
                 System.out.println("OCSP: не удалось получить ответ");
@@ -169,7 +181,8 @@ public final class CertificateStatusCheck {
 
         // CRL
         if (cdpUris != null && cdpUris.length > 0) {
-            JdkHttpCrlFetcher crlFetcher = new JdkHttpCrlFetcher(Duration.ofSeconds(30), 50 * 1024 * 1024);
+            JdkHttpCrlFetcher crlFetcher =
+                    new JdkHttpCrlFetcher(Duration.ofSeconds(30), 50 * 1024 * 1024);
             byte[] crlDer = null;
             String usedCdp = null;
             for (String cdp : cdpUris) {
@@ -187,7 +200,7 @@ public final class CertificateStatusCheck {
             if (crlDer != null) {
                 System.out.println("CRL загружен с " + usedCdp + " (" + crlDer.length + " байт)");
                 try {
-                    TlsCrlVerifier.verify(crlDer, cert.getSerialNumber(), caCert.getPublicKey());
+                    CrlVerifier.verify(crlDer, cert.getSerialNumber(), caCert.getPublicKey());
                     System.out.println("CRL: сертификат не отозван");
                 } catch (Exception e) {
                     System.out.println("CRL: " + e.getMessage());

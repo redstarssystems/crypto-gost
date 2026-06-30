@@ -35,7 +35,8 @@ public final class TlsConstants {
 
     // ГОСТ cipher suites (RFC 9367 §3.1.2)
     public static final int TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L = 0xC103; // Loop ре-кейинг
-    public static final int TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S = 0xC105; // Seal (TLSTREE, SNMAX=2^42-1)
+    public static final int TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S =
+            0xC105; // Seal (TLSTREE, SNMAX=2^42-1)
 
     // IANA-имена cipher suites (RFC 9367 §3.1.2)
     public static final String IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L =
@@ -45,10 +46,10 @@ public final class TlsConstants {
 
     // схемы подписи ГОСТ (RFC 9367 §3.2 + RFC 8446)
     // 256-бит
-    public static final int SIG_GOST_TC26_A_256    = 0x0709; // id_tc26_gost_3410_2012_256_paramSetA
-    public static final int SIG_GOST_CRYPTOPRO_A   = 0x070A; // id_GostR3410_2001_CryptoPro_A_ParamSet
-    public static final int SIG_GOST_CRYPTOPRO_B   = 0x070B; // id_GostR3410_2001_CryptoPro_B_ParamSet
-    public static final int SIG_GOST_CRYPTOPRO_C   = 0x070C; // id_GostR3410_2001_CryptoPro_C_ParamSet
+    public static final int SIG_GOST_TC26_A_256 = 0x0709; // id_tc26_gost_3410_2012_256_paramSetA
+    public static final int SIG_GOST_CRYPTOPRO_A = 0x070A; // id_GostR3410_2001_CryptoPro_A_ParamSet
+    public static final int SIG_GOST_CRYPTOPRO_B = 0x070B; // id_GostR3410_2001_CryptoPro_B_ParamSet
+    public static final int SIG_GOST_CRYPTOPRO_C = 0x070C; // id_GostR3410_2001_CryptoPro_C_ParamSet
     // 512-бит
     public static final int SIG_GOST_TC26_512_A = 0x070D; // id_tc26_gost_3410_12_512_paramSetA
     public static final int SIG_GOST_TC26_512_B = 0x070E; // id_tc26_gost_3410_12_512_paramSetB
@@ -56,23 +57,23 @@ public final class TlsConstants {
 
     // IANA-имена схем подписи (RFC 9367 §3.2)
     public static final String IANA_SIG_GOST_TC26_A_256 = "gostr34102012_256a";
-    public static final String IANA_SIG_GOST_CRYPTOPRO_A  = "gostr34102012_256b";
-    public static final String IANA_SIG_GOST_CRYPTOPRO_B  = "gostr34102012_256c";
-    public static final String IANA_SIG_GOST_CRYPTOPRO_C  = "gostr34102012_256d";
-    public static final String IANA_SIG_GOST_TC26_512_A   = "gostr34102012_512a";
-    public static final String IANA_SIG_GOST_TC26_512_B   = "gostr34102012_512b";
-    public static final String IANA_SIG_GOST_TC26_512_C   = "gostr34102012_512c";
+    public static final String IANA_SIG_GOST_CRYPTOPRO_A = "gostr34102012_256b";
+    public static final String IANA_SIG_GOST_CRYPTOPRO_B = "gostr34102012_256c";
+    public static final String IANA_SIG_GOST_CRYPTOPRO_C = "gostr34102012_256d";
+    public static final String IANA_SIG_GOST_TC26_512_A = "gostr34102012_512a";
+    public static final String IANA_SIG_GOST_TC26_512_B = "gostr34102012_512b";
+    public static final String IANA_SIG_GOST_TC26_512_C = "gostr34102012_512c";
 
     // именованные группы/кривые ГОСТ (RFC 9367 §3.1)
     // 256-бит
-    public static final int GRP_GC256A       = 0x0022; // id_tc26_gost_3410_2012_256_paramSetA
-    public static final int GRP_GC256B       = 0x0023; // id_GostR3410_2001_CryptoPro_A_ParamSet
-    public static final int GRP_GC256C       = 0x0024; // id_GostR3410_2001_CryptoPro_B_ParamSet
-    public static final int GRP_GC256D       = 0x0025; // id_GostR3410_2001_CryptoPro_C_ParamSet
+    public static final int GRP_GC256A = 0x0022; // id_tc26_gost_3410_2012_256_paramSetA
+    public static final int GRP_GC256B = 0x0023; // id_GostR3410_2001_CryptoPro_A_ParamSet
+    public static final int GRP_GC256C = 0x0024; // id_GostR3410_2001_CryptoPro_B_ParamSet
+    public static final int GRP_GC256D = 0x0025; // id_GostR3410_2001_CryptoPro_C_ParamSet
     // 512-бит
-    public static final int GRP_GC512A       = 0x0026; // id_tc26_gost_3410_12_512_paramSetA
-    public static final int GRP_GC512B       = 0x0027; // id_tc26_gost_3410_12_512_paramSetB
-    public static final int GRP_GC512C       = 0x0028; // id_tc26_gost_3410_2012_512_paramSetC
+    public static final int GRP_GC512A = 0x0026; // id_tc26_gost_3410_12_512_paramSetA
+    public static final int GRP_GC512B = 0x0027; // id_tc26_gost_3410_12_512_paramSetB
+    public static final int GRP_GC512C = 0x0028; // id_tc26_gost_3410_2012_512_paramSetC
 
     // IANA-имена именованных групп (RFC 9367 §3.1)
     public static final String IANA_GC256A = "GC256A";
@@ -99,9 +100,11 @@ public final class TlsConstants {
     public static final int KUZNYECHIK_KEY_SIZE = 32;
     public static final int MGM_IV_SIZE = 16;
     public static final int MAX_CERT_CHAIN_LENGTH = 10;
+
     /** Максимальный размер одного сертификата в DER (256 КБ).
      *  Типичный ГОСТ-сертификат — 1–10 КБ, 256 КБ даёт 25x запас. */
     public static final int MAX_CERT_SIZE = 262_144;
+
     /** Максимум delegated OCSP-responder сертификатов в BasicOCSPResponse certs [0]
      *  (RFC 6960 §4.2.2.1). Практически всегда 0–1, 10 — щедрый запас. */
     public static final int MAX_DELEGATED_CERTS = 10;
@@ -110,6 +113,16 @@ public final class TlsConstants {
     // 2^14 + 1 (inner_type) + 16 (max padding) + 16 (MGM tag) = 16401
     // округляем до 16640 для запаса на padding
     public static final int MAX_CIPHERTEXT_LENGTH = 16640;
+
+    /** Таймаут сессии по умолчанию, 24 часа (RFC 8446 §4.6.1). */
+    public static final int DEFAULT_SESSION_TIMEOUT = 86400;
+
+    /** Размер идентификатора сессии в байтах. */
+    public static final int SESSION_ID_LENGTH = 32;
+
+    /** Запас в байтах для буфера TLS-записи:
+     *  RECORD_HEADER_SIZE (5) + MGM_TAG_SIZE (16) + запас на паддинг (43). */
+    public static final int RECORD_BUFFER_HEADROOM = 64;
 
     // метки уровней TLSTREE (RFC 9367 §4.2)
     public static final String LABEL_TLSTREE_LEVEL1 = "level1";
@@ -150,7 +163,7 @@ public final class TlsConstants {
     public static final int EXT_OID_FILTERS = 48;
     // max_fragment_length (RFC 6066 §4)
     public static final int EXT_MAX_FRAGMENT_LENGTH = 1;
-    public static final int MAX_FRAG_LEN_512  = 1;
+    public static final int MAX_FRAG_LEN_512 = 1;
     public static final int MAX_FRAG_LEN_1024 = 2;
     public static final int MAX_FRAG_LEN_2048 = 3;
     public static final int MAX_FRAG_LEN_4096 = 4;
@@ -187,12 +200,17 @@ public final class TlsConstants {
     public static final String CLIENT_CERTIFICATE_VERIFY_CTX = "TLS 1.3, client CertificateVerify";
 
     // HelloRetryRequest random (RFC 8446 §4.1.3)
-    public static final byte[] HRR_RANDOM = new byte[]{
-            (byte) 0xCF, (byte) 0x21, (byte) 0xAD, (byte) 0x74, (byte) 0xE5, (byte) 0x9A, (byte) 0x61, (byte) 0x11,
-            (byte) 0xBE, (byte) 0x1D, (byte) 0x8C, (byte) 0x02, (byte) 0x1E, (byte) 0x65, (byte) 0xB8, (byte) 0x91,
-            (byte) 0xC2, (byte) 0xA2, (byte) 0x11, (byte) 0x16, (byte) 0x7A, (byte) 0xBB, (byte) 0x8C, (byte) 0x5E,
-            (byte) 0x07, (byte) 0x9E, (byte) 0x09, (byte) 0xE2, (byte) 0xC8, (byte) 0xA8, (byte) 0x33, (byte) 0x9C
-    };
+    public static final byte[] HRR_RANDOM =
+            new byte[] {
+                (byte) 0xCF, (byte) 0x21, (byte) 0xAD, (byte) 0x74, (byte) 0xE5, (byte) 0x9A,
+                        (byte) 0x61, (byte) 0x11,
+                (byte) 0xBE, (byte) 0x1D, (byte) 0x8C, (byte) 0x02, (byte) 0x1E, (byte) 0x65,
+                        (byte) 0xB8, (byte) 0x91,
+                (byte) 0xC2, (byte) 0xA2, (byte) 0x11, (byte) 0x16, (byte) 0x7A, (byte) 0xBB,
+                        (byte) 0x8C, (byte) 0x5E,
+                (byte) 0x07, (byte) 0x9E, (byte) 0x09, (byte) 0xE2, (byte) 0xC8, (byte) 0xA8,
+                        (byte) 0x33, (byte) 0x9C
+            };
 
     private TlsConstants() {}
 }

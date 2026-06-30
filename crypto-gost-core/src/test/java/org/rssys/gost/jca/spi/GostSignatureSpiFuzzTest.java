@@ -2,8 +2,6 @@ package org.rssys.gost.jca.spi;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
-import org.rssys.gost.jca.RssysGostProvider;
-
 import java.security.InvalidKeyException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -13,13 +11,14 @@ import java.security.Security;
 import java.security.Signature;
 import java.security.SignatureException;
 import java.security.spec.ECGenParameterSpec;
+import org.rssys.gost.jca.RssysGostProvider;
 
 /**
  * Fuzz-тесты для {@link GostSignatureSpi#engineVerify}.
  * <p>
  * Проверяет JCA entry point верификации подписи: Signature.getInstance("ECGOST3410-2012-256")
- * с произвольными байтами подписи. Путь: engineVerify → Signature.verify →
- * SignatureCodec.decode → ECDSASigner.verifySignature.
+ * с произвольными байтами подписи. Путь: engineVerify -> Signature.verify ->
+ * SignatureCodec.decode -> ECDSASigner.verifySignature.
  * <p>
  * ПОЧЕМУ ловим только SignatureException: engineVerify использует
  * {@code catch (Exception e)} и заворачивает всё в SignatureException.
@@ -28,7 +27,8 @@ import java.security.spec.ECGenParameterSpec;
 class GostSignatureSpiFuzzTest {
 
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
-    private static final byte[] MSG = "fuzz test message".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    private static final byte[] MSG =
+            "fuzz test message".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
     private static final KeyPair KEY_PAIR;
     private static final java.security.PublicKey PUBLIC_KEY;
@@ -75,7 +75,7 @@ class GostSignatureSpiFuzzTest {
 
     /**
      * Подаёт произвольные байты как данные + произвольную подпись.
-     * Покрывает path: engineUpdate → engineVerify с битыми данными и подписью.
+     * Покрывает path: engineUpdate -> engineVerify с битыми данными и подписью.
      */
     @FuzzTest
     void fuzzEngineUpdateAndVerify(FuzzedDataProvider data) {

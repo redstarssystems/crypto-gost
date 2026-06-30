@@ -1,21 +1,5 @@
 package org.rssys.gost.jsse.socket;
 
-import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.tls13.TlsUtils;
-import org.rssys.gost.jsse.engine.GostSSLEngine;
-import org.rssys.gost.jsse.engine.GostSSLSessionContext;
-
-import org.rssys.gost.tls13.TlsConstants;
-
-import javax.net.ssl.HandshakeCompletedEvent;
-import javax.net.ssl.HandshakeCompletedListener;
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLEngineResult;
-import javax.net.ssl.SSLParameters;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSocket;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -27,6 +11,20 @@ import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantLock;
+import javax.net.ssl.HandshakeCompletedEvent;
+import javax.net.ssl.HandshakeCompletedListener;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLEngineResult;
+import javax.net.ssl.SSLParameters;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSocket;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.engine.GostSSLEngine;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsUtils;
 
 /**
  * SSLSocket для ГОСТ TLS 1.3 (RFC 8446 + RFC 9367).
@@ -43,7 +41,8 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class GostSSLSocket extends SSLSocket {
 
     private static final int MAX_PLAINTEXT = TlsConstants.MAX_PLAINTEXT_LENGTH;
-    private static final int MAX_PACKET = TlsConstants.MAX_CIPHERTEXT_LENGTH + 64;
+    private static final int MAX_PACKET =
+            TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM;
     private static final int RECORD_HEADER = TlsConstants.RECORD_HEADER_SIZE;
     private static final ByteBuffer EMPTY = ByteBuffer.allocate(0);
 
@@ -54,9 +53,9 @@ public final class GostSSLSocket extends SSLSocket {
     // Transport
     // ========================================================================
 
-    private final Socket socket;                          // реальный TCP-сокет
-    private final InputStream socketIn;                   // socket.getInputStream()
-    private final OutputStream socketOut;                 // socket.getOutputStream()
+    private final Socket socket; // реальный TCP-сокет
+    private final InputStream socketIn; // socket.getInputStream()
+    private final OutputStream socketOut; // socket.getOutputStream()
     private final boolean autoCloseUnderlying;
 
     // ========================================================================
@@ -102,7 +101,8 @@ public final class GostSSLSocket extends SSLSocket {
     // Буферы
     // ========================================================================
 
-    private final ByteBuffer readDst = ByteBuffer.allocate(MAX_PLAINTEXT + 64);
+    private final ByteBuffer readDst =
+            ByteBuffer.allocate(MAX_PLAINTEXT + TlsConstants.RECORD_BUFFER_HEADROOM);
     private final ByteBuffer writeDst = ByteBuffer.allocate(MAX_PACKET);
 
     // ========================================================================
@@ -110,56 +110,111 @@ public final class GostSSLSocket extends SSLSocket {
     // ========================================================================
 
     // (1) Client: новый TCP-сокет + connect
-    public GostSSLSocket(String host, int port,
-                         GostX509KeyManager km, GostX509TrustManager tm,
-                         GostSSLSessionContext sessionContext) throws IOException {
+    public GostSSLSocket(
+            String host,
+            int port,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
         this(new Socket(host, port), host, port, true, km, tm, sessionContext, true);
     }
 
     // (2) Client: с локальным адресом
-    public GostSSLSocket(String host, int port, InetAddress localAddr, int localPort,
-                         GostX509KeyManager km, GostX509TrustManager tm,
-                         GostSSLSessionContext sessionContext) throws IOException {
-        this(new Socket(host, port, localAddr, localPort), host, port, true,
-                km, tm, sessionContext, true);
+    public GostSSLSocket(
+            String host,
+            int port,
+            InetAddress localAddr,
+            int localPort,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
+        this(
+                new Socket(host, port, localAddr, localPort),
+                host,
+                port,
+                true,
+                km,
+                tm,
+                sessionContext,
+                true);
     }
 
     // (3) Client: InetAddress
-    public GostSSLSocket(InetAddress addr, int port,
-                         GostX509KeyManager km, GostX509TrustManager tm,
-                         GostSSLSessionContext sessionContext) throws IOException {
-        this(new Socket(addr, port), addr.getHostName(), port, true,
-                km, tm, sessionContext, true);
+    public GostSSLSocket(
+            InetAddress addr,
+            int port,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
+        this(new Socket(addr, port), addr.getHostName(), port, true, km, tm, sessionContext, true);
     }
 
     // (4) Client: InetAddress + local
-    public GostSSLSocket(InetAddress addr, int port, InetAddress localAddr, int localPort,
-                         GostX509KeyManager km, GostX509TrustManager tm,
-                         GostSSLSessionContext sessionContext) throws IOException {
-        this(new Socket(addr, port, localAddr, localPort), addr.getHostName(), port, true,
-                km, tm, sessionContext, true);
+    public GostSSLSocket(
+            InetAddress addr,
+            int port,
+            InetAddress localAddr,
+            int localPort,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
+        this(
+                new Socket(addr, port, localAddr, localPort),
+                addr.getHostName(),
+                port,
+                true,
+                km,
+                tm,
+                sessionContext,
+                true);
     }
 
     // (5) Server: wrap accepted socket (package-private, вызывается из GostSSLServerSocket)
-    GostSSLSocket(Socket socket,
-                  GostX509KeyManager km, GostX509TrustManager tm,
-                  GostSSLSessionContext sessionContext) throws IOException {
-        this(socket, socket.getInetAddress().getHostName(), socket.getPort(), true,
-                km, tm, sessionContext, false);
+    GostSSLSocket(
+            Socket socket,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
+        this(
+                socket,
+                socket.getInetAddress().getHostName(),
+                socket.getPort(),
+                true,
+                km,
+                tm,
+                sessionContext,
+                false);
     }
 
     // (6) Layered (HttpsURLConnection прокси) — публичный
-    public GostSSLSocket(Socket underlying, String host, int port, boolean autoClose,
-                         GostX509KeyManager km, GostX509TrustManager tm,
-                         GostSSLSessionContext sessionContext) throws IOException {
+    public GostSSLSocket(
+            Socket underlying,
+            String host,
+            int port,
+            boolean autoClose,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext)
+            throws IOException {
         this(underlying, host, port, autoClose, km, tm, sessionContext, true);
     }
 
     // Единый private конструктор
-    private GostSSLSocket(Socket socket, String host, int port, boolean autoClose,
-                          GostX509KeyManager km, GostX509TrustManager tm,
-                          GostSSLSessionContext sessionContext,
-                          boolean clientMode) throws IOException {
+    private GostSSLSocket(
+            Socket socket,
+            String host,
+            int port,
+            boolean autoClose,
+            GostX509KeyManager km,
+            GostX509TrustManager tm,
+            GostSSLSessionContext sessionContext,
+            boolean clientMode)
+            throws IOException {
         this.socket = socket;
         this.autoCloseUnderlying = autoClose;
         this.keyManager = km;
@@ -167,9 +222,10 @@ public final class GostSSLSocket extends SSLSocket {
         this.sessionContext = sessionContext;
         this.clientMode = clientMode;
 
-        this.engine = clientMode
-                ? GostSSLEngine.createForClient(km, tm, host, port, sessionContext)
-                : GostSSLEngine.createForServer(km, tm, host, port, sessionContext);
+        this.engine =
+                clientMode
+                        ? GostSSLEngine.createForClient(km, tm, host, port, sessionContext)
+                        : GostSSLEngine.createForServer(km, tm, host, port, sessionContext);
 
         // handshakeLock реентрабельный: когда read()/write() триггерят startHandshake()
         // до его завершения, вызывающий тред уже держит readLock/writeLock, затем
@@ -210,27 +266,30 @@ public final class GostSSLSocket extends SSLSocket {
                         writeDst.clear();
                         engine.wrap(EMPTY, writeDst);
                         writeDst.flip();
-                        // WHY: прямой write из backing array (HeapByteBuffer) — zero-alloc
-                        socketOut.write(writeDst.array(),
+                        // прямой write из backing array (HeapByteBuffer) — zero-alloc
+                        socketOut.write(
+                                writeDst.array(),
                                 writeDst.arrayOffset() + writeDst.position(),
                                 writeDst.remaining());
                         socketOut.flush();
                         break;
-                    case NEED_UNWRAP: {
-                        ByteBuffer record = readTlsRecord();
-                        if (record == null) {
-                            throw new IOException("Connection closed by peer during handshake");
+                    case NEED_UNWRAP:
+                        {
+                            ByteBuffer record = readTlsRecord();
+                            if (record == null) {
+                                throw new IOException("Connection closed by peer during handshake");
+                            }
+                            readDst.clear();
+                            engine.unwrap(record, readDst);
+                            readDst.flip();
+                            break;
                         }
-                        readDst.clear();
-                        engine.unwrap(record, readDst);
-                        readDst.flip();
-                        break;
-                    }
-                    case NEED_TASK: {
-                        Runnable task = engine.getDelegatedTask();
-                        if (task != null) task.run();
-                        break;
-                    }
+                    case NEED_TASK:
+                        {
+                            Runnable task = engine.getDelegatedTask();
+                            if (task != null) task.run();
+                            break;
+                        }
                     case FINISHED:
                     case NOT_HANDSHAKING:
                         handshakeDone = true;
@@ -379,8 +438,9 @@ public final class GostSSLSocket extends SSLSocket {
                     }
                     writeDst.flip();
                     int toWrite = writeDst.remaining();
-                    // WHY: прямой write из backing array (HeapByteBuffer) — zero-alloc
-                    socketOut.write(writeDst.array(),
+                    // прямой write из backing array (HeapByteBuffer) — zero-alloc
+                    socketOut.write(
+                            writeDst.array(),
                             writeDst.arrayOffset() + writeDst.position(),
                             writeDst.remaining());
 
@@ -394,7 +454,8 @@ public final class GostSSLSocket extends SSLSocket {
                         }
                         if (writeDst.position() == 0) break;
                         writeDst.flip();
-                        socketOut.write(writeDst.array(),
+                        socketOut.write(
+                                writeDst.array(),
                                 writeDst.arrayOffset() + writeDst.position(),
                                 writeDst.remaining());
                     }
@@ -433,7 +494,8 @@ public final class GostSSLSocket extends SSLSocket {
                     socketOut.write(alertRecord);
                     socketOut.flush();
                 }
-            } catch (IOException ignored) { }
+            } catch (IOException ignored) {
+            }
         }
 
         if (autoCloseUnderlying) {
@@ -460,7 +522,8 @@ public final class GostSSLSocket extends SSLSocket {
         for (HandshakeCompletedListener l : handshakeListeners) {
             try {
                 l.handshakeCompleted(event);
-            } catch (RuntimeException ignored) { }
+            } catch (RuntimeException ignored) {
+            }
         }
     }
 
@@ -773,8 +836,8 @@ public final class GostSSLSocket extends SSLSocket {
             int n = socketIn.read(hdr, off, RECORD_HEADER - off);
             if (n == -1) {
                 if (off == 0) return null;
-                throw new EOFException("Truncated TLS record header: "
-                        + off + " of " + RECORD_HEADER + " bytes");
+                throw new EOFException(
+                        "Truncated TLS record header: " + off + " of " + RECORD_HEADER + " bytes");
             }
             off += n;
         }
@@ -783,11 +846,19 @@ public final class GostSSLSocket extends SSLSocket {
             throw new IOException("TLS record too large: " + bodyLen);
         }
         if (maxFragmentLength > 0) {
-            int maxCipher = TlsConstants.MAX_FRAG_LEN_VALUES[maxFragmentLength]
-                    + 1 + 255 + TlsConstants.MGM_TAG_SIZE; // plaintext + inner_type + max_padding(255) + tag
+            int maxCipher =
+                    TlsConstants.MAX_FRAG_LEN_VALUES[maxFragmentLength]
+                            + 1
+                            + 255
+                            + TlsConstants
+                                    .MGM_TAG_SIZE; // plaintext + inner_type + max_padding(255) +
+            // tag
             if (bodyLen > maxCipher) {
-                throw new IOException("TLS record exceeds max_fragment_length negotiated limit: "
-                        + bodyLen + " > " + maxCipher);
+                throw new IOException(
+                        "TLS record exceeds max_fragment_length negotiated limit: "
+                                + bodyLen
+                                + " > "
+                                + maxCipher);
             }
         }
         byte[] record = new byte[RECORD_HEADER + bodyLen];
@@ -811,8 +882,11 @@ public final class GostSSLSocket extends SSLSocket {
 
     @Override
     public String toString() {
-        return "GostSSLSocket[" + (clientMode ? "CLIENT" : "SERVER") + ", "
-                + (handshakeDone ? "HANDSHAKED" : "NOT_HANDSHAKED") + "]";
+        return "GostSSLSocket["
+                + (clientMode ? "CLIENT" : "SERVER")
+                + ", "
+                + (handshakeDone ? "HANDSHAKED" : "NOT_HANDSHAKED")
+                + "]";
     }
 
     /** Для тестов: закрывает TCP-сокет без close_notify. */

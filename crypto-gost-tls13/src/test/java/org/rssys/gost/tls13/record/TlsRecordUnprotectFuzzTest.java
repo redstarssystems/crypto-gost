@@ -2,13 +2,12 @@ package org.rssys.gost.tls13.record;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.util.AuthenticationException;
-
-import java.nio.ByteBuffer;
-import java.util.Arrays;
 
 /**
  * Fuzz-тесты для {@link TlsRecord#unprotect}.
@@ -36,8 +35,7 @@ class TlsRecordUnprotectFuzzTest {
     private static final int TAG_LEN = 16;
     private static final int MAX_RECORD_SIZE =
             TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH;
-    private static final int PLAINTEXT_BUF_SIZE =
-            TlsConstants.MAX_PLAINTEXT_LENGTH + 64;
+    private static final int PLAINTEXT_BUF_SIZE = TlsConstants.MAX_PLAINTEXT_LENGTH + 64;
 
     // ========================================================================
     // P0: Stateless entry points
@@ -55,8 +53,10 @@ class TlsRecordUnprotectFuzzTest {
         ByteBuffer plaintext = ByteBuffer.allocate(PLAINTEXT_BUF_SIZE);
         try {
             reader.unprotect(src, plaintext);
-        } catch (TlsException | IllegalArgumentException
-                | IllegalStateException | AuthenticationException e) {
+        } catch (TlsException
+                | IllegalArgumentException
+                | IllegalStateException
+                | AuthenticationException e) {
             // ожидаемо для битого ввода
         }
     }
@@ -71,8 +71,10 @@ class TlsRecordUnprotectFuzzTest {
         byte[] input = data.consumeRemainingAsBytes();
         try {
             reader.unprotect(input);
-        } catch (TlsException | IllegalArgumentException
-                | IllegalStateException | AuthenticationException e) {
+        } catch (TlsException
+                | IllegalArgumentException
+                | IllegalStateException
+                | AuthenticationException e) {
         }
     }
 
@@ -87,8 +89,10 @@ class TlsRecordUnprotectFuzzTest {
         byte[] dest = new byte[PLAINTEXT_BUF_SIZE];
         try {
             reader.unprotectInto(input, dest, 0);
-        } catch (TlsException | IllegalArgumentException
-                | IllegalStateException | AuthenticationException e) {
+        } catch (TlsException
+                | IllegalArgumentException
+                | IllegalStateException
+                | AuthenticationException e) {
         }
     }
 
@@ -119,8 +123,7 @@ class TlsRecordUnprotectFuzzTest {
         while (calls-- > 0 && data.remainingBytes() > 5) {
             int size;
             try {
-                size = data.consumeInt(5,
-                        Math.min(MAX_RECORD_SIZE, data.remainingBytes()));
+                size = data.consumeInt(5, Math.min(MAX_RECORD_SIZE, data.remainingBytes()));
             } catch (IllegalArgumentException e) {
                 break;
             }
@@ -130,8 +133,10 @@ class TlsRecordUnprotectFuzzTest {
             ByteBuffer plaintext = ByteBuffer.allocate(PLAINTEXT_BUF_SIZE);
             try {
                 reader.unprotect(src, plaintext);
-            } catch (TlsException | IllegalArgumentException
-                    | IllegalStateException | AuthenticationException e) {
+            } catch (TlsException
+                    | IllegalArgumentException
+                    | IllegalStateException
+                    | AuthenticationException e) {
                 // seqNum НЕ растёт при ошибке — проверяется следующими вызовами
             }
         }

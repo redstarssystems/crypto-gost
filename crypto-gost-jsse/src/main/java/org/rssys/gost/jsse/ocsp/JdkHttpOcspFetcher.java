@@ -19,7 +19,8 @@ import java.time.Duration;
  */
 public final class JdkHttpOcspFetcher implements OcspFetcher {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher");
+    private static final Logger LOG =
+            System.getLogger("org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher");
 
     private final HttpClient client;
     private final Duration timeout;
@@ -48,11 +49,19 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
             return null;
         }
         if (!ocspResponderUri.startsWith("http://")) {
-            LOG.log(Level.WARNING, "OCSP fetch skipped: URI scheme not supported: {0} — only http:// is supported", ocspResponderUri);
+            LOG.log(
+                    Level.WARNING,
+                    "OCSP fetch skipped: URI scheme not supported: {0} — only http:// is supported",
+                    ocspResponderUri);
             return null;
         }
         try {
-            byte[] ocspRequest = OcspRequestBuilder.build(certDer, issuerDer);
+            byte[] ocspRequest =
+                    OcspRequestBuilder.create()
+                            .targetCert(certDer)
+                            .issuerCert(issuerDer)
+                            .build()
+                            .der();
             return doHttpPost(ocspResponderUri, ocspRequest);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -66,16 +75,21 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
      * Отправляет предварительно построенный OCSP-запрос и возвращает ответ вместе с nonce.
      */
     @Override
-    public OcspFetchResult fetchWithNonce(byte[] certDer, byte[] issuerDer, String ocspResponderUri) {
+    public OcspFetchResult fetchWithNonce(
+            byte[] certDer, byte[] issuerDer, String ocspResponderUri) {
         if (certDer == null || issuerDer == null || ocspResponderUri == null) {
             return new OcspFetchResult(null, null);
         }
         if (!ocspResponderUri.startsWith("http://")) {
-            LOG.log(Level.WARNING, "OCSP fetch (with nonce) skipped: URI scheme not supported: {0} — only http:// is supported", ocspResponderUri);
+            LOG.log(
+                    Level.WARNING,
+                    "OCSP fetch (with nonce) skipped: URI scheme not supported: {0} — only http:// is supported",
+                    ocspResponderUri);
             return new OcspFetchResult(null, null);
         }
         try {
-            OcspRequest ocspReq = OcspRequestBuilder.buildWithNonce(certDer, issuerDer);
+            OcspRequest ocspReq =
+                    OcspRequestBuilder.create().targetCert(certDer).issuerCert(issuerDer).build();
             byte[] response = doHttpPost(ocspResponderUri, ocspReq.der());
             return new OcspFetchResult(response, ocspReq.nonce());
         } catch (InterruptedException e) {
@@ -89,7 +103,8 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
     /**
      * Выполняет HTTP POST на OCSP-responder.
      */
-    private byte[] doHttpPost(String uri, byte[] ocspRequest) throws IOException, InterruptedException {
+    private byte[] doHttpPost(String uri, byte[] ocspRequest)
+            throws IOException, InterruptedException {
         URI requestUri;
         try {
             requestUri = URI.create(uri);
@@ -97,15 +112,16 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
             return null;
         }
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(requestUri)
-                .header("Content-Type", "application/ocsp-request")
-                .timeout(timeout)
-                .POST(HttpRequest.BodyPublishers.ofByteArray(ocspRequest))
-                .build();
+        HttpRequest request =
+                HttpRequest.newBuilder()
+                        .uri(requestUri)
+                        .header("Content-Type", "application/ocsp-request")
+                        .timeout(timeout)
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(ocspRequest))
+                        .build();
 
-        HttpResponse<InputStream> response = client.send(request,
-                HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<InputStream> response =
+                client.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
         if (response.statusCode() != 200) {
             response.body().close();
@@ -113,7 +129,7 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
         }
 
         try (InputStream is = response.body();
-             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
             byte[] buf = new byte[4096];
             int total = 0;
             int n;

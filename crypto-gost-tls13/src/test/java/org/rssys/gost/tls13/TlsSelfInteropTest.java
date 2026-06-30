@@ -1,14 +1,6 @@
 package org.rssys.gost.tls13;
 
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.config.TlsClientConfig;
-import org.rssys.gost.tls13.config.TlsServerConfig;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.transport.SocketTlsTransport;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -16,8 +8,15 @@ import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.config.TlsClientConfig;
+import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.transport.SocketTlsTransport;
 
 /**
  * Self-interop tests: наша библиотека выступает и клиентом, и сервером
@@ -25,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *   L/S × non-mTLS/mTLS
  *
  * Основная ценность — сквозная интеграционная проверка полного стека:
- * транспорт → handshake engine → key schedule → record protection → data.
+ * транспорт -> handshake engine -> key schedule -> record protection -> data.
  * InMemoryTlsTransport тестирует engine изоляционно, а здесь проверяется,
  * что бинарный протокол по сети проходит без рассинхронизации.
  */
@@ -35,19 +34,21 @@ class TlsSelfInteropTest {
     private static final String RESPONSE = "World";
 
     private static final class PlainCerts {
-        final TlsCertificate cert;
+        final GostCertificate cert;
         final PrivateKeyParameters priv;
-        PlainCerts(TlsCertificate cert, PrivateKeyParameters priv) {
+
+        PlainCerts(GostCertificate cert, PrivateKeyParameters priv) {
             this.cert = cert;
             this.priv = priv;
         }
     }
 
     private static final class MtlsCerts {
-        final TlsCertificate cert;
+        final GostCertificate cert;
         final PrivateKeyParameters priv;
         final PublicKeyParameters caPub;
-        MtlsCerts(TlsCertificate cert, PrivateKeyParameters priv, PublicKeyParameters caPub) {
+
+        MtlsCerts(GostCertificate cert, PrivateKeyParameters priv, PublicKeyParameters caPub) {
             this.cert = cert;
             this.priv = priv;
             this.caPub = caPub;
@@ -69,18 +70,32 @@ class TlsSelfInteropTest {
     private static final class MtlsCertPair {
         final MtlsCerts server;
         final MtlsCerts client;
+
         MtlsCertPair(MtlsCerts server, MtlsCerts client) {
-            this.server = server; this.client = client;
+            this.server = server;
+            this.client = client;
         }
     }
 
-    private static MtlsCerts createMtlsCertsFor(ECParameters params,
-            PrivateKeyParameters caPriv, PublicKeyParameters caPub,
-            byte[] caDn) throws Exception {
-        TlsTestHelper.CertBundle entity = TlsTestHelper.createCertSignedBy(
-                params, caPriv, caPub, caDn,
-                "20240501120000Z", "21060101120000Z", null, null,
-                null, false, null);
+    private static MtlsCerts createMtlsCertsFor(
+            ECParameters params,
+            PrivateKeyParameters caPriv,
+            PublicKeyParameters caPub,
+            byte[] caDn)
+            throws Exception {
+        TlsTestHelper.CertBundle entity =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        caPriv,
+                        caPub,
+                        caDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        null,
+                        false,
+                        null);
         return new MtlsCerts(entity.cert, entity.priv, caPub);
     }
 
@@ -98,7 +113,8 @@ class TlsSelfInteropTest {
         runSelfInterop(cs, mTls, 0);
     }
 
-    private void runSelfInterop(TlsCiphersuite cs, boolean mTls, int serverNamedGroup) throws Exception {
+    private void runSelfInterop(TlsCiphersuite cs, boolean mTls, int serverNamedGroup)
+            throws Exception {
         PlainCerts plain = createPlainCerts();
         MtlsCertPair mtls = mTls ? createMtlsCertsPair() : null;
         MtlsCerts sCerts = mTls ? mtls.server : null;
@@ -113,69 +129,84 @@ class TlsSelfInteropTest {
         try (ServerSocket ss = new ServerSocket(0)) {
             int port = ss.getLocalPort();
 
-            Thread serverThread = new Thread(() -> {
-                try (Socket s = ss.accept()) {
-                    SocketTlsTransport st = new SocketTlsTransport(s);
-                    TlsServerConfig sc;
-                    if (mTls) {
-                        sc = new TlsServerConfig(cs, Collections.singletonList(sCerts.cert), sCerts.priv)
-                                .withCaPublicKey(sCerts.caPub);
-                    } else {
-                        sc = new TlsServerConfig(cs, Collections.singletonList(plain.cert), plain.priv);
-                    }
-                    if (serverNamedGroup != 0) {
-                        sc = sc.withSelectedNamedGroup(serverNamedGroup);
-                    }
-                    TlsSession server = TlsSession.createServer(sc, st);
+            Thread serverThread =
+                    new Thread(
+                            () -> {
+                                try (Socket s = ss.accept()) {
+                                    SocketTlsTransport st = new SocketTlsTransport(s);
+                                    TlsServerConfig sc;
+                                    if (mTls) {
+                                        sc =
+                                                new TlsServerConfig(
+                                                                cs,
+                                                                Collections.singletonList(
+                                                                        sCerts.cert),
+                                                                sCerts.priv)
+                                                        .withCaPublicKey(sCerts.caPub);
+                                    } else {
+                                        sc =
+                                                new TlsServerConfig(
+                                                        cs,
+                                                        Collections.singletonList(plain.cert),
+                                                        plain.priv);
+                                    }
+                                    if (serverNamedGroup != 0) {
+                                        sc = sc.withSelectedNamedGroup(serverNamedGroup);
+                                    }
+                                    TlsSession server = TlsSession.createServer(sc, st);
 
-                    server.handshakeAsServer();
-                    // 3 ключевых ассерта: handshake статус, cipher suite, данные
-                    assertTrue(server.isHandshakeDone());
-                    assertEquals(cs.getId(), server.getCipherSuite().getId());
+                                    server.handshakeAsServer();
+                                    // 3 ключевых ассерта: handshake статус, cipher suite, данные
+                                    assertTrue(server.isHandshakeDone());
+                                    assertEquals(cs.getId(), server.getCipherSuite().getId());
 
-                    // Сервер читает первым — deadlock prevention:
-                    // на TCP уровне оба не могут одновременно ждать read()
-                    byte[] req = server.read();
-                    assertEquals(HELLO, new String(req, "UTF-8"));
+                                    // Сервер читает первым — deadlock prevention:
+                                    // на TCP уровне оба не могут одновременно ждать read()
+                                    byte[] req = server.read();
+                                    assertEquals(HELLO, new String(req, "UTF-8"));
 
-                    server.write(RESPONSE.getBytes("UTF-8"));
-                    server.close();
-                } catch (Throwable e) {
-                    serverError.set(e);
-                }
-            });
+                                    server.write(RESPONSE.getBytes("UTF-8"));
+                                    server.close();
+                                } catch (Throwable e) {
+                                    serverError.set(e);
+                                }
+                            });
 
-            Thread clientThread = new Thread(() -> {
-                try {
-                    // Прямое подключение: new Socket() завершает TCP handshake →
-                    // ss.accept() на сервере разблокируется, сервер создаёт конфиг
-                    try (Socket s = new Socket("127.0.0.1", port)) {
-                        SocketTlsTransport ct = new SocketTlsTransport(s);
-                        TlsClientConfig cc = new TlsClientConfig(cs);
-                        if (mTls) {
-                            cc = cc.withClientCertificateChain(cCerts.cert)
-                                   .withClientPrivateKey(cCerts.priv)
-                                   .withCaPublicKey(cCerts.caPub);
-                        }
-                        TlsSession client = TlsSession.createClient(cc, ct);
+            Thread clientThread =
+                    new Thread(
+                            () -> {
+                                try {
+                                    // Прямое подключение: new Socket() завершает TCP handshake ->
+                                    // ss.accept() на сервере разблокируется, сервер создаёт конфиг
+                                    try (Socket s = new Socket("127.0.0.1", port)) {
+                                        SocketTlsTransport ct = new SocketTlsTransport(s);
+                                        TlsClientConfig cc = new TlsClientConfig(cs);
+                                        if (mTls) {
+                                            cc =
+                                                    cc.withClientCertificateChain(cCerts.cert)
+                                                            .withClientPrivateKey(cCerts.priv)
+                                                            .withCaPublicKey(cCerts.caPub);
+                                        }
+                                        TlsSession client = TlsSession.createClient(cc, ct);
 
-                        client.handshakeAsClient();
-                        assertTrue(client.isHandshakeDone());
-                        assertEquals(cs.getId(), client.getCipherSuite().getId());
+                                        client.handshakeAsClient();
+                                        assertTrue(client.isHandshakeDone());
+                                        assertEquals(cs.getId(), client.getCipherSuite().getId());
 
-                        // Клиент инициирует запись после того, как сервер уже в read()
-                        client.write(HELLO.getBytes("UTF-8"));
-                        byte[] resp = client.read();
-                        assertEquals(RESPONSE, new String(resp, "UTF-8"));
+                                        // Клиент инициирует запись после того, как сервер уже в
+                                        // read()
+                                        client.write(HELLO.getBytes("UTF-8"));
+                                        byte[] resp = client.read();
+                                        assertEquals(RESPONSE, new String(resp, "UTF-8"));
 
-                        client.close();
-                    }
-                } catch (Throwable e) {
-                    clientError.set(e);
-                } finally {
-                    clientDone.countDown();
-                }
-            });
+                                        client.close();
+                                    }
+                                } catch (Throwable e) {
+                                    clientError.set(e);
+                                } finally {
+                                    clientDone.countDown();
+                                }
+                            });
 
             serverThread.start();
             clientThread.start();

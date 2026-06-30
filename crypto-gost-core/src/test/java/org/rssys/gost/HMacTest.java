@@ -1,19 +1,17 @@
 package org.rssys.gost;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
-
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Тесты HMAC-Streebog (HMAC с хеш-функцией ГОСТ Р 34.11-2012) и базовых
@@ -42,8 +40,10 @@ class HMacTest {
         int len = hex.length();
         byte[] data = new byte[len / 2];
         for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
-                    + Character.digit(hex.charAt(i + 1), 16));
+            data[i / 2] =
+                    (byte)
+                            ((Character.digit(hex.charAt(i), 16) << 4)
+                                    + Character.digit(hex.charAt(i + 1), 16));
         }
         return data;
     }
@@ -76,15 +76,16 @@ class HMacTest {
     @Test
     void testDigest512_RFC6986_Example1() {
         // Сообщение из RFC 6986 §10.1 длиной 63 байта
-        byte[] msg = "012345678901234567890123456789012345678901234567890123456789012"
-                .getBytes(StandardCharsets.US_ASCII);
+        byte[] msg =
+                "012345678901234567890123456789012345678901234567890123456789012"
+                        .getBytes(StandardCharsets.US_ASCII);
         assertEquals(63, msg.length);
 
         String expected =
-                "1b54d01a4af5b9d5cc3d86d68d285462" +
-                "b19abc2475222f35c085122be4ba1ffa" +
-                "00ad30f8767b3a82384c6574f024c311" +
-                "e2a481332b08ef7f41797891c1646f48";
+                "1b54d01a4af5b9d5cc3d86d68d285462"
+                        + "b19abc2475222f35c085122be4ba1ffa"
+                        + "00ad30f8767b3a82384c6574f024c311"
+                        + "e2a481332b08ef7f41797891c1646f48";
 
         Digest d = new Streebog512();
         byte[] result = digest(d, msg);
@@ -103,19 +104,20 @@ class HMacTest {
      */
     @Test
     void testDigest512_RFC6986_Example2() {
-        byte[] msg = fromHex(
-                "fbe2e5f0eee3c820fbeafaebef20fffb" +
-                "f0e1e0f0f520e0ed20e8ece0ebe5f0f2" +
-                "f120fff0eeec20f120faf2fee5e2202c" +
-                "e8f6f3ede220e8e6eee1e8f0f2d1202c" +
-                "e8f0f2e5e220e5d1");
+        byte[] msg =
+                fromHex(
+                        "fbe2e5f0eee3c820fbeafaebef20fffb"
+                                + "f0e1e0f0f520e0ed20e8ece0ebe5f0f2"
+                                + "f120fff0eeec20f120faf2fee5e2202c"
+                                + "e8f6f3ede220e8e6eee1e8f0f2d1202c"
+                                + "e8f0f2e5e220e5d1");
 
         // Проверено на BouncyCastle 1.83
         String expected =
-                "9663a3abce48e5b8545169e9ede65e0c" +
-                "96b827afdad47ac56c8ba343b3628e64" +
-                "a25418a6ed0685e414a4420960c38e10" +
-                "2180f7e1759f8f61262185115fea5703";
+                "9663a3abce48e5b8545169e9ede65e0c"
+                        + "96b827afdad47ac56c8ba343b3628e64"
+                        + "a25418a6ed0685e414a4420960c38e10"
+                        + "2180f7e1759f8f61262185115fea5703";
 
         Digest d = new Streebog512();
         byte[] result = digest(d, msg);
@@ -132,12 +134,11 @@ class HMacTest {
      */
     @Test
     void testDigest256_RFC6986_Example1() {
-        byte[] msg = "012345678901234567890123456789012345678901234567890123456789012"
-                .getBytes(StandardCharsets.US_ASCII);
+        byte[] msg =
+                "012345678901234567890123456789012345678901234567890123456789012"
+                        .getBytes(StandardCharsets.US_ASCII);
 
-        String expected =
-                "9d151eefd8590b89daa6ba6cb74af927" +
-                "5dd051026bb149a452fd84e5e57b5500";
+        String expected = "9d151eefd8590b89daa6ba6cb74af927" + "5dd051026bb149a452fd84e5e57b5500";
 
         Digest d = new Streebog256();
         byte[] result = digest(d, msg);
@@ -154,17 +155,16 @@ class HMacTest {
      */
     @Test
     void testDigest256_RFC6986_Example2() {
-        byte[] msg = fromHex(
-                "fbe2e5f0eee3c820fbeafaebef20fffb" +
-                "f0e1e0f0f520e0ed20e8ece0ebe5f0f2" +
-                "f120fff0eeec20f120faf2fee5e2202c" +
-                "e8f6f3ede220e8e6eee1e8f0f2d1202c" +
-                "e8f0f2e5e220e5d1");
+        byte[] msg =
+                fromHex(
+                        "fbe2e5f0eee3c820fbeafaebef20fffb"
+                                + "f0e1e0f0f520e0ed20e8ece0ebe5f0f2"
+                                + "f120fff0eeec20f120faf2fee5e2202c"
+                                + "e8f6f3ede220e8e6eee1e8f0f2d1202c"
+                                + "e8f0f2e5e220e5d1");
 
         // Проверено против BouncyCastle 1.83
-        String expected =
-                "0e7ab4efd0915eaac2dab58dae45d0f2" +
-                "8d14f83c57794b3338f7872c10542c19";
+        String expected = "0e7ab4efd0915eaac2dab58dae45d0f2" + "8d14f83c57794b3338f7872c10542c19";
 
         Digest d = new Streebog256();
         byte[] result = digest(d, msg);
@@ -178,8 +178,9 @@ class HMacTest {
 
     @Test
     void testDigest512_incrementalEquality() {
-        byte[] msg = "012345678901234567890123456789012345678901234567890123456789012"
-                .getBytes(StandardCharsets.US_ASCII);
+        byte[] msg =
+                "012345678901234567890123456789012345678901234567890123456789012"
+                        .getBytes(StandardCharsets.US_ASCII);
 
         Digest d = new Streebog512();
         byte[] bulk = digest(d, msg);
@@ -191,17 +192,21 @@ class HMacTest {
         byte[] incremental = new byte[64];
         d.doFinal(incremental, 0);
 
-        assertArrayEquals(bulk, incremental, "Инкрементальное и пакетное обновление должны давать одинаковый дайджест");
+        assertArrayEquals(
+                bulk,
+                incremental,
+                "Инкрементальное и пакетное обновление должны давать одинаковый дайджест");
     }
 
     @Test
     void testDigest256_incrementalEquality() {
-        byte[] msg = fromHex(
-                "fbe2e5f0eee3c820fbeafaebef20fffb" +
-                "f0e1e0f0f520e0ed20e8ece0ebe5f0f2" +
-                "f120fff0eeec20f120faf2fee5e2202c" +
-                "e8f6f3ede220e8e6eee1e8f0f2d1202c" +
-                "e8f0f2e5e220e5d1");
+        byte[] msg =
+                fromHex(
+                        "fbe2e5f0eee3c820fbeafaebef20fffb"
+                                + "f0e1e0f0f520e0ed20e8ece0ebe5f0f2"
+                                + "f120fff0eeec20f120faf2fee5e2202c"
+                                + "e8f6f3ede220e8e6eee1e8f0f2d1202c"
+                                + "e8f0f2e5e220e5d1");
 
         Digest d = new Streebog256();
         byte[] bulk = digest(d, msg);
@@ -213,7 +218,10 @@ class HMacTest {
         byte[] incremental = new byte[32];
         d.doFinal(incremental, 0);
 
-        assertArrayEquals(bulk, incremental, "Инкрементальное и пакетное обновление должны давать одинаковый дайджест");
+        assertArrayEquals(
+                bulk,
+                incremental,
+                "Инкрементальное и пакетное обновление должны давать одинаковый дайджест");
     }
 
     // =========================================================================
@@ -229,7 +237,8 @@ class HMacTest {
         // doFinal внутри уже вызывает reset
         byte[] second = digest(d, msg);
 
-        assertArrayEquals(first, second, "Два вызова после сброса должны возвращать одинаковый результат");
+        assertArrayEquals(
+                first, second, "Два вызова после сброса должны возвращать одинаковый результат");
     }
 
     @Test
@@ -240,7 +249,8 @@ class HMacTest {
         byte[] first = digest(d, msg);
         byte[] second = digest(d, msg);
 
-        assertArrayEquals(first, second, "Два вызова после сброса должны возвращать одинаковый результат");
+        assertArrayEquals(
+                first, second, "Два вызова после сброса должны возвращать одинаковый результат");
     }
 
     // =========================================================================
@@ -273,7 +283,10 @@ class HMacTest {
         // Результат не должен состоять из одних нулей
         boolean allZero = true;
         for (byte b : result) {
-            if (b != 0) { allZero = false; break; }
+            if (b != 0) {
+                allZero = false;
+                break;
+            }
         }
         assertFalse(allZero, "Хэш пустого сообщения не должен состоять из одних нулей");
     }
@@ -319,8 +332,7 @@ class HMacTest {
         byte[] key = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] msg = fromHex("0126bdb87800af214341456563780100");
 
-        String expected = "a1aa5f7de402d7b3d323f2991c8d4534" +
-                          "013137010a83754fd0af6d7cd4922ed9";
+        String expected = "a1aa5f7de402d7b3d323f2991c8d4534" + "013137010a83754fd0af6d7cd4922ed9";
 
         Hmac mac = new Hmac(new Streebog256());
         byte[] result = hmac(mac, key, msg);
@@ -342,10 +354,11 @@ class HMacTest {
         byte[] key = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] msg = fromHex("0126bdb87800af214341456563780100");
 
-        String expected = "a59bab22ecae19c65fbde6e5f4e9f5d8" +
-                          "549d31f037f9df9b905500e171923a77" +
-                          "3d5f1530f2ed7e964cb2eedc29e9ad2f" +
-                          "3afe93b2814f79f5000ffc0366c251e6";
+        String expected =
+                "a59bab22ecae19c65fbde6e5f4e9f5d8"
+                        + "549d31f037f9df9b905500e171923a77"
+                        + "3d5f1530f2ed7e964cb2eedc29e9ad2f"
+                        + "3afe93b2814f79f5000ffc0366c251e6";
 
         Hmac mac = new Hmac(new Streebog512());
         byte[] result = hmac(mac, key, msg);
@@ -371,7 +384,10 @@ class HMacTest {
         // Не должно бросать исключение, результат не должен быть нулевым
         boolean allZero = true;
         for (byte b : result) {
-            if (b != 0) { allZero = false; break; }
+            if (b != 0) {
+                allZero = false;
+                break;
+            }
         }
         assertFalse(allZero, "HMAC с длинным ключом должен давать ненулевой результат");
     }
@@ -406,7 +422,10 @@ class HMacTest {
         byte[] result2 = new byte[32];
         mac.doFinal(result2, 0);
 
-        assertArrayEquals(result1, result2, "После reset() Hmac должен давать тот же результат без повторной инициализации");
+        assertArrayEquals(
+                result1,
+                result2,
+                "После reset() Hmac должен давать тот же результат без повторной инициализации");
     }
 
     @Test
@@ -422,7 +441,10 @@ class HMacTest {
         byte[] result2 = new byte[64];
         mac.doFinal(result2, 0);
 
-        assertArrayEquals(result1, result2, "После reset() Hmac должен давать тот же результат без повторной инициализации");
+        assertArrayEquals(
+                result1,
+                result2,
+                "После reset() Hmac должен давать тот же результат без повторной инициализации");
     }
 
     // =========================================================================
@@ -484,7 +506,8 @@ class HMacTest {
         byte[] incr = new byte[32];
         mac.doFinal(incr, 0);
 
-        assertArrayEquals(bulk, incr, "Инкрементальное и пакетное обновление должны давать одинаковый HMAC");
+        assertArrayEquals(
+                bulk, incr, "Инкрементальное и пакетное обновление должны давать одинаковый HMAC");
     }
 
     @Test
@@ -502,7 +525,8 @@ class HMacTest {
         byte[] incr = new byte[64];
         mac.doFinal(incr, 0);
 
-        assertArrayEquals(bulk, incr, "Инкрементальное и пакетное обновление должны давать одинаковый HMAC");
+        assertArrayEquals(
+                bulk, incr, "Инкрементальное и пакетное обновление должны давать одинаковый HMAC");
     }
 
     // =========================================================================
@@ -518,9 +542,10 @@ class HMacTest {
 
         Hmac mac = new Hmac(new Streebog256());
         byte[] authentic = hmac(mac, key, msg);
-        byte[] forged    = hmac(mac, key, tampered);
+        byte[] forged = hmac(mac, key, tampered);
 
-        assertFalse(Arrays.equals(authentic, forged),
+        assertFalse(
+                Arrays.equals(authentic, forged),
                 "HMAC подменённого сообщения должен отличаться от подлинного");
     }
 
@@ -539,7 +564,10 @@ class HMacTest {
         // Не должно бросать исключение; результат не должен быть нулевым
         boolean allZero = true;
         for (byte b : result) {
-            if (b != 0) { allZero = false; break; }
+            if (b != 0) {
+                allZero = false;
+                break;
+            }
         }
         assertFalse(allZero);
     }
@@ -561,7 +589,8 @@ class HMacTest {
     @Test
     void testHmac_initRequiresSymmetricKey() {
         Hmac mac = new Hmac(new Streebog256());
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> mac.init(new ParametersWithIV(new SymmetricKey(new byte[32]), new byte[16])));
     }
 
@@ -579,7 +608,10 @@ class HMacTest {
         mac.doFinal(result, 0);
         boolean allZero = true;
         for (byte b : result) {
-            if (b != 0) { allZero = false; break; }
+            if (b != 0) {
+                allZero = false;
+                break;
+            }
         }
         assertFalse(allZero, "HMAC с пустым ключом не должен давать нулевой результат");
     }
@@ -594,7 +626,10 @@ class HMacTest {
         mac.doFinal(result, 0);
         boolean allZero = true;
         for (byte b : result) {
-            if (b != 0) { allZero = false; break; }
+            if (b != 0) {
+                allZero = false;
+                break;
+            }
         }
         assertFalse(allZero, "HMAC с пустым ключом не должен давать нулевой результат");
     }

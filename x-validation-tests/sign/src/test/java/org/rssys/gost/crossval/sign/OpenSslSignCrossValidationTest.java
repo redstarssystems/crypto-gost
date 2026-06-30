@@ -25,11 +25,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * Кросс-валидация подписи ГОСТ Р 34.10-2012: crypto-gost ↔ OpenSSL.
+ * Кросс-валидация подписи ГОСТ Р 34.10-2012: crypto-gost <-> OpenSSL.
  *
  * Для каждой кривой (CryptoPro-A/B/C и TC26-A/B/C-512):
- * — crypto-gost подписывает → openssl dgst -verify верифицирует (10 сообщений);
- * — openssl dgst -sign подписывает → crypto-gost верифицирует (10 сообщений);
+ * — crypto-gost подписывает -> openssl dgst -verify верифицирует (10 сообщений);
+ * — openssl dgst -sign подписывает -> crypto-gost верифицирует (10 сообщений);
  * — испорченная подпись отклоняется OpenSSL (tamper-тест).
  * Тест пропускается, если OpenSSL или engine gost недоступны.
  */
@@ -97,7 +97,7 @@ class OpenSslSignCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("opensslCurveParams")
-    @DisplayName("OpenSSL: crypto-gost подписывает → openssl верифицирует")
+    @DisplayName("OpenSSL: crypto-gost подписывает -> openssl верифицирует")
     void crossValidateOpenssl(TestData.CurveSpec spec) throws Exception {
         OpenSslCtx c = ctx.get(spec);
         byte[][] msgs = TestData.randomMessages(TestData.OPENSSL_NUM_MESSAGES, TestData.MSG_SIZE);
@@ -148,7 +148,7 @@ class OpenSslSignCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("opensslCurveParams")
-    @DisplayName("OpenSSL dir2: openssl подписывает → crypto-gost верифицирует")
+    @DisplayName("OpenSSL dir2: openssl подписывает -> crypto-gost верифицирует")
     void crossValidateOpensslDir2(TestData.CurveSpec spec) throws Exception {
         OpenSslCtx c = ctx.get(spec);
         byte[][] msgs = TestData.randomMessages(TestData.OPENSSL_NUM_MESSAGES, TestData.MSG_SIZE);

@@ -23,13 +23,13 @@ public final class SignatureCodec {
      * @return байты подписи s ∥ r, длина {@code 2 * rolen}
      */
     public static byte[] encode(BigInteger r, BigInteger s, ECParameters params) {
-        int rolen  = (params.n.bitLength() + 7) / 8;
+        int rolen = (params.n.bitLength() + 7) / 8;
         byte[] out = new byte[2 * rolen];
         byte[] rBytes = r.toByteArray();
         byte[] sBytes = s.toByteArray();
         int rLen = Math.min(rBytes.length, rolen);
         int sLen = Math.min(sBytes.length, rolen);
-        System.arraycopy(sBytes, Math.max(0, sBytes.length - sLen), out, rolen - sLen,     sLen);
+        System.arraycopy(sBytes, Math.max(0, sBytes.length - sLen), out, rolen - sLen, sLen);
         System.arraycopy(rBytes, Math.max(0, rBytes.length - rLen), out, 2 * rolen - rLen, rLen);
         return out;
     }
@@ -47,11 +47,13 @@ public final class SignatureCodec {
         int rolen = (params.n.bitLength() + 7) / 8;
         if (signature == null || signature.length != 2 * rolen) {
             throw new IllegalArgumentException(
-                "Invalid signature length: expected " + (2 * rolen) + " bytes, got "
-                + (signature == null ? "null" : signature.length));
+                    "Invalid signature length: expected "
+                            + (2 * rolen)
+                            + " bytes, got "
+                            + (signature == null ? "null" : signature.length));
         }
-        BigInteger s = new BigInteger(1, Arrays.copyOfRange(signature, 0,     rolen));
+        BigInteger s = new BigInteger(1, Arrays.copyOfRange(signature, 0, rolen));
         BigInteger r = new BigInteger(1, Arrays.copyOfRange(signature, rolen, 2 * rolen));
-        return new BigInteger[]{r, s};
+        return new BigInteger[] {r, s};
     }
 }

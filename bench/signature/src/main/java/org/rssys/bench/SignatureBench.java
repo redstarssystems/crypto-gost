@@ -237,7 +237,7 @@ public class SignatureBench {
     }
 
     // -----------------------------------------------------------------------
-    // Утилита: кодирование BigInteger r,s → byte[] r||s (big-endian, фиксированная длина)
+    // Утилита: кодирование BigInteger r,s -> byte[] r||s (big-endian, фиксированная длина)
     // -----------------------------------------------------------------------
     private static byte[] encodeSig(BigInteger r, BigInteger s, int rolen) {
         byte[] result = new byte[2 * rolen];

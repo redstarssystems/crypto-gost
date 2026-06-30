@@ -1,21 +1,19 @@
 package org.rssys.gost.jsse.engine;
 
-import org.rssys.gost.jsse.RssysGostJsseProvider;
+import static org.junit.jupiter.api.Assertions.*;
 
+import java.security.Security;
+import java.security.cert.X509Certificate;
+import java.util.Enumeration;
+import javax.net.ssl.SSLSession;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
 import org.rssys.gost.util.CryptoRandom;
-
-import javax.net.ssl.SSLSession;
-import java.security.Security;
-import java.security.cert.X509Certificate;
-import java.util.Enumeration;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * T-7: Eviction-тесты для GostSSLSessionContext.
@@ -43,10 +41,13 @@ class GostSSLSessionContextEvictionTest {
         ctx.setSessionCacheSize(5);
 
         for (int i = 0; i < 10; i++) {
-            GostSSLSession s = new GostSSLSession(
-                    "TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L",
-                    "host" + i, 443,
-                    new X509Certificate[0], new X509Certificate[0]);
+            GostSSLSession s =
+                    new GostSSLSession(
+                            "TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L",
+                            "host" + i,
+                            443,
+                            new X509Certificate[0],
+                            new X509Certificate[0]);
             ctx.putSession(s);
         }
 
@@ -71,10 +72,13 @@ class GostSSLSessionContextEvictionTest {
         ctx.setSessionCacheSize(0);
 
         for (int i = 0; i < 10; i++) {
-            GostSSLSession s = new GostSSLSession(
-                    "TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L",
-                    "host" + i, 443,
-                    new X509Certificate[0], new X509Certificate[0]);
+            GostSSLSession s =
+                    new GostSSLSession(
+                            "TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L",
+                            "host" + i,
+                            443,
+                            new X509Certificate[0],
+                            new X509Certificate[0]);
             ctx.putSession(s);
         }
 
@@ -92,10 +96,13 @@ class GostSSLSessionContextEvictionTest {
     @DisplayName("Вытеснение сессий: removeSession удаляет сессию из кэша")
     void testRemoveSession() {
         ctx.setSessionCacheSize(10);
-        GostSSLSession s = new GostSSLSession(
-                "TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L",
-                "host", 443,
-                new X509Certificate[0], new X509Certificate[0]);
+        GostSSLSession s =
+                new GostSSLSession(
+                        "TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L",
+                        "host",
+                        443,
+                        new X509Certificate[0],
+                        new X509Certificate[0]);
         ctx.putSession(s);
         assertNotNull(ctx.getSession(s.getId()));
 
@@ -116,12 +123,16 @@ class GostSSLSessionContextEvictionTest {
         ctx.setMaxIdentityEntries(3);
         byte[] rms = new byte[32];
         CryptoRandom.INSTANCE.nextBytes(rms);
-        // WHY: разные тикеты — иначе все host'ы маппятся в один ключ хранилища,
+        // разные тикеты — иначе все host'ы маппятся в один ключ хранилища,
         // и single-use PSK (RFC 8446 §8.1) удалит его при первом запросе.
-        byte[] nstBodyA = TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[]{1});
-        byte[] nstBodyB = TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[]{2});
-        byte[] nstBodyC = TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[]{3});
-        byte[] nstBodyD = TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[]{4});
+        byte[] nstBodyA =
+                TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[] {1});
+        byte[] nstBodyB =
+                TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[] {2});
+        byte[] nstBodyC =
+                TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[] {3});
+        byte[] nstBodyD =
+                TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[] {4});
 
         ctx.saveNewSessionTicket("a", 443, rms, nstBodyA);
         ctx.saveNewSessionTicket("b", 443, rms, nstBodyB);
@@ -144,5 +155,4 @@ class GostSSLSessionContextEvictionTest {
         if (ctx.getForClientResumption("d", 443) != null) count++;
         assertEquals(3, count, "ровно 3 entry после вытеснения");
     }
-
 }

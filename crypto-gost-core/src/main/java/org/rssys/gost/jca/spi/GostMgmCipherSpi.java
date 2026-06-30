@@ -1,12 +1,13 @@
 package org.rssys.gost.jca.spi;
 
-import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.cipher.Kuznyechik;
-import org.rssys.gost.cipher.ParametersWithIV;
-import org.rssys.gost.cipher.mode.Mgm;
-import org.rssys.gost.jca.key.GostSecretKey;
-import org.rssys.gost.util.AuthenticationException;
-
+import java.security.AlgorithmParameters;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.Key;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
+import java.util.Arrays;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.BadPaddingException;
 import javax.crypto.CipherSpi;
@@ -16,15 +17,13 @@ import javax.crypto.SecretKey;
 import javax.crypto.ShortBufferException;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
-import java.security.AlgorithmParameters;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.Key;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
+import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.cipher.mode.Mgm;
+import org.rssys.gost.jca.key.GostSecretKey;
+import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
-import java.security.spec.AlgorithmParameterSpec;
-import java.util.Arrays;
 
 /**
  * Реализация {@link CipherSpi} для аутентифицированного шифрования
@@ -54,12 +53,13 @@ public final class GostMgmCipherSpi extends CipherSpi {
      * Длина ICN для Кузнечика-MGM: 16 байт (127-битное значение, MSB=0, RFC 9058 §3).
      */
     private static final int ICN_LEN = 16;
+
     /** Размер тега в байтах. */
     private static final int TAG_LEN = 16;
 
-    private Mgm     mgm;
+    private Mgm mgm;
     private boolean forEncryption;
-    private byte[]  icn;
+    private byte[] icn;
     private boolean initialized;
     private boolean aadUpdated;
 
@@ -74,7 +74,7 @@ public final class GostMgmCipherSpi extends CipherSpi {
     protected void engineSetMode(String mode) throws NoSuchAlgorithmException {
         if (!"MGM".equalsIgnoreCase(mode)) {
             throw new NoSuchAlgorithmException(
-                "Only MGM mode is supported by this SPI, got: " + mode);
+                    "Only MGM mode is supported by this SPI, got: " + mode);
         }
     }
 
@@ -83,7 +83,7 @@ public final class GostMgmCipherSpi extends CipherSpi {
     protected void engineSetPadding(String padding) throws NoSuchPaddingException {
         if (!"NoPadding".equalsIgnoreCase(padding)) {
             throw new NoSuchPaddingException(
-                "Only NoPadding is supported for MGM, got: " + padding);
+                    "Only NoPadding is supported for MGM, got: " + padding);
         }
     }
 
@@ -126,12 +126,13 @@ public final class GostMgmCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected void engineInit(int opmode, Key key, AlgorithmParameterSpec params,
-                              SecureRandom random)
+    protected void engineInit(
+            int opmode, Key key, AlgorithmParameterSpec params, SecureRandom random)
             throws InvalidKeyException, InvalidAlgorithmParameterException {
         SymmetricKey keyParam = extractSymmetricKey(key);
-        forEncryption = (opmode == javax.crypto.Cipher.ENCRYPT_MODE
-                      || opmode == javax.crypto.Cipher.WRAP_MODE);
+        forEncryption =
+                (opmode == javax.crypto.Cipher.ENCRYPT_MODE
+                        || opmode == javax.crypto.Cipher.WRAP_MODE);
 
         if (params instanceof IvParameterSpec) {
             byte[] iv = ((IvParameterSpec) params).getIV();
@@ -149,12 +150,13 @@ public final class GostMgmCipherSpi extends CipherSpi {
                 icn[0] &= 0x7F; // обеспечиваем MSB=0
             } else {
                 throw new InvalidAlgorithmParameterException(
-                    "MGM decryption requires an ICN (IvParameterSpec with 16 bytes, MSB=0)");
+                        "MGM decryption requires an ICN (IvParameterSpec with 16 bytes, MSB=0)");
             }
         } else {
             throw new InvalidAlgorithmParameterException(
-                "Unsupported parameter type: " + params.getClass().getName()
-                + ". Use IvParameterSpec(16 bytes, MSB=0) or GCMParameterSpec");
+                    "Unsupported parameter type: "
+                            + params.getClass().getName()
+                            + ". Use IvParameterSpec(16 bytes, MSB=0) or GCMParameterSpec");
         }
 
         if (mgm != null) mgm.destroy();
@@ -162,13 +164,12 @@ public final class GostMgmCipherSpi extends CipherSpi {
         mgm.init(forEncryption, new ParametersWithIV(keyParam, icn));
 
         inputBuffer = new byte[0];
-        aadUpdated  = false;
+        aadUpdated = false;
         initialized = true;
     }
 
     @Override
-    protected void engineInit(int opmode, Key key, AlgorithmParameters params,
-                              SecureRandom random)
+    protected void engineInit(int opmode, Key key, AlgorithmParameters params, SecureRandom random)
             throws InvalidKeyException, InvalidAlgorithmParameterException {
         AlgorithmParameterSpec spec = null;
         if (params != null) {
@@ -176,15 +177,14 @@ public final class GostMgmCipherSpi extends CipherSpi {
                 spec = params.getParameterSpec(IvParameterSpec.class);
             } catch (Exception e) {
                 throw new InvalidAlgorithmParameterException(
-                    "Cannot extract IvParameterSpec from AlgorithmParameters", e);
+                        "Cannot extract IvParameterSpec from AlgorithmParameters", e);
             }
         }
         engineInit(opmode, key, spec, random);
     }
 
     @Override
-    protected void engineInit(int opmode, Key key, SecureRandom random)
-            throws InvalidKeyException {
+    protected void engineInit(int opmode, Key key, SecureRandom random) throws InvalidKeyException {
         try {
             engineInit(opmode, key, (AlgorithmParameterSpec) null, random);
         } catch (InvalidAlgorithmParameterException e) {
@@ -217,8 +217,9 @@ public final class GostMgmCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected int engineUpdate(byte[] input, int inputOffset, int inputLen,
-                               byte[] output, int outputOffset) throws ShortBufferException {
+    protected int engineUpdate(
+            byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
+            throws ShortBufferException {
         engineUpdate(input, inputOffset, inputLen);
         return 0;
     }
@@ -254,23 +255,22 @@ public final class GostMgmCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected int engineDoFinal(byte[] input, int inputOffset, int inputLen,
-                                byte[] output, int outputOffset)
+    protected int engineDoFinal(
+            byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
             throws ShortBufferException, IllegalBlockSizeException, BadPaddingException {
         byte[] result = engineDoFinal(input, inputOffset, inputLen);
         if (result.length > output.length - outputOffset) {
             throw new ShortBufferException(
-                "Output buffer too small: need " + result.length + " bytes");
+                    "Output buffer too small: need " + result.length + " bytes");
         }
         System.arraycopy(result, 0, output, outputOffset, result.length);
         return result.length;
     }
 
-
     /** Шифрует все накопленные данные и добавляет тег. */
     private byte[] doFinalEncrypt() {
-        int   ptLen = inputBuffer.length;
-        byte[] out  = new byte[ptLen + TAG_LEN];
+        int ptLen = inputBuffer.length;
+        byte[] out = new byte[ptLen + TAG_LEN];
 
         mgm.processBytes(inputBuffer, 0, ptLen, out, 0);
         mgm.finishEncryption(out, ptLen);
@@ -285,11 +285,13 @@ public final class GostMgmCipherSpi extends CipherSpi {
     private byte[] doFinalDecrypt() throws BadPaddingException {
         if (inputBuffer.length < TAG_LEN) {
             throw new AEADBadTagException(
-                "Input too short to contain MGM tag: need at least "
-                + TAG_LEN + " bytes, got " + inputBuffer.length);
+                    "Input too short to contain MGM tag: need at least "
+                            + TAG_LEN
+                            + " bytes, got "
+                            + inputBuffer.length);
         }
 
-        int    ctLen      = inputBuffer.length - TAG_LEN;
+        int ctLen = inputBuffer.length - TAG_LEN;
         byte[] ciphertext = Arrays.copyOf(inputBuffer, ctLen);
 
         byte[] plaintext = new byte[ctLen];
@@ -324,12 +326,14 @@ public final class GostMgmCipherSpi extends CipherSpi {
     private static void validateIcn(byte[] iv) throws InvalidAlgorithmParameterException {
         if (iv == null || iv.length != ICN_LEN) {
             throw new InvalidAlgorithmParameterException(
-                "MGM ICN (IV) must be exactly " + ICN_LEN + " bytes (MSB=0), got "
-                + (iv == null ? "null" : iv.length));
+                    "MGM ICN (IV) must be exactly "
+                            + ICN_LEN
+                            + " bytes (MSB=0), got "
+                            + (iv == null ? "null" : iv.length));
         }
         if ((iv[0] & 0x80) != 0) {
             throw new InvalidAlgorithmParameterException(
-                "MGM ICN MSB (bit 127) must be 0 per RFC 9058 §3");
+                    "MGM ICN MSB (bit 127) must be 0 per RFC 9058 §3");
         }
     }
 
@@ -345,22 +349,22 @@ public final class GostMgmCipherSpi extends CipherSpi {
         }
         if (key instanceof SecretKey && "RAW".equals(key.getFormat())) {
             byte[] encoded = key.getEncoded();
-            if (encoded == null || encoded.length != 32) {
+            if (encoded == null || encoded.length != Kuznyechik.KEY_SIZE) {
                 throw new InvalidKeyException(
-                    "Kuznyechik requires 32-byte key, got "
-                    + (encoded == null ? "null" : encoded.length));
+                        "Kuznyechik requires 32-byte key, got "
+                                + (encoded == null ? "null" : encoded.length));
             }
             return new SymmetricKey(encoded);
         }
         throw new InvalidKeyException(
-            "Unsupported key type: " + key.getClass().getName()
-            + ". Expected GostSecretKey or SecretKey with RAW format");
+                "Unsupported key type: "
+                        + key.getClass().getName()
+                        + ". Expected GostSecretKey or SecretKey with RAW format");
     }
 
     private void checkInitialized() {
         if (!initialized) {
-            throw new IllegalStateException(
-                "Cipher not initialized — call init() first");
+            throw new IllegalStateException("Cipher not initialized — call init() first");
         }
     }
 }

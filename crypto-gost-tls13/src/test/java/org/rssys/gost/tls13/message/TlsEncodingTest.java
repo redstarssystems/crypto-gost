@@ -1,16 +1,15 @@
 package org.rssys.gost.tls13.message;
-import org.rssys.gost.tls13.*;
-import java.math.BigInteger;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.ByteArrayOutputStream;
+import java.math.BigInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-
-import java.io.ByteArrayOutputStream;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.rssys.gost.tls13.*;
 
 @DisplayName("TlsEncoding: encode/decode, ECDHE, утилиты")
 class TlsEncodingTest {
@@ -18,27 +17,27 @@ class TlsEncodingTest {
     @Test
     @DisplayName("encodeUint16: корректная упаковка short")
     void testEncodeUint16() {
-        assertArrayEquals(new byte[]{0x00, 0x00}, encode16(0));
-        assertArrayEquals(new byte[]{0x00, 0x01}, encode16(1));
-        assertArrayEquals(new byte[]{0x00, (byte) 0xFF}, encode16(255));
-        assertArrayEquals(new byte[]{0x01, 0x00}, encode16(256));
-        assertArrayEquals(new byte[]{(byte) 0xFF, (byte) 0xFF}, encode16(65535));
+        assertArrayEquals(new byte[] {0x00, 0x00}, encode16(0));
+        assertArrayEquals(new byte[] {0x00, 0x01}, encode16(1));
+        assertArrayEquals(new byte[] {0x00, (byte) 0xFF}, encode16(255));
+        assertArrayEquals(new byte[] {0x01, 0x00}, encode16(256));
+        assertArrayEquals(new byte[] {(byte) 0xFF, (byte) 0xFF}, encode16(65535));
     }
 
     @Test
     @DisplayName("encodeUint24: корректная упаковка 24-битного значения")
     void testEncodeUint24() {
-        assertArrayEquals(new byte[]{0x00, 0x00, 0x00}, encode24(0));
-        assertArrayEquals(new byte[]{0x00, 0x00, 0x01}, encode24(1));
-        assertArrayEquals(new byte[]{0x00, 0x00, (byte) 0xFF}, encode24(255));
-        assertArrayEquals(new byte[]{0x00, 0x01, 0x00}, encode24(256));
-        assertArrayEquals(new byte[]{(byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, encode24(0xFFFFFF));
+        assertArrayEquals(new byte[] {0x00, 0x00, 0x00}, encode24(0));
+        assertArrayEquals(new byte[] {0x00, 0x00, 0x01}, encode24(1));
+        assertArrayEquals(new byte[] {0x00, 0x00, (byte) 0xFF}, encode24(255));
+        assertArrayEquals(new byte[] {0x00, 0x01, 0x00}, encode24(256));
+        assertArrayEquals(new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF}, encode24(0xFFFFFF));
     }
 
     @Test
     @DisplayName("encodeExtension: формат type(2) + length(2) + data")
     void testEncodeExtension() {
-        byte[] data = new byte[]{0x01, 0x02, 0x03};
+        byte[] data = new byte[] {0x01, 0x02, 0x03};
         byte[] encoded = encodeExt(TlsConstants.EXT_KEY_SHARE, data);
         assertEquals(7, encoded.length);
         assertEquals(TlsConstants.EXT_KEY_SHARE, ((encoded[0] & 0xFF) << 8) | (encoded[1] & 0xFF));
@@ -58,7 +57,8 @@ class TlsEncodingTest {
     @Test
     @DisplayName("toFixedLengthBytes: дополнение нулями слева")
     void testToFixedLengthBytesPadLeft() {
-        assertArrayEquals(new byte[]{0x00, 0x00, 0x00, (byte) 0xFF},
+        assertArrayEquals(
+                new byte[] {0x00, 0x00, 0x00, (byte) 0xFF},
                 TlsEncoding.toFixedLengthBytes(BigInteger.valueOf(255), 4));
     }
 
@@ -83,13 +83,13 @@ class TlsEncodingTest {
     }
 
     @Test
-    @DisplayName("encodePoint/decodePoint: roundtrip 256")
+    @DisplayName("encodePoint/decodePoint: обратимость 256")
     void testEncodeDecodePoint256() throws TlsException {
         testPointRoundtrip(ECParameters.tc26a256());
     }
 
     @Test
-    @DisplayName("encodePoint/decodePoint: roundtrip 512")
+    @DisplayName("encodePoint/decodePoint: обратимость 512")
     void testEncodeDecodePoint512() throws TlsException {
         testPointRoundtrip(ECParameters.tc26a512());
     }
@@ -107,12 +107,12 @@ class TlsEncodingTest {
     }
 
     @Test
-    @DisplayName("decodePoint: точка не на кривой → handshake_failure")
+    @DisplayName("decodePoint: точка не на кривой -> handshake_failure")
     void testDecodePointNotOnCurveThrows() {
         ECParameters params = ECParameters.tc26a256();
         byte[] raw = new byte[64];
-        TlsException e = assertThrows(TlsException.class,
-                () -> TlsEncoding.decodePoint(raw, params));
+        TlsException e =
+                assertThrows(TlsException.class, () -> TlsEncoding.decodePoint(raw, params));
         assertEquals(TlsConstants.ALERT_HANDSHAKE_FAILURE, e.getAlertCode());
     }
 

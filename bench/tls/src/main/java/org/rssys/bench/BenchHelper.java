@@ -3,7 +3,7 @@ package org.rssys.bench;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsTestHelper;
 
@@ -18,10 +18,10 @@ class BenchHelper {
     }
 
     static class Bundle {
-        final TlsCertificate cert;
+        final GostCertificate cert;
         final PrivateKeyParameters priv;
         final PublicKeyParameters caPublicKey;
-        Bundle(TlsCertificate cert, PrivateKeyParameters priv,
+        Bundle(GostCertificate cert, PrivateKeyParameters priv,
                PublicKeyParameters caPublicKey) {
             this.cert = cert;
             this.priv = priv;

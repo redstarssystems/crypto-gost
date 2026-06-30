@@ -1,17 +1,16 @@
 package org.rssys.gost.jsse.testkit;
 
-import org.rssys.gost.jsse.RssysGostJsseProvider;
+import java.security.Security;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
 import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import java.security.Security;
-import java.security.cert.X509Certificate;
 
 /**
  * Создание SSLContext с ГОСТ-ключами для тестов и примеров.
@@ -33,15 +32,19 @@ public final class GostTestContext {
      * @param caPublicKey публичный ключ CA (для TrustManager)
      * @return инициализированный SSLContext
      */
-    public static SSLContext buildSslContext(X509Certificate[] serverChain,
-                                              PrivateKeyParameters serverKey,
-                                              PublicKeyParameters caPublicKey) throws Exception {
+    public static SSLContext buildSslContext(
+            X509Certificate[] serverChain,
+            PrivateKeyParameters serverKey,
+            PublicKeyParameters caPublicKey)
+            throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         GostX509KeyManager km = new GostX509KeyManager();
         km.addKeyEntry("default", serverChain, serverKey);
         GostX509TrustManager tm = new GostX509TrustManager(caPublicKey, false);
-        SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
-        ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
+        SSLContext ctx =
+                SSLContext.getInstance(
+                        GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+        ctx.init(new KeyManager[] {km}, new TrustManager[] {tm}, null);
         return ctx;
     }
 

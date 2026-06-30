@@ -1,17 +1,13 @@
 package org.rssys.gost.jca.spi;
 
-import org.rssys.gost.cipher.BlockCipher;
-import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.cipher.Kuznyechik;
-import org.rssys.gost.cipher.ParametersWithIV;
-import org.rssys.gost.cipher.mode.Cbc;
-import org.rssys.gost.cipher.mode.Cfb;
-import org.rssys.gost.cipher.mode.Ctr;
-import org.rssys.gost.cipher.mode.Ofb;
-import org.rssys.gost.jca.key.GostSecretKey;
-import org.rssys.gost.util.Pkcs7Padding;
-import org.rssys.gost.util.ISO7816d4Padding;
-
+import java.security.AlgorithmParameters;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.Key;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
+import java.util.Arrays;
 import javax.crypto.BadPaddingException;
 import javax.crypto.CipherSpi;
 import javax.crypto.IllegalBlockSizeException;
@@ -19,15 +15,18 @@ import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
 import javax.crypto.ShortBufferException;
 import javax.crypto.spec.IvParameterSpec;
-import java.security.AlgorithmParameters;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
-import java.security.Key;
-import java.security.SecureRandom;
+import org.rssys.gost.cipher.BlockCipher;
+import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.cipher.mode.Cbc;
+import org.rssys.gost.cipher.mode.Cfb;
+import org.rssys.gost.cipher.mode.Ctr;
+import org.rssys.gost.cipher.mode.Ofb;
+import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.util.CryptoRandom;
-import java.security.spec.AlgorithmParameterSpec;
-import java.util.Arrays;
+import org.rssys.gost.util.ISO7816d4Padding;
+import org.rssys.gost.util.Pkcs7Padding;
 
 /**
  * Реализация {@link CipherSpi} для алгоритма шифрования Кузнечик (ГОСТ Р 34.12-2015)
@@ -43,13 +42,13 @@ public final class GostCipherSpi extends CipherSpi {
     private static final String MODE_CFB = "CFB";
     private static final String MODE_OFB = "OFB";
 
-    private static final String PAD_NONE  = "NoPadding";
+    private static final String PAD_NONE = "NoPadding";
     private static final String PAD_PKCS5 = "PKCS5Padding";
     private static final String PAD_PKCS7 = "PKCS7Padding";
-    private static final String PAD_ISO   = "ISO7816-4";
+    private static final String PAD_ISO = "ISO7816-4";
 
-        /** Текущий режим шифрования. По умолчанию CTR. */
-    private String mode    = MODE_CTR;
+    /** Текущий режим шифрования. По умолчанию CTR. */
+    private String mode = MODE_CTR;
 
     /** Текущий padding. По умолчанию NoPadding. */
     private String padding = PAD_NONE;
@@ -81,10 +80,12 @@ public final class GostCipherSpi extends CipherSpi {
             throw new java.security.NoSuchAlgorithmException("Mode must not be null");
         }
         String upper = modeStr.toUpperCase();
-        if (!upper.equals(MODE_CTR) && !upper.equals(MODE_CBC)
-                && !upper.equals(MODE_CFB) && !upper.equals(MODE_OFB)) {
-            throw new java.security.NoSuchAlgorithmException("Unsupported mode: " + modeStr
-                + ". Supported: CTR, CBC, CFB, OFB");
+        if (!upper.equals(MODE_CTR)
+                && !upper.equals(MODE_CBC)
+                && !upper.equals(MODE_CFB)
+                && !upper.equals(MODE_OFB)) {
+            throw new java.security.NoSuchAlgorithmException(
+                    "Unsupported mode: " + modeStr + ". Supported: CTR, CBC, CFB, OFB");
         }
         this.mode = upper;
     }
@@ -107,8 +108,10 @@ public final class GostCipherSpi extends CipherSpi {
                 || norm.equalsIgnoreCase(PAD_ISO)) {
             this.padding = norm;
         } else {
-            throw new NoSuchPaddingException("Unsupported padding: " + paddingStr
-                + ". Supported: NoPadding, PKCS5Padding, PKCS7Padding, ISO7816-4");
+            throw new NoSuchPaddingException(
+                    "Unsupported padding: "
+                            + paddingStr
+                            + ". Supported: NoPadding, PKCS5Padding, PKCS7Padding, ISO7816-4");
         }
     }
 
@@ -137,7 +140,7 @@ public final class GostCipherSpi extends CipherSpi {
     @Override
     protected int engineGetOutputSize(int inputLen) {
         int buffered = inputBuffer.length;
-        int total    = buffered + inputLen;
+        int total = buffered + inputLen;
         if (!mode.equals(MODE_CBC)) {
             // Потоковые режимы: вывод совпадает с вводом
             return total;
@@ -167,9 +170,9 @@ public final class GostCipherSpi extends CipherSpi {
      * IV генерируется случайным образом через {@code random}.
      */
     @Override
-    protected void engineInit(int opmode, Key key, AlgorithmParameterSpec params,
-                              SecureRandom random) throws InvalidKeyException,
-            InvalidAlgorithmParameterException {
+    protected void engineInit(
+            int opmode, Key key, AlgorithmParameterSpec params, SecureRandom random)
+            throws InvalidKeyException, InvalidAlgorithmParameterException {
         SymmetricKey keyParam = extractSymmetricKey(key);
 
         byte[] iv;
@@ -181,35 +184,35 @@ public final class GostCipherSpi extends CipherSpi {
             iv = generateIv(random != null ? random : CryptoRandom.INSTANCE);
         } else {
             throw new InvalidAlgorithmParameterException(
-                "Unsupported parameter type: " + params.getClass().getName()
-                + ". Expected IvParameterSpec");
+                    "Unsupported parameter type: "
+                            + params.getClass().getName()
+                            + ". Expected IvParameterSpec");
         }
 
-        forEncryption = (opmode == javax.crypto.Cipher.ENCRYPT_MODE
-                      || opmode == javax.crypto.Cipher.WRAP_MODE);
+        forEncryption =
+                (opmode == javax.crypto.Cipher.ENCRYPT_MODE
+                        || opmode == javax.crypto.Cipher.WRAP_MODE);
 
         initCipher(keyParam, iv);
     }
 
     @Override
-    protected void engineInit(int opmode, Key key, AlgorithmParameters params,
-                              SecureRandom random) throws InvalidKeyException,
-            InvalidAlgorithmParameterException {
+    protected void engineInit(int opmode, Key key, AlgorithmParameters params, SecureRandom random)
+            throws InvalidKeyException, InvalidAlgorithmParameterException {
         AlgorithmParameterSpec spec = null;
         if (params != null) {
             try {
                 spec = params.getParameterSpec(IvParameterSpec.class);
             } catch (Exception e) {
                 throw new InvalidAlgorithmParameterException(
-                    "Cannot extract IvParameterSpec from AlgorithmParameters", e);
+                        "Cannot extract IvParameterSpec from AlgorithmParameters", e);
             }
         }
         engineInit(opmode, key, spec, random);
     }
 
     @Override
-    protected void engineInit(int opmode, Key key, SecureRandom random)
-            throws InvalidKeyException {
+    protected void engineInit(int opmode, Key key, SecureRandom random) throws InvalidKeyException {
         try {
             engineInit(opmode, key, (AlgorithmParameterSpec) null, random);
         } catch (InvalidAlgorithmParameterException e) {
@@ -217,7 +220,6 @@ public final class GostCipherSpi extends CipherSpi {
             throw new InvalidKeyException("Unexpected parameter error", e);
         }
     }
-
 
     /**
      * Обрабатывает часть входных данных.
@@ -243,7 +245,7 @@ public final class GostCipherSpi extends CipherSpi {
             return new byte[0];
         }
         int processLen = fullBlocks * BLOCK_SIZE;
-        byte[] result  = processCbcBlocks(inputBuffer, 0, processLen);
+        byte[] result = processCbcBlocks(inputBuffer, 0, processLen);
         // Оставляем хвост в буфере
         byte[] tail = Arrays.copyOfRange(inputBuffer, processLen, inputBuffer.length);
         inputBuffer = tail;
@@ -251,12 +253,13 @@ public final class GostCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected int engineUpdate(byte[] input, int inputOffset, int inputLen,
-                               byte[] output, int outputOffset) throws ShortBufferException {
+    protected int engineUpdate(
+            byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
+            throws ShortBufferException {
         byte[] result = engineUpdate(input, inputOffset, inputLen);
         if (result.length > output.length - outputOffset) {
-            throw new ShortBufferException("Output buffer too small: need "
-                + result.length + " bytes");
+            throw new ShortBufferException(
+                    "Output buffer too small: need " + result.length + " bytes");
         }
         System.arraycopy(result, 0, output, outputOffset, result.length);
         return result.length;
@@ -290,13 +293,13 @@ public final class GostCipherSpi extends CipherSpi {
     }
 
     @Override
-    protected int engineDoFinal(byte[] input, int inputOffset, int inputLen,
-                                byte[] output, int outputOffset)
+    protected int engineDoFinal(
+            byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
             throws ShortBufferException, IllegalBlockSizeException, BadPaddingException {
         byte[] result = engineDoFinal(input, inputOffset, inputLen);
         if (result.length > output.length - outputOffset) {
-            throw new ShortBufferException("Output buffer too small: need "
-                + result.length + " bytes");
+            throw new ShortBufferException(
+                    "Output buffer too small: need " + result.length + " bytes");
         }
         System.arraycopy(result, 0, output, outputOffset, result.length);
         return result.length;
@@ -306,7 +309,7 @@ public final class GostCipherSpi extends CipherSpi {
      * Создаёт и инициализирует блочный шифр с нужным режимом.
      */
     private void initCipher(SymmetricKey keyParam, byte[] iv) {
-        this.currentIv   = Arrays.copyOf(iv, iv.length);
+        this.currentIv = Arrays.copyOf(iv, iv.length);
         this.inputBuffer = new byte[0];
 
         ParametersWithIV params = new ParametersWithIV(keyParam, iv);
@@ -352,7 +355,7 @@ public final class GostCipherSpi extends CipherSpi {
             return out;
         }
         // CFB/OFB: блочная обработка
-        int outPos  = 0;
+        int outPos = 0;
         int fullBlocks = len / BLOCK_SIZE;
         // Обрабатываем полные блоки
         for (int i = 0; i < fullBlocks; i++) {
@@ -362,7 +365,7 @@ public final class GostCipherSpi extends CipherSpi {
         // Обрабатываем хвост (< BLOCK_SIZE байт) через буфер с нулевым дополнением
         int remaining = len - fullBlocks * BLOCK_SIZE;
         if (remaining > 0) {
-            byte[] tail    = new byte[BLOCK_SIZE];
+            byte[] tail = new byte[BLOCK_SIZE];
             byte[] tailOut = new byte[BLOCK_SIZE];
             System.arraycopy(data, offset + fullBlocks * BLOCK_SIZE, tail, 0, remaining);
             cipher.processBlock(tail, 0, tailOut, 0);
@@ -398,16 +401,18 @@ public final class GostCipherSpi extends CipherSpi {
         if (isPaddingNone()) {
             if (inputBuffer.length % BLOCK_SIZE != 0) {
                 throw new IllegalBlockSizeException(
-                    "CBC/NoPadding requires data length to be a multiple of "
-                    + BLOCK_SIZE + ", got " + inputBuffer.length);
+                        "CBC/NoPadding requires data length to be a multiple of "
+                                + BLOCK_SIZE
+                                + ", got "
+                                + inputBuffer.length);
             }
             paddedData = inputBuffer;
         } else if (isPkcs5OrPkcs7()) {
             paddedData = Pkcs7Padding.addPadding(inputBuffer, BLOCK_SIZE);
         } else {
             // ISO7816-4
-            int padLen    = BLOCK_SIZE - (inputBuffer.length % BLOCK_SIZE);
-            paddedData    = new byte[inputBuffer.length + padLen];
+            int padLen = BLOCK_SIZE - (inputBuffer.length % BLOCK_SIZE);
+            paddedData = new byte[inputBuffer.length + padLen];
             System.arraycopy(inputBuffer, 0, paddedData, 0, inputBuffer.length);
             ISO7816d4Padding.addPadding(paddedData, inputBuffer.length);
         }
@@ -417,8 +422,10 @@ public final class GostCipherSpi extends CipherSpi {
     private byte[] doFinalCbcDecrypt() throws IllegalBlockSizeException, BadPaddingException {
         if (inputBuffer.length % BLOCK_SIZE != 0) {
             throw new IllegalBlockSizeException(
-                "CBC ciphertext length must be a multiple of " + BLOCK_SIZE
-                + ", got " + inputBuffer.length);
+                    "CBC ciphertext length must be a multiple of "
+                            + BLOCK_SIZE
+                            + ", got "
+                            + inputBuffer.length);
         }
         if (inputBuffer.length == 0) {
             return new byte[0];
@@ -444,8 +451,8 @@ public final class GostCipherSpi extends CipherSpi {
     private void appendToBuffer(byte[] input, int offset, int len) {
         if (len <= 0) return;
         byte[] newBuf = new byte[inputBuffer.length + len];
-        System.arraycopy(inputBuffer, 0, newBuf, 0,                  inputBuffer.length);
-        System.arraycopy(input,       offset, newBuf, inputBuffer.length, len);
+        System.arraycopy(inputBuffer, 0, newBuf, 0, inputBuffer.length);
+        System.arraycopy(input, offset, newBuf, inputBuffer.length, len);
         inputBuffer = newBuf;
     }
 
@@ -469,8 +476,12 @@ public final class GostCipherSpi extends CipherSpi {
         int expectedLen = mode.equals(MODE_CTR) ? BLOCK_SIZE / 2 : BLOCK_SIZE;
         if (iv.length != expectedLen) {
             throw new InvalidAlgorithmParameterException(
-                "Invalid IV length for " + mode + ": expected " + expectedLen
-                + " bytes, got " + iv.length);
+                    "Invalid IV length for "
+                            + mode
+                            + ": expected "
+                            + expectedLen
+                            + " bytes, got "
+                            + iv.length);
         }
     }
 
@@ -490,15 +501,16 @@ public final class GostCipherSpi extends CipherSpi {
             if (encoded == null || encoded.length == 0) {
                 throw new InvalidKeyException("Key encoding is null or empty");
             }
-            if (encoded.length != 32) {
+            if (encoded.length != Kuznyechik.KEY_SIZE) {
                 throw new InvalidKeyException(
-                    "Kuznyechik requires 32-byte key, got " + encoded.length);
+                        "Kuznyechik requires 32-byte key, got " + encoded.length);
             }
             return new SymmetricKey(encoded);
         }
         throw new InvalidKeyException(
-            "Unsupported key type: " + key.getClass().getName()
-            + ". Expected GostSecretKey or SecretKey with RAW format");
+                "Unsupported key type: "
+                        + key.getClass().getName()
+                        + ". Expected GostSecretKey or SecretKey with RAW format");
     }
 
     private void checkInitialized() {

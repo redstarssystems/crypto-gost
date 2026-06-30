@@ -92,7 +92,7 @@ class BcEcdhCrossValidationTest {
         ECPrivateKeyParameters bcPrivB = (ECPrivateKeyParameters) bcB.getPrivate();
         ECPublicKeyParameters bcPubB = (ECPublicKeyParameters) bcB.getPublic();
 
-        // BC ключи → crypto-gost
+        // BC ключи -> crypto-gost
         PrivateKeyParameters gostPrivB = new PrivateKeyParameters(bcPrivB.getD(), params);
         PublicKeyParameters gostPubB = new PublicKeyParameters(
                 ECPoint.affine(bcPubB.getQ().getXCoord().toBigInteger(),

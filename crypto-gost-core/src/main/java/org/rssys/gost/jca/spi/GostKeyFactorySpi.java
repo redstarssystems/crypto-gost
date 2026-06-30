@@ -1,5 +1,14 @@
 package org.rssys.gost.jca.spi;
 
+import java.security.InvalidKeyException;
+import java.security.Key;
+import java.security.KeyFactorySpi;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.KeySpec;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jca.key.GostECPrivateKeySpec;
 import org.rssys.gost.jca.key.GostECPublicKey;
@@ -11,25 +20,15 @@ import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
-import java.security.InvalidKeyException;
-import java.security.Key;
-import java.security.KeyFactorySpi;
-import java.security.PrivateKey;
-import java.security.PublicKey;
-import java.security.spec.InvalidKeySpecException;
-import java.security.spec.KeySpec;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
-
 /**
  * Реализация {@link KeyFactorySpi} для ключей ГОСТ Р 34.10-2012.
  * <p>
  * Поддерживаемые преобразования:
  * <ul>
- *   <li>{@link X509EncodedKeySpec} → {@link GostECPublicKey} (DER SubjectPublicKeyInfo)</li>
- *   <li>{@link GostECPublicKeySpec} → {@link GostECPublicKey} (сырые координаты)</li>
- *   <li>{@link PKCS8EncodedKeySpec} → {@link GostECPrivateKey} (DER PrivateKeyInfo)</li>
- *   <li>{@link GostECPrivateKeySpec} → {@link GostECPrivateKey} (сырой скаляр d)</li>
+ *   <li>{@link X509EncodedKeySpec} -> {@link GostECPublicKey} (DER SubjectPublicKeyInfo)</li>
+ *   <li>{@link GostECPublicKeySpec} -> {@link GostECPublicKey} (сырые координаты)</li>
+ *   <li>{@link PKCS8EncodedKeySpec} -> {@link GostECPrivateKey} (DER PrivateKeyInfo)</li>
+ *   <li>{@link GostECPrivateKeySpec} -> {@link GostECPrivateKey} (сырой скаляр d)</li>
  * </ul>
  * <p>
  * Регистрируется в провайдере как {@code "ECGOST3410-2012"}.
@@ -52,7 +51,7 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
                 return new GostECPublicKey(params);
             } catch (Exception e) {
                 throw new InvalidKeySpecException(
-                    "Cannot decode X.509 SubjectPublicKeyInfo: " + e.getMessage(), e);
+                        "Cannot decode X.509 SubjectPublicKeyInfo: " + e.getMessage(), e);
             }
         }
         if (keySpec instanceof GostECPublicKeySpec) {
@@ -63,12 +62,13 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
                 return new GostECPublicKey(new PublicKeyParameters(q, curve));
             } catch (IllegalArgumentException e) {
                 throw new InvalidKeySpecException(
-                    "Invalid GostECPublicKeySpec: " + e.getMessage(), e);
+                        "Invalid GostECPublicKeySpec: " + e.getMessage(), e);
             }
         }
         throw new InvalidKeySpecException(
-            "Unsupported KeySpec type: " + keySpec.getClass().getName()
-            + ". Supported: X509EncodedKeySpec, GostECPublicKeySpec");
+                "Unsupported KeySpec type: "
+                        + keySpec.getClass().getName()
+                        + ". Supported: X509EncodedKeySpec, GostECPublicKeySpec");
     }
 
     /**
@@ -87,7 +87,7 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
                 return new GostECPrivateKey(params);
             } catch (Exception e) {
                 throw new InvalidKeySpecException(
-                    "Cannot decode PKCS#8 PrivateKeyInfo: " + e.getMessage(), e);
+                        "Cannot decode PKCS#8 PrivateKeyInfo: " + e.getMessage(), e);
             }
         }
         if (keySpec instanceof GostECPrivateKeySpec) {
@@ -98,12 +98,13 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
                 return new GostECPrivateKey(params);
             } catch (IllegalArgumentException e) {
                 throw new InvalidKeySpecException(
-                    "Invalid GostECPrivateKeySpec: " + e.getMessage(), e);
+                        "Invalid GostECPrivateKeySpec: " + e.getMessage(), e);
             }
         }
         throw new InvalidKeySpecException(
-            "Unsupported KeySpec type: " + keySpec.getClass().getName()
-            + ". Supported: PKCS8EncodedKeySpec, GostECPrivateKeySpec");
+                "Unsupported KeySpec type: "
+                        + keySpec.getClass().getName()
+                        + ". Supported: PKCS8EncodedKeySpec, GostECPrivateKeySpec");
     }
 
     /**
@@ -123,8 +124,9 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
             return getPrivateKeySpec((GostECPrivateKey) key, keyClass);
         }
         throw new InvalidKeySpecException(
-            "Unsupported key type: " + key.getClass().getName()
-            + ". Expected GostECPublicKey or GostECPrivateKey");
+                "Unsupported key type: "
+                        + key.getClass().getName()
+                        + ". Expected GostECPublicKey or GostECPrivateKey");
     }
 
     @SuppressWarnings("unchecked")
@@ -144,8 +146,9 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
             return (T) new GostECPublicKeySpec(q.getX(), q.getY(), oid);
         }
         throw new InvalidKeySpecException(
-            "Unsupported KeySpec class for public key: " + keyClass.getName()
-            + ". Supported: X509EncodedKeySpec, GostECPublicKeySpec");
+                "Unsupported KeySpec class for public key: "
+                        + keyClass.getName()
+                        + ". Supported: X509EncodedKeySpec, GostECPublicKeySpec");
     }
 
     @SuppressWarnings("unchecked")
@@ -164,8 +167,9 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
             return (T) new GostECPrivateKeySpec(params.getD(), oid);
         }
         throw new InvalidKeySpecException(
-            "Unsupported KeySpec class for private key: " + keyClass.getName()
-            + ". Supported: PKCS8EncodedKeySpec, GostECPrivateKeySpec");
+                "Unsupported KeySpec class for private key: "
+                        + keyClass.getName()
+                        + ". Supported: PKCS8EncodedKeySpec, GostECPrivateKeySpec");
     }
 
     /**
@@ -202,7 +206,6 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
                 }
             }
         }
-        throw new InvalidKeyException(
-            "Cannot translate key of type: " + key.getClass().getName());
+        throw new InvalidKeyException("Cannot translate key of type: " + key.getClass().getName());
     }
 }

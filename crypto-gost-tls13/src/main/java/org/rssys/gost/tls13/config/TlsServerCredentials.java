@@ -1,10 +1,8 @@
 package org.rssys.gost.tls13.config;
 
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-
-import java.util.Arrays;
 import java.util.List;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.signature.PrivateKeyParameters;
 
 /**
  * Набор учётных данных сервера для выбора по SNI: цепочка сертификатов,
@@ -16,7 +14,7 @@ import java.util.List;
  */
 public final class TlsServerCredentials {
 
-    private final List<TlsCertificate> certificateChain;
+    private final List<GostCertificate> certificateChain;
     private final PrivateKeyParameters privateKey;
     private final byte[] ocspResponse;
 
@@ -25,9 +23,10 @@ public final class TlsServerCredentials {
      * @param privateKey       закрытый ключ для CertificateVerify
      * @param ocspResponse     raw OCSP-ответ DER (может быть null)
      */
-    public TlsServerCredentials(List<TlsCertificate> certificateChain,
-                                PrivateKeyParameters privateKey,
-                                byte[] ocspResponse) {
+    public TlsServerCredentials(
+            List<GostCertificate> certificateChain,
+            PrivateKeyParameters privateKey,
+            byte[] ocspResponse) {
         if (certificateChain == null || certificateChain.isEmpty()) {
             throw new IllegalArgumentException("certificateChain must not be null or empty");
         }
@@ -42,7 +41,7 @@ public final class TlsServerCredentials {
     /**
      * @return цепочка сертификатов (leaf первый, root последний)
      */
-    public List<TlsCertificate> getCertificateChain() {
+    public List<GostCertificate> getCertificateChain() {
         return certificateChain;
     }
 
@@ -62,7 +61,8 @@ public final class TlsServerCredentials {
 
     @Override
     public String toString() {
-        return "TlsServerCredentials{certificateChain=" + certificateChain.size()
+        return "TlsServerCredentials{certificateChain="
+                + certificateChain.size()
                 + " cert(s), privateKey=<redacted>"
                 + (ocspResponse != null ? ", ocspResponse=" + ocspResponse.length + " bytes" : "")
                 + '}';

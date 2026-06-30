@@ -2,6 +2,11 @@ package org.rssys.gost.jsse.engine;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import java.nio.ByteBuffer;
+import java.security.Security;
+import java.util.List;
+import javax.net.ssl.SSLException;
+import org.junit.jupiter.api.BeforeAll;
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
@@ -11,11 +16,6 @@ import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsTestHelper;
-
-import org.junit.jupiter.api.BeforeAll;
-import javax.net.ssl.SSLException;
-import java.nio.ByteBuffer;
-import java.security.Security;
 
 /**
  * Fuzz-тесты для {@link GostSSLEngine#unwrap}.
@@ -33,8 +33,7 @@ import java.security.Security;
  */
 class GostSSLEngineUnwrapFuzzTest {
 
-    private static final int PLAINTEXT_BUF =
-            TlsConstants.MAX_PLAINTEXT_LENGTH + 64;
+    private static final int PLAINTEXT_BUF = TlsConstants.MAX_PLAINTEXT_LENGTH + 64;
 
     private static GostX509KeyManager serverKm;
     private static TlsTestHelper.CertBundle serverCert;
@@ -54,14 +53,23 @@ class GostSSLEngineUnwrapFuzzTest {
         rootCa = TlsTestHelper.createRootCA(params);
         PublicKeyParameters caPub = rootCa.cert.getPublicKey();
 
-        serverCert = TlsTestHelper.createCertSignedBy(
-                params, rootCa.priv, caPub, rootCa.subjectDn,
-                "20240501120000Z", "21060101120000Z",
-                new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
-                false, null);
+        serverCert =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        rootCa.priv,
+                        caPub,
+                        rootCa.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"localhost"},
+                        new byte[] {(byte) 0x80},
+                        null,
+                        false,
+                        null);
 
         serverKm = new GostX509KeyManager();
-        java.security.cert.X509Certificate[] chain = CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert);
+        java.security.cert.X509Certificate[] chain =
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert));
         serverKm.addKeyEntry("default", chain, serverCert.priv);
     }
 
@@ -112,9 +120,7 @@ class GostSSLEngineUnwrapFuzzTest {
     // ========================================================================
 
     private static GostSSLEngine createServerEngine() {
-        return new GostSSLEngine(serverKm,
-                new GostX509TrustManager(null, false),
-                "localhost", 0, false);
+        return new GostSSLEngine(
+                serverKm, new GostX509TrustManager(null, false), "localhost", 0, false);
     }
-
 }

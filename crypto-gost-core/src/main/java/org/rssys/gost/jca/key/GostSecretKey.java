@@ -1,14 +1,13 @@
 package org.rssys.gost.jca.key;
 
-import org.rssys.gost.cipher.SymmetricKey;
-
-import javax.crypto.SecretKey;
-import javax.security.auth.Destroyable;
 import java.io.IOException;
 import java.io.NotSerializableException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.Arrays;
+import javax.crypto.SecretKey;
+import javax.security.auth.Destroyable;
+import org.rssys.gost.cipher.SymmetricKey;
 
 /**
  * Симметричный ключ ГОСТ-алгоритмов, реализующий {@link SecretKey}.
@@ -65,7 +64,7 @@ public final class GostSecretKey implements SecretKey, Destroyable {
             throw new IllegalArgumentException("Key bytes must not be null or empty");
         }
         this.algorithm = algorithm;
-        this.keyBytes  = Arrays.copyOf(keyBytes, keyBytes.length);
+        this.keyBytes = Arrays.copyOf(keyBytes, keyBytes.length);
     }
 
     /**
@@ -102,7 +101,6 @@ public final class GostSecretKey implements SecretKey, Destroyable {
         checkNotDestroyed();
         return Arrays.copyOf(keyBytes, keyBytes.length);
     }
-
 
     /**
      * Обнуляет ключевой материал в памяти.

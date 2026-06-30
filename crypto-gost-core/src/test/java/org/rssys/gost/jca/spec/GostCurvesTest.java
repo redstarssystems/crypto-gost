@@ -1,12 +1,12 @@
 package org.rssys.gost.jca.spec;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.signature.ECParameters;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.signature.ECParameters;
 
 @DisplayName("GostCurves — реестр кривых и OID")
 class GostCurvesTest {
@@ -14,11 +14,17 @@ class GostCurvesTest {
     @Test
     @DisplayName("oidOf() возвращает CryptoPro OID, не TC26-алиас")
     void oidOfReturnsCanonicalCryptoProOid() {
-        assertEquals(GostCurves.OID_CRYPTOPRO_A, GostCurves.oidOf(ECParameters.cryptoProA()),
+        assertEquals(
+                GostCurves.OID_CRYPTOPRO_A,
+                GostCurves.oidOf(ECParameters.cryptoProA()),
                 "cryptoProA должен кодироваться с CryptoPro-A OID, не TC26-алиасом");
-        assertEquals(GostCurves.OID_CRYPTOPRO_B, GostCurves.oidOf(ECParameters.cryptoProB()),
+        assertEquals(
+                GostCurves.OID_CRYPTOPRO_B,
+                GostCurves.oidOf(ECParameters.cryptoProB()),
                 "cryptoProB должен кодироваться с CryptoPro-B OID, не TC26-алиасом");
-        assertEquals(GostCurves.OID_CRYPTOPRO_C, GostCurves.oidOf(ECParameters.cryptoProC()),
+        assertEquals(
+                GostCurves.OID_CRYPTOPRO_C,
+                GostCurves.oidOf(ECParameters.cryptoProC()),
                 "cryptoProC должен кодироваться с CryptoPro-C OID, не TC26-алиасом");
     }
 
@@ -36,15 +42,24 @@ class GostCurvesTest {
     void byNameTc26AliasReturnsSameParamsAsCryptoPro() {
         ECParameters cpa = GostCurves.byName(GostCurves.OID_CRYPTOPRO_A);
         ECParameters t26b = GostCurves.byName(GostCurves.OID_TC26_B_256);
-        assertSame(cpa, t26b, "TC26-B-256 должен разрешаться в тот же ECParameters, что и CryptoPro-A");
+        assertSame(
+                cpa,
+                t26b,
+                "TC26-B-256 должен разрешаться в тот же ECParameters, что и CryptoPro-A");
 
         ECParameters cpb = GostCurves.byName(GostCurves.OID_CRYPTOPRO_B);
         ECParameters t26c = GostCurves.byName(GostCurves.OID_TC26_C_256);
-        assertSame(cpb, t26c, "TC26-C-256 должен разрешаться в тот же ECParameters, что и CryptoPro-B");
+        assertSame(
+                cpb,
+                t26c,
+                "TC26-C-256 должен разрешаться в тот же ECParameters, что и CryptoPro-B");
 
         ECParameters cpc = GostCurves.byName(GostCurves.OID_CRYPTOPRO_C);
         ECParameters t26d = GostCurves.byName(GostCurves.OID_TC26_D_256);
-        assertSame(cpc, t26d, "TC26-D-256 должен разрешаться в тот же ECParameters, что и CryptoPro-C");
+        assertSame(
+                cpc,
+                t26d,
+                "TC26-D-256 должен разрешаться в тот же ECParameters, что и CryptoPro-C");
     }
 
     @Test

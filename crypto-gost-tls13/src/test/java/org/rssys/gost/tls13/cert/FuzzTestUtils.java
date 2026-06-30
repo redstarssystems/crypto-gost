@@ -11,8 +11,7 @@ package org.rssys.gost.tls13.cert;
  */
 final class FuzzTestUtils {
 
-    private FuzzTestUtils() {
-    }
+    private FuzzTestUtils() {}
 
     /**
      * Перебрасывает RuntimeException, если это баг (AIOOBE, NPE,

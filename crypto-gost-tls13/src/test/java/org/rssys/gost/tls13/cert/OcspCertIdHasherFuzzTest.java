@@ -2,12 +2,13 @@ package org.rssys.gost.tls13.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.pkix.cert.CertIdHasher;
 
 /**
- * Fuzz-тесты для {@link OcspCertIdHasher}.
+ * Fuzz-тесты для {@link CertIdHasher}.
  * <p>
- * Хешеры CertID вызывают TlsDerParser.readTlv на внешнем DER-сертификате
- * (issuerNameHash, issuerKeyHash). TlsDerParser не проверяет границы —
+ * Хешеры CertID вызывают GostDerParser.readTlv на внешнем DER-сертификате
+ * (issuerNameHash, issuerKeyHash). GostDerParser не проверяет границы —
  * AIOOBE на битом сертификате гарантирован.
  * <p>
  * ПОЧЕМУ ловим RuntimeException: как и в TlsDerParserFuzzTest,
@@ -17,14 +18,14 @@ class OcspCertIdHasherFuzzTest {
 
     /**
      * hashIssuerName(certDer) — извлекает subject DN и хеширует его Streebog-256.
-     * Внутри: TlsDerParser.parseSequence, readTlv на внешнем сертификате.
+     * Внутри: GostDerParser.parseSequence, readTlv на внешнем сертификате.
      */
     @FuzzTest
     void fuzzHashIssuerName(FuzzedDataProvider data) {
         byte[] input = data.consumeRemainingAsBytes();
         if (input.length == 0) return;
         try {
-            OcspCertIdHasher.hashIssuerName(input);
+            CertIdHasher.hashIssuerName(input);
         } catch (RuntimeException e) {
             FuzzTestUtils.rethrowIfBug(e);
         }
@@ -32,7 +33,7 @@ class OcspCertIdHasherFuzzTest {
 
     /**
      * hashIssuerPublicKey(certDer) — извлекает SubjectPublicKeyInfo BIT STRING value
-     * и хеширует его Streebog-256. Вызывает TlsDerParser.readTlv для навигации
+     * и хеширует его Streebog-256. Вызывает GostDerParser.readTlv для навигации
      * по DER сертификата.
      */
     @FuzzTest
@@ -40,7 +41,7 @@ class OcspCertIdHasherFuzzTest {
         byte[] input = data.consumeRemainingAsBytes();
         if (input.length == 0) return;
         try {
-            OcspCertIdHasher.hashIssuerPublicKey(input);
+            CertIdHasher.hashIssuerPublicKey(input);
         } catch (RuntimeException e) {
             FuzzTestUtils.rethrowIfBug(e);
         }

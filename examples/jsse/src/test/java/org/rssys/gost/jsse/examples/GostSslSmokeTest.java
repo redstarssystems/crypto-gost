@@ -1,13 +1,7 @@
 package org.rssys.gost.jsse.examples;
 
-import org.junit.jupiter.api.*;
-import org.rssys.gost.jsse.GostSsl;
-import org.rssys.gost.jsse.GostSslDev;
-import org.rssys.gost.jsse.GostSslException;
+import static org.junit.jupiter.api.Assertions.*;
 
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLServerSocket;
-import javax.net.ssl.SSLSocket;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.Security;
@@ -15,8 +9,13 @@ import java.util.Base64;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-
-import static org.junit.jupiter.api.Assertions.*;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLSocket;
+import org.junit.jupiter.api.*;
+import org.rssys.gost.jsse.GostSsl;
+import org.rssys.gost.jsse.GostSslDev;
+import org.rssys.gost.jsse.GostSslException;
 
 /**
  * Smoke-тест {@link GostSsl}: все публичные методы через real TLS-соединение.
@@ -80,21 +79,23 @@ class GostSslSmokeTest {
         AtomicReference<Exception> serverErr = new AtomicReference<>();
         CountDownLatch done = new CountDownLatch(1);
 
-        Thread.ofVirtual().start(() -> {
-            try (SSLSocket accepted = (SSLSocket) ss.accept()) {
-                accepted.startHandshake();
-                InputStream in = accepted.getInputStream();
-                OutputStream out = accepted.getOutputStream();
-                byte[] buf = new byte[1024];
-                int n = in.read(buf);
-                out.write(buf, 0, n);
-                out.flush();
-            } catch (Exception e) {
-                serverErr.set(e);
-            } finally {
-                done.countDown();
-            }
-        });
+        Thread.ofVirtual()
+                .start(
+                        () -> {
+                            try (SSLSocket accepted = (SSLSocket) ss.accept()) {
+                                accepted.startHandshake();
+                                InputStream in = accepted.getInputStream();
+                                OutputStream out = accepted.getOutputStream();
+                                byte[] buf = new byte[1024];
+                                int n = in.read(buf);
+                                out.write(buf, 0, n);
+                                out.flush();
+                            } catch (Exception e) {
+                                serverErr.set(e);
+                            } finally {
+                                done.countDown();
+                            }
+                        });
 
         SSLSocket cli = GostSsl.socket("localhost", port, cliCtx);
         cli.getOutputStream().write("PING".getBytes());
@@ -138,21 +139,20 @@ class GostSslSmokeTest {
     @Test
     @DisplayName("GostSsl.builder() — сервер через builder")
     void builderServer() {
-        SSLContext ctx = GostSsl.builder()
-                .certificate(certDer, keyDer)
-                .trustCa(caDer)
-                .sessionCacheSize(5000)
-                .buildServerContext();
+        SSLContext ctx =
+                GostSsl.builder()
+                        .certificate(certDer, keyDer)
+                        .trustCa(caDer)
+                        .sessionCacheSize(5000)
+                        .buildServerContext();
         assertNotNull(ctx);
     }
 
     @Test
     @DisplayName("GostSsl.builder() — клиент через builder")
     void builderClient() {
-        SSLContext ctx = GostSsl.builder()
-                .certificate(certDer, keyDer)
-                .trustCa(caDer)
-                .buildClientContext();
+        SSLContext ctx =
+                GostSsl.builder().certificate(certDer, keyDer).trustCa(caDer).buildClientContext();
         assertNotNull(ctx);
     }
 
@@ -167,13 +167,12 @@ class GostSslSmokeTest {
     }
 
     @Test
-    @DisplayName("GostSsl.verifyServer() — неверный CA → GostSslException")
+    @DisplayName("GostSsl.verifyServer() — неверный CA -> GostSslException")
     void verifyServerWrongCa() {
-        // WHY: передаём серверный сертификат вместо CA —
+        // передаём серверный сертификат вместо CA —
         // он не является CA и не подписывал серверный cert,
         // поэтому verifyServer должен бросить GostSslException
-        assertThrows(GostSslException.class,
-                () -> GostSsl.verifyServer(certPem, keyPem, certPem));
+        assertThrows(GostSslException.class, () -> GostSsl.verifyServer(certPem, keyPem, certPem));
     }
 
     // ========================================================================
@@ -183,8 +182,9 @@ class GostSslSmokeTest {
     @Test
     @DisplayName("GostSsl.serverContext — неверный ключ")
     void invalidKey() {
-        assertThrows(GostSslException.class,
-                () -> GostSsl.serverContext(certDer, new byte[]{1, 2, 3}, caDer));
+        assertThrows(
+                GostSslException.class,
+                () -> GostSsl.serverContext(certDer, new byte[] {1, 2, 3}, caDer));
     }
 
     // ========================================================================
@@ -192,8 +192,12 @@ class GostSslSmokeTest {
     // ========================================================================
 
     private static String pem(byte[] der, String type) {
-        return "-----BEGIN " + type + "-----\n"
+        return "-----BEGIN "
+                + type
+                + "-----\n"
                 + Base64.getEncoder().encodeToString(der)
-                + "\n-----END " + type + "-----";
+                + "\n-----END "
+                + type
+                + "-----";
     }
 }

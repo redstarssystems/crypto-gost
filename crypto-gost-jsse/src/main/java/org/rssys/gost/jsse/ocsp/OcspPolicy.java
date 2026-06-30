@@ -34,7 +34,7 @@ public enum OcspPolicy {
      *              установлен — fail-closed (сертификат считается
      *              невалидным);
      *          (4) HTTP-запросы только http:// (не https) из-за
- *          chicken-and-egg проблема.
+     *          chicken-and-egg проблема.
      */
     STAPLING_OR_FETCH
 }

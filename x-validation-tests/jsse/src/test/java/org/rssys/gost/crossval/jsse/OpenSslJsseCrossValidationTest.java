@@ -42,7 +42,7 @@ import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@DisplayName("JSSE: кросс-валидация crypto-gost JSSE ↔ OpenSSL")
+@DisplayName("JSSE: кросс-валидация crypto-gost JSSE <-> OpenSSL")
 class OpenSslJsseCrossValidationTest {
 
     private static final String SUITE_L = "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L";
@@ -186,7 +186,7 @@ class OpenSslJsseCrossValidationTest {
     @DisplayName("Dual-engine по TCP: клиент GC256A \u2192 сервер GC512C \u2192 HRR \u2192 handshake")
     void testEngineClientHrr() throws Exception {
         // Два GostSSLEngine через реальный TCP. Клиент шлёт key_share=GC256A,
-        // сервер предпочитает GC512C — несовпадение → сервер отправляет HRR.
+        // сервер предпочитает GC512C — несовпадение -> сервер отправляет HRR.
         // Проверяет сериализацию/десериализацию HRR-фреймов через реальный
         // транспорт (не in-memory, как в unit-тестах TlsHandshakeEngineTest).
         runEngineTcpHrrTest();
@@ -419,7 +419,7 @@ class OpenSslJsseCrossValidationTest {
 
                     if (keyUpdate) {
                         engine.initiateKeyUpdate(false);
-                        java.nio.ByteBuffer netBuf = java.nio.ByteBuffer.allocate(16640 + 64);
+                        java.nio.ByteBuffer netBuf = java.nio.ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
                         netBuf.clear();
                         engine.wrap(java.nio.ByteBuffer.allocate(0), netBuf);
                         netBuf.flip();
@@ -443,7 +443,7 @@ class OpenSslJsseCrossValidationTest {
                                 + "\r\n"
                                 + "INTEROP_OK";
 
-                        java.nio.ByteBuffer netBuf = java.nio.ByteBuffer.allocate(16640 + 64);
+                        java.nio.ByteBuffer netBuf = java.nio.ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
                         engine.wrap(java.nio.ByteBuffer.wrap(resp.getBytes(StandardCharsets.UTF_8)), netBuf);
                         netBuf.flip();
                         while (netBuf.hasRemaining()) {

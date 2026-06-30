@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@DisplayName("JSSE: кросс-валидация mTLS серверов приложений ↔ OpenSSL s_client -cert")
+@DisplayName("JSSE: кросс-валидация mTLS серверов приложений <-> OpenSSL s_client -cert")
 class TomcatJettyMtlsCrossValTest {
 
     @BeforeAll
@@ -39,7 +39,7 @@ class TomcatJettyMtlsCrossValTest {
             "TOMCAT, TomcatTestSSLImpl",
             "JETTY, SslContextFactory.Server"
     })
-    @DisplayName("mTLS: сервер + s_client -cert → INTEROP_OK")
+    @DisplayName("mTLS: сервер + s_client -cert -> INTEROP_OK")
     void testMtls(String serverTypeName, String impl) throws Exception {
         // Используем TempDirUtils для автоматической очистки файлов сертификатов
         TempDirUtils.withTempDir("jsse-server-mtls-", tmpDir -> {

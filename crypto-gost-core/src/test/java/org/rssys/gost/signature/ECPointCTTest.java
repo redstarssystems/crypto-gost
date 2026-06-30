@@ -1,11 +1,10 @@
 package org.rssys.gost.signature;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigInteger;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 
 @DisplayName("ECPoint constant-time: twice() без data-dependent ветвлений")
 class ECPointCTTest {
@@ -28,13 +27,13 @@ class ECPointCTTest {
         ECParameters p = ECParameters.tc26a256();
         ECPoint G = ECPoint.affine(p.gx, p.gy, p);
 
-        BigInteger k3    = BigInteger.valueOf(3);
-        BigInteger kMid  = BigInteger.ONE.shiftLeft(128);
+        BigInteger k3 = BigInteger.valueOf(3);
+        BigInteger kMid = BigInteger.ONE.shiftLeft(128);
         BigInteger kHigh = p.n.subtract(BigInteger.ONE);
         BigInteger kHalf = p.n.shiftRight(1);
 
-        // (n-1)*G = -G → нормализованный должен быть на кривой, не ∞
-        // (n-1)*G + G = n*G = ∞ → (n-1)*G != ∞
+        // (n-1)*G = -G -> нормализованный должен быть на кривой, не ∞
+        // (n-1)*G + G = n*G = ∞ -> (n-1)*G != ∞
         ECPoint rHigh = G.multiply(kHigh).normalize();
         assertFalse(rHigh.isInfinity(), "(n-1)*G ≠ ∞");
         // (n-1)*G + G = ∞
@@ -65,25 +64,24 @@ class ECPointCTTest {
     @DisplayName("Все кривые: multiply(k) даёт точки на кривой")
     void testMultiplyOnAllCurves() {
         ECParameters[] curves = {
-                ECParameters.tc26a256(),
-                ECParameters.tc26a512(),
-                ECParameters.tc26b512(),
-                ECParameters.tc26c512(),
-                ECParameters.cryptoProA(),
-                ECParameters.cryptoProB(),
-                ECParameters.cryptoProC()
+            ECParameters.tc26a256(),
+            ECParameters.tc26a512(),
+            ECParameters.tc26b512(),
+            ECParameters.tc26c512(),
+            ECParameters.cryptoProA(),
+            ECParameters.cryptoProB(),
+            ECParameters.cryptoProC()
         };
         BigInteger[] scalars = {
-                BigInteger.valueOf(3),
-                BigInteger.valueOf(7),
-                BigInteger.ONE.shiftLeft(128),
+            BigInteger.valueOf(3), BigInteger.valueOf(7), BigInteger.ONE.shiftLeft(128),
         };
         for (ECParameters p : curves) {
             ECPoint G = ECPoint.affine(p.gx, p.gy, p);
             for (BigInteger k : scalars) {
                 if (k.compareTo(p.n) >= 0) continue;
                 ECPoint r = G.multiply(k).normalize();
-                assertTrue(r.isOnCurve(),
+                assertTrue(
+                        r.isOnCurve(),
                         "k*G на кривой: " + p.p.toString(16).substring(0, 8) + "... k=" + k);
             }
         }
@@ -93,16 +91,15 @@ class ECPointCTTest {
     @DisplayName("multiply(k): n*G = ∞ для всех кривых")
     void testOrderOfBasePoint() {
         ECParameters[] curves = {
-                ECParameters.tc26a256(),
-                ECParameters.tc26a512(),
-                ECParameters.tc26b512(),
-                ECParameters.tc26c512(),
+            ECParameters.tc26a256(),
+            ECParameters.tc26a512(),
+            ECParameters.tc26b512(),
+            ECParameters.tc26c512(),
         };
         for (ECParameters p : curves) {
             ECPoint G = ECPoint.affine(p.gx, p.gy, p);
             ECPoint r = G.multiply(p.n).normalize();
-            assertTrue(r.isInfinity(),
-                    "n*G = ∞: " + p.p.toString(16).substring(0, 8) + "...");
+            assertTrue(r.isInfinity(), "n*G = ∞: " + p.p.toString(16).substring(0, 8) + "...");
         }
     }
 }

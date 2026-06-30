@@ -4,7 +4,6 @@ import io.netty.handler.ssl.ApplicationProtocolConfig;
 import io.netty.handler.ssl.CipherSuiteFilter;
 import io.netty.handler.ssl.ClientAuth;
 import io.netty.handler.ssl.JdkSslContext;
-
 import javax.net.ssl.SSLContext;
 
 /**
@@ -17,10 +16,15 @@ import javax.net.ssl.SSLContext;
  */
 public final class GostSslContext extends JdkSslContext {
 
-    GostSslContext(SSLContext sslContext, boolean isClient,
-                   Iterable<String> ciphers, CipherSuiteFilter cipherFilter,
-                   ApplicationProtocolConfig apn, ClientAuth clientAuth,
-                   String[] protocols, boolean startTls) {
+    GostSslContext(
+            SSLContext sslContext,
+            boolean isClient,
+            Iterable<String> ciphers,
+            CipherSuiteFilter cipherFilter,
+            ApplicationProtocolConfig apn,
+            ClientAuth clientAuth,
+            String[] protocols,
+            boolean startTls) {
         super(sslContext, isClient, ciphers, cipherFilter, apn, clientAuth, protocols, startTls);
     }
 }

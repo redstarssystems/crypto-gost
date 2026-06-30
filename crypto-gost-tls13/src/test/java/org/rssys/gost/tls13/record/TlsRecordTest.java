@@ -1,6 +1,11 @@
 package org.rssys.gost.tls13.record;
-import org.rssys.gost.tls13.*;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.rssys.gost.tls13.TlsTestHelper.hex;
+import static org.rssys.gost.tls13.TlsTestHelper.hexStr;
+
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -9,16 +14,10 @@ import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.mode.Mgm;
+import org.rssys.gost.tls13.*;
 import org.rssys.gost.tls13.crypto.TlsTree;
 import org.rssys.gost.util.AuthenticationException;
-
-import java.nio.ByteBuffer;
 import org.rssys.gost.util.CryptoRandom;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.rssys.gost.tls13.TlsTestHelper.hex;
-import static org.rssys.gost.tls13.TlsTestHelper.hexStr;
 
 /**
  * Тесты TlsRecord — уровень записей TLS 1.3 с MGM AEAD (RFC 8446 §5).
@@ -66,14 +65,24 @@ class TlsRecordTest {
         byte[] key = randomKey();
         byte[] iv = randomIv();
         return new RecordPair(
-                new TlsRecord(key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
-                new TlsRecord(key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
     }
 
     private static RecordPair fixedPair() {
         return new RecordPair(
-                new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
-                new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
     }
 
     private static final class RecordPair {
@@ -104,11 +113,11 @@ class TlsRecordTest {
         RecordPair pair = newPair();
         byte[] handshakeData = "hello from client".getBytes();
 
-        byte[] protectedRecord = pair.protect(
-                TlsConstants.CT_HANDSHAKE, handshakeData);
+        byte[] protectedRecord = pair.protect(TlsConstants.CT_HANDSHAKE, handshakeData);
         assertNotNull(protectedRecord);
 
-        assertEquals(TlsConstants.RECORD_HEADER_SIZE + handshakeData.length + 1 + 16,
+        assertEquals(
+                TlsConstants.RECORD_HEADER_SIZE + handshakeData.length + 1 + 16,
                 protectedRecord.length);
 
         TlsParsedRecord parsed = pair.unprotect(protectedRecord);
@@ -123,8 +132,7 @@ class TlsRecordTest {
         byte[] appData = new byte[100];
         CryptoRandom.INSTANCE.nextBytes(appData);
 
-        byte[] protectedRecord = pair.protect(
-                TlsConstants.CT_APPLICATION_DATA, appData);
+        byte[] protectedRecord = pair.protect(TlsConstants.CT_APPLICATION_DATA, appData);
 
         TlsParsedRecord parsed = pair.unprotect(protectedRecord);
         assertEquals(TlsConstants.CT_APPLICATION_DATA, parsed.getContentType());
@@ -132,13 +140,12 @@ class TlsRecordTest {
     }
 
     @Test
-    @DisplayName("protect/unprotect alert")
+    @DisplayName("защита/расшифровка алерта")
     void testProtectUnprotectAlert() throws Exception {
         RecordPair pair = newPair();
-        byte[] alertData = new byte[]{1, 40};
+        byte[] alertData = new byte[] {1, 40};
 
-        byte[] protectedRecord = pair.protect(
-                TlsConstants.CT_ALERT, alertData);
+        byte[] protectedRecord = pair.protect(TlsConstants.CT_ALERT, alertData);
 
         TlsParsedRecord parsed = pair.unprotect(protectedRecord);
         assertEquals(TlsConstants.CT_ALERT, parsed.getContentType());
@@ -151,8 +158,7 @@ class TlsRecordTest {
         RecordPair pair = newPair();
         byte[] emptyData = new byte[0];
 
-        byte[] protectedRecord = pair.protect(
-                TlsConstants.CT_HANDSHAKE, emptyData);
+        byte[] protectedRecord = pair.protect(TlsConstants.CT_HANDSHAKE, emptyData);
 
         TlsParsedRecord parsed = pair.unprotect(protectedRecord);
         assertEquals(TlsConstants.CT_HANDSHAKE, parsed.getContentType());
@@ -167,8 +173,7 @@ class TlsRecordTest {
         byte[] maxData = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH - 1];
         CryptoRandom.INSTANCE.nextBytes(maxData);
 
-        byte[] protectedRecord = pair.protect(
-                TlsConstants.CT_APPLICATION_DATA, maxData);
+        byte[] protectedRecord = pair.protect(TlsConstants.CT_APPLICATION_DATA, maxData);
 
         TlsParsedRecord parsed = pair.unprotect(protectedRecord);
         assertEquals(TlsConstants.CT_APPLICATION_DATA, parsed.getContentType());
@@ -182,13 +187,18 @@ class TlsRecordTest {
     @Test
     @DisplayName("порядковый номер увеличивается после каждого protect")
     void testSequenceNumberIncrementsOnProtect() {
-        TlsRecord writer = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord writer =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         assertEquals(0, writer.getSequenceNumber());
 
-        writer.protect(TlsConstants.CT_HANDSHAKE, new byte[]{1, 2, 3});
+        writer.protect(TlsConstants.CT_HANDSHAKE, new byte[] {1, 2, 3});
         assertEquals(1, writer.getSequenceNumber());
 
-        writer.protect(TlsConstants.CT_HANDSHAKE, new byte[]{4, 5, 6});
+        writer.protect(TlsConstants.CT_HANDSHAKE, new byte[] {4, 5, 6});
         assertEquals(2, writer.getSequenceNumber());
     }
 
@@ -197,7 +207,7 @@ class TlsRecordTest {
     void testSequenceNumberIncrementsOnUnprotect() throws Exception {
         RecordPair pair = fixedPair();
 
-        byte[] rec = pair.protect(TlsConstants.CT_HANDSHAKE, new byte[]{1});
+        byte[] rec = pair.protect(TlsConstants.CT_HANDSHAKE, new byte[] {1});
 
         assertEquals(0, pair.reader.getSequenceNumber());
         TlsParsedRecord parsed = pair.unprotect(rec);
@@ -212,16 +222,21 @@ class TlsRecordTest {
         byte[] iv = fixedIv();
         byte[] data = "same data".getBytes();
 
-        TlsRecord r0 = new TlsRecord(key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        TlsRecord r1 = new TlsRecord(key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord r0 =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord r1 =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         r1.setSequenceNumber(1);
 
         byte[] ct0 = r0.protect(TlsConstants.CT_HANDSHAKE, data);
         byte[] ct1 = r1.protect(TlsConstants.CT_HANDSHAKE, data);
 
-        assertFalse(Arrays.equals(
-                Arrays.copyOfRange(ct0, 5, ct0.length),
-                Arrays.copyOfRange(ct1, 5, ct1.length)));
+        assertFalse(
+                Arrays.equals(
+                        Arrays.copyOfRange(ct0, 5, ct0.length),
+                        Arrays.copyOfRange(ct1, 5, ct1.length)));
     }
 
     @Test
@@ -244,8 +259,18 @@ class TlsRecordTest {
     void testDeterministicEncryption() {
         byte[] data = "deterministic".getBytes();
 
-        TlsRecord w1 = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        TlsRecord w2 = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord w1 =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord w2 =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
 
         byte[] ct1 = w1.protect(TlsConstants.CT_HANDSHAKE, data);
         byte[] ct2 = w2.protect(TlsConstants.CT_HANDSHAKE, data);
@@ -263,13 +288,11 @@ class TlsRecordTest {
         RecordPair pair = fixedPair();
         byte[] data = "sensitive data".getBytes();
 
-        byte[] protectedRecord = pair.protect(
-                TlsConstants.CT_APPLICATION_DATA, data);
+        byte[] protectedRecord = pair.protect(TlsConstants.CT_APPLICATION_DATA, data);
 
         protectedRecord[TlsConstants.RECORD_HEADER_SIZE + 4] ^= 0x42;
 
-        assertThrows(AuthenticationException.class,
-                () -> pair.unprotect(protectedRecord));
+        assertThrows(AuthenticationException.class, () -> pair.unprotect(protectedRecord));
     }
 
     @Test
@@ -278,13 +301,11 @@ class TlsRecordTest {
         RecordPair pair = fixedPair();
         byte[] data = "important data".getBytes();
 
-        byte[] protectedRecord = pair.protect(
-                TlsConstants.CT_APPLICATION_DATA, data);
+        byte[] protectedRecord = pair.protect(TlsConstants.CT_APPLICATION_DATA, data);
 
         protectedRecord[protectedRecord.length - 1] ^= 0xFF;
 
-        assertThrows(AuthenticationException.class,
-                () -> pair.unprotect(protectedRecord));
+        assertThrows(AuthenticationException.class, () -> pair.unprotect(protectedRecord));
     }
 
     @Test
@@ -293,13 +314,11 @@ class TlsRecordTest {
         RecordPair pair = fixedPair();
         byte[] data = "data".getBytes();
 
-        byte[] protectedRecord = pair.protect(
-                TlsConstants.CT_HANDSHAKE, data);
+        byte[] protectedRecord = pair.protect(TlsConstants.CT_HANDSHAKE, data);
 
         protectedRecord[0] = TlsConstants.CT_ALERT;
 
-        assertThrows(AuthenticationException.class,
-                () -> pair.unprotect(protectedRecord));
+        assertThrows(AuthenticationException.class, () -> pair.unprotect(protectedRecord));
     }
 
     // -----------------------------------------------------------------------
@@ -309,37 +328,57 @@ class TlsRecordTest {
     @Test
     @DisplayName("слишком короткая запись вызывает исключение")
     void testRecordTooShortThrows() {
-        TlsRecord reader = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord reader =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] tooShort = new byte[TlsConstants.RECORD_HEADER_SIZE + 1];
 
-        assertThrows(IllegalArgumentException.class,
-                () -> reader.unprotect(tooShort));
+        assertThrows(IllegalArgumentException.class, () -> reader.unprotect(tooShort));
     }
 
     @Test
     @DisplayName("null данные в protect вызывают исключение")
     void testNullDataInProtectThrows() {
-        TlsRecord writer = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        assertThrows(IllegalArgumentException.class,
+        TlsRecord writer =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> writer.protect(TlsConstants.CT_HANDSHAKE, null));
     }
 
     @Test
     @DisplayName("слишком большой фрагмент вызывает исключение")
     void testOversizedDataThrows() {
-        TlsRecord writer = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord writer =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] tooBig = new byte[TlsConstants.MAX_PLAINTEXT_LENGTH];
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> writer.protect(TlsConstants.CT_HANDSHAKE, tooBig));
     }
 
     @Test
     @DisplayName("null запись в unprotect вызывает исключение")
     void testNullRecordInUnprotectThrows() {
-        TlsRecord reader = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        assertThrows(IllegalArgumentException.class,
-                () -> reader.unprotect(null));
+        TlsRecord reader =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        assertThrows(IllegalArgumentException.class, () -> reader.unprotect(null));
     }
 
     // -----------------------------------------------------------------------
@@ -349,29 +388,53 @@ class TlsRecordTest {
     @Test
     @DisplayName("конструктор: ключ null")
     void testConstructorNullKeyThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new TlsRecord(null, fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new TlsRecord(
+                                null,
+                                fixedIv(),
+                                16,
+                                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
     }
 
     @Test
     @DisplayName("конструктор: ключ неверной длины")
     void testConstructorWrongKeyLengthThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new TlsRecord(new byte[16], fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new TlsRecord(
+                                new byte[16],
+                                fixedIv(),
+                                16,
+                                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
     }
 
     @Test
     @DisplayName("конструктор: IV неверной длины")
     void testConstructorWrongIvLengthThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new TlsRecord(fixedKey(), new byte[8], 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new TlsRecord(
+                                fixedKey(),
+                                new byte[8],
+                                16,
+                                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
     }
 
     @Test
     @DisplayName("конструктор: неверная длина тега")
     void testConstructorInvalidTagLenThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new TlsRecord(fixedKey(), fixedIv(), 0, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new TlsRecord(
+                                fixedKey(),
+                                fixedIv(),
+                                0,
+                                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L));
     }
 
     // -----------------------------------------------------------------------
@@ -385,8 +448,7 @@ class TlsRecordTest {
 
         for (int i = 0; i < 10; i++) {
             byte[] data = ("message " + i).getBytes();
-            byte[] protectedRecord = pair.protect(
-                    TlsConstants.CT_APPLICATION_DATA, data);
+            byte[] protectedRecord = pair.protect(TlsConstants.CT_APPLICATION_DATA, data);
 
             TlsParsedRecord parsed = pair.unprotect(protectedRecord);
             assertEquals(TlsConstants.CT_APPLICATION_DATA, parsed.getContentType());
@@ -410,7 +472,7 @@ class TlsRecordTest {
         TlsParsedRecord p2 = pair.unprotect(app);
         assertEquals(TlsConstants.CT_APPLICATION_DATA, p2.getContentType());
 
-        byte[] alert = pair.protect(TlsConstants.CT_ALERT, new byte[]{1, 0});
+        byte[] alert = pair.protect(TlsConstants.CT_ALERT, new byte[] {1, 0});
         TlsParsedRecord p3 = pair.unprotect(alert);
         assertEquals(TlsConstants.CT_ALERT, p3.getContentType());
     }
@@ -423,28 +485,38 @@ class TlsRecordTest {
     @DisplayName("MGM nonce: MSB первого байта очищается (nonce[0] & 0x7F)")
     void testNonceMsbCleared() {
         // IV с установленным MSB (0xFF) — buildNonce должен очистить его
-        TlsRecord record = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord record =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] ivWithMsb = new byte[16];
         Arrays.fill(ivWithMsb, (byte) 0xCD);
         ivWithMsb[0] = (byte) 0xFF;
 
         record.buildNonce(ivWithMsb);
-        assertEquals(0x7F, record.buildNoncePeek() & 0xFF,
-                "MSB не очищен: nonce[0] должен быть 0x7F");
+        assertEquals(
+                0x7F, record.buildNoncePeek() & 0xFF, "MSB не очищен: nonce[0] должен быть 0x7F");
 
         // SeqNum с битом 63: после XOR MSB мог бы восстановиться, но buildNonce очищает после
         record.setSequenceNumber(Long.MAX_VALUE);
         record.buildNonce(ivWithMsb);
-        assertEquals(0x7F, record.buildNoncePeek() & 0xFF,
+        assertEquals(
+                0x7F,
+                record.buildNoncePeek() & 0xFF,
                 "MSB должен быть очищен даже после XOR с seqNum, у которого бит 63=1");
     }
 
     @Test
     @DisplayName("MGM nonce: разные seqNum дают разные nonce при одинаковом IV")
     void testNonceDifferentSeqNums() {
-        TlsRecord record = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord record =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] iv = fixedIv();
 
         record.setSequenceNumber(0);
@@ -467,10 +539,12 @@ class TlsRecordTest {
     void testSnmaxSProtectUnprotect() throws Exception {
         byte[] key = fixedKey();
         byte[] iv = fixedIv();
-        TlsRecord writer = new TlsRecord(key, iv, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-        TlsRecord reader = new TlsRecord(key, iv, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord writer =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord reader =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         byte[] data = "S-variant data".getBytes();
         byte[] record = writer.protect(TlsConstants.CT_APPLICATION_DATA, data);
         TlsParsedRecord parsed = reader.unprotect(record);
@@ -479,16 +553,21 @@ class TlsRecordTest {
     }
 
     @Test
-    @DisplayName("S-вариант: SNMAX = 0x3FFFFFFFFFF → переполнение")
+    @DisplayName("S-вариант: SNMAX = 0x3FFFFFFFFFF -> переполнение")
     void testSnmaxSOverflow() {
-        TlsRecord record = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord record =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         // SNMAX = 0x3FFFFFFFFFF; protect при seqNum = SNMAX - 1 должен пройти
         record.setSequenceNumber(0x3FFFFFFFFFEL);
-        assertDoesNotThrow(() -> record.protect(TlsConstants.CT_APPLICATION_DATA, new byte[]{1}));
+        assertDoesNotThrow(() -> record.protect(TlsConstants.CT_APPLICATION_DATA, new byte[] {1}));
         // seqNum стал = 0x3FFFFFFFFFF, protect при seqNum >= SNMAX должен бросить
-        assertThrows(IllegalStateException.class,
-                () -> record.protect(TlsConstants.CT_APPLICATION_DATA, new byte[]{1}));
+        assertThrows(
+                IllegalStateException.class,
+                () -> record.protect(TlsConstants.CT_APPLICATION_DATA, new byte[] {1}));
     }
 
     @Test
@@ -496,20 +575,21 @@ class TlsRecordTest {
     void testSnmaxSUnprotectOverflow() throws Exception {
         byte[] key = fixedKey();
         byte[] iv = fixedIv();
-        TlsRecord writer = new TlsRecord(key, iv, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord writer =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         writer.setSequenceNumber(0x3FFFFFFFFFEL);
-        byte[] data = new byte[]{42};
+        byte[] data = new byte[] {42};
         byte[] record = writer.protect(TlsConstants.CT_APPLICATION_DATA, data);
 
-        TlsRecord reader = new TlsRecord(key, iv, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord reader =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         reader.setSequenceNumber(0x3FFFFFFFFFEL);
         TlsParsedRecord parsed = reader.unprotect(record);
         assertArrayEquals(data, parsed.getData());
 
-        assertThrows(IllegalStateException.class,
-                () -> reader.unprotect(record));
+        assertThrows(IllegalStateException.class, () -> reader.unprotect(record));
     }
 
     @Test
@@ -517,11 +597,13 @@ class TlsRecordTest {
     void testSnmaxSSeqNumZero() throws Exception {
         byte[] key = fixedKey();
         byte[] iv = fixedIv();
-        TlsRecord writer = new TlsRecord(key, iv, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-        TlsRecord reader = new TlsRecord(key, iv, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-        byte[] data = new byte[]{0};
+        TlsRecord writer =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord reader =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        byte[] data = new byte[] {0};
         byte[] record = writer.protect(TlsConstants.CT_APPLICATION_DATA, data);
         TlsParsedRecord parsed = reader.unprotect(record);
         assertArrayEquals(data, parsed.getData());
@@ -532,13 +614,15 @@ class TlsRecordTest {
     void testSVariantC3Boundary() throws Exception {
         byte[] key = fixedKey();
         byte[] iv = fixedIv();
-        TlsRecord rec = new TlsRecord(key, iv, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord rec =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         rec.setSequenceNumber(7);
-        byte[] data7 = rec.protect(TlsConstants.CT_APPLICATION_DATA, new byte[]{1});
+        byte[] data7 = rec.protect(TlsConstants.CT_APPLICATION_DATA, new byte[] {1});
         rec.setSequenceNumber(8);
-        byte[] data8 = rec.protect(TlsConstants.CT_APPLICATION_DATA, new byte[]{1});
-        assertFalse(Arrays.equals(data7, data8),
+        byte[] data8 = rec.protect(TlsConstants.CT_APPLICATION_DATA, new byte[] {1});
+        assertFalse(
+                Arrays.equals(data7, data8),
                 "seqNum 7 и 8 должны давать разные ciphertext (C3 boundary для S)");
     }
 
@@ -549,12 +633,16 @@ class TlsRecordTest {
     @Test
     @DisplayName("структура защищённой записи соответствует TLS 1.3")
     void testRecordStructure() {
-        TlsRecord writer = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord writer =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] data = new byte[10];
         CryptoRandom.INSTANCE.nextBytes(data);
 
-        byte[] protectedRecord = writer.protect(
-                TlsConstants.CT_APPLICATION_DATA, data);
+        byte[] protectedRecord = writer.protect(TlsConstants.CT_APPLICATION_DATA, data);
 
         assertEquals(TlsConstants.CT_APPLICATION_DATA, protectedRecord[0]);
         assertEquals(TlsConstants.LEGACY_VERSION_MAJOR, protectedRecord[1]);
@@ -571,7 +659,12 @@ class TlsRecordTest {
         byte[] zeroIv = new byte[16];
         byte[] key = fixedKey();
 
-        TlsRecord record = new TlsRecord(key, zeroIv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord record =
+                new TlsRecord(
+                        key,
+                        zeroIv,
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
 
         byte[] data = "test".getBytes();
         byte[] ct0 = record.protect(TlsConstants.CT_HANDSHAKE, data);
@@ -590,7 +683,7 @@ class TlsRecordTest {
     @DisplayName("unprotect: внутренний plaintext с нулевыми байтами данных")
     void testZeroBytesInData() throws Exception {
         RecordPair pair = fixedPair();
-        byte[] data = new byte[]{0x00, 0x00, 0x00};
+        byte[] data = new byte[] {0x00, 0x00, 0x00};
         byte[] record = pair.protect(TlsConstants.CT_APPLICATION_DATA, data);
         TlsParsedRecord parsed = pair.unprotect(record);
         assertEquals(TlsConstants.CT_APPLICATION_DATA, parsed.getContentType());
@@ -602,12 +695,16 @@ class TlsRecordTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("seqNum = Long.MAX_VALUE: protect/unprotect roundtrip")
+    @DisplayName("seqNum = Long.MAX_VALUE: обратимость защита/расшифровка")
     void testSeqNumMaxValueRoundtrip() throws Exception {
         byte[] key = fixedKey();
         byte[] iv = fixedIv();
-        TlsRecord writer = new TlsRecord(key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        TlsRecord reader = new TlsRecord(key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord writer =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord reader =
+                new TlsRecord(
+                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
 
         writer.setSequenceNumber(Long.MAX_VALUE);
         reader.setSequenceNumber(Long.MAX_VALUE);
@@ -623,13 +720,19 @@ class TlsRecordTest {
     @Test
     @DisplayName("seqNum overflow: после Long.MAX_VALUE бросает IllegalStateException")
     void testSeqNumOverflowThrows() {
-        TlsRecord record = new TlsRecord(fixedKey(), fixedIv(), 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord record =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         record.setSequenceNumber(Long.MAX_VALUE);
 
-        assertDoesNotThrow(() -> record.protect(TlsConstants.CT_APPLICATION_DATA, new byte[]{1}));
+        assertDoesNotThrow(() -> record.protect(TlsConstants.CT_APPLICATION_DATA, new byte[] {1}));
 
-        assertThrows(IllegalStateException.class,
-                () -> record.protect(TlsConstants.CT_APPLICATION_DATA, new byte[]{1}));
+        assertThrows(
+                IllegalStateException.class,
+                () -> record.protect(TlsConstants.CT_APPLICATION_DATA, new byte[] {1}));
     }
 
     // -----------------------------------------------------------------------
@@ -642,10 +745,18 @@ class TlsRecordTest {
         byte[] data = new byte[100];
         CryptoRandom.INSTANCE.nextBytes(data);
 
-        TlsRecord r1 = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        TlsRecord r2 = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord r1 =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord r2 =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
 
         byte[] record1 = r1.protect(TlsConstants.CT_APPLICATION_DATA, data);
         byte[] record2 = r2.protect(TlsConstants.CT_APPLICATION_DATA, data, 0, data.length);
@@ -671,17 +782,25 @@ class TlsRecordTest {
     @Test
     @DisplayName("protect с некорректными offset/len бросает IllegalArgumentException")
     void testProtectInvalidOffsetLen() {
-        TlsRecord rec = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord rec =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] data = new byte[50];
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> rec.protect(TlsConstants.CT_APPLICATION_DATA, data, -1, 10));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> rec.protect(TlsConstants.CT_APPLICATION_DATA, data, 0, -1));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> rec.protect(TlsConstants.CT_APPLICATION_DATA, data, 40, 20));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> rec.protect(TlsConstants.CT_APPLICATION_DATA, data, 0, 51));
     }
 
@@ -690,13 +809,14 @@ class TlsRecordTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("ByteBuffer protect/unprotect: handshake roundtrip (UnprotectResult)")
+    @DisplayName("ByteBuffer защита/расшифровка: обратимость handshake (UnprotectResult)")
     void testByteBufferProtectUnprotectHandshake() throws Exception {
         RecordPair pair = newPair();
         byte[] data = "привет от клиента".getBytes("UTF-8");
 
         ByteBuffer src = ByteBuffer.wrap(data);
-        ByteBuffer dst = ByteBuffer.allocate(TlsConstants.RECORD_HEADER_SIZE + data.length + 1 + 16 + 64);
+        ByteBuffer dst =
+                ByteBuffer.allocate(TlsConstants.RECORD_HEADER_SIZE + data.length + 1 + 16 + 64);
 
         int written = pair.writer.protect(TlsConstants.CT_HANDSHAKE, src, dst);
         assertTrue(written > 0, "Должны быть записаны байты в dst");
@@ -744,8 +864,8 @@ class TlsRecordTest {
         CryptoRandom.INSTANCE.nextBytes(data);
 
         ByteBuffer src = ByteBuffer.wrap(data);
-        ByteBuffer dst = ByteBuffer.allocate(
-                TlsConstants.RECORD_HEADER_SIZE + data.length + 1 + 16 + 64);
+        ByteBuffer dst =
+                ByteBuffer.allocate(TlsConstants.RECORD_HEADER_SIZE + data.length + 1 + 16 + 64);
 
         pair.writer.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
         dst.flip();
@@ -764,65 +884,80 @@ class TlsRecordTest {
     @Test
     @DisplayName("ByteBuffer protect: недостаточный dst кидает IllegalArgumentException")
     void testByteBufferDstTooSmall() {
-        TlsRecord writer = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        ByteBuffer src = ByteBuffer.wrap(new byte[]{1, 2, 3});
+        TlsRecord writer =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        ByteBuffer src = ByteBuffer.wrap(new byte[] {1, 2, 3});
         ByteBuffer dst = ByteBuffer.allocate(2);
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> writer.protect(TlsConstants.CT_HANDSHAKE, src, dst));
     }
 
     // -----------------------------------------------------------------------
-    // Regression: защита записи с известными key/IV (первичный прогон → эталон)
+    // Regression: защита записи с известными key/IV (первичный прогон -> эталон)
     // -----------------------------------------------------------------------
 
     // Regression fixture: protect(CT_HANDSHAKE, {0x08,0x00,0x00,0x02,0x00,0x00})
     // key = SWK_HS (RFC 9367 A.1.2), iv = SIV_HS, seqNum=0, tagLen=16, cipher suite S
     // Внутренний plaintext: 6 байт данных + 0x16 (CT_HANDSHAKE) = 7 байт innerLen
     // Full record = header(5) || ciphertext(7) || tag(16) = 28 байт
-    private static final byte[] RECORD_FIXTURE_KEY = hex(
-            "E13764B54B9E1B47D43398D6D216DF24C289A396AB6C5B524BBB9C06F39FEF01");
-    private static final byte[] RECORD_FIXTURE_IV = hex(
-            "6969FFAAA4525281EEBBEB4CBD0B640E");
-    private static final byte[] RECORD_FIXTURE_PLAINTEXT = new byte[]{
-            0x08, 0x00, 0x00, 0x02, 0x00, 0x00};
+    private static final byte[] RECORD_FIXTURE_KEY =
+            hex("E13764B54B9E1B47D43398D6D216DF24C289A396AB6C5B524BBB9C06F39FEF01");
+    private static final byte[] RECORD_FIXTURE_IV = hex("6969FFAAA4525281EEBBEB4CBD0B640E");
+    private static final byte[] RECORD_FIXTURE_PLAINTEXT =
+            new byte[] {0x08, 0x00, 0x00, 0x02, 0x00, 0x00};
 
-    // Первичный прогон → эталон. Заменить при изменении формата записи/криптоалгоритмов.
+    // Первичный прогон -> эталон. Заменить при изменении формата записи/криптоалгоритмов.
     // Regression only — не KAT (RFC 9367 не содержит полные record vectors для protect).
     // Вектор: protect(CT_HANDSHAKE, {0x08,0x00,0x00,0x02,0x00,0x00})
     // Key=SWK_HS, IV=SIV_HS (RFC 9367 A.1.2), seqNum=0, tagLen=16, cipher suite S
     // header(5) || ciphertext(7) || tag(16) = 28 байт
-    private static final byte[] RECORD_FIXTURE_EXPECTED = hex(
-            "1703030017940E5D2C753AE5FEBD20012CC9E3EB24A379841E02ABBE");
+    private static final byte[] RECORD_FIXTURE_EXPECTED =
+            hex("1703030017940E5D2C753AE5FEBD20012CC9E3EB24A379841E02ABBE");
 
     @Test
     @DisplayName("protect: regression — ByteBuffer protect с известными key/IV")
     void testByteBufferProtectRegression() {
-        TlsRecord rec = new TlsRecord(RECORD_FIXTURE_KEY, RECORD_FIXTURE_IV, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord rec =
+                new TlsRecord(
+                        RECORD_FIXTURE_KEY,
+                        RECORD_FIXTURE_IV,
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         ByteBuffer src = ByteBuffer.wrap(RECORD_FIXTURE_PLAINTEXT);
         ByteBuffer dst = ByteBuffer.allocate(128);
         int written = rec.protect(TlsConstants.CT_HANDSHAKE, src, dst);
         dst.flip();
         byte[] actual = new byte[written];
         dst.get(actual);
-        assertArrayEquals(RECORD_FIXTURE_EXPECTED, actual,
-                () -> "Получено: " + hexStr(actual));
+        assertArrayEquals(RECORD_FIXTURE_EXPECTED, actual, () -> "Получено: " + hexStr(actual));
     }
 
     @Test
     @DisplayName("protect: byte[] и ByteBuffer overloads дают одинаковый результат")
     void testProtectOverloadsMatch() {
-        TlsRecord rec = new TlsRecord(RECORD_FIXTURE_KEY, RECORD_FIXTURE_IV, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord rec =
+                new TlsRecord(
+                        RECORD_FIXTURE_KEY,
+                        RECORD_FIXTURE_IV,
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         byte[] data = new byte[50];
         CryptoRandom.INSTANCE.nextBytes(data);
 
         byte[] fromByteArray = rec.protect(TlsConstants.CT_APPLICATION_DATA, data);
 
-        TlsRecord rec2 = new TlsRecord(RECORD_FIXTURE_KEY, RECORD_FIXTURE_IV, 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+        TlsRecord rec2 =
+                new TlsRecord(
+                        RECORD_FIXTURE_KEY,
+                        RECORD_FIXTURE_IV,
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
         ByteBuffer src = ByteBuffer.wrap(data);
         ByteBuffer dst = ByteBuffer.allocate(128);
         rec2.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
@@ -836,9 +971,13 @@ class TlsRecordTest {
     @Test
     @DisplayName("ByteBuffer protect: src.position сдвинут, dst.position сдвинут")
     void testByteBufferProtectPositions() {
-        TlsRecord rec = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        byte[] data = new byte[]{1, 2, 3, 4, 5};
+        TlsRecord rec =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        byte[] data = new byte[] {1, 2, 3, 4, 5};
         ByteBuffer src = ByteBuffer.wrap(data);
         ByteBuffer dst = ByteBuffer.allocate(128);
         assertEquals(0, src.position());
@@ -847,20 +986,27 @@ class TlsRecordTest {
         int written = rec.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
 
         assertEquals(data.length, src.position(), "src должен быть полностью прочитан");
-        assertEquals(written, dst.position(), "dst.position == written");
+        assertEquals(
+                written, dst.position(), "position должен равняться количеству записанных байт");
         assertEquals(0, src.remaining(), "src должен быть пуст");
     }
 
     @Test
     @DisplayName("ByteBuffer protect: null буферы кидают исключение")
     void testByteBufferNullBuffers() {
-        TlsRecord writer = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord writer =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ByteBuffer buf = ByteBuffer.allocate(64);
 
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> writer.protect(TlsConstants.CT_HANDSHAKE, null, buf));
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> writer.protect(TlsConstants.CT_HANDSHAKE, buf, null));
     }
 
@@ -883,12 +1029,12 @@ class TlsRecordTest {
         ByteBuffer tamperedBuf = ByteBuffer.wrap(tampered);
         ByteBuffer plain = ByteBuffer.allocate(64);
 
-        assertThrows(AuthenticationException.class,
-                () -> pair.reader.unprotect(tamperedBuf, plain));
+        assertThrows(
+                AuthenticationException.class, () -> pair.reader.unprotect(tamperedBuf, plain));
     }
 
     @Test
-    @DisplayName("ByteBuffer unprotect: OUTPUT_TOO_SMALL — hint + rollback")
+    @DisplayName("ByteBuffer расшифровка: OUTPUT_TOO_SMALL — подсказка + откат")
     void testByteBufferUnprotectOutputTooSmall() throws Exception {
         RecordPair pair = newPair();
         byte[] data = new byte[100];
@@ -914,14 +1060,15 @@ class TlsRecordTest {
         RecordPair pair = newPair();
 
         // Менее 5 байт — не хватает даже на заголовок
-        ByteBuffer tooShort = ByteBuffer.wrap(new byte[]{0x17, 0x03, 0x03});
+        ByteBuffer tooShort = ByteBuffer.wrap(new byte[] {0x17, 0x03, 0x03});
         int posBefore = tooShort.position();
         ByteBuffer plain = ByteBuffer.allocate(64);
 
         UnprotectResult r = pair.reader.unprotect(tooShort, plain);
 
         assertSame(UnprotectResult.Status.NEED_MORE_INPUT, r.status);
-        assertEquals(TlsConstants.RECORD_HEADER_SIZE, r.hint, "hint = min header size");
+        assertEquals(
+                TlsConstants.RECORD_HEADER_SIZE, r.hint, "hint = минимальный размер заголовка");
         assertEquals(posBefore, tooShort.position(), "position НЕ должен измениться");
     }
 
@@ -931,10 +1078,10 @@ class TlsRecordTest {
         RecordPair pair = newPair();
 
         // Полный заголовок (declaredLen=20, т.е. ciphertext+tag=20) + всего 4 байта body
-        // totalRecordLen = 5 + 20 = 25, но в буфере только 9 → NEED_MORE_INPUT с hint=25
+        // totalRecordLen = 5 + 20 = 25, но в буфере только 9 -> NEED_MORE_INPUT с hint=25
         ByteBuffer partial = ByteBuffer.allocate(9);
-        partial.put(new byte[]{0x17, 0x03, 0x03, 0x00, 0x14}); // length=20
-        partial.put(new byte[]{1, 2, 3, 4});
+        partial.put(new byte[] {0x17, 0x03, 0x03, 0x00, 0x14}); // length=20
+        partial.put(new byte[] {1, 2, 3, 4});
         partial.flip();
 
         int posBefore = partial.position();
@@ -944,12 +1091,12 @@ class TlsRecordTest {
 
         assertSame(UnprotectResult.Status.NEED_MORE_INPUT, r.status);
         // totalRecordLen = 5 + 20 = 25
-        assertEquals(25, r.hint, "hint = exact total record length");
+        assertEquals(25, r.hint, "hint = точная полная длина записи");
         assertEquals(posBefore, partial.position(), "position НЕ должен измениться");
     }
 
     @Test
-    @DisplayName("ByteBuffer unprotect: OK — success after retry after OUTPUT_TOO_SMALL")
+    @DisplayName("ByteBuffer расшифровка: OK — успех после повтора после OUTPUT_TOO_SMALL")
     void testByteBufferUnprotectRetryAfterOutputTooSmall() throws Exception {
         RecordPair pair = newPair();
         byte[] data = new byte[50];
@@ -984,14 +1131,14 @@ class TlsRecordTest {
     void testByteBufferUnprotectReuse() throws Exception {
         // Три записи разного размера через один TlsRecord — проверка что recordBuf reuse
         // не оставляет stale tail от предыдущей записи в данных следующей.
-        byte[] small = new byte[]{1, 2, 3};
+        byte[] small = new byte[] {1, 2, 3};
         byte[] large = new byte[200];
         CryptoRandom.INSTANCE.nextBytes(large);
         byte[] medium = new byte[50];
         CryptoRandom.INSTANCE.nextBytes(medium);
 
         RecordPair pair = newPair();
-        for (byte[] data : new byte[][]{large, medium, small}) {
+        for (byte[] data : new byte[][] {large, medium, small}) {
             ByteBuffer src = ByteBuffer.wrap(data);
             ByteBuffer dst = ByteBuffer.allocate(256);
             pair.writer.protect(TlsConstants.CT_APPLICATION_DATA, src, dst);
@@ -1010,14 +1157,16 @@ class TlsRecordTest {
     @Test
     @DisplayName("ByteBuffer unprotect: null буферы кидают исключение")
     void testByteBufferUnprotectNull() {
-        TlsRecord reader = new TlsRecord(fixedKey(), fixedIv(), 16,
-                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsRecord reader =
+                new TlsRecord(
+                        fixedKey(),
+                        fixedIv(),
+                        16,
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ByteBuffer buf = ByteBuffer.allocate(64);
 
-        assertThrows(IllegalArgumentException.class,
-                () -> reader.unprotect(null, buf));
-        assertThrows(IllegalArgumentException.class,
-                () -> reader.unprotect(buf, null));
+        assertThrows(IllegalArgumentException.class, () -> reader.unprotect(null, buf));
+        assertThrows(IllegalArgumentException.class, () -> reader.unprotect(buf, null));
     }
 
     @Test
@@ -1041,8 +1190,7 @@ class TlsRecordTest {
         nonce[0] &= 0x7F;
 
         // Per-record ключ через TLSTREE для seqNum=0
-        byte[] perRecordKey = TlsTree.tlstree(key, 0,
-                suite.getC1(), suite.getC2(), suite.getC3());
+        byte[] perRecordKey = TlsTree.tlstree(key, 0, suite.getC1(), suite.getC2(), suite.getC3());
 
         // Собираем TLSInnerPlaintext по RFC 8446 §5.2: данные || content_type || padding_zeros
         byte[] innerPlaintext = new byte[innerLen];
@@ -1085,10 +1233,12 @@ class TlsRecordTest {
 
         // Расшифровка — должна пройти без ALERT_RECORD_OVERFLOW
         TlsParsedRecord parsed = reader.unprotect(record);
-        assertEquals(TlsConstants.CT_APPLICATION_DATA, parsed.getContentType(),
+        assertEquals(
+                TlsConstants.CT_APPLICATION_DATA,
+                parsed.getContentType(),
                 "Тип содержимого должен совпадать");
-        assertArrayEquals(data, parsed.getData(),
-                "Расшифрованные данные должны совпадать с исходными");
+        assertArrayEquals(
+                data, parsed.getData(), "Расшифрованные данные должны совпадать с исходными");
     }
 
     @ParameterizedTest
@@ -1110,8 +1260,7 @@ class TlsRecordTest {
         byte[] nonce = iv.clone();
         nonce[0] &= 0x7F;
 
-        byte[] perRecordKey = TlsTree.tlstree(key, 0,
-                suite.getC1(), suite.getC2(), suite.getC3());
+        byte[] perRecordKey = TlsTree.tlstree(key, 0, suite.getC1(), suite.getC2(), suite.getC3());
 
         byte[] innerPlaintext = new byte[innerLen];
         byte[] data = new byte[dataLen];
@@ -1161,7 +1310,7 @@ class TlsRecordTest {
     }
 
     @Test
-    @DisplayName("payloadLen > MAX_CIPHERTEXT_LENGTH → ALERT_RECORD_OVERFLOW")
+    @DisplayName("превышение MAX_CIPHERTEXT_LENGTH -> ALERT_RECORD_OVERFLOW")
     void testOuterPayloadTooLongRejected() {
         TlsCiphersuite suite = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         TlsRecord reader = new TlsRecord(fixedKey(), fixedIv(), 16, suite);
@@ -1178,9 +1327,9 @@ class TlsRecordTest {
         record[3] = (byte) (payloadLen >>> 8);
         record[4] = (byte) payloadLen;
 
-        TlsException ex = assertThrows(TlsException.class,
-                () -> reader.unprotect(record));
-        assertTrue(ex.getMessage().contains("Record too long"),
+        TlsException ex = assertThrows(TlsException.class, () -> reader.unprotect(record));
+        assertTrue(
+                ex.getMessage().contains("Record too long"),
                 "Сообщение должно указывать на превышение длины");
     }
 }

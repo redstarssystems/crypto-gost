@@ -1,17 +1,21 @@
 package org.rssys.gost.tls13;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.rssys.gost.signature.ECParameters;
-
-import static org.junit.jupiter.api.Assertions.*;
-import org.rssys.gost.tls13.psk.*;
-import org.rssys.gost.tls13.crypto.*;
-import org.rssys.gost.tls13.config.*;
 import org.rssys.gost.tls13.cert.*;
-import org.rssys.gost.tls13.record.*;
-import org.rssys.gost.tls13.message.*;
+import org.rssys.gost.tls13.config.*;
+import org.rssys.gost.tls13.crypto.*;
 import org.rssys.gost.tls13.engine.*;
+import org.rssys.gost.tls13.message.*;
+import org.rssys.gost.tls13.psk.*;
+import org.rssys.gost.tls13.record.*;
 
 /**
  * Тесты TlsCiphersuite — константы cipher suite и отображение named group <-> ECParameters.
@@ -20,41 +24,58 @@ import org.rssys.gost.tls13.engine.*;
 class TlsCiphersuiteTest {
 
     // -----------------------------------------------------------------------
-    // Константы cipher suite L (Loop)
+    // Константы cipher suite L (Loop) и S (Seal) — параметризованные
     // -----------------------------------------------------------------------
 
-    @Test
-    @DisplayName("L-вариант: все константы корректны")
-    void testCiphersuiteLConstants() {
-        TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        assertEquals(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L, cs.getId());
-        assertEquals(32, cs.getHashLen());
-        assertEquals(32, cs.getKeyLen());
-        assertEquals(16, cs.getIvLen());
-        assertEquals(16, cs.getTagLen());
-        assertEquals(0xFFFFFFFFFFFFFFFFL, cs.getSnmax());
-        assertEquals(0xF800000000000000L, cs.getC1());
-        assertEquals(0xFFFFFFF000000000L, cs.getC2());
-        assertEquals(0xFFFFFFFFFFFFE000L, cs.getC3());
+    @ParameterizedTest
+    @MethodSource("cipherSuiteData")
+    @DisplayName("константы cipher suite корректны")
+    void testCiphersuiteConstants(
+            TlsCiphersuite cs,
+            int expectedId,
+            int hashLen,
+            int keyLen,
+            int ivLen,
+            int tagLen,
+            long snmax,
+            long c1,
+            long c2,
+            long c3) {
+        assertEquals(expectedId, cs.getId());
+        assertEquals(hashLen, cs.getHashLen());
+        assertEquals(keyLen, cs.getKeyLen());
+        assertEquals(ivLen, cs.getIvLen());
+        assertEquals(tagLen, cs.getTagLen());
+        assertEquals(snmax, cs.getSnmax());
+        assertEquals(c1, cs.getC1());
+        assertEquals(c2, cs.getC2());
+        assertEquals(c3, cs.getC3());
     }
 
-    // -----------------------------------------------------------------------
-    // Константы cipher suite S (Seal)
-    // -----------------------------------------------------------------------
-
-    @Test
-    @DisplayName("S-вариант: все константы корректны")
-    void testCiphersuiteSConstants() {
-        TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S;
-        assertEquals(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S, cs.getId());
-        assertEquals(32, cs.getHashLen());
-        assertEquals(32, cs.getKeyLen());
-        assertEquals(16, cs.getIvLen());
-        assertEquals(16, cs.getTagLen());
-        assertEquals(0x3FFFFFFFFFFL, cs.getSnmax());
-        assertEquals(0xFFFFFFFFE0000000L, cs.getC1());
-        assertEquals(0xFFFFFFFFFFFF0000L, cs.getC2());
-        assertEquals(0xFFFFFFFFFFFFFFF8L, cs.getC3());
+    static Stream<Arguments> cipherSuiteData() {
+        return Stream.of(
+                Arguments.of(
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                        (int) TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                        32,
+                        32,
+                        16,
+                        16,
+                        0xFFFFFFFFFFFFFFFFL,
+                        0xF800000000000000L,
+                        0xFFFFFFF000000000L,
+                        0xFFFFFFFFFFFFE000L),
+                Arguments.of(
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
+                        (int) TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
+                        32,
+                        32,
+                        16,
+                        16,
+                        0x3FFFFFFFFFFL,
+                        0xFFFFFFFFE0000000L,
+                        0xFFFFFFFFFFFF0000L,
+                        0xFFFFFFFFFFFFFFF8L));
     }
 
     @Test
@@ -66,25 +87,24 @@ class TlsCiphersuiteTest {
     }
 
     // -----------------------------------------------------------------------
-    // Поиск cipher suite по ID
+    // Поиск cipher suite по ID — параметризованный
     // -----------------------------------------------------------------------
 
-    @Test
-    @DisplayName("byId: L-вариант найден")
-    void testByIdLookupL() {
-        TlsCiphersuite cs = TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        assertNotNull(cs);
+    @ParameterizedTest
+    @MethodSource("cipherSuiteValues")
+    @DisplayName("byId: cipher suite найден по ID")
+    void testByIdLookup(TlsCiphersuite cs) {
+        TlsCiphersuite found = TlsCiphersuite.byId(cs.getId());
+        assertNotNull(found);
+        assertEquals(cs, found);
+    }
+
+    static Stream<TlsCiphersuite> cipherSuiteValues() {
+        return Stream.of(TlsCiphersuite.values());
     }
 
     @Test
-    @DisplayName("byId: S-вариант найден")
-    void testByIdLookupS() {
-        TlsCiphersuite cs = TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-        assertNotNull(cs);
-    }
-
-    @Test
-    @DisplayName("byId: неизвестный ID → null")
+    @DisplayName("byId: неизвестный ID -> null")
     void testByIdUnknownReturnsNull() {
         assertNull(TlsCiphersuite.byId(0xFFFF));
     }
@@ -97,7 +117,7 @@ class TlsCiphersuiteTest {
     }
 
     // -----------------------------------------------------------------------
-    // Отображение named group → ECParameters
+    // Отображение named group -> ECParameters
     // -----------------------------------------------------------------------
 
     @Test
@@ -113,7 +133,7 @@ class TlsCiphersuiteTest {
     }
 
     @Test
-    @DisplayName("namedGroupToParams: 512-бит → hlen=64")
+    @DisplayName("namedGroupToParams: 512-бит -> hlen=64")
     void testNamedGroupToParams512Bit() {
         assertEquals(64, TlsCiphersuite.namedGroupToParams(TlsConstants.GRP_GC512A).hlen);
         assertEquals(64, TlsCiphersuite.namedGroupToParams(TlsConstants.GRP_GC512B).hlen);
@@ -121,41 +141,47 @@ class TlsCiphersuiteTest {
     }
 
     @Test
-    @DisplayName("namedGroupToParams: неизвестная группа → исключение")
+    @DisplayName("namedGroupToParams: неизвестная группа -> исключение")
     void testNamedGroupToParamsUnknownThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsCiphersuite.namedGroupToParams(0xFFFF));
+        assertThrows(
+                IllegalArgumentException.class, () -> TlsCiphersuite.namedGroupToParams(0xFFFF));
     }
 
     // -----------------------------------------------------------------------
-    // Отображение ECParameters → named group
+    // Отображение ECParameters -> named group — параметризованный
     // -----------------------------------------------------------------------
 
-    @Test
-    @DisplayName("paramsToNamedGroup: все 256-бит кривые")
-    void testParamsToNamedGroup256() {
-        assertEquals(TlsConstants.GRP_GC256A, TlsCiphersuite.paramsToNamedGroup(ECParameters.tc26a256()));
-        assertEquals(TlsConstants.GRP_GC256B, TlsCiphersuite.paramsToNamedGroup(ECParameters.cryptoProA()));
-        assertEquals(TlsConstants.GRP_GC256C, TlsCiphersuite.paramsToNamedGroup(ECParameters.cryptoProB()));
-        assertEquals(TlsConstants.GRP_GC256D, TlsCiphersuite.paramsToNamedGroup(ECParameters.cryptoProC()));
+    @ParameterizedTest
+    @MethodSource("paramsToGroupData")
+    @DisplayName("paramsToNamedGroup: все кривые отображаются корректно")
+    void testParamsToNamedGroup(ECParameters params, int expectedGroup) {
+        assertEquals(expectedGroup, TlsCiphersuite.paramsToNamedGroup(params));
+    }
+
+    static Stream<Arguments> paramsToGroupData() {
+        return Stream.of(
+                Arguments.of(ECParameters.tc26a256(), TlsConstants.GRP_GC256A),
+                Arguments.of(ECParameters.cryptoProA(), TlsConstants.GRP_GC256B),
+                Arguments.of(ECParameters.cryptoProB(), TlsConstants.GRP_GC256C),
+                Arguments.of(ECParameters.cryptoProC(), TlsConstants.GRP_GC256D),
+                Arguments.of(ECParameters.tc26a512(), TlsConstants.GRP_GC512A),
+                Arguments.of(ECParameters.tc26b512(), TlsConstants.GRP_GC512B),
+                Arguments.of(ECParameters.tc26c512(), TlsConstants.GRP_GC512C));
     }
 
     @Test
-    @DisplayName("paramsToNamedGroup: все 512-бит кривые")
-    void testParamsToNamedGroup512() {
-        assertEquals(TlsConstants.GRP_GC512A, TlsCiphersuite.paramsToNamedGroup(ECParameters.tc26a512()));
-        assertEquals(TlsConstants.GRP_GC512B, TlsCiphersuite.paramsToNamedGroup(ECParameters.tc26b512()));
-        assertEquals(TlsConstants.GRP_GC512C, TlsCiphersuite.paramsToNamedGroup(ECParameters.tc26c512()));
-    }
-
-    @Test
-    @DisplayName("paramsToNamedGroup: нестандартные параметры → исключение")
+    @DisplayName("paramsToNamedGroup: нестандартные параметры -> исключение")
     void testParamsToNamedGroupUnknownThrows() {
-        ECParameters fake = new ECParameters(
-                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
-                "1", "1", "1", "1",
-                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF01", 32, 1);
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsCiphersuite.paramsToNamedGroup(fake));
+        ECParameters fake =
+                new ECParameters(
+                        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFD97",
+                        "1",
+                        "1",
+                        "1",
+                        "1",
+                        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF01",
+                        32,
+                        1);
+        assertThrows(IllegalArgumentException.class, () -> TlsCiphersuite.paramsToNamedGroup(fake));
     }
 }

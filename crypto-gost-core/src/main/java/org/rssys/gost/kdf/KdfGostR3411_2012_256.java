@@ -31,7 +31,7 @@ public final class KdfGostR3411_2012_256 {
      * @return big-endian байты
      */
     private static byte[] bigEndian(int value) {
-        if (value == 0) return new byte[]{0};
+        if (value == 0) return new byte[] {0};
         int bits = 32 - Integer.numberOfLeadingZeros(value);
         int bytes = (bits + 7) / 8;
         byte[] result = new byte[bytes];
@@ -87,10 +87,10 @@ public final class KdfGostR3411_2012_256 {
         byte[] block = new byte[HASH_LEN];
 
         for (int i = 1; i <= n; i++) {
-            buf[0] = (byte) i;                    // меняем только первый байт
+            buf[0] = (byte) i; // меняем только первый байт
 
             hmac.update(buf, 0, buf.length);
-            hmac.doFinal(block, 0);                // перезаписывает block
+            hmac.doFinal(block, 0); // перезаписывает block
 
             int copyLen = Math.min(HASH_LEN, outputLength - (i - 1) * HASH_LEN);
             System.arraycopy(block, 0, result, (i - 1) * HASH_LEN, copyLen);

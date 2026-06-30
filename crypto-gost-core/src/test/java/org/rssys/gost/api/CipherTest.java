@@ -1,9 +1,6 @@
 package org.rssys.gost.api;
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.cipher.SymmetricKey;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -11,22 +8,24 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.cipher.SymmetricKey;
 
 @DisplayName("Cipher Tests")
 class CipherTest {
 
     private SymmetricKey key;
-    private byte[] data16;   // кратные 16 байт
-    private byte[] data20;   // не кратные 16 байт
+    private byte[] data16; // кратные 16 байт
+    private byte[] data20; // не кратные 16 байт
     private byte[] dataLong; // 1024 байта
 
     @BeforeEach
     void setUp() {
-        key     = KeyGenerator.generateSymmetricKey();
-        data16  = "1234567890ABCDEF".getBytes(StandardCharsets.UTF_8); // 16 байт
-        data20  = "1234567890ABCDEFGHIJ".getBytes(StandardCharsets.UTF_8); // 20 байт
+        key = KeyGenerator.generateSymmetricKey();
+        data16 = "1234567890ABCDEF".getBytes(StandardCharsets.UTF_8); // 16 байт
+        data20 = "1234567890ABCDEFGHIJ".getBytes(StandardCharsets.UTF_8); // 20 байт
         dataLong = new byte[1024];
         for (int i = 0; i < dataLong.length; i++) dataLong[i] = (byte) i;
     }
@@ -148,10 +147,11 @@ class CipherTest {
     }
 
     @Test
-    @DisplayName("CBC + NONE: не кратные данные → IllegalArgumentException")
+    @DisplayName("CBC + NONE: не кратные данные -> IllegalArgumentException")
     void testCbcNonePaddingRejectsUnaligned() {
-        assertThrows(IllegalArgumentException.class, () ->
-            Cipher.encrypt(data20, key, Cipher.Mode.CBC, Cipher.Padding.NONE));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> Cipher.encrypt(data20, key, Cipher.Mode.CBC, Cipher.Padding.NONE));
     }
 
     @Test
@@ -210,12 +210,14 @@ class CipherTest {
     @Test
     @DisplayName("CBC потоковый: UnsupportedOperationException")
     void testCbcStreamUnsupported() {
-        assertThrows(Exception.class, () -> {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            try (OutputStream enc = Cipher.encryptingStream(out, key, Cipher.Mode.CBC)) {
-                enc.write(data16);
-            }
-        });
+        assertThrows(
+                Exception.class,
+                () -> {
+                    ByteArrayOutputStream out = new ByteArrayOutputStream();
+                    try (OutputStream enc = Cipher.encryptingStream(out, key, Cipher.Mode.CBC)) {
+                        enc.write(data16);
+                    }
+                });
     }
 
     // -----------------------------------------------------------------------
@@ -223,7 +225,7 @@ class CipherTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("CTR: неверный ключ → неверный plaintext")
+    @DisplayName("CTR: неверный ключ -> неверный plaintext")
     void testWrongKeyGivesWrongPlaintext() {
         byte[] enc = Cipher.encrypt(data20, key, Cipher.Mode.CTR);
         SymmetricKey wrongKey = KeyGenerator.generateSymmetricKey();

@@ -1,11 +1,10 @@
 package org.rssys.gost.jsse.bridge;
 
+import java.security.PrivateKey;
+import javax.security.auth.Destroyable;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.signature.PrivateKeyParameters;
-
-import javax.security.auth.Destroyable;
-import java.security.PrivateKey;
 
 /**
  * Адаптер: оборачивает PrivateKeyParameters в java.security.PrivateKey
@@ -39,7 +38,7 @@ public final class KeyBridge {
     }
 
     /**
-     * Адаптер PrivateKeyParameters → java.security.PrivateKey.
+     * Адаптер PrivateKeyParameters -> java.security.PrivateKey.
      */
     public static final class GostPrivateKeyAdapter implements PrivateKey, Destroyable {
 

@@ -42,7 +42,7 @@ public final class Pkcs7Padding {
         }
         if (data.length % blockSize != 0) {
             throw new IllegalArgumentException(
-                "data length " + data.length + " is not a multiple of blockSize " + blockSize);
+                    "data length " + data.length + " is not a multiple of blockSize " + blockSize);
         }
         int padLen = data[data.length - 1] & 0xFF;
         if (padLen < 1 || padLen > blockSize) {

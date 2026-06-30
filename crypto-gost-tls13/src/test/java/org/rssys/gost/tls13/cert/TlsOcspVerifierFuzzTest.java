@@ -1,24 +1,26 @@
 package org.rssys.gost.tls13.cert;
-import org.rssys.gost.tls13.*;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.pkix.cert.OcspVerifier;
+import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.*;
 
 /**
- * Fuzz-тесты для {@link TlsOcspVerifier}.
+ * Fuzz-тесты для {@link OcspVerifier}.
  * <p>
  * OCSP-верификатор — входная точка для аутентификации OCSP-степплинга.
- * Внутри вызывает TlsDerParser (нет проверки границ — AIOOBE на битом входе)
+ * Внутри вызывает GostDerParser (нет проверки границ — AIOOBE на битом входе)
  * и Signature.verifyHash (может упасть с RuntimeException).
  * <p>
  * ПОЧЕМУ ловим RuntimeException:
- * TlsDerParser НЕ проверяет границы массивов — любой битый OCSP-ответ
- * гарантированно даст AIOOBE или NPE, как документировано в TlsDerParser.
- * TlsOcspVerifier.verify() при нормальной работе кидает только TlsException.
- * RuntimeException внутри означает баг TlsDerParser, а не битый OCSP-ответ.
+ * GostDerParser НЕ проверяет границы массивов — любой битый OCSP-ответ
+ * гарантированно даст AIOOBE или NPE, как документировано в GostDerParser.
+ * OcspVerifier.verify() при нормальной работе кидает только PkixException.
+ * RuntimeException внутри означает баг GostDerParser, а не битый OCSP-ответ.
  * <p>
  * ПОЧЕМУ caKey — один на весь класс:
  * PublicKeyParameters — тяжелый объект (ECDSA + кривая). Генерируется один раз
@@ -35,7 +37,7 @@ class TlsOcspVerifierFuzzTest {
     }
 
     /**
-     * Fuzz-тест для TlsOcspVerifier.verify() с CertID-проверкой (5-param overload).
+     * Fuzz-тест для OcspVerifier.verify() с CertID-проверкой (5-param overload).
      * <p>
      * Отличается от fuzzVerify тем, что передаёт fuzzed issuerCertDer и
      * expectedIssuerDn — код CertID-секции (issuerNameHash/issuerKeyHash)
@@ -49,8 +51,8 @@ class TlsOcspVerifierFuzzTest {
         byte[] issuerCert = data.consumeBytes(data.consumeInt(0, 4096));
         if (ocspResponse.length == 0) return;
         try {
-            TlsOcspVerifier.verify(ocspResponse, serialNumber, caKey, issuerDn, issuerCert);
-        } catch (TlsException e) {
+            OcspVerifier.verify(ocspResponse, serialNumber, caKey, issuerDn, issuerCert);
+        } catch (PkixException e) {
             // Ожидаемо: битый OCSP-ответ не проходит верификацию
         } catch (RuntimeException e) {
             FuzzTestUtils.rethrowIfBug(e);
@@ -58,14 +60,14 @@ class TlsOcspVerifierFuzzTest {
     }
 
     /**
-     * Fuzz-тест для TlsOcspVerifier.verify().
+     * Fuzz-тест для OcspVerifier.verify().
      * <p>
      * ocspResponse и serialNumber — случайные байты из FuzzedDataProvider.
      * caKey — заранее сгенерированный ключ CA (не из фузерра — валидный).
      * <p>
      * ПОЧЕМУ serialNumber из random bytes, а не константа:
      * serialNumber влияет на траекторию поиска certId внутри OCSP-ответа
-     * (TlsOcspVerifier ищет certId с совпадающим serialNumber). Разные
+     * (OcspVerifier ищет certId с совпадающим serialNumber). Разные
      * serialNumber заставят парсер обходить больше веток, а не останавливаться
      * на первом несовпадении.
      */
@@ -75,8 +77,8 @@ class TlsOcspVerifierFuzzTest {
         byte[] serialNumber = data.consumeBytes(data.consumeInt(0, 32));
         if (ocspResponse.length == 0) return;
         try {
-            TlsOcspVerifier.verify(ocspResponse, serialNumber, caKey);
-        } catch (TlsException e) {
+            OcspVerifier.verify(ocspResponse, serialNumber, caKey);
+        } catch (PkixException e) {
             // Ожидаемо: битый OCSP-ответ не проходит верификацию
         } catch (RuntimeException e) {
             FuzzTestUtils.rethrowIfBug(e);

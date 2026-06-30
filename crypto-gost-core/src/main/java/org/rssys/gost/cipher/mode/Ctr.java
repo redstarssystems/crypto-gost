@@ -29,20 +29,21 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
 
     public Ctr(Kuznyechik cipher) {
         super(cipher);
-        this.kuz  = cipher;
-        this.CTR  = new byte[blockSize];
-        this.buf  = new byte[blockSize];
+        this.kuz = cipher;
+        this.CTR = new byte[blockSize];
+        this.buf = new byte[blockSize];
     }
 
     @Override
-    public void init(boolean forEncryption, CipherParameters params) throws IllegalArgumentException {
+    public void init(boolean forEncryption, CipherParameters params)
+            throws IllegalArgumentException {
         reset();
         ParametersWithIV ivParams = requireIV(params, "CTR");
         byte[] iv = ivParams.getIV();
         int expectedIvLen = blockSize / 2;
         if (iv.length != expectedIvLen) {
             throw new IllegalArgumentException(
-                "CTR mode requires IV of length " + expectedIvLen + " bytes");
+                    "CTR mode requires IV of length " + expectedIvLen + " bytes");
         }
         this.IV = new byte[expectedIvLen];
         System.arraycopy(iv, 0, IV, 0, expectedIvLen);
@@ -77,9 +78,9 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
     /**
      * Пакетная обработка полных блоков.
      *
-     * <p>В отличие от MGM, batch-разделение (4×encryptToFields → 4×XOR) не нужно:
+     * <p>В отличие от MGM, batch-разделение (4×encryptToFields -> 4×XOR) не нужно:
      * в CTR нет второго независимого потока вычислений (MAC/Galois-field), который
-     * batch разделял бы. Единственный конвейер — encryptToFields → XOR → counter++ —
+     * batch разделял бы. Единственный конвейер — encryptToFields -> XOR -> counter++ —
      * JIT разворачивает самостоятельно.
      */
     @Override
@@ -97,7 +98,7 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
             kuz.encryptToFields(ctrHi, ctrLo);
             long inHi = (long) LONG_BE.get(in, inOff + i);
             long inLo = (long) LONG_BE.get(in, inOff + i + 8);
-            LONG_BE.set(out, outOff + i,     inHi ^ kuz.getEncBufHi());
+            LONG_BE.set(out, outOff + i, inHi ^ kuz.getEncBufHi());
             LONG_BE.set(out, outOff + i + 8, inLo ^ kuz.getEncBufLo());
             ctrLo++;
         }

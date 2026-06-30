@@ -1,20 +1,20 @@
 package org.rssys.gost.tls13.crypto;
-import org.rssys.gost.tls13.*;
-
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.signature.ECDSASigner;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.api.Digest;
-import org.rssys.gost.digest.Streebog256;
-
-import java.math.BigInteger;
-import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@DisplayName("TlsSignatureCodec — LE fixed-length signature encode/decode/sign/verify (RFC 9367 §3.2)")
+import java.math.BigInteger;
+import java.util.function.Supplier;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.Digest;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.digest.Streebog256;
+import org.rssys.gost.signature.ECDSASigner;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.tls13.*;
+
+@DisplayName(
+        "TlsSignatureCodec — LE кодирование/декодирование/подпись/проверка фиксированной длины (RFC 9367 §3.2)")
 class TlsSignatureCodecTest {
 
     private static final int ROLEN_256 = 32;
@@ -27,8 +27,12 @@ class TlsSignatureCodecTest {
     @Test
     @DisplayName("encode/decode roundtrip для 256-бит")
     void testEncodeDecodeRoundtrip256() {
-        BigInteger r = new BigInteger("1234567890ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF", 16);
-        BigInteger s = new BigInteger("FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321", 16);
+        BigInteger r =
+                new BigInteger(
+                        "1234567890ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF", 16);
+        BigInteger s =
+                new BigInteger(
+                        "FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321FEDCBA0987654321", 16);
         byte[] encoded = TlsSignatureCodec.encode(r, s, ROLEN_256);
         assertEquals(64, encoded.length);
         BigInteger[] decoded = TlsSignatureCodec.decode(encoded, ROLEN_256);
@@ -81,11 +85,11 @@ class TlsSignatureCodecTest {
     }
 
     @Test
-    @DisplayName("decode: длины компонент не совпадают с rolen → ошибка")
+    @DisplayName("decode: длины компонент не совпадают с rolen -> ошибка")
     void testDecodeWrongLength() {
         byte[] sig = new byte[32]; // too short for 2*rolen
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsSignatureCodec.decode(sig, ROLEN_256));
+        assertThrows(
+                IllegalArgumentException.class, () -> TlsSignatureCodec.decode(sig, ROLEN_256));
     }
 
     // ========================================================================
@@ -97,7 +101,8 @@ class TlsSignatureCodecTest {
     void testSignVerify256() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest256("test message".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest256("test message".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_256);
         assertEquals(64, sig.length);
@@ -109,18 +114,22 @@ class TlsSignatureCodecTest {
     void testSignVerifyCryptoProA() throws Exception {
         ECParameters params = ECParameters.cryptoProA();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest256("another message".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest256(
+                        "another message".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_256);
         assertTrue(TlsSignatureCodec.verify(hash, sig, kp.getPublic(), ROLEN_256));
     }
 
     @Test
-    @DisplayName("sign: детерминизм (одинаковые ключи+данные → одинаковая подпись)")
+    @DisplayName("sign: детерминизм (одинаковые ключи+данные -> одинаковая подпись)")
     void testSignDeterminism() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest256("deterministic test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest256(
+                        "deterministic test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         Supplier<org.rssys.gost.digest.Digest> factory = Streebog256::new;
         ECDSASigner signer = new ECDSASigner(factory);
@@ -132,11 +141,12 @@ class TlsSignatureCodecTest {
     }
 
     @Test
-    @DisplayName("verify: подмена подписи → false")
+    @DisplayName("verify: подмена подписи -> false")
     void testVerifyTamperedSignature() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest256("tamper test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest256("tamper test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_256);
         sig[0] ^= 0xFF; // flip a bit in the signature
@@ -144,36 +154,43 @@ class TlsSignatureCodecTest {
     }
 
     @Test
-    @DisplayName("verify: другой ключ → false")
+    @DisplayName("verify: другой ключ -> false")
     void testVerifyWrongKey() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp1 = KeyGenerator.generateKeyPair(params);
         org.rssys.gost.api.KeyPair kp2 = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest256("wrong key test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest256(
+                        "wrong key test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp1.getPrivate(), ROLEN_256);
         assertFalse(TlsSignatureCodec.verify(hash, sig, kp2.getPublic(), ROLEN_256));
     }
 
     @Test
-    @DisplayName("verify: подмена хеша → false")
+    @DisplayName("verify: подмена хеша -> false")
     void testVerifyTamperedHash() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash1 = Digest.digest256("original message".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        byte[] hash2 = Digest.digest256("tampered message".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash1 =
+                Digest.digest256(
+                        "original message".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash2 =
+                Digest.digest256(
+                        "tampered message".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash1, kp.getPrivate(), ROLEN_256);
         assertFalse(TlsSignatureCodec.verify(hash2, sig, kp.getPublic(), ROLEN_256));
     }
 
     @Test
-    @DisplayName("verify: null public key → NPE")
+    @DisplayName("проверка: null открытый ключ -> NPE")
     void testVerifyNullPubKey() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         byte[] hash = Digest.digest256("test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         byte[] sig = new byte[64];
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> TlsSignatureCodec.verify(hash, sig, null, ROLEN_256));
     }
 
@@ -186,7 +203,8 @@ class TlsSignatureCodecTest {
     void testSignVerify512A() throws Exception {
         ECParameters params = ECParameters.tc26a512();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest512("test 512-a".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest512("test 512-a".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_512);
         assertEquals(128, sig.length);
@@ -198,7 +216,8 @@ class TlsSignatureCodecTest {
     void testSignVerify512B() throws Exception {
         ECParameters params = ECParameters.tc26b512();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest512("test 512-b".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest512("test 512-b".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_512);
         assertTrue(TlsSignatureCodec.verify(hash, sig, kp.getPublic(), ROLEN_512));
@@ -209,18 +228,20 @@ class TlsSignatureCodecTest {
     void testSignVerify512C() throws Exception {
         ECParameters params = ECParameters.tc26c512();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest512("test 512-c".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest512("test 512-c".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_512);
         assertTrue(TlsSignatureCodec.verify(hash, sig, kp.getPublic(), ROLEN_512));
     }
 
     @Test
-    @DisplayName("verify: 512-бит подмена подписи → false")
+    @DisplayName("verify: 512-бит подмена подписи -> false")
     void testVerifyTamperedSignature512() throws Exception {
         ECParameters params = ECParameters.tc26a512();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest512("tamper 512".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest512("tamper 512".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_512);
         sig[0] ^= 0xFF;
@@ -228,12 +249,13 @@ class TlsSignatureCodecTest {
     }
 
     @Test
-    @DisplayName("verify: 512-бит другой ключ → false")
+    @DisplayName("verify: 512-бит другой ключ -> false")
     void testVerifyWrongKey512() throws Exception {
         ECParameters params = ECParameters.tc26a512();
         org.rssys.gost.api.KeyPair kp1 = KeyGenerator.generateKeyPair(params);
         org.rssys.gost.api.KeyPair kp2 = KeyGenerator.generateKeyPair(params);
-        byte[] hash = Digest.digest512("wrong key 512".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] hash =
+                Digest.digest512("wrong key 512".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp1.getPrivate(), ROLEN_512);
         assertFalse(TlsSignatureCodec.verify(hash, sig, kp2.getPublic(), ROLEN_512));
@@ -242,6 +264,5 @@ class TlsSignatureCodecTest {
     // ========================================================================
     // Вспомогательные методы
     // ========================================================================
-
 
 }

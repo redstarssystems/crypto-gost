@@ -1,15 +1,14 @@
 package org.rssys.gost.jsse;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
 
-import java.nio.charset.StandardCharsets;
-
-import static org.junit.jupiter.api.Assertions.*;
-
-@DisplayName("GostSslBuilder.trustCaFromPem")
+@DisplayName("GostSslBuilder.trustCaFromPem: загрузка доверенных CA")
 class GostSslBuilderCaTest {
 
     @Test
@@ -41,7 +40,8 @@ class GostSslBuilderCaTest {
     @DisplayName("Пустой PEM бросает IllegalArgumentException")
     void testEmptyPem() {
         byte[] emptyPem = "".getBytes(StandardCharsets.US_ASCII);
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> GostSsl.builder().trustCaFromPem(emptyPem),
                 "Пустой PEM должен бросать IllegalArgumentException");
     }
@@ -54,7 +54,9 @@ class GostSslBuilderCaTest {
         String pem = rootCa.cert.toPem();
 
         GostSslBuilder builder = GostSsl.builder();
-        assertSame(builder, builder.trustCaFromPem(pem.getBytes(StandardCharsets.US_ASCII)),
+        assertSame(
+                builder,
+                builder.trustCaFromPem(pem.getBytes(StandardCharsets.US_ASCII)),
                 "trustCaFromPem должен возвращать this");
     }
 }

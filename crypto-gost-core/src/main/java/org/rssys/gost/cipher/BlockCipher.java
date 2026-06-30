@@ -1,7 +1,6 @@
 package org.rssys.gost.cipher;
 
 import org.rssys.gost.util.DataLengthException;
-import org.rssys.gost.util.OutputLengthException;
 
 public interface BlockCipher {
     void init(boolean forEncryption, CipherParameters params) throws IllegalArgumentException;

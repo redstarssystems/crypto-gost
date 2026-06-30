@@ -1,25 +1,27 @@
 package org.rssys.gost.jca;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.security.Security;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.rssys.gost.api.CmacApi;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.jca.key.GostSecretKey;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.security.Security;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 @DisplayName("GostMacSpi — HMAC и CMAC через JCA Mac")
 class GostMacTest {
 
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
-    private static final byte[] DATA = "тест MAC ГОСТ".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    private static final byte[] DATA =
+            "тест MAC ГОСТ".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
     @BeforeAll
     static void registerProvider() {
@@ -29,8 +31,26 @@ class GostMacTest {
     }
 
     // -----------------------------------------------------------------------
-    // HMAC-Стрибог-256
+    // HMAC-Стрибог — параметризованные тесты
     // -----------------------------------------------------------------------
+
+    @ParameterizedTest
+    @DisplayName("результат совпадает с Digest.hmac*/hmac*")
+    @CsvSource({"HmacGOST3411-2012-256, 32", "HmacGOST3411-2012-512, 64"})
+    void testHmacMatchesReferenceApi(String algo, int expectedLen) throws Exception {
+        SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
+        GostSecretKey key = new GostSecretKey(algo, keyParam);
+
+        Mac mac = Mac.getInstance(algo, PROVIDER);
+        mac.init(key);
+        byte[] jcaResult = mac.doFinal(DATA);
+
+        byte[] refResult =
+                expectedLen == 32 ? Digest.hmac256(DATA, keyParam) : Digest.hmac512(DATA, keyParam);
+        assertArrayEquals(
+                refResult, jcaResult, "JCA Mac должен давать тот же результат что и Digest.hmac*");
+        assertEquals(expectedLen, jcaResult.length);
+    }
 
     @Test
     @DisplayName("HmacGOST3411-2012-256: getInstance не бросает исключений")
@@ -38,21 +58,6 @@ class GostMacTest {
         Mac mac = Mac.getInstance("HmacGOST3411-2012-256", PROVIDER);
         assertNotNull(mac);
         assertEquals(32, mac.getMacLength());
-    }
-
-    @Test
-    @DisplayName("HmacGOST3411-2012-256: результат совпадает с Digest.hmac256")
-    void testHmac256MatchesReferenceApi() throws Exception {
-        SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
-        GostSecretKey key     = new GostSecretKey("HmacGOST3411-2012-256", keyParam);
-
-        Mac mac    = Mac.getInstance("HmacGOST3411-2012-256", PROVIDER);
-        mac.init(key);
-        byte[] jcaResult = mac.doFinal(DATA);
-
-        byte[] refResult = Digest.hmac256(DATA, keyParam);
-        assertArrayEquals(refResult, jcaResult,
-            "JCA Mac должен давать тот же результат что и Digest.hmac256");
     }
 
     @Test
@@ -71,7 +76,7 @@ class GostMacTest {
     @DisplayName("HmacGOST3411-2012-256: инкрементальный update = однократный doFinal")
     void testHmac256Incremental() throws Exception {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
-        GostSecretKey key     = new GostSecretKey("HmacGOST3411-2012-256", keyParam);
+        GostSecretKey key = new GostSecretKey("HmacGOST3411-2012-256", keyParam);
 
         Mac mac = Mac.getInstance("HmacGOST3411-2012-256", PROVIDER);
 
@@ -90,23 +95,8 @@ class GostMacTest {
     }
 
     // -----------------------------------------------------------------------
-    // HMAC-Стрибог-512
+    // HMAC-Стрибог-512 (reference match параметризован выше)
     // -----------------------------------------------------------------------
-
-    @Test
-    @DisplayName("HmacGOST3411-2012-512: результат совпадает с Digest.hmac512, длина 64")
-    void testHmac512MatchesReferenceApi() throws Exception {
-        SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
-        GostSecretKey key     = new GostSecretKey("HmacGOST3411-2012-512", keyParam);
-
-        Mac mac    = Mac.getInstance("HmacGOST3411-2012-512", PROVIDER);
-        mac.init(key);
-        byte[] jcaResult = mac.doFinal(DATA);
-
-        byte[] refResult = Digest.hmac512(DATA, keyParam);
-        assertArrayEquals(refResult, jcaResult);
-        assertEquals(64, jcaResult.length);
-    }
 
     @Test
     @DisplayName("HmacGOST3411-2012-512: эталонный вектор RFC 7836 Appendix B")
@@ -118,18 +108,21 @@ class GostMacTest {
 
         byte[] msg = fromHex("0126bdb87800af214341456563780100");
 
-        String expected = "a59bab22ecae19c65fbde6e5f4e9f5d8" +
-                          "549d31f037f9df9b905500e171923a77" +
-                          "3d5f1530f2ed7e964cb2eedc29e9ad2f" +
-                          "3afe93b2814f79f5000ffc0366c251e6";
+        String expected =
+                "a59bab22ecae19c65fbde6e5f4e9f5d8"
+                        + "549d31f037f9df9b905500e171923a77"
+                        + "3d5f1530f2ed7e964cb2eedc29e9ad2f"
+                        + "3afe93b2814f79f5000ffc0366c251e6";
 
         SecretKeySpec key = new SecretKeySpec(rawKey, "HmacGOST3411-2012-512");
         Mac mac = Mac.getInstance("HmacGOST3411-2012-512", PROVIDER);
         mac.init(key);
         byte[] result = mac.doFinal(msg);
 
-        assertEquals(expected, toHex(result),
-            "JCA HMAC-512 должен совпадать с эталоном RFC 7836 Appendix B");
+        assertEquals(
+                expected,
+                toHex(result),
+                "JCA HMAC-512 должен совпадать с эталоном RFC 7836 Appendix B");
     }
 
     // -----------------------------------------------------------------------
@@ -148,15 +141,15 @@ class GostMacTest {
     @DisplayName("CMAC-Kuznyechik: результат совпадает с CmacApi.cmac")
     void testCmacMatchesReferenceApi() throws Exception {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
-        GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
+        GostSecretKey key = new GostSecretKey("Kuznyechik", keyParam);
 
         Mac mac = Mac.getInstance("CMAC-Kuznyechik", PROVIDER);
         mac.init(key);
         byte[] jcaResult = mac.doFinal(DATA);
 
         byte[] refResult = CmacApi.cmac(DATA, keyParam);
-        assertArrayEquals(refResult, jcaResult,
-            "JCA Mac должен давать тот же результат что и CmacApi.cmac");
+        assertArrayEquals(
+                refResult, jcaResult, "JCA Mac должен давать тот же результат что и CmacApi.cmac");
         assertEquals(16, jcaResult.length);
     }
 
@@ -164,7 +157,7 @@ class GostMacTest {
     @DisplayName("CMAC-Kuznyechik: инкрементальный update = однократный doFinal")
     void testCmacIncremental() throws Exception {
         SymmetricKey keyParam = KeyGenerator.generateSymmetricKey();
-        GostSecretKey key     = new GostSecretKey("Kuznyechik", keyParam);
+        GostSecretKey key = new GostSecretKey("Kuznyechik", keyParam);
 
         Mac mac = Mac.getInstance("CMAC-Kuznyechik", PROVIDER);
 
@@ -193,8 +186,7 @@ class GostMacTest {
         mac.init(new GostSecretKey("Kuznyechik", key2));
         byte[] tag2 = mac.doFinal(DATA);
 
-        assertFalse(java.util.Arrays.equals(tag1, tag2),
-            "Разные ключи должны давать разные теги");
+        assertFalse(java.util.Arrays.equals(tag1, tag2), "Разные ключи должны давать разные теги");
     }
 
     // -----------------------------------------------------------------------
@@ -211,8 +203,10 @@ class GostMacTest {
         hex = hex.replaceAll("\\s+", "");
         byte[] data = new byte[hex.length() / 2];
         for (int i = 0; i < data.length; i++) {
-            data[i] = (byte) ((Character.digit(hex.charAt(i * 2), 16) << 4)
-                             + Character.digit(hex.charAt(i * 2 + 1), 16));
+            data[i] =
+                    (byte)
+                            ((Character.digit(hex.charAt(i * 2), 16) << 4)
+                                    + Character.digit(hex.charAt(i * 2 + 1), 16));
         }
         return data;
     }

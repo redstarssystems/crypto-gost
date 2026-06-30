@@ -26,7 +26,7 @@ public final class OpenSslChecker {
 
     /**
      * Возвращает корневую директорию openssl (родитель bin/).
-     * Например, для /opt/openssl/bin/openssl → /opt/openssl.
+     * Например, для /opt/openssl/bin/openssl -> /opt/openssl.
      */
     public static String resolveOpenSslRoot() {
         String binary = resolveOpenSslBinary();
@@ -115,19 +115,21 @@ public final class OpenSslChecker {
      */
     public static void assumeEngineGost() {
         try {
-            String[] cmd = CrossValUtils.concat(
-                new String[]{resolveOpenSslBinary(), "genpkey"},
-                resolveEngineFlag(),
-                new String[]{"-algorithm", "gost2012_256",
-                             "-pkeyopt", "paramset:A",
-                             "-out", "/dev/null"});
+            String[] cmd =
+                    CrossValUtils.concat(
+                            new String[] {resolveOpenSslBinary(), "genpkey"},
+                            resolveEngineFlag(),
+                            new String[] {
+                                "-algorithm", "gost2012_256",
+                                "-pkeyopt", "paramset:A",
+                                "-out", "/dev/null"
+                            });
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.environment().putAll(getOpenSslEnv());
             Process p = pb.start();
             p.getInputStream().readAllBytes();
             int code = p.waitFor();
-            assertTrue(code == 0,
-                    "OpenSSL GOST (engine/provider) не найден — пропуск");
+            assertTrue(code == 0, "OpenSSL GOST (engine/provider) не найден — пропуск");
         } catch (Exception e) {
             fail("Проверка GOST (engine/provider) не удалась: " + e.getMessage());
         }
@@ -139,15 +141,17 @@ public final class OpenSslChecker {
      */
     public static void assumeKuznyechikCipher() {
         try {
-            String[] cmd = CrossValUtils.concat(
-                new String[]{resolveOpenSslBinary(), "list", "-cipher-algorithms"},
-                resolveEngineFlag());
+            String[] cmd =
+                    CrossValUtils.concat(
+                            new String[] {resolveOpenSslBinary(), "list", "-cipher-algorithms"},
+                            resolveEngineFlag());
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.environment().putAll(getOpenSslEnv());
             Process p = pb.start();
             String ciphers = new String(p.getInputStream().readAllBytes());
             p.waitFor();
-            assertTrue(ciphers.toLowerCase().contains("kuznyechik"),
+            assertTrue(
+                    ciphers.toLowerCase().contains("kuznyechik"),
                     "OpenSSL собран без поддержки Кузнечика — пропуск");
         } catch (Exception e) {
             fail("Проверка cipher-algorithms не удалась: " + e.getMessage());
@@ -159,15 +163,17 @@ public final class OpenSslChecker {
      */
     public static void assumeStreebog() {
         try {
-            String[] cmd = CrossValUtils.concat(
-                new String[]{resolveOpenSslBinary(), "dgst", "-md_gost12_256"},
-                resolveEngineFlag(),
-                new String[]{"/dev/null"});
+            String[] cmd =
+                    CrossValUtils.concat(
+                            new String[] {resolveOpenSslBinary(), "dgst", "-md_gost12_256"},
+                            resolveEngineFlag(),
+                            new String[] {"/dev/null"});
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.environment().putAll(getOpenSslEnv());
             Process p = pb.start();
             int code = p.waitFor();
-            assertTrue(code == 0,
+            assertTrue(
+                    code == 0,
                     "openssl не поддерживает -md_gost12_256 (нужен GOST-провайдер) — пропуск");
         } catch (Exception e) {
             fail("Проверка -streebog256 не удалась: " + e.getMessage());
@@ -179,7 +185,7 @@ public final class OpenSslChecker {
      */
     /**
      * Проверяет полную готовность gost-pkcs12:
-     * genpkey → req → pkcs12 -export.
+     * genpkey -> req -> pkcs12 -export.
      * Определяет синтаксис engine vs provider по версии OpenSSL.
      * При любом сбое — assumeTrue/abort (тест пропускается).
      */
@@ -188,43 +194,55 @@ public final class OpenSslChecker {
         Path tmp = null;
         try {
             tmp = Files.createTempDirectory("ossl-probe-");
-            Path keyFile  = tmp.resolve("probe.key");
+            Path keyFile = tmp.resolve("probe.key");
             Path certFile = tmp.resolve("probe.crt");
-            Path pfxFile  = tmp.resolve("probe.pfx");
+            Path pfxFile = tmp.resolve("probe.pfx");
 
             String[] engineFlag = resolveEngineFlag();
 
-            String[] genCmd = CrossValUtils.concat(
-                new String[]{resolveOpenSslBinary(), "genpkey"},
-                engineFlag,
-                new String[]{"-algorithm", "gost2012_256",
-                             "-pkeyopt", "paramset:A",
-                             "-out", keyFile.toString()});
+            String[] genCmd =
+                    CrossValUtils.concat(
+                            new String[] {resolveOpenSslBinary(), "genpkey"},
+                            engineFlag,
+                            new String[] {
+                                "-algorithm", "gost2012_256",
+                                "-pkeyopt", "paramset:A",
+                                "-out", keyFile.toString()
+                            });
             int c1 = run(genCmd);
-            assertTrue(c1 == 0,
-                "OpenSSL gost2012_256 genpkey недоступен — пропуск");
+            assertTrue(c1 == 0, "OpenSSL gost2012_256 genpkey недоступен — пропуск");
 
-            String[] reqCmd = CrossValUtils.concat(
-                new String[]{resolveOpenSslBinary(), "req", "-new", "-x509"},
-                engineFlag,
-                new String[]{"-key", keyFile.toString(),
-                             "-out", certFile.toString(),
-                             "-subj", "/CN=probe", "-days", "1",
-                             "-config", "/dev/null"});
+            String[] reqCmd =
+                    CrossValUtils.concat(
+                            new String[] {resolveOpenSslBinary(), "req", "-new", "-x509"},
+                            engineFlag,
+                            new String[] {
+                                "-key",
+                                keyFile.toString(),
+                                "-out",
+                                certFile.toString(),
+                                "-subj",
+                                "/CN=probe",
+                                "-days",
+                                "1",
+                                "-config",
+                                "/dev/null"
+                            });
             int c2 = run(reqCmd);
-            assertTrue(c2 == 0,
-                "OpenSSL req с gost2012_256 недоступен — пропуск");
+            assertTrue(c2 == 0, "OpenSSL req с gost2012_256 недоступен — пропуск");
 
-            String[] p12Cmd = CrossValUtils.concat(
-                new String[]{resolveOpenSslBinary(), "pkcs12", "-export"},
-                engineFlag,
-                new String[]{"-inkey", keyFile.toString(),
-                             "-in",    certFile.toString(),
-                             "-out",   pfxFile.toString(),
-                             "-passout", "pass:probe"});
+            String[] p12Cmd =
+                    CrossValUtils.concat(
+                            new String[] {resolveOpenSslBinary(), "pkcs12", "-export"},
+                            engineFlag,
+                            new String[] {
+                                "-inkey", keyFile.toString(),
+                                "-in", certFile.toString(),
+                                "-out", pfxFile.toString(),
+                                "-passout", "pass:probe"
+                            });
             int c3 = run(p12Cmd);
-            assertTrue(c3 == 0,
-                "OpenSSL pkcs12 -export с ГОСТ недоступен — пропуск");
+            assertTrue(c3 == 0, "OpenSSL pkcs12 -export с ГОСТ недоступен — пропуск");
 
         } catch (Exception e) {
             fail("Проверка gost pkcs12 не удалась: " + e.getMessage());
@@ -255,17 +273,32 @@ public final class OpenSslChecker {
         if (!root.isEmpty()) {
             Path osslModules = Paths.get(root, "lib", "ossl-modules");
             if (Files.isDirectory(osslModules)) {
-                String[] candidate = new String[]{
-                        "-provider-path", osslModules.toString(),
-                        "-provider", "gostprov", "-provider", "default"};
+                String[] candidate =
+                        new String[] {
+                            "-provider-path",
+                            osslModules.toString(),
+                            "-provider",
+                            "gostprov",
+                            "-provider",
+                            "default"
+                        };
                 try {
-                    ProcessBuilder pb = new ProcessBuilder(
-                            opensslBin, "genpkey",
-                            "-provider-path", osslModules.toString(),
-                            "-provider", "gostprov", "-provider", "default",
-                            "-algorithm", "gost2012_256",
-                            "-pkeyopt", "paramset:A",
-                            "-out", "/dev/null");
+                    ProcessBuilder pb =
+                            new ProcessBuilder(
+                                    opensslBin,
+                                    "genpkey",
+                                    "-provider-path",
+                                    osslModules.toString(),
+                                    "-provider",
+                                    "gostprov",
+                                    "-provider",
+                                    "default",
+                                    "-algorithm",
+                                    "gost2012_256",
+                                    "-pkeyopt",
+                                    "paramset:A",
+                                    "-out",
+                                    "/dev/null");
                     pb.environment().putAll(getOpenSslEnv());
                     Process p = pb.start();
                     p.getInputStream().readAllBytes();
@@ -274,31 +307,40 @@ public final class OpenSslChecker {
                         cachedEngineFlag = candidate;
                         return cachedEngineFlag;
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
         }
 
         // 2) provider gost (системный gost-engine)
         try {
-            ProcessBuilder pb = new ProcessBuilder(
-                    opensslBin, "genpkey",
-                    "-provider", "gost", "-provider", "default",
-                    "-algorithm", "gost2012_256",
-                    "-pkeyopt", "paramset:A",
-                    "-out", "/dev/null");
+            ProcessBuilder pb =
+                    new ProcessBuilder(
+                            opensslBin,
+                            "genpkey",
+                            "-provider",
+                            "gost",
+                            "-provider",
+                            "default",
+                            "-algorithm",
+                            "gost2012_256",
+                            "-pkeyopt",
+                            "paramset:A",
+                            "-out",
+                            "/dev/null");
             pb.environment().putAll(getOpenSslEnv());
             Process p = pb.start();
             p.getInputStream().readAllBytes();
             int code = p.waitFor();
             if (code == 0) {
-                cachedEngineFlag = new String[]{
-                        "-provider", "gost", "-provider", "default"};
+                cachedEngineFlag = new String[] {"-provider", "gost", "-provider", "default"};
                 return cachedEngineFlag;
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         // 3) engine gost (legacy)
-        cachedEngineFlag = new String[]{"-engine", "gost"};
+        cachedEngineFlag = new String[] {"-engine", "gost"};
         return cachedEngineFlag;
     }
 
@@ -312,41 +354,63 @@ public final class OpenSslChecker {
         Path tmp = null;
         try {
             tmp = Files.createTempDirectory("ossl-derive-probe-");
-            Path priv  = tmp.resolve("probe.der");
-            Path pub   = tmp.resolve("probe_pub.der");
+            Path priv = tmp.resolve("probe.der");
+            Path pub = tmp.resolve("probe_pub.der");
             Path shared = tmp.resolve("shared.bin");
 
-            int c1 = run(CrossValUtils.concat(
-                    new String[]{resolveOpenSslBinary(), "genpkey"},
-                    resolveEngineFlag(),
-                    new String[]{"-algorithm", "gost2012_256",
-                            "-pkeyopt", "paramset:A",
-                            "-outform", "DER",
-                            "-out", priv.toString()}));
-            assertTrue(c1 == 0,
-                    "OpenSSL genpkey gost2012_256 недоступен — пропуск");
+            int c1 =
+                    run(
+                            CrossValUtils.concat(
+                                    new String[] {resolveOpenSslBinary(), "genpkey"},
+                                    resolveEngineFlag(),
+                                    new String[] {
+                                        "-algorithm",
+                                        "gost2012_256",
+                                        "-pkeyopt",
+                                        "paramset:A",
+                                        "-outform",
+                                        "DER",
+                                        "-out",
+                                        priv.toString()
+                                    }));
+            assertTrue(c1 == 0, "OpenSSL genpkey gost2012_256 недоступен — пропуск");
 
-            int c2 = run(CrossValUtils.concat(
-                    new String[]{resolveOpenSslBinary(), "pkey"},
-                    resolveEngineFlag(),
-                    new String[]{"-in", priv.toString(),
-                            "-inform", "DER",
-                            "-pubout",
-                            "-outform", "DER",
-                            "-out", pub.toString()}));
-            assertTrue(c2 == 0,
-                    "OpenSSL pkey -pubout недоступен — пропуск");
+            int c2 =
+                    run(
+                            CrossValUtils.concat(
+                                    new String[] {resolveOpenSslBinary(), "pkey"},
+                                    resolveEngineFlag(),
+                                    new String[] {
+                                        "-in",
+                                        priv.toString(),
+                                        "-inform",
+                                        "DER",
+                                        "-pubout",
+                                        "-outform",
+                                        "DER",
+                                        "-out",
+                                        pub.toString()
+                                    }));
+            assertTrue(c2 == 0, "OpenSSL pkey -pubout недоступен — пропуск");
 
-            int c3 = run(CrossValUtils.concat(
-                    new String[]{resolveOpenSslBinary(), "pkeyutl", "-derive"},
-                    resolveEngineFlag(),
-                    new String[]{"-inkey", priv.toString(),
-                            "-keyform", "DER",
-                            "-peerkey", pub.toString(),
-                            "-peerform", "DER",
-                            "-out", shared.toString()}));
-            assertTrue(c3 == 0,
-                    "OpenSSL pkeyutl -derive с ГОСТ недоступен — пропуск");
+            int c3 =
+                    run(
+                            CrossValUtils.concat(
+                                    new String[] {resolveOpenSslBinary(), "pkeyutl", "-derive"},
+                                    resolveEngineFlag(),
+                                    new String[] {
+                                        "-inkey",
+                                        priv.toString(),
+                                        "-keyform",
+                                        "DER",
+                                        "-peerkey",
+                                        pub.toString(),
+                                        "-peerform",
+                                        "DER",
+                                        "-out",
+                                        shared.toString()
+                                    }));
+            assertTrue(c3 == 0, "OpenSSL pkeyutl -derive с ГОСТ недоступен — пропуск");
         } catch (Exception e) {
             fail("Проверка pkeyutl -derive не удалась: " + e.getMessage());
         } finally {
@@ -372,11 +436,14 @@ public final class OpenSslChecker {
         int exitCode = p.waitFor();
         if (exitCode != 0) {
             throw new RuntimeException(
-                    "Command failed (exit=" + exitCode + "): "
-                            + String.join(" ", cmd) + "\n" + out);
+                    "Command failed (exit="
+                            + exitCode
+                            + "): "
+                            + String.join(" ", cmd)
+                            + "\n"
+                            + out);
         }
     }
-
 
     /**
      * Определяет флаги провайдера/движка для команд OpenSSL,
@@ -409,14 +476,15 @@ public final class OpenSslChecker {
         }
 
         // 1) provider gost (системный gost-engine)
-        if (testTls13Flags(openssl, new String[]{"-provider", "gost", "-provider", "default"})) {
-            cachedTls13Flags = new String[]{"-provider", "gost", "-provider", "default"};
+        if (testTls13Flags(openssl, new String[] {"-provider", "gost", "-provider", "default"})) {
+            cachedTls13Flags = new String[] {"-provider", "gost", "-provider", "default"};
             return cachedTls13Flags;
         }
 
         // 2) provider gostprov (установлен в system-wide)
-        if (testTls13Flags(openssl, new String[]{"-provider", "gostprov", "-provider", "default"})) {
-            cachedTls13Flags = new String[]{"-provider", "gostprov", "-provider", "default"};
+        if (testTls13Flags(
+                openssl, new String[] {"-provider", "gostprov", "-provider", "default"})) {
+            cachedTls13Flags = new String[] {"-provider", "gostprov", "-provider", "default"};
             return cachedTls13Flags;
         }
 
@@ -424,9 +492,15 @@ public final class OpenSslChecker {
         if (!root.isEmpty()) {
             Path osslModules = Paths.get(root, "lib", "ossl-modules");
             if (Files.isDirectory(osslModules)) {
-                String[] candidate = new String[]{
-                        "-provider-path", osslModules.toString(),
-                        "-provider", "gostprov", "-provider", "default"};
+                String[] candidate =
+                        new String[] {
+                            "-provider-path",
+                            osslModules.toString(),
+                            "-provider",
+                            "gostprov",
+                            "-provider",
+                            "default"
+                        };
                 if (testTls13Flags(openssl, candidate)) {
                     cachedTls13Flags = candidate;
                     return cachedTls13Flags;
@@ -435,7 +509,7 @@ public final class OpenSslChecker {
         }
 
         // 4) engine gost (legacy)
-        cachedTls13Flags = new String[]{"-engine", "gost"};
+        cachedTls13Flags = new String[] {"-engine", "gost"};
         return cachedTls13Flags;
     }
 
@@ -468,11 +542,17 @@ public final class OpenSslChecker {
      */
     private static boolean testTls13Flags(String openssl, String[] flags) {
         try {
-            String[] cmd = CrossValUtils.concat(
-                    new String[]{openssl, "ciphers", "-s", "-tls1_3",
-                            "-ciphersuites", "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L"},
-                    flags
-            );
+            String[] cmd =
+                    CrossValUtils.concat(
+                            new String[] {
+                                openssl,
+                                "ciphers",
+                                "-s",
+                                "-tls1_3",
+                                "-ciphersuites",
+                                "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L"
+                            },
+                            flags);
             Process p = new ProcessBuilder(cmd).start();
             String out = new String(p.getInputStream().readAllBytes());
             p.waitFor();
@@ -492,17 +572,22 @@ public final class OpenSslChecker {
         String[] flags = resolveTls13AssumeFlags();
         try {
             String suite = "TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L";
-            String[] cmd = CrossValUtils.concat(
-                    new String[]{opensslBin, "ciphers", "-s", "-tls1_3", "-ciphersuites", suite},
-                    flags
-            );
+            String[] cmd =
+                    CrossValUtils.concat(
+                            new String[] {
+                                opensslBin, "ciphers", "-s", "-tls1_3", "-ciphersuites", suite
+                            },
+                            flags);
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.environment().putAll(getOpenSslEnv());
             Process p = pb.start();
             String out = new String(p.getInputStream().readAllBytes());
             int code = p.waitFor();
-            assertTrue(code == 0 && out.contains(suite),
-                    "OpenSSL не поддерживает GOST TLS 1.3 cipher suite (" + opensslBin + ") — пропуск");
+            assertTrue(
+                    code == 0 && out.contains(suite),
+                    "OpenSSL не поддерживает GOST TLS 1.3 cipher suite ("
+                            + opensslBin
+                            + ") — пропуск");
         } catch (Exception e) {
             fail("Проверка GOST TLS 1.3 не удалась: " + e.getMessage());
         }
@@ -510,19 +595,25 @@ public final class OpenSslChecker {
 
     public static void assumeCmacKuznyechik() {
         try {
-            String[] cmd = CrossValUtils.concat(
-                new String[]{resolveOpenSslBinary(), "mac",
-                        "-cipher", "kuznyechik-cbc",
-                        "-macopt",
-                        "hexkey:0000000000000000000000000000000000000000000000000000000000000000"},
-                resolveEngineFlag(),
-                new String[]{"CMAC"});
+            String[] cmd =
+                    CrossValUtils.concat(
+                            new String[] {
+                                resolveOpenSslBinary(),
+                                "mac",
+                                "-cipher",
+                                "kuznyechik-cbc",
+                                "-macopt",
+                                "hexkey:0000000000000000000000000000000000000000000000000000000000000000"
+                            },
+                            resolveEngineFlag(),
+                            new String[] {"CMAC"});
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.environment().putAll(getOpenSslEnv());
             pb.redirectInput(ProcessBuilder.Redirect.from(new File("/dev/null")));
             Process p = pb.start();
             int code = p.waitFor();
-            assertTrue(code == 0,
+            assertTrue(
+                    code == 0,
                     "openssl не поддерживает CMAC-Kuznyechik (нужен GOST-провайдер) — пропуск");
         } catch (Exception e) {
             fail("Проверка CMAC-Kuznyechik не удалась: " + e.getMessage());

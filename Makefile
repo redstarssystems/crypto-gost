@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: clean doc test test-stress-tlssession test-stress-tlssession-mixed fuzz fuzz-all
+.PHONY: clean doc format test test-stress-tlssession test-stress-tlssession-mixed fuzz fuzz-all
 
 ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -8,12 +8,17 @@ DUR ?= 300
 # Количество параллельных фаззинг-процессов. 1 job ≈ 2GB RSS.
 # На 32GB: JOBS=8, на 16GB: JOBS=4, на 8GB: JOBS=2
 JOBS ?= 3
-MODULES_FUZZ := core tls13 jsse
+MODULES_FUZZ := core tls13 jsse pkix
 
 # Авто-определение FQN fuzz-классов в каждом модуле
 FUZZ_CLASSES_core  := $(shell find crypto-gost-core/src/test/java  -name '*FuzzTest.java' | sed 's|.*/java/||; s|\.java$$||; s|/|.|g')
 FUZZ_CLASSES_tls13 := $(shell find crypto-gost-tls13/src/test/java -name '*FuzzTest.java' | sed 's|.*/java/||; s|\.java$$||; s|/|.|g')
 FUZZ_CLASSES_jsse  := $(shell find crypto-gost-jsse/src/test/java  -name '*FuzzTest.java' | sed 's|.*/java/||; s|\.java$$||; s|/|.|g')
+FUZZ_CLASSES_pkix  := $(shell find crypto-gost-pkix/src/test/java  -name '*FuzzTest.java' | sed 's|.*/java/||; s|\.java$$||; s|/|.|g')
+
+# Форматирование Java-кода через Spotless (Google Java Format, стиль AOSP)
+format:
+	mvn spotless:apply
 
 # То же что и mvn test (запуск всех unit-тестов), но с подсчетом их общего количества в конце
 test:
@@ -96,14 +101,16 @@ fuzz-all:
 	exit $$total_fail
 
 clean:
-	cd $(ROOT) && mvn clean -q
+	find $(ROOT) -type d -name target -exec rm -rf {} + 2>/dev/null
+	rm -f $(ROOT)/dependency-reduced-pom.xml $(ROOT)/*.log $(ROOT)/*.orig
 	$(MAKE) -s -C bench clean
 	$(MAKE) -s -C examples clean
 	$(MAKE) -s -C x-validation-tests clean
 	# Фаззинг-артефакты (cifuzz корпус, crash-файлы)
 	rm -rf $(ROOT)/crypto-gost-core/.cifuzz-corpus \
 	       $(ROOT)/crypto-gost-jsse/.cifuzz-corpus \
-	       $(ROOT)/crypto-gost-tls13/.cifuzz-corpus
+	       $(ROOT)/crypto-gost-tls13/.cifuzz-corpus \
+	       $(ROOT)/crypto-gost-pkix/.cifuzz-corpus
 	find $(ROOT) -path '*/fuzz*/crash-*' -delete 2>/dev/null
 	@echo "All modules cleaned."
 

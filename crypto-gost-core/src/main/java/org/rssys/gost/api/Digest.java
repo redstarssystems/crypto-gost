@@ -95,11 +95,11 @@ public final class Digest {
     public Digest(Algorithm algorithm) {
         if (algorithm == Algorithm.HMAC_256 || algorithm == Algorithm.HMAC_512) {
             throw new IllegalArgumentException(
-                algorithm + " requires a key — use Digest(Algorithm, SymmetricKey)");
+                    algorithm + " requires a key — use Digest(Algorithm, SymmetricKey)");
         }
-        this.algorithm  = algorithm;
+        this.algorithm = algorithm;
         this.digestImpl = createDigestImpl(algorithm);
-        this.mac        = null;
+        this.mac = null;
     }
 
     /**
@@ -112,11 +112,11 @@ public final class Digest {
     public Digest(Algorithm algorithm, SymmetricKey key) {
         if (algorithm == Algorithm.STREEBOG_256 || algorithm == Algorithm.STREEBOG_512) {
             throw new IllegalArgumentException(
-                algorithm + " does not use a key — use Digest(Algorithm)");
+                    algorithm + " does not use a key — use Digest(Algorithm)");
         }
-        this.algorithm  = algorithm;
+        this.algorithm = algorithm;
         this.digestImpl = null;
-        this.mac        = createHmac(algorithm, key);
+        this.mac = createHmac(algorithm, key);
     }
 
     // -----------------------------------------------------------------------
@@ -159,7 +159,7 @@ public final class Digest {
             return out;
         } else {
             byte[] out = new byte[mac.getMacSize()];
-            mac.doFinal(out, 0);        // doFinal вызывает reset() внутри
+            mac.doFinal(out, 0); // doFinal вызывает reset() внутри
             return out;
         }
     }
@@ -247,18 +247,26 @@ public final class Digest {
 
     private static org.rssys.gost.digest.Digest createDigestImpl(Algorithm algorithm) {
         switch (algorithm) {
-            case STREEBOG_256: return new Streebog256();
-            case STREEBOG_512: return new Streebog512();
-            default: throw new IllegalArgumentException("Not a digest algorithm: " + algorithm);
+            case STREEBOG_256:
+                return new Streebog256();
+            case STREEBOG_512:
+                return new Streebog512();
+            default:
+                throw new IllegalArgumentException("Not a digest algorithm: " + algorithm);
         }
     }
 
     private static Mac createHmac(Algorithm algorithm, SymmetricKey key) {
         Mac m;
         switch (algorithm) {
-            case HMAC_256: m = new Hmac(new Streebog256()); break;
-            case HMAC_512: m = new Hmac(new Streebog512()); break;
-            default: throw new IllegalArgumentException("Not an HMAC algorithm: " + algorithm);
+            case HMAC_256:
+                m = new Hmac(new Streebog256());
+                break;
+            case HMAC_512:
+                m = new Hmac(new Streebog512());
+                break;
+            default:
+                throw new IllegalArgumentException("Not an HMAC algorithm: " + algorithm);
         }
         m.init(key);
         return m;

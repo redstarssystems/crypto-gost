@@ -3,18 +3,6 @@ package org.rssys.gost.netty;
 import io.netty.handler.ssl.ApplicationProtocolConfig;
 import io.netty.handler.ssl.CipherSuiteFilter;
 import io.netty.handler.ssl.ClientAuth;
-import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.engine.GostSSLSessionContext;
-import org.rssys.gost.util.CryptoRandom;
-
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLSessionContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.TrustManagerFactory;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.security.Provider;
@@ -23,6 +11,17 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSessionContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * Fluent builder для {@link GostSslContext}.
@@ -110,10 +109,11 @@ public final class GostSslContextBuilder {
      */
     public static GostSslContextBuilder forServer(KeyManager km) {
         if (km == null) {
-            throw new IllegalArgumentException("GostSslContextBuilder.forServer: KeyManager must not be null");
+            throw new IllegalArgumentException(
+                    "GostSslContextBuilder.forServer: KeyManager must not be null");
         }
         GostSslContextBuilder b = new GostSslContextBuilder(false);
-        b.keyManagers = new KeyManager[]{km};
+        b.keyManagers = new KeyManager[] {km};
         return b;
     }
 
@@ -135,7 +135,7 @@ public final class GostSslContextBuilder {
      * Задаёт единственный TrustManager для проверки сертификатов пира.
      */
     public GostSslContextBuilder trustManager(TrustManager tm) {
-        this.trustManagers = new TrustManager[]{tm};
+        this.trustManagers = new TrustManager[] {tm};
         this.trustManagerFactory = null;
         return this;
     }
@@ -164,7 +164,7 @@ public final class GostSslContextBuilder {
      * Задаёт единственный KeyManager для серверного сертификата (или клиентского при mTLS).
      */
     public GostSslContextBuilder keyManager(KeyManager km) {
-        this.keyManagers = new KeyManager[]{km};
+        this.keyManagers = new KeyManager[] {km};
         this.keyManagerFactory = null;
         return this;
     }
@@ -262,7 +262,7 @@ public final class GostSslContextBuilder {
             configureSessionContext(sslContext);
         }
 
-        // WHY: redirect оба контекста — сервер пишет NST в serverSessionContext
+        // redirect оба контекста — сервер пишет NST в serverSessionContext
         // при full handshake, клиент ищет PSK в clientSessionContext при reconnect.
         // Cast безопасен: GostSSLContextSpi создаёт именно GostSSLSessionContext.
         if (externalSessionContext != null) {
@@ -277,12 +277,16 @@ public final class GostSslContextBuilder {
         ApplicationProtocolConfig apnConfig = buildApnConfig();
         List<String> gostCiphers = Arrays.asList(GostJsseConstants.SUPPORTED_CIPHER_SUITES);
 
-        GostSslContext gostCtx = new GostSslContext(
-                sslContext, isClient,
-                gostCiphers, PASSTHROUGH_FILTER,
-                apnConfig, clientAuth,
-                GostJsseConstants.SUPPORTED_PROTOCOLS,
-                false);
+        GostSslContext gostCtx =
+                new GostSslContext(
+                        sslContext,
+                        isClient,
+                        gostCiphers,
+                        PASSTHROUGH_FILTER,
+                        apnConfig,
+                        clientAuth,
+                        GostJsseConstants.SUPPORTED_PROTOCOLS,
+                        false);
 
         verifyCipherSuites(gostCtx, gostCiphers);
 
@@ -297,14 +301,12 @@ public final class GostSslContextBuilder {
         if (isClient) {
             TrustManager[] tm = resolveTrustManagers();
             if (tm == null || tm.length == 0) {
-                throw new SSLException(
-                        "GostSslContext: client requires at least one TrustManager");
+                throw new SSLException("GostSslContext: client requires at least one TrustManager");
             }
         } else {
             KeyManager[] km = resolveKeyManagers();
             if (km == null || km.length == 0) {
-                throw new SSLException(
-                        "GostSslContext: server requires at least one KeyManager");
+                throw new SSLException("GostSslContext: server requires at least one KeyManager");
             }
             if (clientAuth != ClientAuth.NONE) {
                 TrustManager[] tm = resolveTrustManagers();
@@ -331,9 +333,10 @@ public final class GostSslContextBuilder {
     }
 
     private void configureSessionContext(SSLContext sslContext) {
-        for (SSLSessionContext ss : new SSLSessionContext[]{
-                sslContext.getClientSessionContext(),
-                sslContext.getServerSessionContext()}) {
+        for (SSLSessionContext ss :
+                new SSLSessionContext[] {
+                    sslContext.getClientSessionContext(), sslContext.getServerSessionContext()
+                }) {
             if (ss == null) continue;
             if (sessionCacheSizeSet) {
                 ss.setSessionCacheSize((int) Math.min(sessionCacheSize, Integer.MAX_VALUE));
@@ -344,7 +347,7 @@ public final class GostSslContextBuilder {
         }
     }
 
-    // WHY: GostSSLEngine при ALPN mismatch возвращает null из селектора —
+    // GostSSLEngine при ALPN mismatch возвращает null из селектора —
     // handshake продолжается без ALPN (applicationProtocol = null).
     // NO_ADVERTISE + ACCEPT отражают реальное поведение: mismatch не роняет
     // handshake, а просто не включает ALPN-расширение в EncryptedExtensions.
@@ -376,12 +379,15 @@ public final class GostSslContextBuilder {
         if (effective.isEmpty()) {
             throw new SSLException(
                     "GostSslContext: no cipher suites enabled. "
-                            + "Expected GOST suites: " + allowedSuites);
+                            + "Expected GOST suites: "
+                            + allowedSuites);
         }
         if (!nonGost.isEmpty()) {
             throw new SSLException(
-                    "GostSslContext: non-GOST cipher suites detected: " + nonGost
-                            + ". Only GOST suites are allowed: " + allowedSuites);
+                    "GostSslContext: non-GOST cipher suites detected: "
+                            + nonGost
+                            + ". Only GOST suites are allowed: "
+                            + allowedSuites);
         }
     }
 }

@@ -1,18 +1,8 @@
 package org.rssys.gost.jsse.engine;
 
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsException;
-import org.rssys.gost.tls13.message.TlsMessageParser;
-import org.rssys.gost.tls13.psk.InMemoryPskStore;
-import org.rssys.gost.tls13.psk.PskEntry;
-import org.rssys.gost.tls13.psk.TlsPskHelper;
-
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSessionContext;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -21,6 +11,15 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSessionContext;
+import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsException;
+import org.rssys.gost.tls13.message.TlsMessageParser;
+import org.rssys.gost.tls13.psk.InMemoryPskStore;
+import org.rssys.gost.tls13.psk.PskEntry;
+import org.rssys.gost.tls13.psk.TlsPskHelper;
 
 /**
  * Контекст сессии для ГОСТ TLS 1.3 по JSSE-контракту.
@@ -30,7 +29,7 @@ import java.util.concurrent.locks.ReentrantLock;
  *   <li>{@link InMemoryPskStore} — PSK-тикеты для session resumption</li>
  *   <li>{@code ConcurrentHashMap<sessionId, GostSSLSession>} — для JSSE API
  *       ({@link #getSession(byte[])}, {@link #getIds()})</li>
- *   <li>{@code ConcurrentHashMap<HostPort, byte[]>} — привязка (host,port)→идентификатор
+ *   <li>{@code ConcurrentHashMap<HostPort, byte[]>} — привязка (host,port)->идентификатор
  *       тикета для безопасного клиентского lookup</li>
  * </ul>
  * <p>
@@ -44,6 +43,7 @@ public final class GostSSLSessionContext implements SSLSessionContext {
 
     /** RFC 8446 §4.6.1: ticket_lifetime MUST NOT exceed 604800 seconds (7 days) */
     static final long RFC_MAX_TICKET_LIFETIME = 604800L;
+
     private static final int DEFAULT_MAX_PSK = 1000;
     private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSSLSessionContext");
 
@@ -60,7 +60,7 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     private Map<HostPort, byte[]> identityByHost;
     private final TlsCiphersuite ciphersuite;
     private final int hashLen;
-    private volatile int sessionTimeout = 86400;
+    private volatile int sessionTimeout = TlsConstants.DEFAULT_SESSION_TIMEOUT;
     private volatile int sessionCacheSize;
 
     /**
@@ -69,13 +69,15 @@ public final class GostSSLSessionContext implements SSLSessionContext {
      */
     public GostSSLSessionContext(TlsCiphersuite ciphersuite, int hashLen) {
         this.pskStore = new InMemoryPskStore(DEFAULT_MAX_PSK);
-        this.sessions = new LinkedHashMap<>(16, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<ByteBuffer, GostSSLSession> eldest) {
-                if (sessionCacheSize > 0 && size() > sessionCacheSize) return true;
-                return !eldest.getValue().isValid();
-            }
-        };
+        this.sessions =
+                new LinkedHashMap<>(16, 0.75f, true) {
+                    @Override
+                    protected boolean removeEldestEntry(
+                            Map.Entry<ByteBuffer, GostSSLSession> eldest) {
+                        if (sessionCacheSize > 0 && size() > sessionCacheSize) return true;
+                        return !eldest.getValue().isValid();
+                    }
+                };
         this.identityByHost = new ConcurrentHashMap<>();
         this.ciphersuite = ciphersuite;
         this.hashLen = hashLen;
@@ -166,8 +168,8 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     // ========================================================================
 
     /**
-     * Сохраняет сессию в кэш sessionId→GostSSLSession и устанавливает
-     * обратную ссылку session→context.
+     * Сохраняет сессию в кэш sessionId->GostSSLSession и устанавливает
+     * обратную ссылку session->context.
      */
     void putSession(GostSSLSession session) {
         sessionsLock.lock();
@@ -197,7 +199,7 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     }
 
     /**
-     * Сохраняет NewSessionTicket в PskStore и в карту host:port→identity.
+     * Сохраняет NewSessionTicket в PskStore и в карту host:port->identity.
      * <p>
      * Постусловие: PSK доступен для последующего resumption через
      * {@link #getForClientResumption(String, int)}.
@@ -208,29 +210,42 @@ public final class GostSSLSessionContext implements SSLSessionContext {
      * @param nstBody    тело NewSessionTicket (парсится внутри)
      * @throws TlsException при ошибке парсинга NST
      */
-    void saveNewSessionTicket(String peerHost, int peerPort,
-                               byte[] rms, byte[] nstBody) throws TlsException {
+    void saveNewSessionTicket(String peerHost, int peerPort, byte[] rms, byte[] nstBody)
+            throws TlsException {
         TlsMessageParser.ParsedNewSessionTicket parsed =
                 TlsMessageParser.parseNewSessionTicket(nstBody);
         byte[] psk = TlsPskHelper.derivePsk(rms, parsed.ticketNonce, hashLen);
         if (psk == null) {
-            LOG.log(Level.WARNING, "PSK derivation failed for {0}:{1}, NST not saved",
-                    peerHost, peerPort);
+            LOG.log(
+                    Level.WARNING,
+                    "PSK derivation failed for {0}:{1}, NST not saved",
+                    peerHost,
+                    peerPort);
             return;
         }
         long effectiveLifetime = effectiveTtl(parsed.ticketLifetime);
-        PskEntry entry = new PskEntry(parsed.ticket, effectiveLifetime,
-                parsed.ticketAgeAdd, parsed.ticketNonce, psk,
-                System.currentTimeMillis());
+        PskEntry entry =
+                new PskEntry(
+                        parsed.ticket,
+                        effectiveLifetime,
+                        parsed.ticketAgeAdd,
+                        parsed.ticketNonce,
+                        psk,
+                        System.currentTimeMillis());
         pskStore.onTicketReceived(entry);
         // ConcurrentHashMap без LRU — при превышении лимита вытесняем случайный entry
         if (identityByHost.size() >= maxIdentityEntries) {
-            identityByHost.entrySet().stream().findAny().ifPresent(
-                    e -> identityByHost.remove(e.getKey()));
+            identityByHost.entrySet().stream()
+                    .findAny()
+                    .ifPresent(e -> identityByHost.remove(e.getKey()));
         }
         identityByHost.put(new HostPort(peerHost, peerPort), parsed.ticket);
-        LOG.log(Level.DEBUG, "NST saved for {0}:{1}, lifetime={2}s",
-                peerHost, peerPort, effectiveLifetime);
+        LOG.log(
+                Level.DEBUG,
+                "NST saved for {0}:{1}, lifetime={2}s",
+                peerHost,
+                peerPort,
+                effectiveLifetime);
     }
 
     /** Тестовый хелпер: подменить logger для перехвата сообщений. Возвращает предыдущий для restore в tearDown. */
@@ -241,7 +256,7 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     }
 
     /**
-     * Удаляет привязку host:port→identity из identityByHost.
+     * Удаляет привязку host:port->identity из identityByHost.
      * Вызывается из GostSSLEngine.processHandshakeFrames() при успешном PSK resumption.
      */
     void removeIdentity(String host, int port) {
@@ -251,8 +266,8 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     /**
      * Ищет PSK для клиентского resumption по (host, port).
      * <p>
-     * Безопасность: lookup идёт в два этапа — сначала host:port→identity,
-     * затем identity→PskEntry. Это исключает использование PSK от другого
+     * Безопасность: lookup идёт в два этапа — сначала host:port->identity,
+     * затем identity->PskEntry. Это исключает использование PSK от другого
      * сервера (императив #1).
      *
      * @param host DNS-имя сервера
@@ -313,7 +328,7 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     }
 
     /**
-     * Value-based ключ для карты host:port→identity.
+     * Value-based ключ для карты host:port->identity.
      * equals/hashCode по (host, port).
      */
     private static final class HostPort {

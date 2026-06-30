@@ -21,7 +21,6 @@ public final class GostSslDev {
      * Для production используйте {@link GostSsl#clientContext(byte[])}.
      */
     public static SSLContext trustAllClientContextInsecure() {
-        return GostSsl.buildContext(null, null, null, null,
-                null, false, -1, true, false);
+        return GostSsl.buildContext(null, null, null, null, null, false, -1, true, false);
     }
 }

@@ -1,5 +1,19 @@
 package org.rssys.gost.jsse.examples.socket;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.security.Security;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,22 +27,6 @@ import org.rssys.gost.jsse.socket.GostSSLSocket;
 import org.rssys.gost.jsse.testkit.GostTestCerts;
 import org.rssys.gost.jsse.testkit.GostTestCerts.CertChain;
 import org.rssys.gost.tls13.TlsCiphersuite;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.Socket;
-import java.net.SocketTimeoutException;
-import java.nio.charset.StandardCharsets;
-import java.security.Security;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Тесты таймаутов partial reads имитирующих реальные сетевые условия.
@@ -85,31 +83,35 @@ class SlowNetworkTest {
         // не отвечает на ClientHello: серверный тред просто спит, клиент
         // ждёт ServerHello и падает по SoTimeout.
         // Это поведение подтверждено кодом GostSSLServerSocket.accept().
-        GostSSLServerSocket serverSock = new GostSSLServerSocket(0, serverKm,
-                serverTm, sessionCtx);
+        GostSSLServerSocket serverSock = new GostSSLServerSocket(0, serverKm, serverTm, sessionCtx);
         try {
             int port = serverSock.getLocalPort();
 
             // Отдельный поток: accept без handshake — просто держим соединение
             CountDownLatch accepted = new CountDownLatch(1);
-            Thread serverThread = new Thread(() -> {
-                try {
-                    Socket s = serverSock.accept();
-                    accepted.countDown();
-                    // Не делаем startHandshake() — клиент ждёт ответ и таймаутит
-                    Thread.sleep(10000);
-                    s.close();
-                } catch (Exception ignored) {
-                }
-            }, "server-silent");
+            Thread serverThread =
+                    new Thread(
+                            () -> {
+                                try {
+                                    Socket s = serverSock.accept();
+                                    accepted.countDown();
+                                    // Не делаем startHandshake() — клиент ждёт ответ и таймаутит
+                                    Thread.sleep(10000);
+                                    s.close();
+                                } catch (Exception ignored) {
+                                }
+                            },
+                            "server-silent");
             serverThread.start();
 
-            GostSSLSocket client = new GostSSLSocket("localhost", port,
-                    clientKm, clientTm, sessionCtx);
+            GostSSLSocket client =
+                    new GostSSLSocket("localhost", port, clientKm, clientTm, sessionCtx);
             client.setSoTimeout(300); // 300ms таймаут
 
             Exception ex = assertThrows(Exception.class, client::startHandshake);
-            assertInstanceOf(SocketTimeoutException.class, ex,
+            assertInstanceOf(
+                    SocketTimeoutException.class,
+                    ex,
                     "Ожидался SocketTimeoutException, получено: " + ex.getClass().getName());
 
             client.close();
@@ -125,37 +127,39 @@ class SlowNetworkTest {
     void timeoutDuringReadAfterHandshake() throws Exception {
         // Полноценный TLS handshake, затем сервер медлит с ответом.
         // Клиент делает read() — таймаут.
-        GostSSLServerSocket serverSock = new GostSSLServerSocket(0, serverKm,
-                serverTm, sessionCtx);
+        GostSSLServerSocket serverSock = new GostSSLServerSocket(0, serverKm, serverTm, sessionCtx);
         try {
             int port = serverSock.getLocalPort();
 
             CountDownLatch accepted = new CountDownLatch(1);
             AtomicReference<Socket> acceptedRef = new AtomicReference<>();
-            Thread serverThread = new Thread(() -> {
-                try {
-                    GostSSLSocket serverSsl = (GostSSLSocket) serverSock.accept();
-                    acceptedRef.set(serverSsl);
-                    serverSsl.startHandshake();
-                    accepted.countDown();
-                    // Сервер не пишет ответ — клиентский read() таймаутит
-                    Thread.sleep(10000);
-                    serverSsl.close();
-                } catch (Exception ignored) {
-                }
-            }, "server-slow");
+            Thread serverThread =
+                    new Thread(
+                            () -> {
+                                try {
+                                    GostSSLSocket serverSsl = (GostSSLSocket) serverSock.accept();
+                                    acceptedRef.set(serverSsl);
+                                    serverSsl.startHandshake();
+                                    accepted.countDown();
+                                    // Сервер не пишет ответ — клиентский read() таймаутит
+                                    Thread.sleep(10000);
+                                    serverSsl.close();
+                                } catch (Exception ignored) {
+                                }
+                            },
+                            "server-slow");
             serverThread.start();
 
-            GostSSLSocket client = new GostSSLSocket("localhost", port,
-                    clientKm, clientTm, sessionCtx);
+            GostSSLSocket client =
+                    new GostSSLSocket("localhost", port, clientKm, clientTm, sessionCtx);
             client.setSoTimeout(300);
 
             // Клиент инициирует handshake
             client.startHandshake();
 
             // Ждём пока сервер примет и выполнит handshake
-            assertTrue(accepted.await(5, TimeUnit.SECONDS),
-                    "Сервер должен принять соединение за 5 с");
+            assertTrue(
+                    accepted.await(5, TimeUnit.SECONDS), "Сервер должен принять соединение за 5 с");
 
             // Клиент пишет и пытается прочитать — таймаут
             OutputStream out = client.getOutputStream();
@@ -163,11 +167,16 @@ class SlowNetworkTest {
             out.flush();
 
             InputStream in = client.getInputStream();
-            Exception ex = assertThrows(Exception.class, () -> {
-                byte[] buf = new byte[1024];
-                in.read(buf);
-            });
-            assertInstanceOf(SocketTimeoutException.class, ex,
+            Exception ex =
+                    assertThrows(
+                            Exception.class,
+                            () -> {
+                                byte[] buf = new byte[1024];
+                                in.read(buf);
+                            });
+            assertInstanceOf(
+                    SocketTimeoutException.class,
+                    ex,
                     "Ожидался SocketTimeoutException, получено: " + ex.getClass().getName());
 
             client.close();
@@ -183,43 +192,47 @@ class SlowNetworkTest {
         // write(byte[0]) не должен отправлять TLS-запись с нулевым телом —
         // RFC 8446 не допускает нулевые Application Data записи.
         // Внутренняя проверка отсекает пустые массивы до передачи в engine.
-        GostSSLServerSocket serverSock = new GostSSLServerSocket(0, serverKm,
-                serverTm, sessionCtx);
+        GostSSLServerSocket serverSock = new GostSSLServerSocket(0, serverKm, serverTm, sessionCtx);
         try {
             int port = serverSock.getLocalPort();
 
             CountDownLatch serverReady = new CountDownLatch(1);
-            Thread serverThread = new Thread(() -> {
-                try {
-                    GostSSLSocket serverSsl = (GostSSLSocket) serverSock.accept();
-                    serverSsl.startHandshake();
-                    serverReady.countDown();
-                    // Сервер читает и отвечает — не должен застрять из-за нулевой записи
-                    InputStream in = serverSsl.getInputStream();
-                    OutputStream out = serverSsl.getOutputStream();
-                    byte[] buf = new byte[1024];
-                    int len = in.read(buf);
-                    if (len > 0) {
-                        out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
-                        out.flush();
-                    }
-                    serverSsl.close();
-                } catch (Exception ignored) {
-                }
-            }, "server-zero");
+            Thread serverThread =
+                    new Thread(
+                            () -> {
+                                try {
+                                    GostSSLSocket serverSsl = (GostSSLSocket) serverSock.accept();
+                                    serverSsl.startHandshake();
+                                    serverReady.countDown();
+                                    // Сервер читает и отвечает — не должен застрять из-за нулевой
+                                    // записи
+                                    InputStream in = serverSsl.getInputStream();
+                                    OutputStream out = serverSsl.getOutputStream();
+                                    byte[] buf = new byte[1024];
+                                    int len = in.read(buf);
+                                    if (len > 0) {
+                                        out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
+                                        out.flush();
+                                    }
+                                    serverSsl.close();
+                                } catch (Exception ignored) {
+                                }
+                            },
+                            "server-zero");
             serverThread.start();
 
-            GostSSLSocket client = new GostSSLSocket("localhost", port,
-                    clientKm, clientTm, sessionCtx);
+            GostSSLSocket client =
+                    new GostSSLSocket("localhost", port, clientKm, clientTm, sessionCtx);
             client.setSoTimeout(TIMEOUT_MS);
             client.startHandshake();
 
             assertTrue(serverReady.await(5, TimeUnit.SECONDS));
 
             // write(0) — не должен упасть
-            assertDoesNotThrow(() -> {
-                client.getOutputStream().write(new byte[0]);
-            });
+            assertDoesNotThrow(
+                    () -> {
+                        client.getOutputStream().write(new byte[0]);
+                    });
 
             // write(0) не равносилен close — последующая запись должна работать
             OutputStream out = client.getOutputStream();
@@ -230,8 +243,7 @@ class SlowNetworkTest {
             byte[] buf = new byte[1024];
             int len = in.read(buf);
             String response = new String(buf, 0, len, StandardCharsets.UTF_8).trim();
-            assertTrue(response.contains("PONG"),
-                    "Ожидался PONG, получено: " + response);
+            assertTrue(response.contains("PONG"), "Ожидался PONG, получено: " + response);
 
             client.close();
             serverThread.join(2000);
@@ -245,36 +257,38 @@ class SlowNetworkTest {
     void timeoutThenRetry() throws Exception {
         // Сервер: handshake, потом перед отправкой PONG ждёт > SoTimeout.
         // Клиент: read() таймаутит, повторный read() получает данные.
-        GostSSLServerSocket serverSock = new GostSSLServerSocket(0, serverKm,
-                serverTm, sessionCtx);
+        GostSSLServerSocket serverSock = new GostSSLServerSocket(0, serverKm, serverTm, sessionCtx);
         try {
             int port = serverSock.getLocalPort();
 
             CountDownLatch serverReady = new CountDownLatch(1);
-            Thread serverThread = new Thread(() -> {
-                try {
-                    GostSSLSocket serverSsl = (GostSSLSocket) serverSock.accept();
-                    serverSsl.startHandshake();
-                    serverReady.countDown();
-                    InputStream in = serverSsl.getInputStream();
-                    OutputStream out = serverSsl.getOutputStream();
+            Thread serverThread =
+                    new Thread(
+                            () -> {
+                                try {
+                                    GostSSLSocket serverSsl = (GostSSLSocket) serverSock.accept();
+                                    serverSsl.startHandshake();
+                                    serverReady.countDown();
+                                    InputStream in = serverSsl.getInputStream();
+                                    OutputStream out = serverSsl.getOutputStream();
 
-                    byte[] buf = new byte[1024];
-                    int len = in.read(buf);
+                                    byte[] buf = new byte[1024];
+                                    int len = in.read(buf);
 
-                    // Пауза перед отправкой — клиент таймаутит
-                    Thread.sleep(1000);
+                                    // Пауза перед отправкой — клиент таймаутит
+                                    Thread.sleep(1000);
 
-                    out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
-                    out.flush();
-                    serverSsl.close();
-                } catch (Exception ignored) {
-                }
-            }, "server-delay");
+                                    out.write("PONG\n".getBytes(StandardCharsets.UTF_8));
+                                    out.flush();
+                                    serverSsl.close();
+                                } catch (Exception ignored) {
+                                }
+                            },
+                            "server-delay");
             serverThread.start();
 
-            GostSSLSocket client = new GostSSLSocket("localhost", port,
-                    clientKm, clientTm, sessionCtx);
+            GostSSLSocket client =
+                    new GostSSLSocket("localhost", port, clientKm, clientTm, sessionCtx);
             client.setSoTimeout(200);
             client.startHandshake();
 
@@ -287,7 +301,9 @@ class SlowNetworkTest {
             // Первый read — таймаут (сервер ещё не отправил ответ)
             InputStream in = client.getInputStream();
             byte[] buf = new byte[1024];
-            assertThrows(SocketTimeoutException.class, () -> in.read(buf),
+            assertThrows(
+                    SocketTimeoutException.class,
+                    () -> in.read(buf),
                     "Первый read должен упасть по таймауту");
 
             // Ждём пока сервер ответит
@@ -297,7 +313,8 @@ class SlowNetworkTest {
             client.setSoTimeout(TIMEOUT_MS);
             int len = in.read(buf);
             String response = new String(buf, 0, len, StandardCharsets.UTF_8).trim();
-            assertTrue(response.contains("PONG"),
+            assertTrue(
+                    response.contains("PONG"),
                     "Повторный read должен получить PONG, получено: " + response);
 
             client.close();

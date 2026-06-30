@@ -1,9 +1,8 @@
 package org.rssys.gost.kdf;
 
+import java.util.Arrays;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.mac.Hmac;
-
-import java.util.Arrays;
 
 /**
  * KDF_TREE_GOSTR3411_2012_256 (RFC 7836 §4.5).
@@ -46,7 +45,9 @@ public final class KdfTreeGostR3411_2012_256 {
         }
         if (keyLen > HASH_LEN) {
             throw new IllegalArgumentException(
-                "keyLen must be <= " + HASH_LEN + " (HMAC-Streebog-256 output size per RFC 7836 §4.5)");
+                    "keyLen must be <= "
+                            + HASH_LEN
+                            + " (HMAC-Streebog-256 output size per RFC 7836 §4.5)");
         }
 
         int bufLen = label.length + 1 + seed.length + INT_LEN + INT_LEN;
@@ -58,7 +59,7 @@ public final class KdfTreeGostR3411_2012_256 {
         byte[] lBytes = intToBytes(keyLen);
         int counterOff = label.length + 1 + seed.length;
         int lenOff = counterOff + INT_LEN;
-        buf[lenOff]     = lBytes[0];
+        buf[lenOff] = lBytes[0];
         buf[lenOff + 1] = lBytes[1];
         buf[lenOff + 2] = lBytes[2];
         buf[lenOff + 3] = lBytes[3];
@@ -71,7 +72,7 @@ public final class KdfTreeGostR3411_2012_256 {
 
         try {
             for (int i = 1; i <= count; i++) {
-                buf[counterOff]     = (byte) (i >> 24);
+                buf[counterOff] = (byte) (i >> 24);
                 buf[counterOff + 1] = (byte) (i >> 16);
                 buf[counterOff + 2] = (byte) (i >> 8);
                 buf[counterOff + 3] = (byte) i;
@@ -92,11 +93,8 @@ public final class KdfTreeGostR3411_2012_256 {
     }
 
     private static byte[] intToBytes(int value) {
-        return new byte[]{
-            (byte) (value >> 24),
-            (byte) (value >> 16),
-            (byte) (value >> 8),
-            (byte) value
+        return new byte[] {
+            (byte) (value >> 24), (byte) (value >> 16), (byte) (value >> 8), (byte) value
         };
     }
 }

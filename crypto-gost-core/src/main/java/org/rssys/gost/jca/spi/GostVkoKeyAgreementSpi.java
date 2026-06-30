@@ -1,5 +1,15 @@
 package org.rssys.gost.jca.spi;
 
+import java.math.BigInteger;
+import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidKeyException;
+import java.security.Key;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
+import javax.crypto.KeyAgreementSpi;
+import javax.crypto.SecretKey;
+import javax.crypto.ShortBufferException;
 import org.rssys.gost.api.KeyAgreement;
 import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jca.key.GostECPublicKey;
@@ -8,25 +18,14 @@ import org.rssys.gost.jca.spec.GostUkmParameterSpec;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
-import javax.crypto.KeyAgreementSpi;
-import javax.crypto.SecretKey;
-import javax.crypto.ShortBufferException;
-import java.math.BigInteger;
-import java.security.InvalidAlgorithmParameterException;
-import java.security.InvalidKeyException;
-import java.security.Key;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.security.spec.AlgorithmParameterSpec;
-
 /**
  * JCA {@link KeyAgreementSpi} для алгоритма VKO_GOSTR3410_2012_256
  * (RFC 7836 §4.3.1) — согласование 256-битного ключа на основе
  * ECDH и хэш-функции Стрибог-256.
  *
  * <p>Поддерживает однофазный VKO:
- * {@code engineInit(privKey, ukmSpec)} →
- * {@code engineDoPhase(pubKey, true)} →
+ * {@code engineInit(privKey, ukmSpec)} ->
+ * {@code engineDoPhase(pubKey, true)} ->
  * {@code engineGenerateSecret()}.
  *
  * <p>UKM обязателен и передаётся через {@link GostUkmParameterSpec}
@@ -67,11 +66,13 @@ public final class GostVkoKeyAgreementSpi extends KeyAgreementSpi {
     protected void engineInit(Key key, AlgorithmParameterSpec params, SecureRandom random)
             throws InvalidKeyException, InvalidAlgorithmParameterException {
         if (!(key instanceof GostECPrivateKey)) {
-            throw new InvalidKeyException("Expected GostECPrivateKey, got: " + key.getClass().getName());
+            throw new InvalidKeyException(
+                    "Expected GostECPrivateKey, got: " + key.getClass().getName());
         }
         if (!(params instanceof GostUkmParameterSpec)) {
             throw new InvalidAlgorithmParameterException(
-                    "Expected GostUkmParameterSpec, got: " + (params == null ? "null" : params.getClass().getName()));
+                    "Expected GostUkmParameterSpec, got: "
+                            + (params == null ? "null" : params.getClass().getName()));
         }
         GostECPrivateKey gostKey = (GostECPrivateKey) key;
         this.myPriv = gostKey.toPrivateKeyParameters();
@@ -100,7 +101,8 @@ public final class GostVkoKeyAgreementSpi extends KeyAgreementSpi {
                     "VKOGOST3410-2012-256 requires exactly one phase (lastPhase must be true)");
         }
         if (!(key instanceof GostECPublicKey)) {
-            throw new InvalidKeyException("Expected GostECPublicKey, got: " + key.getClass().getName());
+            throw new InvalidKeyException(
+                    "Expected GostECPublicKey, got: " + key.getClass().getName());
         }
         this.peerPub = ((GostECPublicKey) key).toPublicKeyParameters();
         return null;

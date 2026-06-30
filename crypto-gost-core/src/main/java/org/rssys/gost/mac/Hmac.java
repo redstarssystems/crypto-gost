@@ -1,7 +1,6 @@
 package org.rssys.gost.mac;
 
 import java.util.Arrays;
-
 import org.rssys.gost.cipher.CipherParameters;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.digest.Digest;
@@ -88,7 +87,7 @@ public class Hmac implements Mac {
         Arrays.fill(outputPad, OPAD);
 
         for (int i = 0; i < k.length; i++) {
-            inputPad[i]  ^= k[i];
+            inputPad[i] ^= k[i];
             outputPad[i] ^= k[i];
         }
 
@@ -143,7 +142,7 @@ public class Hmac implements Mac {
      * временных HMAC-буферов после генерации детерминированного нonce {@code k} по RFC 6979.
      */
     public void clear() {
-        Arrays.fill(inputPad,  (byte) 0);
+        Arrays.fill(inputPad, (byte) 0);
         Arrays.fill(outputPad, (byte) 0);
         digest.reset();
     }

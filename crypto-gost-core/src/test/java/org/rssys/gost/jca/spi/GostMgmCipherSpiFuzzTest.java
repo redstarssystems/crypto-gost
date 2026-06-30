@@ -2,23 +2,22 @@ package org.rssys.gost.jca.spi;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.jca.RssysGostProvider;
-import org.rssys.gost.jca.key.GostSecretKey;
-
-import javax.crypto.AEADBadTagException;
-import javax.crypto.BadPaddingException;
-import javax.crypto.Cipher;
-import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.NoSuchPaddingException;
-import javax.crypto.spec.IvParameterSpec;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.Security;
 import java.util.Arrays;
+import javax.crypto.AEADBadTagException;
+import javax.crypto.BadPaddingException;
+import javax.crypto.Cipher;
+import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
+import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.jca.RssysGostProvider;
+import org.rssys.gost.jca.key.GostSecretKey;
 
 /**
  * Fuzz-тесты для {@link GostMgmCipherSpi#engineDoFinal}.
@@ -62,8 +61,8 @@ class GostMgmCipherSpiFuzzTest {
 
     /**
      * Подаёт произвольный ciphertext (с тегом) в engineDoFinal.
-     * Путь: doFinalDecrypt → проверка длины → mgm.processBytes →
-     * mgm.finishDecryption → AEAD tag verification.
+     * Путь: doFinalDecrypt -> проверка длины -> mgm.processBytes ->
+     * mgm.finishDecryption -> AEAD tag verification.
      * <p>
      * Каждая итерация создаёт свежий Cipher + init — потому что
      * после doFinal буфер сбрасывается, но MGM-состояние может
@@ -83,8 +82,11 @@ class GostMgmCipherSpiFuzzTest {
             // Ожидаемо: неверные параметры
         } catch (IllegalBlockSizeException | BadPaddingException e) {
             // Ожидаемо: JCA-обёртки
-        } catch (NoSuchAlgorithmException | NoSuchProviderException | NoSuchPaddingException
-                | InvalidKeyException | InvalidAlgorithmParameterException e) {
+        } catch (NoSuchAlgorithmException
+                | NoSuchProviderException
+                | NoSuchPaddingException
+                | InvalidKeyException
+                | InvalidAlgorithmParameterException e) {
             // Ожидаемо: JCA-initialisation ошибки
         }
     }
@@ -111,8 +113,11 @@ class GostMgmCipherSpiFuzzTest {
             // Ожидаемо
         } catch (IllegalBlockSizeException | BadPaddingException e) {
             // Ожидаемо
-        } catch (NoSuchAlgorithmException | NoSuchProviderException | NoSuchPaddingException
-                | InvalidKeyException | InvalidAlgorithmParameterException e) {
+        } catch (NoSuchAlgorithmException
+                | NoSuchProviderException
+                | NoSuchPaddingException
+                | InvalidKeyException
+                | InvalidAlgorithmParameterException e) {
             // Ожидаемо: JCA-initialisation ошибки
         }
     }

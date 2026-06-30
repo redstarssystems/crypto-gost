@@ -1,19 +1,17 @@
 package org.rssys.gost.tls13.record;
 
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.mode.Mgm;
-import org.rssys.gost.cipher.Kuznyechik;
-import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.crypto.TlsTreeCache;
-
-import java.nio.ByteBuffer;
-import java.util.Arrays;
-
+import org.rssys.gost.util.AuthenticationException;
 
 /**
  * Уровень записей TLS 1.3 (RFC 8446 Section 5).
@@ -40,17 +38,18 @@ public final class TlsRecord {
     // Буфер для входящей зашифрованной TLS-записи + заголовок.
     // Переиспользуется между вызовами unprotect — не аллоцируем byte[] на каждый decrypt.
     // Размер: HEADER(5) + MAX_CIPHERTEXT(16640) = 16645. Достаточно для любой записи RFC 8446.
-    // НЕ удаляется при возможном shared-buffer рефакторинге transport↔record,
+    // НЕ удаляется при возможном shared-buffer рефакторинге transport<->record,
     // потому что MGM API (mgm.processBytes/mgm.finishDecryption) принимает
     // только byte[], не ByteBuffer. ByteBuffer от transport копируется сюда
     // один раз — цена ~5мкс/16KB на современном CPU.
-    private final byte[] recordBuf = new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
+    private final byte[] recordBuf =
+            new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
     private long seqNum;
     private final int tagLen;
 
     // Параметры TLSTREE
     private final long snmax;
-    private long rekeyThreshold = -1L;   // -1 = default (80% SNMAX)
+    private long rekeyThreshold = -1L; // -1 = default (80% SNMAX)
     private final long c1;
     private final long c2;
     private final long c3;
@@ -102,9 +101,10 @@ public final class TlsRecord {
      *                        0 = сброс на дефолт (16384)
      */
     public void setMaxFragmentLength(int maxFragLenCode) {
-        this.maxFragmentLength = (maxFragLenCode >= 1 && maxFragLenCode <= 4)
-                ? TlsConstants.MAX_FRAG_LEN_VALUES[maxFragLenCode]
-                : TlsConstants.MAX_PLAINTEXT_LENGTH;
+        this.maxFragmentLength =
+                (maxFragLenCode >= 1 && maxFragLenCode <= 4)
+                        ? TlsConstants.MAX_FRAG_LEN_VALUES[maxFragLenCode]
+                        : TlsConstants.MAX_PLAINTEXT_LENGTH;
     }
 
     /** Обнуляет ключи, IV, scratch-буферы и сбрасывает seqNum. */
@@ -247,8 +247,10 @@ public final class TlsRecord {
         DecryptResult r = doDecrypt(record, record.length);
         if (destOff < 0 || destOff + r.dataLen > dest.length) {
             throw new IllegalArgumentException(
-                    "Destination buffer too small: need " + (destOff + r.dataLen) +
-                    ", have " + dest.length);
+                    "Destination buffer too small: need "
+                            + (destOff + r.dataLen)
+                            + ", have "
+                            + dest.length);
         }
         System.arraycopy(plaintext, 0, dest, destOff, r.dataLen);
         seqNum++;
@@ -287,15 +289,16 @@ public final class TlsRecord {
         }
         int len = src.remaining();
         if (len + 1 > maxFragmentLength) {
-            throw new IllegalArgumentException(
-                    "Data exceeds maximum fragment size: " + len);
+            throw new IllegalArgumentException("Data exceeds maximum fragment size: " + len);
         }
         int innerLen = len + 1;
         int totalSize = TlsConstants.RECORD_HEADER_SIZE + innerLen + tagLen;
         if (dst.remaining() < totalSize) {
             throw new IllegalArgumentException(
-                    "Destination buffer too small: need " + totalSize +
-                    ", have " + dst.remaining());
+                    "Destination buffer too small: need "
+                            + totalSize
+                            + ", have "
+                            + dst.remaining());
         }
         if (seqNum < 0) {
             throw new IllegalStateException("Sequence number overflow");
@@ -390,14 +393,13 @@ public final class TlsRecord {
         }
 
         // Stage 2: peek заголовок — узнаём declared payload length (без consume)
-        int declaredLen = ((record.get(initialPos + 3) & 0xFF) << 8)
-                        | (record.get(initialPos + 4) & 0xFF);
+        int declaredLen =
+                ((record.get(initialPos + 3) & 0xFF) << 8) | (record.get(initialPos + 4) & 0xFF);
         int totalRecordLen = TlsConstants.RECORD_HEADER_SIZE + declaredLen;
 
         // Грубая проверка: payload не может быть меньше tag
         if (declaredLen < tagLen) {
-            throw new IllegalArgumentException(
-                    "Record payload too small for tag: " + declaredLen);
+            throw new IllegalArgumentException("Record payload too small for tag: " + declaredLen);
         }
 
         // Stage 3: хватает ли байт на всю запись?
@@ -409,7 +411,8 @@ public final class TlsRecord {
         // (doDecrypt тоже проверяет, но record.get в Stage 4 упадёт с BufferOverflowException
         // если declaredLen > recordBuf.length — а recordBuf фиксированного размера)
         if (declaredLen > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
-            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+            throw new TlsException(
+                    TlsConstants.ALERT_RECORD_OVERFLOW,
                     "Record too long: " + declaredLen + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
@@ -476,7 +479,8 @@ public final class TlsRecord {
      * @return результат дешифрования
      * @throws TlsException при превышении максимального размера записи
      */
-    private DecryptResult doDecrypt(byte[] buf, int len) throws AuthenticationException, TlsException {
+    private DecryptResult doDecrypt(byte[] buf, int len)
+            throws AuthenticationException, TlsException {
         if (buf == null || len < TlsConstants.RECORD_HEADER_SIZE + tagLen) {
             throw new IllegalArgumentException("Record too short");
         }
@@ -494,7 +498,8 @@ public final class TlsRecord {
         int payloadLen = ((buf[3] & 0xFF) << 8) | (buf[4] & 0xFF);
 
         if (payloadLen > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
-            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+            throw new TlsException(
+                    TlsConstants.ALERT_RECORD_OVERFLOW,
                     "Record too long: " + payloadLen + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
@@ -507,7 +512,8 @@ public final class TlsRecord {
             throw new IllegalArgumentException("Record payload too small for tag");
         }
         if (ciphertextLen > maxInnerPlaintext) {
-            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+            throw new TlsException(
+                    TlsConstants.ALERT_RECORD_OVERFLOW,
                     "Decrypted payload too long: " + ciphertextLen + " > " + maxInnerPlaintext);
         }
 
@@ -559,10 +565,14 @@ public final class TlsRecord {
         // Проверка против явно согласованного max_fragment_length (RFC 6066 §4).
         // При дефолтном значении (MAX_PLAINTEXT_LENGTH) проверка не применяется —
         // защита от запредельно больших записей обеспечивается maxInnerPlaintext выше.
-        if (maxFragmentLength < TlsConstants.MAX_PLAINTEXT_LENGTH && lastNonZero > maxFragmentLength) {
-            throw new TlsException(TlsConstants.ALERT_RECORD_OVERFLOW,
+        if (maxFragmentLength < TlsConstants.MAX_PLAINTEXT_LENGTH
+                && lastNonZero > maxFragmentLength) {
+            throw new TlsException(
+                    TlsConstants.ALERT_RECORD_OVERFLOW,
                     "Decrypted record exceeds negotiated max fragment length: "
-                    + lastNonZero + " > " + maxFragmentLength);
+                            + lastNonZero
+                            + " > "
+                            + maxFragmentLength);
         }
 
         byte innerContentType = plaintext[lastNonZero];
@@ -608,10 +618,10 @@ public final class TlsRecord {
      * Long.compareUnsigned корректно трактует его как 2^64-1.
      */
     private void checkSnmax() {
-        // Long.compareUnsigned корректен: snmax==Long.MIN_VALUE...-1 трактуется как беззнаковое 2^63...2^64-1
+        // Long.compareUnsigned корректен: snmax==Long.MIN_VALUE...-1 трактуется как беззнаковое
+        // 2^63...2^64-1
         if (Long.compareUnsigned(seqNum, snmax) >= 0) {
-            throw new IllegalStateException(
-                    "SNMAX exceeded: " + Long.toUnsignedString(seqNum));
+            throw new IllegalStateException("SNMAX exceeded: " + Long.toUnsignedString(seqNum));
         }
     }
 
@@ -647,6 +657,4 @@ public final class TlsRecord {
     public void setRekeyThreshold(long threshold) {
         this.rekeyThreshold = threshold;
     }
-
-
 }

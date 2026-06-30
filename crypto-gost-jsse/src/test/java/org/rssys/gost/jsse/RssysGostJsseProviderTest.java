@@ -1,16 +1,13 @@
 package org.rssys.gost.jsse;
 
+import static org.junit.jupiter.api.Assertions.*;
 
+import java.security.Security;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.KeyManagerFactory;
-import javax.net.ssl.TrustManagerFactory;
-import java.security.Provider;
-import java.security.Security;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Тесты регистрации RssysGostJsseProvider.
@@ -27,13 +24,13 @@ class RssysGostJsseProviderTest {
         assertEquals("RssysGostJsse", provider.getName());
         assertEquals("1.0", provider.getVersionStr());
 
-        // WHY: без этих сервисов TLS 1.3 через провайдер не работает
+        // без этих сервисов TLS 1.3 через провайдер не работает
         assertNotNull(provider.get("SSLContext.TLSv1.3"));
         assertNotNull(provider.get("SSLContext.GOST-TLSv1.3"));
         assertNotNull(provider.get("KeyManagerFactory.GostX509"));
         assertNotNull(provider.get("TrustManagerFactory.GostX509"));
 
-        // WHY: алиасы PKIX и TLS ведут на SunJCE —fallback запрещён
+        // алиасы PKIX и TLS ведут на SunJCE —fallback запрещён
         assertNull(provider.get("SSLContext.TLS"));
         assertNull(provider.get("KeyManagerFactory.PKIX"));
         assertNull(provider.get("TrustManagerFactory.PKIX"));
@@ -44,7 +41,9 @@ class RssysGostJsseProviderTest {
     void testSSLContextCreation() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         try {
-            SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
             assertNotNull(ctx, "SSLContext не должен быть null");
             ctx.init(null, null, null);
             assertNotNull(ctx.createSSLEngine(), "SSLEngine не должен быть null");
@@ -58,7 +57,8 @@ class RssysGostJsseProviderTest {
     void testGostTls13Name() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         try {
-            SSLContext ctx = SSLContext.getInstance("GOST-TLSv1.3", GostJsseConstants.PROVIDER_NAME);
+            SSLContext ctx =
+                    SSLContext.getInstance("GOST-TLSv1.3", GostJsseConstants.PROVIDER_NAME);
             assertNotNull(ctx, "SSLContext для GOST-TLSv1.3 не должен быть null");
         } finally {
             Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
@@ -70,7 +70,8 @@ class RssysGostJsseProviderTest {
     void testKeyManagerFactory() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         try {
-            KeyManagerFactory kmf = KeyManagerFactory.getInstance("GostX509", GostJsseConstants.PROVIDER_NAME);
+            KeyManagerFactory kmf =
+                    KeyManagerFactory.getInstance("GostX509", GostJsseConstants.PROVIDER_NAME);
             assertNotNull(kmf, "KeyManagerFactory не должен быть null");
         } finally {
             Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
@@ -82,7 +83,8 @@ class RssysGostJsseProviderTest {
     void testTrustManagerFactory() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         try {
-            TrustManagerFactory tmf = TrustManagerFactory.getInstance("GostX509", GostJsseConstants.PROVIDER_NAME);
+            TrustManagerFactory tmf =
+                    TrustManagerFactory.getInstance("GostX509", GostJsseConstants.PROVIDER_NAME);
             assertNotNull(tmf, "TrustManagerFactory не должен быть null");
         } finally {
             Security.removeProvider(GostJsseConstants.PROVIDER_NAME);

@@ -1,13 +1,11 @@
 package org.rssys.gost.tls13.transport;
 
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsTransport;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.SocketChannel;
-import java.util.Arrays;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsTransport;
 
 /**
  * Транспорт TLS 1.3 поверх {@link SocketChannel} (NIO).
@@ -27,7 +25,8 @@ public final class ChannelTlsTransport implements TlsTransport {
 
     private final SocketChannel channel;
     private final ByteBuffer headerBuf;
-    private final byte[] recordBuf = new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
+    private final byte[] recordBuf =
+            new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
     private volatile boolean closed;
 
     /**
@@ -80,8 +79,8 @@ public final class ChannelTlsTransport implements TlsTransport {
 
         int length = (headerBuf.get(3) & 0xFF) << 8 | (headerBuf.get(4) & 0xFF);
         if (length > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
-            throw new IOException("Record too long: " + length
-                    + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+            throw new IOException(
+                    "Record too long: " + length + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
         // Читаем тело напрямую в recordBuf через ByteBuffer.wrap (без аллокации)
@@ -118,14 +117,14 @@ public final class ChannelTlsTransport implements TlsTransport {
 
         int length = (headerBuf.get(3) & 0xFF) << 8 | (headerBuf.get(4) & 0xFF);
         if (length > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
-            throw new IOException("Record too long: " + length
-                    + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
+            throw new IOException(
+                    "Record too long: " + length + " > " + TlsConstants.MAX_CIPHERTEXT_LENGTH);
         }
 
         int total = TlsConstants.RECORD_HEADER_SIZE + length;
         if (dst.remaining() < total) {
-            throw new IOException("Destination buffer too small: need " + total
-                    + ", have " + dst.remaining());
+            throw new IOException(
+                    "Destination buffer too small: need " + total + ", have " + dst.remaining());
         }
 
         // Копируем заголовок в dst
@@ -150,8 +149,8 @@ public final class ChannelTlsTransport implements TlsTransport {
             try {
                 int read = channel.read(buf);
                 if (read == -1) throw new IOException("Connection closed by peer");
-                if (read == 0) throw new IllegalStateException(
-                        "Channel switched to non-blocking mode");
+                if (read == 0)
+                    throw new IllegalStateException("Channel switched to non-blocking mode");
             } catch (ClosedByInterruptException e) {
                 closed = true;
                 Thread.currentThread().interrupt();

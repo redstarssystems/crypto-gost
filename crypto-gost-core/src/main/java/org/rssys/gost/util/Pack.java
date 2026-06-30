@@ -22,7 +22,7 @@ public abstract class Pack {
     }
 
     /**
-     * Реверс порядка байт массива (big-endian ↔ little-endian).
+     * Реверс порядка байт массива (big-endian <-> little-endian).
      * Используется для интерпретации хэша по RFC 7091 §5.3 (LSB first).
      */
     public static byte[] reverseBytes(byte[] in) {

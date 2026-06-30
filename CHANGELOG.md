@@ -1,3 +1,494 @@
+# \[0.6.0\] - 30-06-2026
+
+Данный релиз вносит **ломающие** изменения в связи с новым модулем
+`crypto-gost-pkix` и миграцией кодовой базы на него.
+
+## Модуль crypto-gost-pkix
+
+### Добавлено
+
+- **Модуль `crypto-gost-pkix`** — новый модуль для PKIX-инфраструктуры:
+  ГОСТ-реестр OID, CMS (RFC 5652 + TC26), X.509-сертификаты, OCSP, CRL,
+  CSR (PKCS#10), PKCS#12, CAdES-T, TSP.
+
+- **CMS SignedData** — построение (`CmsSignedDataBuilder`) и верификация
+  (`CmsSignedDataVerifier`) по RFC 5652 §5. Результат верификации —
+  record `VerifiedSignedData` (данные + сертификат подписанта).
+  Поддерживаются инкапсулированные и detached подписи, signed-атрибуты,
+  встроенные сертификаты, валидация цепочки доверия. Верификатор
+  совместим с форматом подписи КриптоПРО (cryptcp → crypto-gost, BER
+  indefinite-length).
+
+- **CMS EnvelopedData** — шифрование (`CmsEnvelopedDataBuilder`) и
+  расшифрование (`CmsEnvelopedDataDecryptor`) по RFC 5652 §6.
+  KeyAgreeRecipientInfo с VKO + KExp15 (RFC 9189 §8.2.1) + Кузнечик
+  CTR-ACPKM (RFC 9337 §7). Эфемерные ключи и CEK затираются после
+  использования. Поддержка нескольких получателей.
+
+  **Совместимость:** КриптоПРО 5.0 использует KeyTransRecipientInfo с
+  ГОСТ 28147-89 (RFC 4490 §5). Совместимость с КриптоПРО на уровне
+  EnvelopedData отсутствует: разные поколения стандартов GOST CMS.
+
+- **Базовые CMS-структуры:** `CmsContentInfo` (с BER indefinite-length),
+  `CmsAttribute`, `CmsAlgorithmIdentifier`, `CmsIssuerAndSerialNumber`,
+  `CmsKeyWrap` / `Kexp15CmsKeyWrap`.
+
+- **`GostOids`** — перенесён из `crypto-gost-tls13` в
+  `crypto-gost-pkix`. Добавлены CMS OID: `CMS_SIGNED_DATA`,
+  `CMS_ENVELOPED_DATA`, `AGREEMENT_VKO_256`, `WRAP_KUZNYECHIK_KEXP15`,
+  атрибуты подписи. Добавлена константа `STREEBOG_512_HASH_LEN = 64`.
+  Добавлены OID-константы X.509-расширений: `EXT_SKI`, `EXT_CP`,
+  `EXT_AKI`. Добавлены CRL entry extension OID: `EXT_CRL_REASON`
+  (2.5.29.21), `EXT_INVALIDITY_DATE` (2.5.29.24),
+  `EXT_CERTIFICATE_ISSUER` (2.5.29.29). Добавлены CRL-level расширения:
+  `EXT_CRL_NUMBER` (2.5.29.20), `EXT_DELTA_CRL_INDICATOR` (2.5.29.27),
+  `EXT_FRESHEST_CRL` (2.5.29.46).
+
+- **Семантическое исправление УКЭП/УНЭП:** Константы `EKU_UKEP` /
+  `EKU_UNEP` переименованы в `POLICY_KC1` / `POLICY_KC2`, поскольку OID
+  `1.2.643.100.113.x` соответствуют классам криптосредств KC1/KC2 (RFC
+  9215 §5.2, Приказ ФСБ №795 п.28) и размещаются в CertificatePolicies
+  (2.5.29.32), а не в ExtendedKeyUsage. В `GostCertificateBuilder`
+  добавлен `buildCertificatePoliciesExtension()`, в `GostOids` —
+  константы `POLICY_KC1` / `POLICY_KC2`, в `GostDerParser` —
+  `KC1_OID_BYTES` / `KC2_OID_BYTES`. В `matchesOidFilter()` добавлена
+  поддержка фильтра по `CP_OID_BYTES` (структурный аналог EKU-ветки).
+  **Ломающее изменение:** использование старых имён приведёт к ошибке
+  компиляции.
+
+- **`PkixException`** — checked-исключение PKIX-слоя
+  (`extends Exception`). Ошибка верификации сертификата — часть
+  контракта. TLS-адаптер ловит и оборачивает в `TlsException` с
+  маппингом alert-кода по `Reason` enum вместо grep по тексту сообщения.
+
+- **`GostCertificate`** — парсинг и верификация X.509-сертификатов ГОСТ
+  Р 34.10-2012: извлечение DN, serial, validity, расширений (KeyUsage,
+  EKU, BasicConstraints, SAN, CDP, AIA), верификация подписи, проверка
+  срока, проверка hostname по dNSName/iPAddress (RFC 6125):
+  `verifyHostname()` — полная проверка сертификата, `matchDnsName()` —
+  атомарное wildcard-сопоставление hostname↔dNSName для внешних
+  вызывающих (KeyManager).
+
+- **`ChainValidator`** — валидация цепочки сертификатов: проверка
+  подписей, DN-связности (issuer → subject), KeyUsage
+  (keyCertSign/digitalSignature), BasicConstraints (CA flag + pathLen),
+  EKU. Без TLS-алертов.
+
+- **OCSP/CRL:** `GostOcspResponse` — парсер OCSP-ответа (RFC 6960):
+  разбор OCSPResponse в структурированный объект, извлечение
+  `SingleOcspResponse` (certStatus, thisUpdate, nextUpdate), проверка
+  подписи, поддержка делегированных сертификатов и nonce-расширения;
+  `GostOcspRequestBuilder` — fluent-построитель DER OCSP-запросов:
+  CertID (Streebog-256/512), nonce (RFC 8954), опциональная подпись
+  запроса (RFC 9215 §4.2), multi-cert (несколько CertID в одном
+  OCSPRequest); `GostOcspRequest` — парсер входящих OCSP-запросов:
+  `List`&lt;`CertId`&gt;, nonce, `verifySignature()`; `CertId` record —
+  OCSP CertID (hashAlgOid, issuerNameHash, issuerKeyHash, serialNumber);
+  `SingleOcspResponse` record — разобранный single OCSP response с
+  полями certStatus (good/revoked/unknown), thisUpdate, nextUpdate;
+  `OcspVerifier` — верификация OCSP-ответов, использует
+  `GostOcspResponse` для разбора; `GostCrl` — объект-парсер CRL
+  (извлечение issuer, срока, revoked-списка, верификация подписи), новые
+  геттеры: `getCrlNumber()`, `getBaseCrlNumber()`, `isDelta()`,
+  `getReason(byte[] serial)` — парсинг CRL-level и entry-level
+  расширений после `verify()`; `CrlVerifier` (RFC 5280 §6.3) —
+  верификация CRL: проверка подписи, срока, issuer DN (§6.3.3(c)), поиск
+  серийного номера. Верификация пары base+delta CRL:
+  `CrlVerifier.verify(baseDer, deltaDer, serial, caKey)` — сверка
+  cRLNumber, thisUpdate, issuer DN; delta-записи перекрывают base;
+  `REMOVE_FROM_CRL` удаляет из base. Все выбрасывают `PkixException`
+  (checked).
+
+- **Сертификатные утилиты:** `GostDerParser` — DER-парсер (бывший
+  `TlsDerParser`), бинарные OID для CRL-расширений:
+  `CRL_NUMBER_OID_BYTES`, `CRL_REASON_OID_BYTES`,
+  `DELTA_CRL_INDICATOR_OID_BYTES`, `FRESHEST_CRL_OID_BYTES`; константа
+  `TAG_ENUMERATED` (0x0A); `CertIdHasher` — хеширование
+  issuerName/issuerKey для OCSP CertID (бывший `OcspCertIdHasher`).
+
+- **PKCS#12 (RFC 7292):** `GostPkcs12Parser` — разбор PFX (вложенный
+  AuthenticatedSafe, SafeBag, MacData, EncryptedPrivateKeyInfo,
+  PBES2-params); `GostPkcs12Builder` — построение PFX-контейнеров с ГОСТ
+  PBE; `GostPkcs12Loader` / `Pkcs12Loader` — загрузка ключей и
+  сертификатов; `GostPkcs12Mac` — вычисление и проверка MAC PFX (RFC
+  9548 §7); `GostPbes2` — шифрование/расшифровка ключей по PBES2-ГОСТ
+  (RFC 9337).
+
+- **X.509-строители (fluent API):** `GostCertificateBuilder` — сборка
+  сертификатов (TBS + подпись, расширения
+  SKI/AKI/SAN/KeyUsage/EKU/CDP/AIA). SKI вычисляется как Streebog-256 от
+  байт точки ключа (32 байта, RFC 5280 §4.2.1.2); AKI — копия SKI
+  издателя в `[0] IMPLICIT OCTET STRING`; `GostCrlBuilder` — построение
+  CRL (RFC 5280, AlgorithmIdentifier — signwithdigest без параметров
+  согласно RFC 9215 §2) с поддержкой CRL entry extensions: reasonCode,
+  invalidityDate, certificateIssuer для indirect CRL. Fluent-методы для
+  Delta CRL: `withCrlNumber()`, `withDeltaCrlIndicator()`,
+  `withFreshestCrl()`; валидация: deltaCRLIndicator без cRLNumber →
+  `IllegalStateException`; `GostCsrBuilder` — построение CSR (RFC 9215
+  §4); `GostCsrParser` — разбор и верификация PKCS#10 CSR (RFC 2986
+  §4.1): извлечение DN, SPKI (публичный ключ), OID алгоритма подписи,
+  proof-of-possession (verifySelf), расширения extensionRequest
+  (SAN/KU/EKU/SKI/AKI и др. через `GostExtensionParser`),
+  PEM-сериализация с заголовком `CERTIFICATE REQUEST`;
+  `GostOcspResponseBuilder` — OCSP-ответы (RFC 6960) с делегированными
+  сертификатами и поддержкой nonce (RFC 8954). Вспомогательный
+  `GostSignatureHelper` (doHash  
+  buildAlgId для X.509-подписей).
+
+- **`GostDnParser.encodeDn()`** — сборка DER Distinguished Name по
+  набору атрибутов (CN, O, OU, L, ST, C).
+
+- **`ReasonCode` enum** — причины отзыва сертификата (RFC 5280 §5.3.1):
+  `UNSPECIFIED`, `KEY_COMPROMISE`, `CA_COMPROMISE`,
+  `AFFILIATION_CHANGED`, `SUPERSEDED`, `CESSATION_OF_OPERATION`,
+  `CERTIFICATE_HOLD`, `REMOVE_FROM_CRL`, `PRIVILEGE_WITHDRAWN`,
+  `AA_COMPROMISE`. Используется в `RevokedEntry` при построении CRL.
+  Метод `fromValue(int)` — обратный lookup по числовому коду.
+
+- **`RevokedEntry` record** — структура записи отзыва для
+  `GostCrlBuilder`: serial, revocationDate, опциональные reasonCode /
+  invalidityDate / certificateIssuer. Сокращённый конструктор (serial,
+  date) для записей без расширений.
+
+- **`GeneralNameCodec`** — кодек GeneralName (RFC 5280 §4.2.1.6) для
+  DNS, IP и directoryName. Выделен из `GostCertificateBuilder`,
+  переиспользуется в SAN (сертификаты) и certificateIssuer (indirect
+  CRL).
+
+- **`CmsSignedAndEnvelopedData`** — совмещённая подпись и шифрование
+  (RFC 5652, CMS triple-wrapped). Статические методы
+  `signThenEncrypt()`, `encryptThenSign()`, `decryptAndVerify()`,
+  `verifyAndDecrypt()`. Поддержка нескольких получателей.
+
+- **`PkixDemo`** — демонстрационная программа, последовательно
+  выполняющая все возможности модуля pkix с проверкой результатов:
+  сертификаты, PKCS#12, CSR, цепочки, CRL, OCSP, CMS SignedData
+  (инкапсулированная, detached, signed-атрибуты), CMS EnvelopedData, CMS
+  SignedAndEnvelopedData, GostOids, Certificate Policies, GostDnParser.
+
+- **CAdES-T / TSP (RFC 3161, ETSI EN 319 122)** — долговременная
+  электронная подпись с метками времени.:
+
+  - `CAdESAttributes` — `signingCertificateV2` (ESS, RFC 5035),
+    автоматическое добавление через `CmsSignedDataBuilder.withCAdES()`.;
+
+  - `CAdESExtender` — встраивание `signature-time-stamp` в
+    unsigned-атрибуты SignerInfo (CAdES-BES → CAdES-T).;
+
+  - TSP-клиент: `TspRequestBuilder`, `TspResponse`, `TstInfo`,
+    `JdkHttpTspTransport` (HTTP POST, `java.net.http`).;
+
+  - TSP-сервер: `TspRequest` (разбор входящих TimeStampReq),
+    `TspResponseBuilder` — построение TimeStampResp: granted, rejected,
+    grantedWithMods, nonce-echo, accuracy, ordering, CAdES-атрибуты,
+    авто-определение digest (256/512) по ключу TSA, цепочка сертификатов
+    в ответе.;
+
+  - `TstInfo.ordering` — новое поле (RFC 3161 §2.4.2), поддержка в
+    парсере и билдере.;
+
+  - Поддержка нескольких подписантов: каждому — отдельная метка.;
+
+  - `CmsSignedDataVerifier.verifyAll()` — AND-семантика (все подписанты
+    обязаны пройти).;
+
+  - Кросс-валидация с BouncyCastle, КриптоПРО, OpenSSL (модуль
+    `x-validation-tests/cadest`).;
+
+  - Интеграционный тест с боевым TSP-сервером
+    `pki.skbkontur.ru/tsp2012/tsp.srf`: HTTP POST, разбор TimeStampResp,
+    извлечение TSA-сертификата, проверка messageImprint + подпись TSA,
+    построение цепочки (TSA → ООО «Сертум-Про» → Минцифры России),
+    `addTimestamp` → CAdES-T → `verifyCAdEST` — полный цикл пройден.
+    Также проверены `testca.cryptopro.ru` (ГОСТ 34.11-94 — не
+    поддерживается crypto-gost) и `pki.tax.gov.ru` (Стрибог, но DN
+    цепочки не совпал по порядку RDN). См. пример `examples/pkix/` —
+    `TspRealServerDemo`.
+
+### Изменено
+
+- **`GostPkcs12Loader` / `Pkcs12Loader` — breaking change.**
+  Двухаргументный `load(pfxData, password)` удалён — его неявный
+  `allowJdkFallback=true` тихо делегировал не-ГОСТ PFX в SunJCE, нарушая
+  правило «криптография только через org.rssys.gost.\*». Оставлен только
+  3-аргументный `load(pfxData, password, allowJdkFallback)`. Все
+  вызывающие (включая `GostSsl`, `GostSslBuilder`) обновлены.
+
+- **`Pkcs12Loader` —
+  `@Deprecated(since = "0.6.0", forRemoval = false)`.** Javadoc
+  указывает на `GostPkcs12Loader.load()` и
+  `GostPkcs12Loader.adaptPrivateKey()` напрямую. Прослойка сохранена для
+  возможности загрузки PFX через JDK.
+
+- **`GostPkcs12Loader.adaptPrivateKey()` — `static` → `public static`.**
+  Метод доступен извне пакета `pkix.cert` напрямую, без
+  deprecated-прослойки.
+
+- **`GostCertificateBuilder` — self-signed сертификаты.** При сборке
+  self-signed сертификата (без явного `.issuerDn()`) issuer DN
+  автоматически копируется из subject DN. Сертификаты проходят
+  `openssl verify`.
+
+- **`GostCertificateBuilder.buildCdpExtension()` — кодирование CDP.**
+  Реализован RFC 5280 §4.2.1.14: `DIST_POINT_NAME` CHOICE с
+  `[0] IMPLICIT` fullName (тег заменяет SEQUENCE, а не оборачивает его).
+  `openssl x509 -text` отображает: `Full Name: URI:http://...`.
+
+- **`GostOcspResponseBuilder` — responderId и статусы сертификата.**
+  **responderId:** `[1] EXPLICIT` (byName) с реальным subject DN
+  подписанта (RFC 6960 §4.2.1). **Статусы:** `.good()`,
+  `.revoked(String)`, `.revoked(String, ReasonCode)`, `.unknown()`.
+  Кодирование: good — `[0] IMPLICIT NULL`, revoked —
+  `[1] IMPLICIT RevokedInfo` (GeneralizedTime + опциональный
+  `[0] EXPLICIT ENUMERATED` CRLReason), unknown — `[2] IMPLICIT NULL`
+  (RFC 6960 CertStatus CHOICE).
+
+- **`SingleOcspResponse.isUnknown()` — поддержка примитивного тега.**
+  Принимает оба DER-тэга неизвестного статуса: `0xA2` (constructed) и
+  `0x82` (primitive), симметрично `isGood()` (`0xA0` / `0x80`).
+
+- **`GostCertificateBuilder.extendedKeyUsage(boolean, String...)`** —
+  построение EKU с флагом критичности (RFC 5280 §4.2.1.12).
+
+- **`CmsSignedDataBuilder` — SignerInfo.signatureAlgorithm.** Использует
+  OID алгоритма подписи с дайджестом (`SIGN_ALG_*`, 1.2.643.7.1.1.3.x),
+  как в сертификатах, CRL и OCSP (RFC 5652 §5.3).
+
+- **`GostPkcs12Builder` — выбор длины хеша MAC.** Fluent-метод
+  `macHashLen(int)` в `Builder` (32 = Streebog-256, 64 = Streebog-512).
+  `GostPkcs12Mac.compute()` — новая перегрузка с параметром `hashLen`.
+  По умолчанию Streebog-512. **Примечание:** OpenSSL 3.6.0-gost не
+  поддерживает HMAC-Streebog для PKCS12 MAC — кросс-валидационный
+  `@Disabled`.
+
+- **Кросс-валидационные тесты — сертификаты, CRL, OCSP.** Три новых
+  модуля в профиле `crossval`: `x-validation-tests/cert/` — 9 тестов
+  (verify self-signed, цепочка, x509 -text, -pubkey, -checkhost,
+  -fingerprint, -issuer, PEM roundtrip, порченая подпись);
+  `x-validation-tests/crl/` — 7 тестов (пустой, отозванный, reasonCode,
+  fingerprint, порченая подпись, Delta CRL с deltaCRLIndicator, base CRL
+  с freshestCRL); `x-validation-tests/ocsp/` — 7 сценариев +
+  параметризация по кривым (good, revoked, unknown, verify, обе кривые,
+  запрос к openssl -reqin, запрос от openssl -reqout).
+
+- **Кросс-валидация OCSP и TSP с BouncyCastle (в обе стороны).**
+  `x-validation-tests/ocsp/` — +23 теста: good/revoked/unknown ответы,
+  delegated certs, nonce, верификация подписи, запросы единичные и
+  multi-cert, CertID round-trip, обе кривые.
+  `x-validation-tests/cadest/` — +15 тестов TSP: TimeStampReq/Token/Resp
+  round-trip, nonce, verify с критическим EKU `timeStamping`,
+  TspResponseBuilder → BC (granted/rejected/nonce/imprint).
+
+- **Расширение кросс-валидации CMS и PKCS12.** `x-validation-tests/cms/`
+  — +2 теста (asn1parse + библиотечная верификация для инкапсулированной
+  и detached SignedData; L3 openssl cms -verify заблокирован
+  ограничением OpenSSL 3.6.0-gost). `x-validation-tests/pkcs12/` — +1
+  тест (библиотечный ключ → PFX → OpenSSL, `@Disabled` — ограничение
+  OpenSSL).
+
+- **Makefile-очистка без Maven.** `make clean` в корне и подмодулях
+  заменяет `mvn clean -q` на `find -name target -exec rm -rf`. Исключён
+  запуск JVM, очистка мгновенная. Новые модули `cert/`, `crl/`, `ocsp/`
+  — с Makefile и в списке очистки.
+
+### GostOids — новые константы
+
+- `STREEBOG_256_HASH_LEN = 32` — для `macHashLen(32)` в PKCS#12.
+
+### Добавлено
+
+- **Расширение `DerCodec`** — для поддержки CMS: `encodeNull()`,
+  `encodePrintableString()`, `encodeSetOf()` с DER-сортировкой (X.690
+  §11.6), `compareDer()`. Поддержка длин 0x83/0x84 (до 4GB). BER
+  indefinite-length: `INDEFINITE_LENGTH`, `findEoc()` с отслеживанием
+  вложенности, `parseSetContents()` для SET OF с BER. Константы
+  `TAG_NULL`, `TAG_PRINTABLE_STRING`, `TAG_IA5_STRING`,
+  `TAG_ENUMERATED`.
+
+- **`DerCodec.encodeTime()`** — кодирование времени в UTCTime /
+  GeneralizedTime (RFC 5280 §4.1.2.5), автоматический выбор тега по
+  длине строки.
+
+- **`DerCodec.encodeContextConstructed()`** — кодирование explicit
+  context tag `[n]` для DER.
+
+- **`GostDerCodec.subjectPublicKeyPointBytes(PublicKeyParameters)`** —
+  извлечение байт точки открытого ключа (x\_LE || y\_LE, RFC 4491
+  §2.3.2) для вычисления Subject Key Identifier. Выделено из
+  `encodePublicKey()` без дублирования.
+
+### Изменено
+
+- **`DerCodec.checkTag` — публичный доступ.** Сделан `public` (был
+  `private`). Используется `GostPkcs12Parser` и `GostCertificate` для
+  проверки тегов DER.
+
+- **`CtrAcpkmMode.encryptOnly()`.** Добавлен публичный метод
+  `encryptOnly()` — семантически корректный алиас `decryptOnly()` (CTR
+  симметричен). Используется в `CmsEnvelopedDataBuilder` и
+  `GostPbes2.encryptKey()` вместо `decryptOnly()`.
+
+### Исправлено
+
+- **DoS-защита в `DerCodec.parseBitString()` и `parseInteger()`.**
+  Добавлена проверка длины контента ≤ 65536 байт перед
+  `Arrays.copyOfRange()`. Фаззинг-тесты (`DerCodecFuzzTest`) выявили
+  OutOfMemoryError при гигантских DER-длинах, генерируемых Jazzer’ом.
+  `parseOctetString()` оставлен без лимита — используется для
+  пользовательских данных произвольного размера (CMS EnvelopedData,
+  SignedData). Находка фаззера.
+
+## Модуль crypto-gost-tls13
+
+### Добавлено
+
+- **`TlsCertUtils`** — новый класс со статическими TLS-утилитами:
+  `hasSignatureScheme()`, `getNamedGroup()`, `verifyOcspResponse()`,
+  `matchesOidFilter()`. Вся TLS-специфичная логика, ранее жившая в
+  instance-методах `TlsCertificate`, вынесена сюда.
+
+### Изменено
+
+- **Зависимость `crypto-gost-pkix`** — `GostOids` вынесен в новый
+  модуль.
+
+- **`GostCertificate` — основной тип сертификата во всём
+  TLS/JSSE-коде.** `TlsSession.getPeerCertificates()` возвращает
+  `List<GostCertificate>`. `TlsMessageParser.parseCertificate()` создаёт
+  `GostCertificate` напрямую. Конфиги (`TlsClientConfig`,
+  `TlsServerConfig`, `TlsClientCredentials`, `TlsServerCredentials`)
+  типизированы по `GostCertificate`. `TlsMessageBuilder` хранит цепочку
+  как `List<GostCertificate>`.
+
+- **`TlsCertificate` — удалён.** Все статические фабрики (`fromDer`,
+  `fromPemOrDer`, `listFromPem`, `chainToPem`, `isPem`, `isPkcs12`,
+  `pemToDer`) доступны напрямую в `GostCertificate` (модуль
+  `crypto-gost-pkix`). Замена тривиальна: `TlsCertificate.method()` →
+  `GostCertificate.method()`. Экземплярная модель
+  (`new TlsCertificate(der)`) → `new GostCertificate(der)`. Это breaking
+  change.
+
+- **`TlsCertUtils.KNOWN_EXTENSION_OIDS`** — сырые OID-строки заменены на
+  константы из `GostOids` (`EXT_SKI`, `EXT_KU`, `EXT_SAN`, `EXT_BC`,
+  `EXT_CDP`, `EXT_CP`, `EXT_AKI`, `EXT_EKU`, `EXT_AIA`). Устранено
+  дублирование.
+
+- **`TlsCertificateValidator` — принимает `List<GostCertificate>`
+  напрямую.** Убран промежуточный `Stream`/`collect`-адаптер. Валидация
+  цепочки делегируется в `ChainValidator` (pkix) без конвертации типов.
+  `verifyOcspResponse`, `hasSignatureScheme` заменены на вызовы
+  `TlsCertUtils.*`.
+
+- **Сертификатная инфраструктура мигрирована в pkix.** Удалено 10
+  продакшен-файлов из `tls13/cert/`: `TlsDerParser`, `OcspCertIdHasher`,
+  `GostPkcs12Builder/Parser/Loader/Mac`, `GostPbes2`, `Pkcs12Loader`,
+  `TlsOcspVerifier`, `TlsCrlVerifier`. Заменены на классы `pkix.cert.*`.
+
+- **Упрощение `TlsTestHelper`.** Приватные `buildDn`, `buildCert`,
+  `buildTbs`, `buildCrl`, `buildOcspResponse` удалены — делегированы в
+  `GostCertificateBuilder`, `GostCrlBuilder`, `GostOcspResponseBuilder`.
+  Мёртвые константы `TAG_CTX_0`/`TAG_CTX_3` и метод `Set` (→
+  `encodeSet`) удалены. `buildAlgId` исправлен: signwithdigest OID без
+  параметров (RFC 9215 §2), дублирующий `curveOidOf` удалён.
+
+### Исправлено
+
+- **Удалён устаревший Javadoc со ссылками на `TlsCertificate`.** Класс
+  `TlsCertificate` удалён; ссылки в `GostCertificate.getEkuOids()`,
+  `getPresentExtensionOids()` и `TlsCertUtils` заменены на актуальные
+  описания.
+
+- **`TlsCrlVerifierTest` — структурная проверка `Reason.REVOKED`.** В
+  тест добавлен
+  `assertEquals(PkixException.Reason.REVOKED, ex.reason())` вместо
+  строковой проверки `contains("revoked")`.
+
+## Модуль crypto-gost-jsse
+
+### Изменено
+
+- **`CertificateBridge` — полная миграция на `GostCertificate`.**
+  Удалены overload’ы `toJca(TlsCertificate)` и `toTls()`. Добавлен
+  `toGost(X509Certificate)` для конвертации JCA-сертификатов в
+  `GostCertificate`. Добавлен `toJca(List<GostCertificate>)` для
+  конверсии списка. Убран неиспользуемый импорт `TlsCertificate`.
+
+- **`GostSSLEngine`, `GostX509KeyManager`, `GostX509TrustManager` — все
+  сигнатуры переведены с `TlsCertificate` на `GostCertificate`.** Вызовы
+  `matchesOidFilter()` заменены на `TlsCertUtils.matchesOidFilter()`.
+  `getCertificateChainTls()` возвращает `List<GostCertificate>`.
+
+- **`OcspRequestBuilder` делегирует в pkix.** Логика построения DER
+  OCSPRequest, CertID и подписи вынесена в `GostOcspRequestBuilder`
+  (модуль pkix). Устранено ~180 строк дублирования, зависимость от
+  `TlsConstants` заменена на `GostOids`.
+
+### Исправлено
+
+- **Прямая зависимость `crypto-gost-pkix`.** Модуль jsse использовал 12
+  классов из `org.rssys.gost.pkix.*` только транзитивно через tls13.
+  Добавлена явная зависимость в pom.xml.
+
+- **Удалён `@Deprecated OcspRequestBuilder.build()`.** Метод без
+  nonce-защиты заменён на `buildWithNonce()`.
+  `JdkHttpOcspFetcher.fetch()` обновлён. `OcspRequestBuilderTest`
+  обновлён (4 вызова `build()` → `buildWithNonce()`).
+
+- **FQN заменён на import.** `GostSsl.isEncryptedPrivateKey()`
+  использовала `org.rssys.gost.pkix.GostOids.PBES2` — заменено на
+  короткое имя с import.
+
+- **`GostX509KeyManager.chooseAliasForHostname()` — wildcard матчил
+  пустую первую метку.** Приватный метод `matchHostname()` не проверял
+  `firstLabel.isEmpty()` — сертификат с `*.example.com` мог быть выбран
+  для hostname `.example.com`, в отличие от
+  `GostCertificate.verifyHostname()`. `matchHostname()` удалён, вызов
+  заменён на `GostCertificate.matchDnsName()` (устранение дублирования +
+  исправление бага).
+
+## Фаззинг
+
+### Добавлено
+
+- **`CmsVerifierFuzzTest` (модуль pkix)** — фаззинг-тесты для
+  `CmsEnvelopedDataDecryptor` и `CmsSignedDataVerifier` на случайном
+  DER-входе. Защита от AIOOBE, NPE, OOM при битых CMS-сообщениях. Модуль
+  pkix получил независимую копию `FuzzTestUtils` (29 строк,
+  package-private).
+
+- **`GostKdfFuzzTest` (модуль core)** — фаззинг-тест для
+  `KDF_GOSTR3411_2012_256` и `KDF_TREE_GOSTR3411_2012_256`.
+
+- **`GostCrlFuzzTest` (модуль pkix)** — фаззинг-тест парсинга CRL на
+  случайном DER.
+
+- **`GostCsrParserFuzzTest` (модуль pkix)** — фаззинг-тест парсинга CSR.
+
+- **`TlsCertUtilsFuzzTest` (модуль tls13)** — фаззинг-тест
+  TLS-сертификатных утилит.
+
+- **`TlsHandshakeEngineFuzzTest` (модуль tls13)** — фаззинг-тест TLS
+  handshake engine.
+
+## Кросс-валидация
+
+### Добавлено
+
+- **Диагностический тест EnvelopedData (`envelopedDataDiagnostics()` в
+  `CmsCrossValidationTest`).** Проверка DER-структуры через
+  `openssl asn1parse`, структурная проверка параметров контентного шифра
+  (SEQUENCE по RFC 9337 §7.3), roundtrip библиотека→библиотека. OpenSSL
+  с gost-engine не поддерживает `CMS EnvelopedData` (нет реализации
+  `EVP_PKEY_OP_ENCAPSULATE`/`DECAPSULATE` для ГОСТ-ключей), поэтому
+  полноценная кросс-валидация невозможна.
+
+## Документация
+
+- Обновлены README.adoc в модулях `core`, `pkix`, `tls13`, `jsse` —
+  актуализированы описания модулей, импорты и примеры кода после
+  миграции сертификатной инфраструктуры и перехода на fluent builder
+  API.
+
 # \[0.5.6\] - 20-06-2026
 
 ## Модуль crypto-gost-core
@@ -946,8 +1437,8 @@ TC26 (см. Исправлено).
   (опционально). CA-сертификаты упаковываются без `localKeyId` —
   совместимо с фильтрацией `GostPkcs12Loader`. Атомарная запись в файл
   (`buildAndWriteTo(Path)` — temp + rename).  
-  Созданные PFX совместимы с `GostPkcs12Loader.load()` и проходят
-  структурную валидацию OpenSSL.
+  Созданные PFX совместимы с `GostPkcs12Loader.load(..., true)` и
+  проходят структурную валидацию OpenSSL.
 
 - **Вычисление MAC PFX (`GostPkcs12Mac.compute()`)** — RFC 9548 §7.  
   Парная операция к существующему `verify()`: PBKDF2(96 байт) →
@@ -1730,7 +2221,7 @@ style="text-align: left;"><p><code>addHttpsListener(port, host, ctx)</code></p><
 
 - Интеграционный тест верификации реальной цепочки сертификатов Минцифры
   (512-бит ГОСТ Р 34.10-2012, ParamSet A) —
-  subCa.verify(root.getPublicKey()) успешен.
+  subCa.verifySignature(root.getPublicKey()) успешен.
 
 - GenerateCsr.java: Новый пример генерации PKCS#10 CSR для ГОСТ Р
   34.10-2012 (256 и 512 бит, любой DN).

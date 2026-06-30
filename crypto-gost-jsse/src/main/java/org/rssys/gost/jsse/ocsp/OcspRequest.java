@@ -6,5 +6,4 @@ package org.rssys.gost.jsse.ocsp;
  * @param der   DER-encoded OCSPRequest
  * @param nonce случайный nonce (16 байт) для проверки в ответе
  */
-public record OcspRequest(byte[] der, byte[] nonce) {
-}
+public record OcspRequest(byte[] der, byte[] nonce) {}

@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Интеграционный тест: Spring Boot + ГОСТ TLS 1.3.
  * <p>
- * Проверяет полный HTTP-цикл через GostSSLSocket: TLS-хендшейк + POST /echo → PONG.
+ * Проверяет полный HTTP-цикл через GostSSLSocket: TLS-хендшейк + POST /echo -> PONG.
  */
 @SpringBootTest(
         classes = GostSpringBootApp.class,

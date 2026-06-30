@@ -1,13 +1,5 @@
 package org.rssys.gost.jsse.manager;
 
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.cert.Pkcs12Loader;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-
-import org.rssys.gost.jsse.GostJsseConstants;
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.KeyManagerFactorySpi;
-import javax.net.ssl.ManagerFactoryParameters;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.Certificate;
@@ -15,13 +7,19 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.KeyManagerFactorySpi;
+import javax.net.ssl.ManagerFactoryParameters;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.signature.PrivateKeyParameters;
 
 /**
  * KeyManagerFactorySpi для ГОСТ-ключей.
  * <p>
  * Загружает ключи из KeyStore (PKCS12) с зарегистрированным RssysGostProvider.
- * Конвертация JDK PrivateKey → {@link PrivateKeyParameters} делегируется
- * {@link Pkcs12Loader#adaptPrivateKey}.
+ * Конвертация JDK PrivateKey -> {@link PrivateKeyParameters} делегируется
+ * {@link GostPkcs12Loader#adaptPrivateKey(java.security.PrivateKey)}.
  */
 public final class GostKeyManagerFactorySpi extends KeyManagerFactorySpi {
 
@@ -37,7 +35,8 @@ public final class GostKeyManagerFactorySpi extends KeyManagerFactorySpi {
                 if (!ks.isKeyEntry(alias)) continue;
 
                 PrivateKey pk = (PrivateKey) ks.getKey(alias, password);
-                if (pk == null || !GostJsseConstants.KEY_ALG_ECGOST_2012.equals(pk.getAlgorithm())) continue;
+                if (pk == null || !GostJsseConstants.KEY_ALG_ECGOST_2012.equals(pk.getAlgorithm()))
+                    continue;
 
                 Certificate[] certChain = ks.getCertificateChain(alias);
                 X509Certificate[] x509Chain = new X509Certificate[certChain.length];
@@ -45,7 +44,7 @@ public final class GostKeyManagerFactorySpi extends KeyManagerFactorySpi {
                     x509Chain[i] = (X509Certificate) certChain[i];
                 }
 
-                PrivateKeyParameters keyParams = Pkcs12Loader.adaptPrivateKey(pk);
+                PrivateKeyParameters keyParams = GostPkcs12Loader.adaptPrivateKey(pk);
                 if (keyParams != null) {
                     entries.add(new KeyStoreEntry(alias, x509Chain, keyParams));
                 }
@@ -66,7 +65,7 @@ public final class GostKeyManagerFactorySpi extends KeyManagerFactorySpi {
         for (KeyStoreEntry e : entries) {
             km.addKeyEntry(e.alias, e.chain, e.keyParams);
         }
-        return new KeyManager[]{km};
+        return new KeyManager[] {km};
     }
 
     private static final class KeyStoreEntry {

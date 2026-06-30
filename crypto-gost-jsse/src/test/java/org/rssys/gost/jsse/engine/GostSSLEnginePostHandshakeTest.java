@@ -1,26 +1,25 @@
 package org.rssys.gost.jsse.engine;
-import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.nio.ByteBuffer;
+import java.security.Security;
+import java.util.List;
+import javax.net.ssl.SSLEngineResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
-
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
+import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 import org.rssys.gost.util.CryptoRandom;
-import javax.net.ssl.SSLEngineResult;
-import javax.net.ssl.SSLException;
-import java.nio.ByteBuffer;
-import java.security.Security;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Тесты post-handshake: SessionContext, PSK resumption, KeyUpdate.
@@ -42,11 +41,19 @@ class GostSSLEnginePostHandshakeTest {
         params = ECParameters.tc26a256();
 
         rootCa = TlsTestHelper.createRootCA(params);
-        serverCert = TlsTestHelper.createCertSignedBy(
-                params, rootCa.priv, rootCa.cert.getPublicKey(), rootCa.subjectDn,
-                "20240501120000Z", "21060101120000Z",
-                new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
-                false, null);
+        serverCert =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        rootCa.priv,
+                        rootCa.cert.getPublicKey(),
+                        rootCa.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"localhost"},
+                        new byte[] {(byte) 0x80},
+                        null,
+                        false,
+                        null);
     }
 
     // ========================================================================
@@ -54,17 +61,20 @@ class GostSSLEnginePostHandshakeTest {
     // ========================================================================
 
     @Test
-    @DisplayName("SessionContext: put/get/remove сессии, timeout, invalidate")
+    @DisplayName("SessionContext: put/get/remove сессии, таймаут, инвалидация")
     void testSessionContextBasic() throws Exception {
         GostSSLSessionContext ctx = new GostSSLSessionContext(cs, cs.getHashLen());
 
         assertEquals(86400, ctx.getSessionTimeout());
         assertEquals(0, ctx.getSessionCacheSize());
 
-        GostSSLSession session = new GostSSLSession(
-                cs.getIanaName(), "localhost", PSK_BINDING_PORT,
-                new java.security.cert.X509Certificate[0],
-                new java.security.cert.X509Certificate[0]);
+        GostSSLSession session =
+                new GostSSLSession(
+                        cs.getIanaName(),
+                        "localhost",
+                        PSK_BINDING_PORT,
+                        new java.security.cert.X509Certificate[0],
+                        new java.security.cert.X509Certificate[0]);
 
         assertNull(ctx.getSession(session.getId()));
 
@@ -76,12 +86,15 @@ class GostSSLEnginePostHandshakeTest {
         assertFalse(session.isValid());
         assertNull(ctx.getSession(session.getId()));
 
-        // WHY: setSessionTimeout задаёт TTL сессии — по истечении сессия невалидна
+        // setSessionTimeout задаёт TTL сессии — по истечении сессия невалидна
         ctx.setSessionTimeout(1);
-        GostSSLSession session2 = new GostSSLSession(
-                cs.getIanaName(), "localhost", PSK_BINDING_PORT,
-                new java.security.cert.X509Certificate[0],
-                new java.security.cert.X509Certificate[0]);
+        GostSSLSession session2 =
+                new GostSSLSession(
+                        cs.getIanaName(),
+                        "localhost",
+                        PSK_BINDING_PORT,
+                        new java.security.cert.X509Certificate[0],
+                        new java.security.cert.X509Certificate[0]);
         ctx.putSession(session2);
         Thread.sleep(1100);
         assertFalse(session2.isValid());
@@ -97,18 +110,18 @@ class GostSSLEnginePostHandshakeTest {
         GostSSLSessionContext ctx = new GostSSLSessionContext(cs, cs.getHashLen());
 
         byte[] rms = new byte[32];
-        // WHY: разные nonce → разные деривации PSK; разные ticket-идентификаторы
-        // → разные ключи в хранилище. Без этого тест ломается при single-use PSK
+        // разные nonce -> разные деривации PSK; разные ticket-идентификаторы
+        // -> разные ключи в хранилище. Без этого тест ломается при single-use PSK
         // (RFC 8446 §8.1), потому что одинаковые тикеты маппятся в один ключ.
-        byte[] nstBody = TlsMessageBuilder.buildNewSessionTicket(3600, 0,
-                new byte[8], new byte[]{1});
-        byte[] nstBody2 = TlsMessageBuilder.buildNewSessionTicket(3600, 0,
-                new byte[8], new byte[]{2});
+        byte[] nstBody =
+                TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[] {1});
+        byte[] nstBody2 =
+                TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[] {2});
 
         ctx.saveNewSessionTicket("server1.com", PSK_BINDING_PORT, rms, nstBody);
         ctx.saveNewSessionTicket("server2.com", PSK_BINDING_PORT, rms, nstBody2);
 
-        // WHY: если host:port не маппится — PSK не должен быть найден
+        // если host:port не маппится — PSK не должен быть найден
         assertNotNull(ctx.getForClientResumption("server1.com", PSK_BINDING_PORT));
         assertNull(ctx.getForClientResumption("server1.com", 444));
         assertNotNull(ctx.getForClientResumption("server2.com", PSK_BINDING_PORT));
@@ -118,7 +131,7 @@ class GostSSLEnginePostHandshakeTest {
     @Test
     @DisplayName("PSK: peek не сжигает тикет, только явный remove")
     void pskTicketSingleUse() throws Exception {
-        // WHY: клиентский peek() не удаляет запись — тикет должен быть
+        // клиентский peek() не удаляет запись — тикет должен быть
         // удалён только после подтверждения PSK сервером (ServerHello c PSK).
         // Тест верифицирует: (1) peek отдаёт тикет, (2) повторный peek
         // тоже отдаёт (не потреблён), (3) после явного remove — null.
@@ -133,41 +146,56 @@ class GostSSLEnginePostHandshakeTest {
 
         ctx.saveNewSessionTicket("host", PSK_BINDING_PORT, rms, nstBody);
 
-        assertNotNull(ctx.getForClientResumption("host", PSK_BINDING_PORT),
+        assertNotNull(
+                ctx.getForClientResumption("host", PSK_BINDING_PORT),
                 "PSK доступен при первом запросе");
-        assertNotNull(ctx.getForClientResumption("host", PSK_BINDING_PORT),
+        assertNotNull(
+                ctx.getForClientResumption("host", PSK_BINDING_PORT),
                 "peek не сжигает тикет — второй запрос тоже не null");
         ctx.getPskStore().remove(ticket);
-        assertNull(ctx.getForClientResumption("host", PSK_BINDING_PORT),
+        assertNull(
+                ctx.getForClientResumption("host", PSK_BINDING_PORT),
                 "После явного remove тикет недоступен");
     }
 
     // ========================================================================
-    // PSK resumption — полный handshake → NST → PSK handshake
+    // PSK resumption — полный handshake -> NST -> PSK handshake
     // ========================================================================
 
     @Test
-    @DisplayName("Resumption: full handshake → NST → close → PSK handshake")
+    @DisplayName("Возобновление: полное рукопожатие -> NST -> закрытие -> PSK рукопожатие")
     void testLoopbackResumption() throws Exception {
         GostSSLSessionContext sessionContext = new GostSSLSessionContext(cs, cs.getHashLen());
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default",
-                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
+                serverCert.priv);
 
-        // WHY: первый handshake — полный, чтобы получить PSK через NST
+        // первый handshake — полный, чтобы получить PSK через NST
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
-        GostSSLEngine server1 = GostSSLEngine.createForServer(
-                serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, sessionContext);
-        GostSSLEngine client1 = GostSSLEngine.createForClient(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", PSK_BINDING_PORT, sessionContext);
+        GostSSLEngine server1 =
+                GostSSLEngine.createForServer(
+                        serverKeyManager,
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        sessionContext);
+        GostSSLEngine client1 =
+                GostSSLEngine.createForClient(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        PSK_BINDING_PORT,
+                        sessionContext);
         doLoopback(client1, server1, pair1);
         assertTrue(client1.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
 
-        // WHY: NST от сервера — в его outgoingQueue; нужно вытолкнуть через wrap
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        // NST от сервера — в его outgoingQueue; нужно вытолкнуть через wrap
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         if (server1.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
             netBuf.clear();
             server1.wrap(ByteBuffer.allocate(0), netBuf);
@@ -178,7 +206,7 @@ class GostSSLEnginePostHandshakeTest {
                 pair1.getServerTransport().sendRecord(nstOut);
             }
         }
-        // WHY: клиент должен получить NST до PSK resumption
+        // клиент должен получить NST до PSK resumption
         byte[] nstIn = pair1.getClientTransport().receiveRecord();
         assertNotNull(nstIn, "NST должен быть доступен в транспорте клиента");
         netBuf.clear();
@@ -188,39 +216,59 @@ class GostSSLEnginePostHandshakeTest {
 
         assertNotNull(sessionContext.getForClientResumption("localhost", PSK_BINDING_PORT));
 
-        // WHY: второй handshake с теми же контекстами — должен использовать PSK
+        // второй handshake с теми же контекстами — должен использовать PSK
         InMemoryTlsTransport.Pair pair2 = InMemoryTlsTransport.newPair();
-        GostSSLEngine server2 = GostSSLEngine.createForServer(
-                serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, sessionContext);
-        GostSSLEngine client2 = GostSSLEngine.createForClient(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", PSK_BINDING_PORT, sessionContext);
+        GostSSLEngine server2 =
+                GostSSLEngine.createForServer(
+                        serverKeyManager,
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        sessionContext);
+        GostSSLEngine client2 =
+                GostSSLEngine.createForClient(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        PSK_BINDING_PORT,
+                        sessionContext);
         doLoopback(client2, server2, pair2);
         assertTrue(client2.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
     }
 
     @Test
-    @DisplayName("Resumption expired: TTL истёк → full re-handshake")
+    @DisplayName("Возобновление истекло: TTL истёк -> полное повторное рукопожатие")
     void testLoopbackResumptionExpired() throws Exception {
         GostSSLSessionContext sessionContext = new GostSSLSessionContext(cs, cs.getHashLen());
         sessionContext.setSessionTimeout(1);
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default",
-                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
+                serverCert.priv);
 
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
-        GostSSLEngine server1 = GostSSLEngine.createForServer(
-                serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, sessionContext);
-        GostSSLEngine client1 = GostSSLEngine.createForClient(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", PSK_BINDING_PORT, sessionContext);
+        GostSSLEngine server1 =
+                GostSSLEngine.createForServer(
+                        serverKeyManager,
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        sessionContext);
+        GostSSLEngine client1 =
+                GostSSLEngine.createForClient(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        PSK_BINDING_PORT,
+                        sessionContext);
         doLoopback(client1, server1, pair1);
 
-        // WHY: NST нужно доставить клиенту для проверки истечения TTL
-        ByteBuffer netBufPH = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        // NST нужно доставить клиенту для проверки истечения TTL
+        ByteBuffer netBufPH =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         if (server1.getHandshakeStatus() == SSLEngineResult.HandshakeStatus.NEED_WRAP) {
             netBufPH.clear();
             server1.wrap(ByteBuffer.allocate(0), netBufPH);
@@ -241,17 +289,25 @@ class GostSSLEnginePostHandshakeTest {
 
         assertNotNull(sessionContext.getForClientResumption("localhost", PSK_BINDING_PORT));
 
-        // WHY: TTL = 1s → ждём 1500ms чтобы PSK гарантированно истёк
+        // TTL = 1s -> ждём 1500ms чтобы PSK гарантированно истёк
         Thread.sleep(1500);
 
-        // WHY: ticket lifetime = 1s, прошло 1500ms → PSK истёк, нужен полный handshake
+        // ticket lifetime = 1s, прошло 1500ms -> PSK истёк, нужен полный handshake
         InMemoryTlsTransport.Pair pair2 = InMemoryTlsTransport.newPair();
-        GostSSLEngine server2 = GostSSLEngine.createForServer(
-                serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, sessionContext);
-        GostSSLEngine client2 = GostSSLEngine.createForClient(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", PSK_BINDING_PORT, sessionContext);
+        GostSSLEngine server2 =
+                GostSSLEngine.createForServer(
+                        serverKeyManager,
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        sessionContext);
+        GostSSLEngine client2 =
+                GostSSLEngine.createForClient(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        PSK_BINDING_PORT,
+                        sessionContext);
         doLoopback(client2, server2, pair2);
         assertTrue(client2.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
     }
@@ -266,26 +322,38 @@ class GostSSLEnginePostHandshakeTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default",
-                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
+                serverCert.priv);
 
-        GostSSLEngine serverEngine = new GostSSLEngine(
-                serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, false);
-        GostSSLEngine clientEngine = new GostSSLEngine(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", 0, true);
+        GostSSLEngine serverEngine =
+                new GostSSLEngine(
+                        serverKeyManager,
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        false);
+        GostSSLEngine clientEngine =
+                new GostSSLEngine(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        true);
 
         doLoopback(clientEngine, serverEngine, pair);
 
-        // WHY: данные до KU — гарантируют, что шифрование работало до смены ключей
+        // данные до KU — гарантируют, что шифрование работало до смены ключей
         sendAndReceiveAppData(clientEngine, serverEngine, pair, "before-ku");
 
-        // WHY: ручной KU на клиенте — инициируем смену ключей
+        // ручной KU на клиенте — инициируем смену ключей
         clientEngine.initiateKeyUpdate(false);
 
-        // WHY: KU-фрейм попадает в outgoingQueue — выталкиваем его через wrap
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        // KU-фрейм попадает в outgoingQueue — выталкиваем его через wrap
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         netBuf.clear();
         clientEngine.wrap(ByteBuffer.allocate(0), netBuf);
         netBuf.flip();
@@ -293,14 +361,14 @@ class GostSSLEnginePostHandshakeTest {
         netBuf.get(kuOut);
         pair.getClientTransport().sendRecord(kuOut);
 
-        // WHY: сервер обрабатывает KU
+        // сервер обрабатывает KU
         byte[] kuIn = pair.getServerTransport().receiveRecord();
         netBuf.clear();
         netBuf.put(kuIn);
         netBuf.flip();
         serverEngine.unwrap(netBuf, ByteBuffer.allocate(0));
 
-        // WHY: данные после KU — проверяем, что шифрование работает на новых ключах
+        // данные после KU — проверяем, что шифрование работает на новых ключах
         sendAndReceiveAppData(clientEngine, serverEngine, pair, "after-ku-data");
 
         assertTrue(clientEngine.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
@@ -313,28 +381,37 @@ class GostSSLEnginePostHandshakeTest {
     /**
      * Выполняет handshake в двух потоках.
      */
-    private void doLoopback(GostSSLEngine clientEngine, GostSSLEngine serverEngine,
-                            InMemoryTlsTransport.Pair pair) throws Exception {
+    private void doLoopback(
+            GostSSLEngine clientEngine, GostSSLEngine serverEngine, InMemoryTlsTransport.Pair pair)
+            throws Exception {
         clientEngine.beginHandshake();
         serverEngine.beginHandshake();
 
-        java.util.concurrent.atomic.AtomicReference<Throwable> clientError = new java.util.concurrent.atomic.AtomicReference<>();
-        java.util.concurrent.atomic.AtomicReference<Throwable> serverError = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Throwable> clientError =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<Throwable> serverError =
+                new java.util.concurrent.atomic.AtomicReference<>();
 
-        Thread clientThread = new Thread(() -> {
-            try {
-                doClientHandshake(clientEngine, pair);
-            } catch (Exception e) {
-                clientError.set(e);
-            }
-        }, "p3-client");
-        Thread serverThread = new Thread(() -> {
-            try {
-                doServerHandshake(serverEngine, pair);
-            } catch (Exception e) {
-                serverError.set(e);
-            }
-        }, "p3-server");
+        Thread clientThread =
+                new Thread(
+                        () -> {
+                            try {
+                                doClientHandshake(clientEngine, pair);
+                            } catch (Exception e) {
+                                clientError.set(e);
+                            }
+                        },
+                        "p3-client");
+        Thread serverThread =
+                new Thread(
+                        () -> {
+                            try {
+                                doServerHandshake(serverEngine, pair);
+                            } catch (Exception e) {
+                                serverError.set(e);
+                            }
+                        },
+                        "p3-server");
 
         clientThread.start();
         serverThread.start();
@@ -342,10 +419,18 @@ class GostSSLEnginePostHandshakeTest {
         clientThread.join(15000);
         serverThread.join(15000);
 
-        if (clientThread.isAlive()) { clientThread.interrupt(); fail("Тайм-аут рукопожатия клиента"); }
-        if (serverThread.isAlive()) { serverThread.interrupt(); fail("Тайм-аут рукопожатия сервера"); }
-        if (clientError.get() != null) throw new RuntimeException("Client error", clientError.get());
-        if (serverError.get() != null) throw new RuntimeException("Server error", serverError.get());
+        if (clientThread.isAlive()) {
+            clientThread.interrupt();
+            fail("Тайм-аут рукопожатия клиента");
+        }
+        if (serverThread.isAlive()) {
+            serverThread.interrupt();
+            fail("Тайм-аут рукопожатия сервера");
+        }
+        if (clientError.get() != null)
+            throw new RuntimeException("Ошибка клиента", clientError.get());
+        if (serverError.get() != null)
+            throw new RuntimeException("Ошибка сервера", serverError.get());
     }
 
     // ========================================================================
@@ -353,28 +438,40 @@ class GostSSLEnginePostHandshakeTest {
     // ========================================================================
 
     @Test
-    @DisplayName("KeyUpdate: пониженный порог → auto-initiate KU при wrap")
+    @DisplayName("KeyUpdate: пониженный порог -> auto-initiate KU при wrap")
     void testKeyUpdateThreshold() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default",
-                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
+                serverCert.priv);
 
-        GostSSLEngine serverEngine = new GostSSLEngine(
-                serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, false);
-        GostSSLEngine clientEngine = new GostSSLEngine(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", 0, true);
+        GostSSLEngine serverEngine =
+                new GostSSLEngine(
+                        serverKeyManager,
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        false);
+        GostSSLEngine clientEngine =
+                new GostSSLEngine(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        true);
 
         doLoopback(clientEngine, serverEngine, pair);
 
-        // WHY: пониженный порог — тестируем auto-KU без прогона триллионов записей
+        // пониженный порог — тестируем auto-KU без прогона триллионов записей
         clientEngine.setRekeyThresholdForTest(5);
 
-        // WHY: 7 записей — после 5-й auto-KU срабатывает, KU-фрейм в outgoingQueue
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        // 7 записей — после 5-й auto-KU срабатывает, KU-фрейм в outgoingQueue
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
         byte[] data = "d".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
@@ -388,7 +485,7 @@ class GostSSLEnginePostHandshakeTest {
 
             pair.getClientTransport().sendRecord(out);
 
-            // WHY: сервер читает каждый фрейм — обрабатывает KU в том числе
+            // сервер читает каждый фрейм — обрабатывает KU в том числе
             byte[] serverIn = pair.getServerTransport().receiveRecord();
             if (serverIn != null) {
                 netBuf.clear();
@@ -399,9 +496,10 @@ class GostSSLEnginePostHandshakeTest {
             }
         }
 
-        // WHY: KU был обработан на сервере — см. testKeyUpdateOneWay
-        assertTrue(serverEngine.getPeerKeyUpdateCountForTest() > 0,
-                "Server should have received at least one KeyUpdate");
+        // KU был обработан на сервере — см. testKeyUpdateOneWay
+        assertTrue(
+                serverEngine.getPeerKeyUpdateCountForTest() > 0,
+                "Сервер должен получить хотя бы один KeyUpdate");
     }
 
     // ========================================================================
@@ -409,20 +507,30 @@ class GostSSLEnginePostHandshakeTest {
     // ========================================================================
 
     @Test
-    @DisplayName("Bidirectional KU — update_requested=true, обе стороны обмениваются KU")
+    @DisplayName("Двунаправленный KU — update_requested=true, обе стороны обмениваются KU")
     void testBidirectionalKeyUpdate() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
-        serverKeyManager.addKeyEntry("default",
-                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert), serverCert.priv);
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
+                serverCert.priv);
 
-        GostSSLEngine serverEngine = new GostSSLEngine(
-                serverKeyManager, new GostX509TrustManager(null, false),
-                "localhost", 0, false);
-        GostSSLEngine clientEngine = new GostSSLEngine(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", 0, true);
+        GostSSLEngine serverEngine =
+                new GostSSLEngine(
+                        serverKeyManager,
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        false);
+        GostSSLEngine clientEngine =
+                new GostSSLEngine(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        true);
 
         doLoopback(clientEngine, serverEngine, pair);
 
@@ -433,7 +541,9 @@ class GostSSLEnginePostHandshakeTest {
         clientEngine.initiateKeyUpdate(true);
 
         // Выталкиваем KU-фрейм клиента
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         netBuf.clear();
         clientEngine.wrap(ByteBuffer.allocate(0), netBuf);
         netBuf.flip();
@@ -455,21 +565,25 @@ class GostSSLEnginePostHandshakeTest {
         netBuf.flip();
         byte[] serverKuOut = new byte[netBuf.remaining()];
         netBuf.get(serverKuOut);
-        assertTrue(serverKuOut.length > 0, "Server should respond with its own KU frame");
+        assertTrue(serverKuOut.length > 0, "Сервер должен ответить своим KU-фреймом");
         pair.getServerTransport().sendRecord(serverKuOut);
 
         // Клиент: получает ответный KU сервера
         byte[] clientIn = pair.getClientTransport().receiveRecord();
-        assertNotNull(clientIn, "Client should receive server's KU frame");
+        assertNotNull(clientIn, "Клиент должен получить KU-фрейм сервера");
         netBuf.clear();
         netBuf.put(clientIn);
         netBuf.flip();
         clientEngine.unwrap(netBuf, ByteBuffer.allocate(0));
 
         // Оба должны иметь peerKeyUpdateCount == 1 (каждый получил один KU)
-        assertEquals(1, serverEngine.getPeerKeyUpdateCountForTest(),
-                "Server должен получить 1 KU от клиента");
-        assertEquals(1, clientEngine.getPeerKeyUpdateCountForTest(),
+        assertEquals(
+                1,
+                serverEngine.getPeerKeyUpdateCountForTest(),
+                "Сервер должен получить 1 KU от клиента");
+        assertEquals(
+                1,
+                clientEngine.getPeerKeyUpdateCountForTest(),
                 "Клиент должен получить 1 KU от сервера (ответный)");
 
         // Данные после KU — проверяем шифрование на новых ключах
@@ -479,8 +593,11 @@ class GostSSLEnginePostHandshakeTest {
     /**
      * Цикл handshake для клиента: wrap/unwrap через in-memory transport.
      */
-    private void doClientHandshake(GostSSLEngine engine, InMemoryTlsTransport.Pair pair) throws Exception {
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+    private void doClientHandshake(GostSSLEngine engine, InMemoryTlsTransport.Pair pair)
+            throws Exception {
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
 
         for (int i = 0; i < 120; i++) {
@@ -517,15 +634,18 @@ class GostSSLEnginePostHandshakeTest {
                     break;
             }
         }
-        throw new RuntimeException("Client handshake did not complete, status="
-                + engine.getHandshakeStatus());
+        throw new RuntimeException(
+                "Рукопожатие клиента не завершено, status=" + engine.getHandshakeStatus());
     }
 
     /**
      * Цикл handshake для сервера: wrap/unwrap через in-memory transport.
      */
-    private void doServerHandshake(GostSSLEngine engine, InMemoryTlsTransport.Pair pair) throws Exception {
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+    private void doServerHandshake(GostSSLEngine engine, InMemoryTlsTransport.Pair pair)
+            throws Exception {
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
 
         for (int i = 0; i < 120; i++) {
@@ -562,8 +682,8 @@ class GostSSLEnginePostHandshakeTest {
                     break;
             }
         }
-        throw new RuntimeException("Server handshake did not complete, status="
-                + engine.getHandshakeStatus());
+        throw new RuntimeException(
+                "Рукопожатие сервера не завершено, status=" + engine.getHandshakeStatus());
     }
 
     /**
@@ -578,9 +698,15 @@ class GostSSLEnginePostHandshakeTest {
      * @param data     строка для отправки
      * @throws Exception если отправка/приём/проверка не удались
      */
-    private void sendAndReceiveAppData(GostSSLEngine sender, GostSSLEngine receiver,
-                                       InMemoryTlsTransport.Pair pair, String data) throws Exception {
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+    private void sendAndReceiveAppData(
+            GostSSLEngine sender,
+            GostSSLEngine receiver,
+            InMemoryTlsTransport.Pair pair,
+            String data)
+            throws Exception {
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
         boolean isClient = sender.getUseClientMode();
 
@@ -602,7 +728,8 @@ class GostSSLEnginePostHandshakeTest {
         } else {
             received = pair.getClientTransport().receiveRecord();
         }
-        assertNotNull(received, "Ожидаемые данные приложения на " + (isClient ? "сервере" : "клиенте"));
+        assertNotNull(
+                received, "Ожидаемые данные приложения на " + (isClient ? "сервере" : "клиенте"));
 
         netBuf.clear();
         netBuf.put(received);

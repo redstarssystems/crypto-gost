@@ -1,9 +1,6 @@
 package org.rssys.gost.jsse.examples.jetty;
 
-import org.rssys.gost.jsse.examples.EchoSocketClient;
-import org.rssys.gost.jsse.examples.ExamplesCertHelper;
-import org.rssys.gost.jsse.GostJsseConstants;
-
+import java.nio.charset.StandardCharsets;
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
@@ -15,8 +12,9 @@ import org.eclipse.jetty.server.ServerConnector;
 import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.util.Callback;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
-
-import java.nio.charset.StandardCharsets;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.examples.EchoSocketClient;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 
 /**
  * Демонстрация интеграции crypto-gost-jsse с Jetty 12.
@@ -36,37 +34,43 @@ public final class JettyEchoServer {
         scf.setIncludeProtocols(GostJsseConstants.PROTOCOL_TLS_1_3);
 
         Server server = new Server();
-        ServerConnector connector = new ServerConnector(server,
-                new SslConnectionFactory(scf, "http/1.1"),
-                new HttpConnectionFactory(new HttpConfiguration()));
+        ServerConnector connector =
+                new ServerConnector(
+                        server,
+                        new SslConnectionFactory(scf, "http/1.1"),
+                        new HttpConnectionFactory(new HttpConfiguration()));
         connector.setPort(0);
         server.addConnector(connector);
 
         // Handler.Abstract — Jetty 12 core handler API.
         // blocking handler; Content.Source.asString() блокируется
         // в потоке пула Jetty.
-        server.setHandler(new Handler.Abstract() {
-            @Override
-            public boolean handle(Request request, Response response, Callback callback) {
-                try {
-                    String body = Content.Source.asString(
-                            request, StandardCharsets.UTF_8).trim();
-                    if ("PING".equals(body)) {
-                        response.setStatus(200);
-                        response.getHeaders().put(
-                                org.eclipse.jetty.http.HttpHeader.CONTENT_TYPE, "text/plain");
-                        // Content.Sink.write — утилита для отправки строки в blocking handler
-                        Content.Sink.write(response, true, "PONG\n", callback);
-                    } else {
-                        callback.succeeded();
+        server.setHandler(
+                new Handler.Abstract() {
+                    @Override
+                    public boolean handle(Request request, Response response, Callback callback) {
+                        try {
+                            String body =
+                                    Content.Source.asString(request, StandardCharsets.UTF_8).trim();
+                            if ("PING".equals(body)) {
+                                response.setStatus(200);
+                                response.getHeaders()
+                                        .put(
+                                                org.eclipse.jetty.http.HttpHeader.CONTENT_TYPE,
+                                                "text/plain");
+                                // Content.Sink.write — утилита для отправки строки в blocking
+                                // handler
+                                Content.Sink.write(response, true, "PONG\n", callback);
+                            } else {
+                                callback.succeeded();
+                            }
+                            return true;
+                        } catch (Exception e) {
+                            callback.failed(e);
+                            return true;
+                        }
                     }
-                    return true;
-                } catch (Exception e) {
-                    callback.failed(e);
-                    return true;
-                }
-            }
-        });
+                });
 
         server.start();
         int port = connector.getLocalPort();

@@ -1,5 +1,7 @@
 package org.rssys.gost.cipher.mode;
 
+import java.security.MessageDigest;
+import java.util.Arrays;
 import org.rssys.gost.cipher.CipherParameters;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
@@ -9,9 +11,6 @@ import org.rssys.gost.mac.Cmac;
 import org.rssys.gost.mac.Mac;
 import org.rssys.gost.util.AuthenticationException;
 
-import java.security.MessageDigest;
-import java.util.Arrays;
-
 /**
  * Режим CTR-ACPKM (RFC 8645, RFC 9337 §5) для Кузнечика.
  * <p>
@@ -20,7 +19,7 @@ import java.util.Arrays;
  *   <li><b>Без OMAC</b> ({@code id-gostr3412-2015-kuznyechik-ctracpkm}):
  *       чистый CTR с S' = ukm[0..7]. Ключ = DK.</li>
  *   <li><b>С OMAC</b> ({@code id-gostr3412-2015-kuznyechik-ctracpkm-omac}):
- *       KDF_TREE(DK, "kdf tree", ukm[8..15]) → K(1)||K(2).
+ *       KDF_TREE(DK, "kdf tree", ukm[8..15]) -> K(1)||K(2).
  *       Encrypt-then-MAC: шифрование CTR с K(1), CMAC с K(2).</li>
  * </ul>
  * Симметричен: encrypt = decrypt для CTR-части.
@@ -35,7 +34,8 @@ public final class CtrAcpkmMode {
     /** Размер CMAC-тега для Кузнечика (128 бит). */
     private static final int MAC_TAG_LEN = 16;
 
-    private static final byte[] KDF_TREE_LABEL = "kdf tree".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    private static final byte[] KDF_TREE_LABEL =
+            "kdf tree".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
     private final Kuznyechik cipher;
     private final boolean useOmac;
@@ -74,7 +74,8 @@ public final class CtrAcpkmMode {
             dkBytes = sk.getKey();
             ukm = null;
         } else {
-            throw new IllegalArgumentException("CTR-ACPKM requires SymmetricKey or ParametersWithIV");
+            throw new IllegalArgumentException(
+                    "CTR-ACPKM requires SymmetricKey or ParametersWithIV");
         }
 
         if (dkBytes.length != KEY_LEN) {
@@ -87,13 +88,13 @@ public final class CtrAcpkmMode {
         if (useOmac) {
             if (ukm == null || ukm.length != UKM_LEN) {
                 throw new IllegalArgumentException(
-                    "CTR-ACPKM-OMAC requires 16-byte UKM in ParametersWithIV");
+                        "CTR-ACPKM-OMAC requires 16-byte UKM in ParametersWithIV");
             }
             // UKM[0..7] = S' (IV для CTR); UKM[8..15] = seed для KDF_TREE (RFC 9337 §5.1.1)
             byte[] seed = Arrays.copyOfRange(ukm, 8, 16);
             // KDF_TREE разделяет DK на ключ шифрования K(1) и ключ MAC K(2)
-            byte[] derived = KdfTreeGostR3411_2012_256.generate(
-                dkBytes, KDF_TREE_LABEL, seed, 2, KEY_LEN);
+            byte[] derived =
+                    KdfTreeGostR3411_2012_256.generate(dkBytes, KDF_TREE_LABEL, seed, 2, KEY_LEN);
             byte[] encKey = Arrays.copyOfRange(derived, 0, KEY_LEN);
             byte[] macKey = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
             Arrays.fill(derived, (byte) 0);
@@ -118,8 +119,7 @@ public final class CtrAcpkmMode {
             } else {
                 iv = new byte[IV_LEN];
             }
-            cipher.init(true, dk instanceof ParametersWithIV pv2
-                ? pv2.getParameters() : dk);
+            cipher.init(true, dk instanceof ParametersWithIV pv2 ? pv2.getParameters() : dk);
             initCounter(iv);
         }
 
@@ -138,8 +138,7 @@ public final class CtrAcpkmMode {
      * @param outOff смещение в выходном буфере
      * @return количество записанных байт
      */
-    public int processBytes(byte[] input, int inOff, int len,
-                            byte[] output, int outOff) {
+    public int processBytes(byte[] input, int inOff, int len, byte[] output, int outOff) {
         checkInitialized();
 
         if (len == 0) return 0;
@@ -161,6 +160,19 @@ public final class CtrAcpkmMode {
     }
 
     /**
+     * Шифрование без OMAC (чистый CTR-ACPKM).
+     * CTR симметричен — идентично {@link #decryptOnly}.
+     *
+     * @param dk   ключ (SymmetricKey)
+     * @param ukm  UKM (16 байт, первые 8 = S')
+     * @param data открытые данные
+     * @return зашифрованные данные
+     */
+    public static byte[] encryptOnly(CipherParameters dk, byte[] ukm, byte[] data) {
+        return decryptOnly(dk, ukm, data);
+    }
+
+    /**
      * Однократное расшифрование данных (без OMAC — чистый CTR).
      *
      * @param dk   ключ (SymmetricKey)
@@ -170,9 +182,7 @@ public final class CtrAcpkmMode {
      */
     public static byte[] decryptOnly(CipherParameters dk, byte[] ukm, byte[] data) {
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false);
-        mode.init(false, ukm != null
-            ? new ParametersWithIV(dk, ukm)
-            : dk);
+        mode.init(false, ukm != null ? new ParametersWithIV(dk, ukm) : dk);
         byte[] result = new byte[data.length];
         mode.processBytes(data, 0, data.length, result, 0);
         return result;

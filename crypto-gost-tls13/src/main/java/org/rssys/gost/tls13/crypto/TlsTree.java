@@ -1,9 +1,9 @@
 package org.rssys.gost.tls13.crypto;
 
+import java.util.Arrays;
 import org.rssys.gost.kdf.KdfGostR3411_2012_256;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
-import java.util.Arrays;
 
 /**
  * TLSTREE — per-record внешний ре-кейинг ключей (RFC 9367 раздел 4.2).
@@ -40,8 +40,8 @@ public final class TlsTree {
      * @param scratch8 буфер 8 байт для STR_8 (seed KDF) — сохраняется в течении вызова
      * @return 32 байта ключевого материала
      */
-    static byte[] expandLevel(byte[] inputKey, byte[] label, long mask, long seqNum,
-                               byte[] scratch8) {
+    static byte[] expandLevel(
+            byte[] inputKey, byte[] label, long mask, long seqNum, byte[] scratch8) {
         be64(seqNum & mask, scratch8, 0);
         return KdfGostR3411_2012_256.expand(inputKey, label, scratch8, 32);
     }
@@ -74,8 +74,7 @@ public final class TlsTree {
      * @param c3      битовая маска уровня 3
      * @return 32 байта ключевого материала
      */
-    public static byte[] tlstree(byte[] rootKey, long seqNum,
-                                  long c1, long c2, long c3) {
+    public static byte[] tlstree(byte[] rootKey, long seqNum, long c1, long c2, long c3) {
         byte[] level1 = expandLevel(rootKey, LABEL_LEVEL1, c1, seqNum);
         byte[] level2 = expandLevel(level1, LABEL_LEVEL2, c2, seqNum);
         byte[] level3 = expandLevel(level2, LABEL_LEVEL3, c3, seqNum);
@@ -95,8 +94,8 @@ public final class TlsTree {
      * @param keyLen   длина ключа (32 для Kuznyechik)
      * @return ключ
      */
-    public static byte[] deriveKey(byte[] startKey, long seqNum,
-                                    long c1, long c2, long c3, int keyLen) {
+    public static byte[] deriveKey(
+            byte[] startKey, long seqNum, long c1, long c2, long c3, int keyLen) {
         byte[] full = tlstree(startKey, seqNum, c1, c2, c3);
         byte[] key = Arrays.copyOf(full, keyLen);
         TlsUtils.wipeArray(full);
@@ -112,7 +111,7 @@ public final class TlsTree {
      * @param off   смещение в буфере
      */
     static void be64(long value, byte[] dest, int off) {
-        dest[off]     = (byte) (value >>> 56);
+        dest[off] = (byte) (value >>> 56);
         dest[off + 1] = (byte) (value >>> 48);
         dest[off + 2] = (byte) (value >>> 40);
         dest[off + 3] = (byte) (value >>> 32);

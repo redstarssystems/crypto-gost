@@ -1,8 +1,8 @@
 package org.rssys.gost.tls13.message;
-import org.rssys.gost.tls13.*;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.tls13.*;
 
 /**
  * Fuzz-тесты для {@link TlsMessageParser}.
@@ -36,8 +36,8 @@ class TlsMessageParserFuzzTest {
     void fuzzParseClientHello(FuzzedDataProvider data) {
         byte[] input = data.consumeRemainingAsBytes();
         try {
-            TlsMessageParser.parseClientHello(input, TlsConstants.GRP_GC256A,
-                    TlsConstants.SIG_GOST_TC26_A_256);
+            TlsMessageParser.parseClientHello(
+                    input, TlsConstants.GRP_GC256A, TlsConstants.SIG_GOST_TC26_A_256);
         } catch (TlsException | IllegalArgumentException e) {
         }
     }

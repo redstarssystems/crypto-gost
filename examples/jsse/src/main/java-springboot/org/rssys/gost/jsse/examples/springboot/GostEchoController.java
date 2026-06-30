@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Минимальный эхо-эндпоинт для проверки интеграции.
  * <p>
- * POST /echo с телом "PING" → "PONG".
+ * POST /echo с телом "PING" -> "PONG".
  */
 @RestController
 public class GostEchoController {

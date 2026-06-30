@@ -1,32 +1,32 @@
 package org.rssys.gost.jsse.manager;
 
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.crl.CrlCache;
-import org.rssys.gost.jsse.crl.CrlFetcher;
-import org.rssys.gost.jsse.crl.CrlPolicy;
-import org.rssys.gost.jsse.ocsp.OcspFetcher;
-import org.rssys.gost.jsse.ocsp.OcspFetchResult;
-import org.rssys.gost.jsse.ocsp.OcspPolicy;
-import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.TlsException;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.cert.TlsCertificateValidator;
-import org.rssys.gost.tls13.cert.TlsCrlVerifier;
-import org.rssys.gost.tls13.cert.TlsOcspVerifier;
-
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.X509ExtendedTrustManager;
 import java.io.IOException;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.net.Socket;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
+import java.time.Instant;
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.X509ExtendedTrustManager;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.crl.CrlCache;
+import org.rssys.gost.jsse.crl.CrlFetcher;
+import org.rssys.gost.jsse.crl.CrlPolicy;
+import org.rssys.gost.jsse.ocsp.OcspFetchResult;
+import org.rssys.gost.jsse.ocsp.OcspFetcher;
+import org.rssys.gost.jsse.ocsp.OcspPolicy;
+import org.rssys.gost.pkix.cert.CrlVerifier;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostOcspResponse;
+import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.TlsException;
+import org.rssys.gost.tls13.cert.TlsCertificateValidator;
 
 /**
  * X509TrustManager для ГОСТ-сертификатов.
@@ -48,13 +48,16 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
     private final CrlFetcher crlFetcher;
     private final CrlCache crlCache;
 
-    /** Кэш OCSP-ответов: key = (issuerSerialHex, certSerialHex) → CachedStatus. TTL = 1 час */
+    /** Кэш OCSP-ответов: key = (issuerSerialHex, certSerialHex) -> CachedStatus. TTL = 1 час */
     private long ocspCacheTtlMs = 3600_000L;
+
     private static final long GRACE_MS = 3600_000L; // grace-период для nextUpdate (перекос часов)
 
     /** Максимум записей в кэше OCSP (soft cap — защита от OOM при большом числе уникальных сертификатов). */
     private static final int OCSP_CACHE_MAX_ENTRIES = 500;
-    private final ConcurrentHashMap<OcspCacheKey, CachedOcspStatus> ocspCache = new ConcurrentHashMap<>();
+
+    private final ConcurrentHashMap<OcspCacheKey, CachedOcspStatus> ocspCache =
+            new ConcurrentHashMap<>();
 
     /** setter для тестов */
     public void setOcspCacheTtlMs(long ttlMs) {
@@ -66,8 +69,10 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
      * @param requireOcspStapling true — OCSP-степплинг обязателен
      */
     public GostX509TrustManager(PublicKeyParameters caPublicKey, boolean requireOcspStapling) {
-        this(caPublicKey != null ? Collections.singletonList(caPublicKey) : null,
-                requireOcspStapling ? OcspPolicy.STAPLING_REQUIRED : OcspPolicy.IF_PRESENT, null);
+        this(
+                caPublicKey != null ? Collections.singletonList(caPublicKey) : null,
+                requireOcspStapling ? OcspPolicy.STAPLING_REQUIRED : OcspPolicy.IF_PRESENT,
+                null);
     }
 
     /**
@@ -75,10 +80,12 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
      * @param ocspPolicy   политика проверки OCSP
      * @param ocspFetcher  fetcher для client-side OCSP-запросов (может быть null)
      */
-    public GostX509TrustManager(PublicKeyParameters caPublicKey, OcspPolicy ocspPolicy,
-                                OcspFetcher ocspFetcher) {
-        this(caPublicKey != null ? Collections.singletonList(caPublicKey) : null,
-                ocspPolicy, ocspFetcher);
+    public GostX509TrustManager(
+            PublicKeyParameters caPublicKey, OcspPolicy ocspPolicy, OcspFetcher ocspFetcher) {
+        this(
+                caPublicKey != null ? Collections.singletonList(caPublicKey) : null,
+                ocspPolicy,
+                ocspFetcher);
     }
 
     /**
@@ -86,8 +93,10 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
      * @param ocspPolicy   политика проверки OCSP
      * @param ocspFetcher  fetcher для client-side OCSP-запросов (может быть null)
      */
-    public GostX509TrustManager(List<PublicKeyParameters> caPublicKeys, OcspPolicy ocspPolicy,
-                                OcspFetcher ocspFetcher) {
+    public GostX509TrustManager(
+            List<PublicKeyParameters> caPublicKeys,
+            OcspPolicy ocspPolicy,
+            OcspFetcher ocspFetcher) {
         this(caPublicKeys, ocspPolicy, ocspFetcher, CrlPolicy.DISABLED, null);
     }
 
@@ -98,9 +107,12 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
      * @param crlPolicy    политика проверки CRL
      * @param crlFetcher   fetcher для CRL по CDP URI (может быть null)
      */
-    public GostX509TrustManager(List<PublicKeyParameters> caPublicKeys, OcspPolicy ocspPolicy,
-                                OcspFetcher ocspFetcher, CrlPolicy crlPolicy,
-                                CrlFetcher crlFetcher) {
+    public GostX509TrustManager(
+            List<PublicKeyParameters> caPublicKeys,
+            OcspPolicy ocspPolicy,
+            OcspFetcher ocspFetcher,
+            CrlPolicy crlPolicy,
+            CrlFetcher crlFetcher) {
         this.caPublicKeys = caPublicKeys;
         this.ocspPolicy = ocspPolicy;
         this.ocspFetcher = ocspFetcher;
@@ -186,23 +198,24 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
     }
 
     /**
-     * Прямая валидация цепочки TlsCertificate с OCSP и CRL для всей цепочки.
+     * Прямая валидация цепочки GostCertificate с OCSP и CRL для всей цепочки.
      * <p>
      * Поддерживает client-side OCSP fetch для leaf и intermediate сертификатов
      * по политике {@code ocspPolicy}. Поддерживает CRL-проверку по политике
      * {@code crlPolicy}. CRL проверяется только если OCSP-ответ отсутствует
-     * (приоритет OCSP → CRL, RFC 5280).
+     * (приоритет OCSP -> CRL, RFC 5280).
      */
-    public void validateChainWithOcsp(List<TlsCertificate> chain, String hostname,
-                                boolean requireOcsp) throws CertificateException {
+    public void validateChainWithOcsp(
+            List<GostCertificate> chain, String hostname, boolean requireOcsp)
+            throws CertificateException {
         if (chain == null || chain.isEmpty()) {
             throw new CertificateException("Empty certificate chain");
         }
 
         // OCSP + CRL для всех сертификатов в цепочке (кроме root)
         for (int i = 0; i < chain.size() - 1; i++) {
-            TlsCertificate cert = chain.get(i);
-            TlsCertificate issuer = chain.get(i + 1);
+            GostCertificate cert = chain.get(i);
+            GostCertificate issuer = chain.get(i + 1);
             fetchOcspIfNeeded(cert, issuer);
             // CRL только если OCSP не дал ответа (приоритет OCSP)
             if (!cert.hasOcspResponse()) {
@@ -211,8 +224,7 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         }
 
         try {
-            boolean needOcsp = requireOcsp
-                    || (ocspPolicy == OcspPolicy.STAPLING_OR_FETCH);
+            boolean needOcsp = requireOcsp || (ocspPolicy == OcspPolicy.STAPLING_OR_FETCH);
             TlsCertificateValidator.checkServerCertificateChain(
                     chain, hostname, needOcsp, caPublicKeys);
         } catch (TlsException e) {
@@ -220,7 +232,9 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
             if (msg != null && (msg.contains("revoked") || msg.contains("OCSP"))) {
                 LOG.log(Level.WARNING, "Revocation status: {0}", msg);
             } else {
-                LOG.log(Level.WARNING, "Certificate validation failed: {0}",
+                LOG.log(
+                        Level.WARNING,
+                        "Certificate validation failed: {0}",
                         msg != null && msg.length() > 200 ? msg.substring(0, 200) : msg);
             }
             throw new CertificateException("Certificate validation failed: " + msg, e);
@@ -231,10 +245,13 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         // Intermediate OCSP missing (best-effort fallthrough) — только при STAPLING_OR_FETCH
         if (ocspPolicy == OcspPolicy.STAPLING_OR_FETCH) {
             for (int i = 1; i < chain.size() - 1; i++) {
-                TlsCertificate ic = chain.get(i);
-                if (!ic.hasOcspResponse() && ic.getOcspUris() != null
+                GostCertificate ic = chain.get(i);
+                if (!ic.hasOcspResponse()
+                        && ic.getOcspUris() != null
                         && ic.getOcspUris().length > 0) {
-                    LOG.log(Level.WARNING, "Intermediate cert missing OCSP (best-effort fallthrough)");
+                    LOG.log(
+                            Level.WARNING,
+                            "Intermediate cert missing OCSP (best-effort fallthrough)");
                 }
             }
         }
@@ -249,8 +266,8 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         if (chain == null || chain.length == 0) {
             throw new CertificateException("Empty server certificate chain");
         }
-        List<TlsCertificate> tlsChain = CertificateBridge.toTls(chain);
-        validateChainWithOcsp(tlsChain, hostname, requireOcspStapling);
+        List<GostCertificate> gostChain = CertificateBridge.toGost(chain);
+        validateChainWithOcsp(gostChain, hostname, requireOcspStapling);
     }
 
     private void checkClientTrustedImpl(X509Certificate[] chain) throws CertificateException {
@@ -258,17 +275,17 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
             throw new CertificateException("Empty client certificate chain");
         }
         try {
-            List<TlsCertificate> tlsChain = CertificateBridge.toTls(chain);
-            TlsCertificateValidator.checkClientCertificateChain(
-                    tlsChain, caPublicKeys);
+            List<GostCertificate> gostChain = CertificateBridge.toGost(chain);
+            TlsCertificateValidator.checkClientCertificateChain(gostChain, caPublicKeys);
             // CRL для client certificate (по аналогии с серверной проверкой)
-            if (crlPolicy != CrlPolicy.DISABLED && tlsChain.size() >= 2) {
-                TlsCertificate leaf = tlsChain.get(0);
-                TlsCertificate issuer = tlsChain.get(1);
+            if (crlPolicy != CrlPolicy.DISABLED && gostChain.size() >= 2) {
+                GostCertificate leaf = gostChain.get(0);
+                GostCertificate issuer = gostChain.get(1);
                 checkCrl(leaf, issuer);
             }
         } catch (TlsException e) {
-            throw new CertificateException("Client certificate validation failed: " + e.getMessage(), e);
+            throw new CertificateException(
+                    "Client certificate validation failed: " + e.getMessage(), e);
         } catch (Exception e) {
             throw new CertificateException("Certificate validation error: " + e.getMessage(), e);
         }
@@ -278,7 +295,7 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
      * Запрашивает OCSP для сертификата, если ещё нет stapled ответа и политика разрешает fetch.
      * Результат кэшируется.
      */
-    private void fetchOcspIfNeeded(TlsCertificate cert, TlsCertificate issuer) {
+    private void fetchOcspIfNeeded(GostCertificate cert, GostCertificate issuer) {
         if (ocspPolicy != OcspPolicy.STAPLING_OR_FETCH || ocspFetcher == null) {
             return;
         }
@@ -306,29 +323,44 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         for (String ocspUri : ocspUris) {
             if (ocspUri == null || ocspUri.isEmpty()) continue;
             long start = System.nanoTime();
-            OcspFetchResult result = ocspFetcher.fetchWithNonce(
-                    cert.getEncoded(), issuer.getEncoded(), ocspUri);
+            OcspFetchResult result =
+                    ocspFetcher.fetchWithNonce(cert.getEncoded(), issuer.getEncoded(), ocspUri);
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             if (result.response() != null) {
                 cert.setOcspResponse(result.response());
                 cert.setOcspNonce(result.nonce());
-                Date nextUpdate = TlsOcspVerifier.extractNextUpdate(result.response());
-                long expiresAt = nextUpdate != null
-                        ? Math.min(nextUpdate.getTime() + GRACE_MS,
-                                   System.currentTimeMillis() + ocspCacheTtlMs)
-                        : System.currentTimeMillis() + ocspCacheTtlMs;
-                ocspCache.put(cacheKey, new CachedOcspStatus(
-                        result.response(), result.nonce(), expiresAt));
+                Instant nextUpdate = null;
+                try {
+                    nextUpdate = new GostOcspResponse(result.response()).getNextUpdate();
+                } catch (PkixException ignored) {
+                    // Парсинг не удался — используем дефолтный TTL
+                }
+                long expiresAt =
+                        nextUpdate != null
+                                ? Math.min(
+                                        nextUpdate.toEpochMilli() + GRACE_MS,
+                                        System.currentTimeMillis() + ocspCacheTtlMs)
+                                : System.currentTimeMillis() + ocspCacheTtlMs;
+                ocspCache.put(
+                        cacheKey,
+                        new CachedOcspStatus(result.response(), result.nonce(), expiresAt));
                 // Soft cap — случайное вытеснение при превышении (паттерн CrlCache)
                 if (ocspCache.size() > OCSP_CACHE_MAX_ENTRIES) {
                     ocspCache.keySet().stream().findAny().ifPresent(ocspCache::remove);
                 }
-                LOG.log(Level.INFO, "OCSP fetch success for cert={0} from {1} ({2}ms)",
-                        cacheKey.certSerial, ocspUri, elapsedMs);
+                LOG.log(
+                        Level.INFO,
+                        "OCSP fetch success for cert={0} from {1} ({2}ms)",
+                        cacheKey.certSerial,
+                        ocspUri,
+                        elapsedMs);
                 break;
             } else {
-                LOG.log(Level.WARNING, "OCSP fetch failed for cert={0} from {1}",
-                        cacheKey.certSerial, ocspUri);
+                LOG.log(
+                        Level.WARNING,
+                        "OCSP fetch failed for cert={0} from {1}",
+                        cacheKey.certSerial,
+                        ocspUri);
             }
         }
     }
@@ -336,7 +368,7 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
     /**
      * Проверяет сертификат по CRL (Certificate Revocation List).
      * <p>
-     * Вызывается только если OCSP-ответ отсутствует (приоритет OCSP → CRL, RFC 5280).
+     * Вызывается только если OCSP-ответ отсутствует (приоритет OCSP -> CRL, RFC 5280).
      * fail-closed: при REQUIRE + нет CDP/нет fetcher/ошибка fetch — reject.
      * Сетевые ошибки (IOException) при fetch приводят к переходу к следующему CDP mirror
      * (или reject при REQUIRE). TlsException из {@code verify} (битая подпись,
@@ -347,7 +379,8 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
      * @param issuer issuer сертификата (cert[i+1] в цепочке)
      * @throws CertificateException при revoked CRL, REQUIRE без CDP, REQUIRE без fetcher
      */
-    private void checkCrl(TlsCertificate cert, TlsCertificate issuer) throws CertificateException {
+    private void checkCrl(GostCertificate cert, GostCertificate issuer)
+            throws CertificateException {
         if (crlPolicy == CrlPolicy.DISABLED) {
             return;
         }
@@ -361,8 +394,7 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         }
         if (crlFetcher == null) {
             if (crlPolicy == CrlPolicy.REQUIRE) {
-                throw new CertificateException(
-                        "CRL required but no CrlFetcher configured");
+                throw new CertificateException("CRL required but no CrlFetcher configured");
             }
             return;
         }
@@ -375,8 +407,11 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
                     try {
                         crlDer = crlFetcher.fetch(crlUri);
                     } catch (IOException e) {
-                        LOG.log(Level.WARNING, "CRL mirror unavailable, trying next: {0} — {1}",
-                                crlUri, e.getMessage());
+                        LOG.log(
+                                Level.WARNING,
+                                "CRL mirror unavailable, trying next: {0} — {1}",
+                                crlUri,
+                                e.getMessage());
                         continue;
                     }
                     if (crlDer == null) continue;
@@ -384,9 +419,13 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
                         crlCache.put(crlUri, crlDer);
                     }
                 }
-                TlsCrlVerifier.verify(crlDer, cert.getSerialNumber(), issuer.getPublicKey());
+                CrlVerifier.verify(
+                        crlDer,
+                        cert.getSerialNumber(),
+                        issuer.getPublicKey(),
+                        cert.getIssuerDnBytes());
                 return; // чистый CRL — прерываем цикл
-            } catch (TlsException e) {
+            } catch (PkixException e) {
                 String msg = e.getMessage();
                 if (msg != null && msg.contains("revoked")) {
                     LOG.log(Level.ERROR, "CRL: certificate revoked: {0}", msg);
@@ -404,11 +443,10 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
     /**
      * Строит ключ кэша OCSP по (issuerSerial, certSerial).
      */
-    private static OcspCacheKey buildCacheKey(TlsCertificate cert, TlsCertificate issuer) {
+    private static OcspCacheKey buildCacheKey(GostCertificate cert, GostCertificate issuer) {
         byte[] certSerial = cert.getSerialNumber();
         byte[] issuerSerial = issuer.getSerialNumber();
-        return new OcspCacheKey(
-                bytesToHex(issuerSerial), bytesToHex(certSerial));
+        return new OcspCacheKey(bytesToHex(issuerSerial), bytesToHex(certSerial));
     }
 
     private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();

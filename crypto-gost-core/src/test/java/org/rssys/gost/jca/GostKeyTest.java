@@ -1,5 +1,17 @@
 package org.rssys.gost.jca;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Security;
+import java.security.spec.ECGenParameterSpec;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.SecretKeySpec;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -9,20 +21,7 @@ import org.rssys.gost.jca.key.GostECPublicKey;
 import org.rssys.gost.jca.key.GostECPublicKeySpec;
 import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.jca.spec.GostCurves;
-
-import javax.crypto.SecretKey;
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.SecretKeySpec;
-import java.security.KeyFactory;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import org.rssys.gost.util.CryptoRandom;
-import java.security.Security;
-import java.security.spec.ECGenParameterSpec;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 @DisplayName("GostKey — ключевые классы, KeyFactory, SecretKeyFactory, DER-кодирование")
 class GostKeyTest {
@@ -154,13 +153,22 @@ class GostKeyTest {
 
         // Декодируем обратно
         KeyFactory kf = KeyFactory.getInstance("ECGOST3410-2012", PROVIDER);
-        GostECPublicKey restored = (GostECPublicKey) kf.generatePublic(new X509EncodedKeySpec(encoded));
+        GostECPublicKey restored =
+                (GostECPublicKey) kf.generatePublic(new X509EncodedKeySpec(encoded));
 
         // Сравниваем координаты
-        org.rssys.gost.signature.ECPoint qOrig   = ((GostECPublicKey) pair.getPublic()).toPublicKeyParameters().getQ().normalize();
-        org.rssys.gost.signature.ECPoint qRestored = restored.toPublicKeyParameters().getQ().normalize();
-        assertEquals(qOrig.getX(), qRestored.getX(), "X-координата должна совпадать после DER roundtrip");
-        assertEquals(qOrig.getY(), qRestored.getY(), "Y-координата должна совпадать после DER roundtrip");
+        org.rssys.gost.signature.ECPoint qOrig =
+                ((GostECPublicKey) pair.getPublic()).toPublicKeyParameters().getQ().normalize();
+        org.rssys.gost.signature.ECPoint qRestored =
+                restored.toPublicKeyParameters().getQ().normalize();
+        assertEquals(
+                qOrig.getX(),
+                qRestored.getX(),
+                "X-координата должна совпадать после DER roundtrip");
+        assertEquals(
+                qOrig.getY(),
+                qRestored.getY(),
+                "Y-координата должна совпадать после DER roundtrip");
     }
 
     @Test
@@ -176,10 +184,12 @@ class GostKeyTest {
 
         // Декодируем обратно
         KeyFactory kf = KeyFactory.getInstance("ECGOST3410-2012", PROVIDER);
-        GostECPrivateKey restored = (GostECPrivateKey) kf.generatePrivate(new PKCS8EncodedKeySpec(encoded));
+        GostECPrivateKey restored =
+                (GostECPrivateKey) kf.generatePrivate(new PKCS8EncodedKeySpec(encoded));
 
         // Сравниваем значения d
-        java.math.BigInteger dOrig    = ((GostECPrivateKey) pair.getPrivate()).toPrivateKeyParameters().getD();
+        java.math.BigInteger dOrig =
+                ((GostECPrivateKey) pair.getPrivate()).toPrivateKeyParameters().getD();
         java.math.BigInteger dRestored = restored.toPrivateKeyParameters().getD();
         assertEquals(dOrig, dRestored, "Закрытый ключ d должен совпасть после DER roundtrip");
     }
@@ -195,19 +205,23 @@ class GostKeyTest {
 
         // Открытый ключ
         byte[] pubEncoded = pair.getPublic().getEncoded();
-        GostECPublicKey pubRestored = (GostECPublicKey) kf.generatePublic(new X509EncodedKeySpec(pubEncoded));
+        GostECPublicKey pubRestored =
+                (GostECPublicKey) kf.generatePublic(new X509EncodedKeySpec(pubEncoded));
         assertEquals(
-            ((GostECPublicKey) pair.getPublic()).toPublicKeyParameters().getQ().normalize().getX(),
-            pubRestored.toPublicKeyParameters().getQ().normalize().getX()
-        );
+                ((GostECPublicKey) pair.getPublic())
+                        .toPublicKeyParameters()
+                        .getQ()
+                        .normalize()
+                        .getX(),
+                pubRestored.toPublicKeyParameters().getQ().normalize().getX());
 
         // Закрытый ключ
         byte[] privEncoded = pair.getPrivate().getEncoded();
-        GostECPrivateKey privRestored = (GostECPrivateKey) kf.generatePrivate(new PKCS8EncodedKeySpec(privEncoded));
+        GostECPrivateKey privRestored =
+                (GostECPrivateKey) kf.generatePrivate(new PKCS8EncodedKeySpec(privEncoded));
         assertEquals(
-            ((GostECPrivateKey) pair.getPrivate()).toPrivateKeyParameters().getD(),
-            privRestored.toPrivateKeyParameters().getD()
-        );
+                ((GostECPrivateKey) pair.getPrivate()).toPrivateKeyParameters().getD(),
+                privRestored.toPrivateKeyParameters().getD());
     }
 
     @Test
@@ -258,24 +272,29 @@ class GostKeyTest {
         kpg.initialize(new ECGenParameterSpec("cryptopro-A"));
         KeyPair pair = kpg.generateKeyPair();
 
-        byte[] msg = "данные для подписи после DER roundtrip".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] msg =
+                "данные для подписи после DER roundtrip"
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
         // Подписываем оригинальным закрытым ключом
-        java.security.Signature signer = java.security.Signature.getInstance("ECGOST3410-2012-256", PROVIDER);
+        java.security.Signature signer =
+                java.security.Signature.getInstance("ECGOST3410-2012-256", PROVIDER);
         signer.initSign(pair.getPrivate());
         signer.update(msg);
         byte[] sig = signer.sign();
 
         // Восстанавливаем открытый ключ из DER
         KeyFactory kf = KeyFactory.getInstance("ECGOST3410-2012", PROVIDER);
-        GostECPublicKey restoredPub = (GostECPublicKey) kf.generatePublic(
-            new X509EncodedKeySpec(pair.getPublic().getEncoded()));
+        GostECPublicKey restoredPub =
+                (GostECPublicKey)
+                        kf.generatePublic(new X509EncodedKeySpec(pair.getPublic().getEncoded()));
 
         // Верифицируем восстановленным ключом
-        java.security.Signature verifier = java.security.Signature.getInstance("ECGOST3410-2012-256", PROVIDER);
+        java.security.Signature verifier =
+                java.security.Signature.getInstance("ECGOST3410-2012-256", PROVIDER);
         verifier.initVerify(restoredPub);
         verifier.update(msg);
-        assertTrue(verifier.verify(sig),
-            "Восстановленный из DER ключ должен верифици��овать подпись");
+        assertTrue(
+                verifier.verify(sig), "Восстановленный из DER ключ должен верифици��овать подпись");
     }
 }

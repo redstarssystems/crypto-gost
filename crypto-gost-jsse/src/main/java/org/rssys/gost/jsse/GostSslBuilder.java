@@ -1,16 +1,10 @@
 package org.rssys.gost.jsse;
 
-import org.rssys.gost.jsse.engine.GostSSLSessionContext;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.cert.GostPkcs12Loader;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-
-import javax.net.ssl.SSLContext;
-import java.security.PrivateKey;
-import java.security.cert.X509Certificate;
 import java.util.List;
 import java.util.stream.Collectors;
+import javax.net.ssl.SSLContext;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 
 /**
  * Fluent builder для сложных случаев настройки {@link GostSsl}.
@@ -35,17 +29,16 @@ public class GostSslBuilder {
      * Устанавливает сертификат и ключ с авто-определением формата.
      * <p>
      * Каждый аргумент может быть в PEM или DER. PEM автоматически конвертируется
-     * в DER через {@link TlsCertificate#pemToDer(byte[])}.
+     * в DER через {@link GostCertificate#pemToDer(byte[])}.
      *
      * @param certData сертификат X.509 (PEM или DER)
      * @param keyData  закрытый ключ PKCS#8 (PEM или DER)
      * @return this для fluent API
      */
     public GostSslBuilder certificate(byte[] certData, byte[] keyData) {
-        this.certDer = TlsCertificate.isPem(certData)
-                ? TlsCertificate.pemToDer(certData) : certData;
-        this.keyDer = TlsCertificate.isPem(keyData)
-                ? TlsCertificate.pemToDer(keyData) : keyData;
+        this.certDer =
+                GostCertificate.isPem(certData) ? GostCertificate.pemToDer(certData) : certData;
+        this.keyDer = GostCertificate.isPem(keyData) ? GostCertificate.pemToDer(keyData) : keyData;
         return this;
     }
 
@@ -73,9 +66,8 @@ public class GostSslBuilder {
      * @throws IllegalArgumentException если данные не содержат валидного сертификата
      */
     public GostSslBuilder trustCa(byte[] caData) {
-        if (TlsCertificate.isPem(caData)) {
-            TlsCertificate.listFromPem(caData)
-                    .forEach(ca -> trustCaSingle(ca.getEncoded()));
+        if (GostCertificate.isPem(caData)) {
+            GostCertificate.listFromPem(caData).forEach(ca -> trustCaSingle(ca.getEncoded()));
         } else {
             trustCaSingle(caData);
         }
@@ -84,7 +76,7 @@ public class GostSslBuilder {
 
     private void trustCaSingle(byte[] caDer) {
         if (this.trustedCaDers == null) {
-            this.trustedCaDers = new byte[][]{caDer};
+            this.trustedCaDers = new byte[][] {caDer};
         } else {
             byte[][] copy = new byte[trustedCaDers.length + 1][];
             System.arraycopy(trustedCaDers, 0, copy, 0, trustedCaDers.length);
@@ -103,10 +95,11 @@ public class GostSslBuilder {
      * @param password пароль PFX
      */
     public GostSslBuilder trustCa(byte[] pfxData, char[] password) {
-        GostPkcs12Loader.Result r = GostPkcs12Loader.load(pfxData, password);
-        List<TlsCertificate> caCerts = r.getCertificateChain().stream()
-            .filter(TlsCertificate::isCA)
-            .collect(Collectors.toList());
+        GostPkcs12Loader.Result r = GostPkcs12Loader.load(pfxData, password, true);
+        List<GostCertificate> caCerts =
+                r.getCertificateChain().stream()
+                        .filter(GostCertificate::isCA)
+                        .collect(Collectors.toList());
         if (caCerts.isEmpty()) {
             throw new IllegalArgumentException("No CA certificate found in PFX");
         }
@@ -123,8 +116,7 @@ public class GostSslBuilder {
      * @throws IllegalArgumentException если PEM не содержит валидных сертификатов
      */
     public GostSslBuilder trustCaFromPem(byte[] pemChain) {
-        TlsCertificate.listFromPem(pemChain).forEach(
-                ca -> trustCa(ca.getEncoded()));
+        GostCertificate.listFromPem(pemChain).forEach(ca -> trustCa(ca.getEncoded()));
         return this;
     }
 
@@ -156,15 +148,31 @@ public class GostSslBuilder {
      * Строит серверный SSLContext.
      */
     public SSLContext buildServerContext() {
-        return GostSsl.buildContext(certDer, keyDer, p12Data, p12Password,
-                trustedCaDers, ocspEnabled, sessionCacheSize, trustAll, true);
+        return GostSsl.buildContext(
+                certDer,
+                keyDer,
+                p12Data,
+                p12Password,
+                trustedCaDers,
+                ocspEnabled,
+                sessionCacheSize,
+                trustAll,
+                true);
     }
 
     /**
      * Строит клиентский SSLContext.
      */
     public SSLContext buildClientContext() {
-        return GostSsl.buildContext(certDer, keyDer, p12Data, p12Password,
-                trustedCaDers, ocspEnabled, sessionCacheSize, trustAll, false);
+        return GostSsl.buildContext(
+                certDer,
+                keyDer,
+                p12Data,
+                p12Password,
+                trustedCaDers,
+                ocspEnabled,
+                sessionCacheSize,
+                trustAll,
+                false);
     }
 }

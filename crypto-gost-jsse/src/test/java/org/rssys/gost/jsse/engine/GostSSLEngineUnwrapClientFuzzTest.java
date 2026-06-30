@@ -2,12 +2,11 @@ package org.rssys.gost.jsse.engine;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import java.nio.ByteBuffer;
+import javax.net.ssl.SSLException;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.tls13.TlsConstants;
-
-import javax.net.ssl.SSLException;
-import java.nio.ByteBuffer;
 
 /**
  * Fuzz-тесты для {@link GostSSLEngine#unwrap} на стороне клиента.
@@ -18,8 +17,7 @@ import java.nio.ByteBuffer;
  */
 class GostSSLEngineUnwrapClientFuzzTest {
 
-    private static final int PLAINTEXT_BUF =
-            TlsConstants.MAX_PLAINTEXT_LENGTH + 64;
+    private static final int PLAINTEXT_BUF = TlsConstants.MAX_PLAINTEXT_LENGTH + 64;
 
     @FuzzTest
     void fuzzUnwrapClient(FuzzedDataProvider data) {
@@ -39,6 +37,8 @@ class GostSSLEngineUnwrapClientFuzzTest {
         return new GostSSLEngine(
                 new GostX509KeyManager(),
                 new GostX509TrustManager(null, false),
-                "localhost", 0, true);
+                "localhost",
+                0,
+                true);
     }
 }

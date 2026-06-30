@@ -41,7 +41,7 @@ public final class GostECPrivateKeySpec implements KeySpec {
         if (curveName == null || curveName.isEmpty()) {
             throw new IllegalArgumentException("Curve name must not be null or empty");
         }
-        this.d         = d;
+        this.d = d;
         this.curveName = curveName;
     }
 

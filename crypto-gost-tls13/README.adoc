@@ -26,7 +26,7 @@ toc::[]
 * *Защита записей*: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446 §5.3.
 * Эфемерные ключи затираются после использования.
 .. *Сертификаты:*
-* Парсинг X.509v3 (GOST R 34.10-2012) — встроенный DER-парсер.
+ * Парсинг X.509v3 (GOST R 34.10-2012) — делегирован в `GostCertificate` (модуль `crypto-gost-pkix`).
 * Валидация цепочки: подписи, DN (issuer → subject), `Basic Constraints`,
 `Key Usage`, `Extended Key Usage` (`serverAuth` / `clientAuth`), pathLen.
 * Проверка hostname: dNSName + iPAddress (RFC 6125).
@@ -94,7 +94,18 @@ TlsTransport transport = new SocketTlsTransport(socket);
 Реализация `receiveRecord()` использует явный цикл read loop (не `readFully`/`readNBytes`) и проверяет флаг закрытия на каждой итерации.
 Перед использованием обязательно установите `socket.setSoTimeout()` — без таймаута злоумышленник может повесить сессию навсегда.
 
-Для сценариев, требующих прерывания потока при блокирующем чтении (InterruptibleChannel), используйте `ChannelTlsTransport` (пакет `org.rssys.gost.tls13.transport`), который работает в блокирующем режиме поверх `SocketChannel` и поддерживает `Thread.interrupt()`.
+Для сценариев, требующих прерывания потока при блокирующем чтении (InterruptibleChannel), используйте `ChannelTlsTransport` (пакет `org.rssys.gost.tls13.transport`), который работает в блокирующем режиме поверх `SocketChannel` и поддерживает `Thread.interrupt()`:
+
+[source,java]
+----
+import org.rssys.gost.tls13.transport.ChannelTlsTransport;
+import java.net.InetSocketAddress;
+import java.nio.channels.SocketChannel;
+
+SocketChannel channel = SocketChannel.open(new InetSocketAddress("host", 443));
+channel.configureBlocking(true);
+TlsTransport transport = new ChannelTlsTransport(channel);
+----
 
 Для тестов и взаимодействия в рамках одной JVM используйте `InMemoryTlsTransport` (пакет `org.rssys.gost.tls13.transport`):
 
@@ -123,7 +134,7 @@ TlsTransport serverTransport = pair.getServerTransport();
 ----
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.transport.SocketTlsTransport;
 import java.net.ServerSocket;
@@ -138,10 +149,10 @@ byte[] caDer   = Files.readAllBytes(Paths.get("intermediate.der"));
 byte[] rootDer = Files.readAllBytes(Paths.get("root.der"));
 byte[] keyDer  = Files.readAllBytes(Paths.get("server.key"));
 
-List<TlsCertificate> chain = List.of(
-        new TlsCertificate(certDer),      // серверный (leaf)
-        new TlsCertificate(caDer),        // промежуточный CA
-        new TlsCertificate(rootDer));      // корневой CA (самоподписанный)
+List<GostCertificate> chain = List.of(
+        new GostCertificate(certDer),      // серверный (leaf)
+        new GostCertificate(caDer),        // промежуточный CA
+        new GostCertificate(rootDer));      // корневой CA (самоподписанный)
 
 PrivateKeyParameters priv = org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(keyDer);
 byte[] ocspDer = Files.readAllBytes(Paths.get("ocsp.der"));
@@ -182,6 +193,10 @@ NOTE: Сервер не валидирует свою цепочку — она 
 
 [source,java]
 ----
+import org.rssys.gost.tls13.*;
+import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.config.TlsServerCredentials;
+
 TlsSession server = TlsSession.createServer(
     new TlsServerConfig(cs, defaultChain, defaultKey)
         .withSniSelector(sni -> {
@@ -228,7 +243,7 @@ try {
 ----
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -237,7 +252,7 @@ import java.nio.file.Paths;
 
 // Загружаем ключ CA для проверки сертификата сервера
 byte[] caDer = Files.readAllBytes(Paths.get("ca.der"));
-TlsCertificate caCert = new TlsCertificate(caDer);
+GostCertificate caCert = new GostCertificate(caDer);
 PublicKeyParameters caKey = caCert.getPublicKey();
 
 TlsSession client = TlsSession.createClient(new TlsClientConfig(
@@ -255,6 +270,28 @@ try {
 }
 ----
 
+.Упрощённые фабрики — для сценариев без расширенных настроек (без SNI, ALPN, OCSP, mTLS):
+
+[source,java]
+----
+// Клиент (без валидации сервера)
+TlsSession client = TlsSession.createClient(
+    transport, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+    null, null);
+
+// Клиент (с валидацией по CA)
+TlsSession client = TlsSession.createClient(
+    transport, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+    null, null, caPublicKey);
+
+// Сервер
+TlsSession server = TlsSession.createServer(
+    transport, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+    serverCert, privateKey);
+----
+
+NOTE: Для SNI, ALPN, OCSP stapling, mTLS и выбора клиентского сертификата по OID-фильтрам используйте `TlsClientConfig` / `TlsServerConfig`.
+
 .ALPN: клиент предлагает протоколы прикладного уровня:
 
 [source,java]
@@ -267,6 +304,10 @@ TlsSession client = TlsSession.createClient(
 Сервер настраивается через `TlsServerConfig.withAlpnProtocols()`.
 После handshake согласованный протокол доступен через `session.getAlpnProtocol()`.
 
+NOTE: Для снижения фрагментации на каналах с малым MTU (IoT, спутниковая связь)
+клиент может запросить уменьшенный размер фрагмента через `session.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512)` до handshake.
+Поддерживаются значения 512, 1024, 2048, 4096 (RFC 6066 §4).
+Согласованное значение доступно через `session.getMaxFragmentLength()`.
 
 === Взаимная аутентификация узлов (mTLS)
 
@@ -282,7 +323,7 @@ TlsSession client = TlsSession.createClient(
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -291,9 +332,9 @@ byte[] caDer   = Files.readAllBytes(Paths.get("ca.der"));
 byte[] certDer = Files.readAllBytes(Paths.get("server.der"));
 byte[] keyDer  = Files.readAllBytes(Paths.get("server.key"));
 
-PublicKeyParameters caKey    = new TlsCertificate(caDer).getPublicKey();
+PublicKeyParameters caKey    = new GostCertificate(caDer).getPublicKey();
 PrivateKeyParameters priv    = org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(keyDer);
-List<TlsCertificate> chain  = List.of(new TlsCertificate(certDer));
+List<GostCertificate> chain  = List.of(new GostCertificate(certDer));
 
 TlsSession server = TlsSession.createServer(
         new TlsServerConfig(
@@ -304,6 +345,8 @@ TlsSession server = TlsSession.createServer(
 try {
     server.handshakeAsServer();
     // После handshake сертификат клиента проверен
+    List<GostCertificate> peerCerts = server.getPeerCertificates();
+    // peerCerts.get(0) — сертификат клиента
     byte[] data = server.read();
 } finally {
     server.close();
@@ -315,7 +358,7 @@ try {
 // Клиент (mTLS)
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -323,7 +366,7 @@ import java.nio.file.Paths;
 byte[] clientCertDer = Files.readAllBytes(Paths.get("client.der"));
 byte[] clientKeyDer  = Files.readAllBytes(Paths.get("client.key"));
 
-TlsCertificate clientCert   = new TlsCertificate(clientCertDer);
+GostCertificate clientCert   = new GostCertificate(clientCertDer);
 PrivateKeyParameters clientPriv = org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(clientKeyDer);
 
 TlsSession client = TlsSession.createClient(
@@ -347,33 +390,33 @@ NOTE: Для цепочки из нескольких сертификатов (
 
 Сервер может включить в `CertificateRequest` расширение `oid_filters` (RFC 8446 §4.2.5) —
 список OID-критериев для выбора подходящего клиентского сертификата.
-Типичный ГОСТ-сценарий: сервер требует сертификат с EKU УКЭП (`1.2.643.100.113.1`)
-или УНЭП (`1.2.643.100.113.2`).
+Типичный ГОСТ-сценарий: сервер требует сертификат с CertificatePolicies KC1 (`1.2.643.100.113.1`)
+или KC2 (`1.2.643.100.113.2`).
 
 .Сервер — передать фильтры через `withOidFilters()`:
 [source,java]
 ----
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.config.OIDFilter;
-import org.rssys.gost.tls13.cert.TlsDerParser;
+import org.rssys.gost.pkix.cert.GostDerParser;
 
-// Фильтр: клиент должен предъявить сертификат с EKU УКЭП
-// filterOid = OID расширения EKU (2.5.29.37), filterValues = DER SEQUENCE { OID УКЭП }
-byte[] oidTlv = new byte[2 + TlsDerParser.UKEP_OID_BYTES.length];
+// Фильтр: клиент должен предъявить сертификат с CertificatePolicies KC1
+// filterOid = OID расширения CertificatePolicies (2.5.29.32), filterValues = DER SEQUENCE { OID KC1 }
+byte[] oidTlv = new byte[2 + GostDerParser.KC1_OID_BYTES.length];
 oidTlv[0] = 0x06; // TAG_OID
-oidTlv[1] = (byte) TlsDerParser.UKEP_OID_BYTES.length;
-System.arraycopy(TlsDerParser.UKEP_OID_BYTES, 0, oidTlv, 2, TlsDerParser.UKEP_OID_BYTES.length);
+oidTlv[1] = (byte) GostDerParser.KC1_OID_BYTES.length;
+System.arraycopy(GostDerParser.KC1_OID_BYTES, 0, oidTlv, 2, GostDerParser.KC1_OID_BYTES.length);
 byte[] filterValues = new byte[2 + oidTlv.length];
 filterValues[0] = 0x30; // TAG_SEQUENCE
 filterValues[1] = (byte) oidTlv.length;
 System.arraycopy(oidTlv, 0, filterValues, 2, oidTlv.length);
 
-OIDFilter ukepFilter = new OIDFilter(TlsDerParser.EKU_OID_BYTES, filterValues);
+OIDFilter kc1Filter = new OIDFilter(GostDerParser.CP_OID_BYTES, filterValues);
 
 TlsSession server = TlsSession.createServer(
         new TlsServerConfig(ciphersuite, chain, priv)
                 .withCaPublicKey(caKey)
-                .withOidFilters(List.of(ukepFilter)),
+                .withOidFilters(List.of(kc1Filter)),
         transport);
 server.handshakeAsServer();
 ----
@@ -384,14 +427,15 @@ server.handshakeAsServer();
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.ClientCertificateSelector;
 import org.rssys.gost.tls13.config.TlsClientCredentials;
+import org.rssys.gost.tls13.cert.TlsCertUtils;
 
-// Два сертификата: УКЭП (clientAuth + УКЭП EKU) и обычный (clientAuth)
+// Два сертификата: KC1 (clientAuth + KC1 CertificatePolicies) и обычный (clientAuth)
 ClientCertificateSelector selector = (caDns, oidFilters) -> {
     for (var entry : List.of(
-            Map.entry(ukepCert, ukepKey),
+            Map.entry(kc1Cert, kc1Key),
             Map.entry(simpleCert, simpleKey))) {
-        TlsCertificate cert = entry.getKey();
-        boolean ok = oidFilters.stream().allMatch(cert::matchesOidFilter);
+        GostCertificate cert = entry.getKey();
+        boolean ok = oidFilters.stream().allMatch(f -> TlsCertUtils.matchesOidFilter(cert, f));
         if (ok) return new TlsClientCredentials(List.of(cert), entry.getValue());
     }
     return null; // нет подходящего → отправляется пустой certificate_list
@@ -407,10 +451,11 @@ client.handshakeAsClient();
 NOTE: Если `selector` возвращает `null` — клиент отправляет пустой `certificate_list`
 (RFC 8446 §4.4.2). Сервер сам решает, прерывать ли handshake.
 
-NOTE: Встроенные константы OID: `GostOids.EKU_UKEP` = `1.2.643.100.113.1`,
-`GostOids.EKU_UNEP` = `1.2.643.100.113.2`. Байтовые константы:
-`TlsDerParser.UKEP_OID_BYTES`, `TlsDerParser.UNEP_OID_BYTES`,
-`TlsDerParser.EKU_OID_BYTES`.
+NOTE: Встроенные константы OID: `GostOids.POLICY_KC1` = `1.2.643.100.113.1`,
+`GostOids.POLICY_KC2` = `1.2.643.100.113.2`. Байтовые константы:
+`GostDerParser.KC1_OID_BYTES`, `GostDerParser.KC2_OID_BYTES`,
+`GostDerParser.CP_OID_BYTES`. Фильтр по EKU остаётся — используйте
+`GostDerParser.EKU_OID_BYTES` с `GostDerParser.CLIENT_AUTH_OID_BYTES` для clientAuth.
 
 === Возобновление сессии по предварительно согласованному ключу (PSK session resumption)
 
@@ -429,7 +474,7 @@ import org.rssys.gost.tls13.psk.InMemoryPskStore;
 InMemoryPskStore serverStore = new InMemoryPskStore(1000); // макс. 1000 PSK-тикетов (см. PskStore javadoc)
 
 // Сервер
-TlsSession server1 = TlsSession.createServer(/* TlsServerConfig */);
+TlsSession server1 = TlsSession.createServer(/* TlsServerConfig */, transport);
 server1.setPskStore(serverStore);
 server1.handshakeAsServer();
 server1.write("ready".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -438,7 +483,7 @@ server1.close();
 // клиент
 InMemoryPskStore clientStore = new InMemoryPskStore(100);  // макс. 100 PSK-тикетов (см. PskStore javadoc)
 
-TlsSession client1 = TlsSession.createClient(/* TlsClientConfig */);
+TlsSession client1 = TlsSession.createClient(/* TlsClientConfig */, transport);
 client1.setPskStore(clientStore);
 client1.handshakeAsClient();
 // read() обрабатывает NST внутри, возвращает данные сервера
@@ -447,13 +492,14 @@ client1.close();
 
 // Второе подключение — сокращённый handshake (PSK)
 // Клиент автоматически находит тикет в PskStore
-TlsSession client2 = TlsSession.createClient(/* TlsClientConfig */);
+TlsSession client2 = TlsSession.createClient(/* TlsClientConfig */, transport);
 client2.setPskStore(clientStore);
 client2.handshakeAsClient();
+boolean resumed = client2.wasResumed(); // true — сокращённый, false — полный handshake
 client2.write("Resumed!".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 client2.close();
 
-TlsSession server2 = TlsSession.createServer(/* TlsServerConfig */);
+TlsSession server2 = TlsSession.createServer(/* TlsServerConfig */, transport);
 server2.setPskStore(serverStore);
 server2.handshakeAsServer();
 server2.close();
@@ -560,6 +606,20 @@ while (totalRead < fileLength) {
 Files.write(Paths.get("received.bin"), data.toByteArray());
 ----
 
+==== Обновление ключей шифрования (KeyUpdate)
+
+Для длительных сессий можно принудительно сменить трафик-ключи через `initiateKeyUpdate()`.
+Если параметр `request == true`, удалённая сторона также обновит свои ключи отправки:
+
+[source,java]
+----
+// После передачи большого объёма данных
+session.initiateKeyUpdate(true); // запросить встречное обновление
+// Ключи записи/чтения обновлены; старые данные более не расшифруются
+session.write("data after key update".getBytes(StandardCharsets.UTF_8));
+----
+
+NOTE: Старые ключи затираются немедленно — данные, зашифрованные до вызова, не могут быть расшифрованы после.
 
 === Обработка ошибок
 
@@ -629,12 +689,12 @@ try (TlsSession server = TlsSession.createServer(
 
 [source,java]
 ----
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
 byte[] certDer = Files.readAllBytes(Paths.get("server.der"));
-TlsCertificate cert = new TlsCertificate(certDer);
+GostCertificate cert = new GostCertificate(certDer);
 
 // Открытый ключ из сертификата
 org.rssys.gost.signature.PublicKeyParameters pubKey = cert.getPublicKey();
@@ -643,8 +703,8 @@ org.rssys.gost.signature.PublicKeyParameters pubKey = cert.getPublicKey();
 boolean valid = cert.verify(pubKey);
 
 // В типовом сценарии серверный сертификат проверяется по CA:
-TlsCertificate caCert = new TlsCertificate(Files.readAllBytes(Paths.get("ca.der")));
-TlsCertificate serverCert = new TlsCertificate(Files.readAllBytes(Paths.get("server.der")));
+GostCertificate caCert = new GostCertificate(Files.readAllBytes(Paths.get("ca.der")));
+GostCertificate serverCert = new GostCertificate(Files.readAllBytes(Paths.get("server.der")));
 boolean serverValid = serverCert.verify(caCert.getPublicKey());
 
 ----
@@ -653,14 +713,14 @@ boolean serverValid = serverCert.verify(caCert.getPublicKey());
 
 [source,java]
 ----
-import org.rssys.gost.tls13.cert.GostPkcs12Loader;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
 GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(
-        Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray());
+        Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray(), true);
 PrivateKeyParameters key   = p12.getPrivateKey();
-List<TlsCertificate> chain = p12.getCertificateChain(); // leaf — первый элемент
+List<GostCertificate> chain = p12.getCertificateChain(); // leaf — первый элемент
 ----
 
 ГОСТ PBE поддерживается нативно: PBKDF2-HMAC-Стрибог-512 + Кузнечик CTR-ACPKM(-OMAC)
@@ -670,18 +730,18 @@ List<TlsCertificate> chain = p12.getCertificateChain(); // leaf — первый
 
 [source,java]
 ----
-import org.rssys.gost.tls13.cert.GostPkcs12Builder;
+import org.rssys.gost.pkix.cert.GostPkcs12Builder;
 import java.nio.file.Path;
 
 // Минимальный вариант: ключ + leaf-сертификат
-byte[] pfx = GostPkcs12Builder.newBuilder()
+byte[] pfx = GostPkcs12Builder.create()
         .key(privateKey)
         .certificate(leafCert)
         .password("changeit".toCharArray())
         .build();
 
 // С цепочкой CA и записью в файл
-GostPkcs12Builder.newBuilder()
+GostPkcs12Builder.create()
         .key(privateKey)
         .certificate(leafCert)
         .caCertificate(intermediateCert)
@@ -694,7 +754,7 @@ GostPkcs12Builder.newBuilder()
 По умолчанию используются: Кузнечик CTR-ACPKM-OMAC, 2000 итераций PBKDF2.
 
 Для совместимости с системами без поддержки OMAC — `.encScheme(GostOids.KUZ_CTR_ACPKM)`.
-Созданный PFX читается `GostPkcs12Loader.load()` и проходит структурную валидацию OpenSSL.
+Созданный PFX читается `GostPkcs12Loader.load(..., true)` и проходит структурную валидацию OpenSSL.
 
 Для тестовой разработки можно использовать самоподписанный сертификат:
 `TlsTestHelper.createCertWithKey(params)` (класс находится в `src/test/` —
@@ -706,9 +766,9 @@ GostPkcs12Builder.newBuilder()
 
 [source,java]
 ----
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 
-TlsCertificate cert = new TlsCertificate(certDer);
+GostCertificate cert = new GostCertificate(certDer);
 
 // Срок действия (RFC 5280 §4.1.2.5)
 boolean expired = cert.isExpired();

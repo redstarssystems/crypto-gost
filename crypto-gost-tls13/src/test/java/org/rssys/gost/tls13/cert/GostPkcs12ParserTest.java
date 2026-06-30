@@ -1,15 +1,15 @@
 package org.rssys.gost.tls13.cert;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.tls13.GostOids;
-import org.rssys.gost.tls13.cert.GostPkcs12Parser.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.rssys.gost.tls13.TlsTestHelper.*;
 
 import java.io.ByteArrayOutputStream;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.rssys.gost.tls13.TlsTestHelper.*;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.cert.GostPkcs12Parser;
+import org.rssys.gost.pkix.cert.GostPkcs12Parser.*;
 
 /**
  * Тесты разбора синтетического PFX-контейнера (RFC 7292).
@@ -19,10 +19,11 @@ import static org.rssys.gost.tls13.TlsTestHelper.*;
 @DisplayName("GostPkcs12Parser — разбор синтетического PFX")
 class GostPkcs12ParserTest {
 
-    private static final byte[] FAKE_CERT_DER = hex(
-            "30 82 01 01 02 01 01 30 0A 06 08 2A 85 03 07 01 02 01 01 30 0C 06 08 " +
-            "2A 85 03 07 01 02 01 02 04 00 30 0C 06 08 2A 85 03 07 01 02 01 03 04 " +
-            "00 02 01 00");
+    private static final byte[] FAKE_CERT_DER =
+            hex(
+                    "30 82 01 01 02 01 01 30 0A 06 08 2A 85 03 07 01 02 01 01 30 0C 06 08 "
+                            + "2A 85 03 07 01 02 01 02 04 00 30 0C 06 08 2A 85 03 07 01 02 01 03 04 "
+                            + "00 02 01 00");
 
     // ========================================================================
     // Помощники DER
@@ -31,7 +32,7 @@ class GostPkcs12ParserTest {
     private static byte[] derInteger(int value) {
         byte[] bytes;
         if (value == 0) {
-            bytes = new byte[]{0};
+            bytes = new byte[] {0};
         } else {
             int bits = 32 - Integer.numberOfLeadingZeros(value);
             int byteLen = Math.max(1, (bits + 7) / 8);
@@ -65,24 +66,24 @@ class GostPkcs12ParserTest {
         }
         return derTlv(0x06, body.toByteArray());
     }
+
     private static byte[] ctx0(byte[] content) {
         return derTlv(0xA0, content);
     }
 
     /** DigestInfo ::= SEQUENCE { AlgorithmIdentifier, OCTET STRING } */
     private static byte[] buildDigestInfo(String digestOid, byte[] digestValue) {
-        return derSequence(
-                derSequence(encodeOid(digestOid)),
-                derOctetString(digestValue));
+        return derSequence(derSequence(encodeOid(digestOid)), derOctetString(digestValue));
     }
 
     /** MacData ::= SEQUENCE { DigestInfo, OCTET STRING salt, INTEGER OPTIONAL } */
-    private static byte[] buildMacData(byte[] salt, int iterations,
-                                        String digestOid, byte[] digestValue) {
-        byte[] macData = derSequence(
-                buildDigestInfo(digestOid, digestValue),
-                derOctetString(salt),
-                derInteger(iterations));
+    private static byte[] buildMacData(
+            byte[] salt, int iterations, String digestOid, byte[] digestValue) {
+        byte[] macData =
+                derSequence(
+                        buildDigestInfo(digestOid, digestValue),
+                        derOctetString(salt),
+                        derInteger(iterations));
         return macData;
     }
 
@@ -90,32 +91,26 @@ class GostPkcs12ParserTest {
     private static byte[] buildEncryptedPrivateKeyInfo(
             String encAlgOid, byte[] encParams, byte[] encryptedData) {
         return derSequence(
-                derSequence(encodeOid(encAlgOid), encParams),
-                derOctetString(encryptedData));
+                derSequence(encodeOid(encAlgOid), encParams), derOctetString(encryptedData));
     }
 
     /** PBES2-params ::= SEQUENCE { keyDerivationFunc, encryptionScheme } */
     private static byte[] buildPbes2Params(
-            byte[] salt, int iterationCount, byte[] ukm,
-            String prfOid, String encOid) {
+            byte[] salt, int iterationCount, byte[] ukm, String prfOid, String encOid) {
         byte[] prfAlgId = derSequence(encodeOid(prfOid));
         byte[] encParams = derSequence(derOctetString(ukm));
         byte[] encAlgId = derSequence(encodeOid(encOid), encParams);
 
-        byte[] kdfAlgId = derSequence(
-                encodeOid(GostOids.PBKDF2),
+        byte[] kdfAlgId =
                 derSequence(
-                        derOctetString(salt),
-                        derInteger(iterationCount),
-                        prfAlgId));
+                        encodeOid(GostOids.PBKDF2),
+                        derSequence(derOctetString(salt), derInteger(iterationCount), prfAlgId));
         return derSequence(kdfAlgId, encAlgId);
     }
 
     /** CertBag ::= SEQUENCE { certId OID, certValue [0] EXPLICIT OCTET STRING } */
     private static byte[] buildCertBag(String certOid, byte[] certDer) {
-        return derSequence(
-                encodeOid(certOid),
-                ctx0(derOctetString(certDer)));
+        return derSequence(encodeOid(certOid), ctx0(derOctetString(certDer)));
     }
 
     /** SafeBag ::= SEQUENCE { bagId OID, bagValue [0] EXPLICIT, attributes SET OPTIONAL } */
@@ -124,8 +119,7 @@ class GostPkcs12ParserTest {
     }
 
     /** SafeBag с аттрибутами (SET of SEQUENCE). */
-    private static byte[] buildSafeBagWithAttrs(String bagId, byte[] bagValue,
-                                                  byte[]... attrs) {
+    private static byte[] buildSafeBagWithAttrs(String bagId, byte[] bagValue, byte[]... attrs) {
         byte[][] all = new byte[3 + attrs.length][];
         all[0] = encodeOid(bagId);
         all[1] = ctx0(bagValue);
@@ -136,7 +130,7 @@ class GostPkcs12ParserTest {
             System.arraycopy(attr, 0, tmp, attrContent.length, attr.length);
             attrContent = tmp;
         }
-        all[2] = Set(attrContent);
+        all[2] = encodeSet(attrContent);
         return derSequence(all);
     }
 
@@ -148,9 +142,7 @@ class GostPkcs12ParserTest {
 
     /** ContentInfo (pkcs7-data) ::= SEQUENCE { OID, [0] EXPLICIT OCTET STRING } */
     private static byte[] buildDataContentInfo(byte[] contentOctets) {
-        return derSequence(
-                encodeOid(GostOids.PKCS7_DATA),
-                ctx0(derOctetString(contentOctets)));
+        return derSequence(encodeOid(GostOids.PKCS7_DATA), ctx0(derOctetString(contentOctets)));
     }
 
     /** AuthenticatedSafe ::= SEQUENCE OF ContentInfo */
@@ -183,8 +175,7 @@ class GostPkcs12ParserTest {
     void testParsePfx() {
         byte[] salt = hex("01 02 03 04 05 06 07 08");
         byte[] digestVal = hex("AA BB CC DD");
-        byte[] macData = buildMacData(salt, 100,
-                GostOids.HMAC_STREEBOG_512, digestVal);
+        byte[] macData = buildMacData(salt, 100, GostOids.HMAC_STREEBOG_512, digestVal);
 
         byte[] pfx = buildFullPfx(derSequence(), macData);
 
@@ -218,9 +209,12 @@ class GostPkcs12ParserTest {
     @Test
     @DisplayName("parsePfx: неверная версия -> IllegalArgumentException")
     void testParsePfxWrongVersion() {
-        byte[] pfx = derSequence(derInteger(2), derSequence(encodeOid(GostOids.PKCS7_DATA), ctx0(derOctetString(new byte[1]))));
-        assertThrows(IllegalArgumentException.class,
-                () -> GostPkcs12Parser.parsePfx(pfx));
+        byte[] pfx =
+                derSequence(
+                        derInteger(2),
+                        derSequence(
+                                encodeOid(GostOids.PKCS7_DATA), ctx0(derOctetString(new byte[1]))));
+        assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx));
     }
 
     @Test
@@ -229,9 +223,10 @@ class GostPkcs12ParserTest {
         byte[] salt = hex("01 02 03 04");
         byte[] digestVal = hex("11 22 33 44");
         // MacData без iterations: SEQUENCE { DigestInfo, OCTET STRING salt }
-        byte[] macData = derSequence(
-                buildDigestInfo(GostOids.HMAC_STREEBOG_512, digestVal),
-                derOctetString(salt));
+        byte[] macData =
+                derSequence(
+                        buildDigestInfo(GostOids.HMAC_STREEBOG_512, digestVal),
+                        derOctetString(salt));
 
         byte[] pfx = buildFullPfx(derSequence(), macData);
         PfxData result = GostPkcs12Parser.parsePfx(pfx);
@@ -240,20 +235,21 @@ class GostPkcs12ParserTest {
     }
 
     @Test
-    @DisplayName("parseSafeContents: pkcs8ShroudedKeyBag + certBag")
+    @DisplayName("разбор SafeContents: pkcs8ShroudedKeyBag + certBag")
     void testParseSafeContents() {
         byte[] ukm = new byte[16];
         byte[] salt = hex("01 02 03 04");
         byte[] encData = hex("AB CD EF");
 
-        byte[] pbes2Params = buildPbes2Params(salt, 1000, ukm,
-                GostOids.HMAC_STREEBOG_512, GostOids.KUZ_CTR_ACPKM_OMAC);
-        byte[] epki = buildEncryptedPrivateKeyInfo(
-                GostOids.PBES2, pbes2Params, encData);
+        byte[] pbes2Params =
+                buildPbes2Params(
+                        salt, 1000, ukm, GostOids.HMAC_STREEBOG_512, GostOids.KUZ_CTR_ACPKM_OMAC);
+        byte[] epki = buildEncryptedPrivateKeyInfo(GostOids.PBES2, pbes2Params, encData);
 
         byte[] keyBag = buildSafeBag(GostOids.BAG_PKCS8_SHROUDED_KEY, epki);
-        byte[] certBag = buildSafeBag(GostOids.BAG_CERT,
-                buildCertBag(GostOids.PKCS9_X509_CERT, FAKE_CERT_DER));
+        byte[] certBag =
+                buildSafeBag(
+                        GostOids.BAG_CERT, buildCertBag(GostOids.PKCS9_X509_CERT, FAKE_CERT_DER));
 
         byte[] safeContents = buildSafeContents(keyBag, certBag);
         byte[] pfx = buildFullPfx(safeContents, null);
@@ -281,18 +277,17 @@ class GostPkcs12ParserTest {
     }
 
     @Test
-    @DisplayName("parseEncryptedPrivateKeyInfo: PBES2, OID, encryptedData")
+    @DisplayName("разбор EncryptedPrivateKeyInfo: PBES2, OID, encryptedData")
     void testParseEncryptedPrivateKeyInfo() {
         byte[] ukm = new byte[16];
         byte[] salt = hex("01 02 03 04");
         byte[] encData = hex("AB CD EF 01 02");
-        byte[] pbes2Params = buildPbes2Params(salt, 1000, ukm,
-                GostOids.HMAC_STREEBOG_512, GostOids.KUZ_CTR_ACPKM_OMAC);
-        byte[] epkiDer = buildEncryptedPrivateKeyInfo(
-                GostOids.PBES2, pbes2Params, encData);
+        byte[] pbes2Params =
+                buildPbes2Params(
+                        salt, 1000, ukm, GostOids.HMAC_STREEBOG_512, GostOids.KUZ_CTR_ACPKM_OMAC);
+        byte[] epkiDer = buildEncryptedPrivateKeyInfo(GostOids.PBES2, pbes2Params, encData);
 
-        EncryptedPrivateKeyInfo epki =
-                GostPkcs12Parser.parseEncryptedPrivateKeyInfo(epkiDer);
+        EncryptedPrivateKeyInfo epki = GostPkcs12Parser.parseEncryptedPrivateKeyInfo(epkiDer);
         assertEquals(GostOids.PBES2, epki.getEncryptionAlgorithmOid());
         assertArrayEquals(encData, epki.getEncryptedData());
         assertNotNull(epki.getEncryptionParams());
@@ -303,8 +298,9 @@ class GostPkcs12ParserTest {
     void testParsePbes2Params() {
         byte[] ukm = new byte[16];
         byte[] salt = hex("01 02 03 04 05 06 07 08");
-        byte[] pbes2Params = buildPbes2Params(salt, 2000, ukm,
-                GostOids.HMAC_STREEBOG_512, GostOids.KUZ_CTR_ACPKM_OMAC);
+        byte[] pbes2Params =
+                buildPbes2Params(
+                        salt, 2000, ukm, GostOids.HMAC_STREEBOG_512, GostOids.KUZ_CTR_ACPKM_OMAC);
 
         Pbes2Params params = GostPkcs12Parser.parsePbes2Params(pbes2Params);
         assertArrayEquals(salt, params.getSalt());
@@ -317,7 +313,8 @@ class GostPkcs12ParserTest {
     @Test
     @DisplayName("parsePbes2Params: keyLength отсутствует -> prfOid корректен")
     void testParsePbes2ParamsNoKeyLength() {
-        // PBKDF2-params: SEQUENCE { salt OCTET STRING, iterationCount INTEGER, prf AlgorithmIdentifier }
+        // PBKDF2-params: SEQUENCE { salt OCTET STRING, iterationCount INTEGER, prf
+        // AlgorithmIdentifier }
         byte[] salt = hex("01 02 03 04");
         byte[] prfAlgId = derSequence(encodeOid(GostOids.HMAC_STREEBOG_256));
         byte[] kdfParams = derSequence(derOctetString(salt), derInteger(500), prfAlgId);
@@ -346,8 +343,7 @@ class GostPkcs12ParserTest {
     @DisplayName("parseCertBag: неверный OID -> IllegalArgumentException")
     void testParseCertBagWrongOid() {
         byte[] certBag = buildCertBag("1.2.3.4", FAKE_CERT_DER);
-        assertThrows(IllegalArgumentException.class,
-                () -> GostPkcs12Parser.parseCertBag(certBag));
+        assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parseCertBag(certBag));
     }
 
     @Test
@@ -357,8 +353,7 @@ class GostPkcs12ParserTest {
         // Обрезаем в середине
         byte[] truncated = new byte[pfx.length / 2];
         System.arraycopy(pfx, 0, truncated, 0, truncated.length);
-        assertThrows(Exception.class,
-                () -> GostPkcs12Parser.parsePfx(truncated));
+        assertThrows(Exception.class, () -> GostPkcs12Parser.parsePfx(truncated));
     }
 
     @Test
@@ -366,8 +361,7 @@ class GostPkcs12ParserTest {
     void testParsePfxWrongTag() {
         // Вместо SEQUENCE (0x30) используем SET (0x31)
         byte[] badPfx = derTlv(0x31, derInteger(3));
-        assertThrows(IllegalArgumentException.class,
-                () -> GostPkcs12Parser.parsePfx(badPfx));
+        assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(badPfx));
     }
 
     // ========================================================================
@@ -375,7 +369,7 @@ class GostPkcs12ParserTest {
     // ========================================================================
 
     @Test
-    @DisplayName("findLocalKeyId: null -> null")
+    @DisplayName("поиск локального идентификатора ключа: null -> null")
     void testFindLocalKeyIdNull() {
         assertNull(GostPkcs12Parser.findLocalKeyId(null));
     }
@@ -389,28 +383,27 @@ class GostPkcs12ParserTest {
     @Test
     @DisplayName("findLocalKeyId: совпадающий ATTR_LOCAL_KEY_ID -> содержимое OCTET STRING")
     void testFindLocalKeyIdMatch() {
-        byte[] keyId = new byte[]{0x01, 0x02, 0x03, 0x04};
-        BagAttribute attr = new BagAttribute(
-            GostOids.ATTR_LOCAL_KEY_ID,
-            new byte[][]{derOctetString(keyId)});
-        assertArrayEquals(keyId,
-            GostPkcs12Parser.findLocalKeyId(List.of(attr)));
+        byte[] keyId = new byte[] {0x01, 0x02, 0x03, 0x04};
+        BagAttribute attr =
+                new BagAttribute(GostOids.ATTR_LOCAL_KEY_ID, new byte[][] {derOctetString(keyId)});
+        assertArrayEquals(keyId, GostPkcs12Parser.findLocalKeyId(List.of(attr)));
     }
 
     @Test
     @DisplayName("findLocalKeyId: повреждённый DER -> null (без исключения)")
     void testFindLocalKeyIdCorruptedDer() {
-        BagAttribute attr = new BagAttribute(
-            GostOids.ATTR_LOCAL_KEY_ID,
-            new byte[][]{new byte[]{0x04, (byte) 0xFF, 0x01, 0x02}});
+        BagAttribute attr =
+                new BagAttribute(
+                        GostOids.ATTR_LOCAL_KEY_ID,
+                        new byte[][] {new byte[] {0x04, (byte) 0xFF, 0x01, 0x02}});
         assertNull(GostPkcs12Parser.findLocalKeyId(List.of(attr)));
     }
 
     @Test
     @DisplayName("findLocalKeyId: другой OID -> null")
     void testFindLocalKeyIdWrongOid() {
-        BagAttribute attr = new BagAttribute("1.2.3.4",
-            new byte[][]{derOctetString(new byte[]{0x01})});
+        BagAttribute attr =
+                new BagAttribute("1.2.3.4", new byte[][] {derOctetString(new byte[] {0x01})});
         assertNull(GostPkcs12Parser.findLocalKeyId(List.of(attr)));
     }
 }

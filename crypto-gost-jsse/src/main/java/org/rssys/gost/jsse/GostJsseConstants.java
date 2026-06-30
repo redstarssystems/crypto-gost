@@ -11,14 +11,8 @@ public final class GostJsseConstants {
     public static final String PROTOCOL_TLS_1_3 = "TLSv1.3";
     public static final String[] SUPPORTED_PROTOCOLS = {PROTOCOL_TLS_1_3};
 
-    /** IANA-имена cipher suites — из TlsConstants, не дублировать. */
-    public static final String IANA_CIPHER_SUITE_L =
-            TlsConstants.IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
     /** Cipher suite для pre-handshake session (JSSE spec §getSession). */
     public static final String SSL_NULL_CIPHER = "SSL_NULL_WITH_NULL_NULL";
-
-    public static final String IANA_CIPHER_SUITE_S =
-            TlsConstants.IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S;
 
     /** Поддерживаемые cipher suite имена — строим из TlsCiphersuite. */
     public static final String[] SUPPORTED_CIPHER_SUITES = buildSupportedCipherSuites();

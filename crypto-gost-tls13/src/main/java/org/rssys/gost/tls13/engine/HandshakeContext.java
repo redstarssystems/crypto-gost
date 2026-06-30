@@ -1,20 +1,19 @@
 package org.rssys.gost.tls13.engine;
 
-import org.rssys.gost.digest.Digest;
-import org.rssys.gost.digest.Streebog256;
-import org.rssys.gost.digest.Streebog512;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsUtils;
-import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.crypto.TlsKeySchedule;
-import org.rssys.gost.tls13.config.OIDFilter;
-
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.rssys.gost.digest.Digest;
+import org.rssys.gost.digest.Streebog256;
+import org.rssys.gost.digest.Streebog512;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsUtils;
+import org.rssys.gost.tls13.config.OIDFilter;
+import org.rssys.gost.tls13.crypto.TlsKeySchedule;
 
 /**
  * Эфемерное состояние handshake: ECDHE-ключи, transcript, key schedule.
@@ -43,9 +42,10 @@ public final class HandshakeContext {
     private List<OIDFilter> oidFilters = Collections.emptyList();
 
     public HandshakeContext(int hashLen) {
-        this.hsDigest = hashLen == TlsConstants.STREEBOG_512_HASH_LEN
-                ? new Streebog512()
-                : new Streebog256();
+        this.hsDigest =
+                hashLen == TlsConstants.STREEBOG_512_HASH_LEN
+                        ? new Streebog512()
+                        : new Streebog256();
     }
 
     public void setEcdhePrivateKey(PrivateKeyParameters key) {
@@ -140,8 +140,8 @@ public final class HandshakeContext {
     private void ensureTranscriptCapacity(int additional) {
         int needed = transcriptSize + additional;
         if (needed > transcriptBuf.length) {
-            transcriptBuf = Arrays.copyOf(transcriptBuf,
-                Math.max(transcriptBuf.length * 2, needed));
+            transcriptBuf =
+                    Arrays.copyOf(transcriptBuf, Math.max(transcriptBuf.length * 2, needed));
         }
     }
 

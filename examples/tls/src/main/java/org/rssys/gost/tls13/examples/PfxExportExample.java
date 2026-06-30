@@ -1,20 +1,19 @@
 package org.rssys.gost.tls13.examples;
 
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.api.KeyPair;
-import org.rssys.gost.api.Signature;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.cert.GostPkcs12Builder;
-import org.rssys.gost.tls13.cert.GostPkcs12Loader;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.KeyPair;
+import org.rssys.gost.api.Signature;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostPkcs12Builder;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Создание PFX-контейнера с ГОСТ-сертификатом и ключом.
@@ -63,50 +62,51 @@ public final class PfxExportExample {
             }
         }
 
-        ECParameters params = curveName != null
-                ? mapCurve(curveName.toUpperCase())
-                : ECParameters.tc26a256();
+        ECParameters params =
+                curveName != null ? mapCurve(curveName.toUpperCase()) : ECParameters.tc26a256();
         // 1. Генерируем CA
         KeyPair caKp = KeyGenerator.generateKeyPair(params);
         PrivateKeyParameters caPriv = caKp.getPrivate();
         PublicKeyParameters caPub = caKp.getPublic();
         byte[] caDn = ExampleUtils.buildDN("PfxExport CA");
         byte[] bcExt = ExampleUtils.buildBasicConstraintsExt(true, null);
-        TlsCertificate caCert = ExampleUtils.createCert(
-                caPriv, caPub, caPub, params, caDn, caDn, bcExt);
+        GostCertificate caCert = ExampleUtils.createCert(caPriv, caPub, params, caDn, caDn, bcExt);
 
         // 2. Генерируем серверный ключ и сертификат
         KeyPair serverKp = KeyGenerator.generateKeyPair(params);
         PrivateKeyParameters serverPriv = serverKp.getPrivate();
         PublicKeyParameters serverPub = serverKp.getPublic();
         byte[] serverDn = ExampleUtils.buildDN("PfxExport Server");
-        byte[] sanExt = ExampleUtils.buildSanExt(new String[]{"localhost"}, null);
-        byte[] kuExt = ExampleUtils.buildKeyUsageExt(new byte[]{(byte) 0x80});
+        byte[] sanExt = ExampleUtils.buildSanExt(new String[] {"localhost"}, null);
+        byte[] kuExt = ExampleUtils.buildKeyUsageExt(new byte[] {(byte) 0x80});
         // buildTbs уже оборачивает в SEQUENCE — передаём сырые extension-байты
         ByteArrayOutputStream extBuf = new ByteArrayOutputStream();
         extBuf.write(sanExt);
         extBuf.write(kuExt);
-        TlsCertificate serverCert = ExampleUtils.createCert(
-                caPriv, caPub, serverPub, params, caDn, serverDn, extBuf.toByteArray());
+        GostCertificate serverCert =
+                ExampleUtils.createCert(
+                        caPriv, serverPub, params, caDn, serverDn, extBuf.toByteArray());
 
         // 3. Собираем PFX
-        byte[] pfx = GostPkcs12Builder.newBuilder()
-                .key(serverPriv)
-                .certificate(serverCert)
-                .caCertificate(caCert)
-                .password(password.toCharArray())
-                .friendlyName(friendlyName)
-                .iterations(iterations)
-                .build();
+        byte[] pfx =
+                GostPkcs12Builder.create()
+                        .key(serverPriv)
+                        .certificate(serverCert)
+                        .caCertificate(caCert)
+                        .password(password.toCharArray())
+                        .friendlyName(friendlyName)
+                        .iterations(iterations)
+                        .build();
 
         Path outFile = Path.of(outputPath);
         Files.write(outFile, pfx);
         System.out.println("PFX saved to " + outFile.toAbsolutePath());
 
         // 4. Верифицируем: загружаем PFX обратно
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, password.toCharArray());
+        // allowJdkFallback = false: контейнер заведомо ГОСТ, SunJCE не нужен
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, password.toCharArray(), false);
         PrivateKeyParameters loadedKey = result.getPrivateKey();
-        List<TlsCertificate> chain = result.getCertificateChain();
+        List<GostCertificate> chain = result.getCertificateChain();
 
         if (loadedKey == null) {
             System.err.println("ERROR: private key is null");

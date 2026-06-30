@@ -1,15 +1,13 @@
 package org.rssys.gost.tls13.config;
 
+import java.util.Collections;
+import java.util.List;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-
-import java.util.Collections;
-import java.util.List;
-import java.util.Objects;
 
 /**
  * Конфигурация сервера TLS 1.3.
@@ -21,7 +19,7 @@ import java.util.Objects;
  */
 public final class TlsServerConfig {
     private final TlsCiphersuite ciphersuite;
-    private final List<TlsCertificate> serverCertificateChain;
+    private final List<GostCertificate> serverCertificateChain;
     private final PrivateKeyParameters serverPrivateKey;
     private byte[] ocspResponse;
     private List<PublicKeyParameters> caPublicKeys;
@@ -36,9 +34,10 @@ public final class TlsServerConfig {
      * @param serverCertificateChain  цепочка сертификатов сервера (leaf первый; не пуста)
      * @param serverPrivateKey        закрытый ключ для CertificateVerify
      */
-    public TlsServerConfig(TlsCiphersuite ciphersuite,
-                           List<TlsCertificate> serverCertificateChain,
-                           PrivateKeyParameters serverPrivateKey) {
+    public TlsServerConfig(
+            TlsCiphersuite ciphersuite,
+            List<GostCertificate> serverCertificateChain,
+            PrivateKeyParameters serverPrivateKey) {
         if (ciphersuite == null) throw new IllegalArgumentException("ciphersuite must not be null");
         if (serverCertificateChain == null || serverCertificateChain.isEmpty()) {
             throw new IllegalArgumentException("serverCertificateChain must not be null or empty");
@@ -84,8 +83,8 @@ public final class TlsServerConfig {
      * @return this
      */
     public TlsServerConfig withCaPublicKey(PublicKeyParameters caPublicKey) {
-        return withCaPublicKeys(caPublicKey != null
-                ? Collections.singletonList(caPublicKey) : null);
+        return withCaPublicKeys(
+                caPublicKey != null ? Collections.singletonList(caPublicKey) : null);
     }
 
     /**
@@ -119,26 +118,54 @@ public final class TlsServerConfig {
     }
 
     // package-private аксессоры для фабрики TlsSession
-    public TlsCiphersuite getCiphersuite() { return ciphersuite; }
-    public List<TlsCertificate> getServerCertificateChain() { return serverCertificateChain; }
-    public PrivateKeyParameters getServerPrivateKey() { return serverPrivateKey; }
-    public List<PublicKeyParameters> getCaPublicKeys() { return caPublicKeys; }
+    public TlsCiphersuite getCiphersuite() {
+        return ciphersuite;
+    }
+
+    public List<GostCertificate> getServerCertificateChain() {
+        return serverCertificateChain;
+    }
+
+    public PrivateKeyParameters getServerPrivateKey() {
+        return serverPrivateKey;
+    }
+
+    public List<PublicKeyParameters> getCaPublicKeys() {
+        return caPublicKeys;
+    }
 
     public PublicKeyParameters getCaPublicKey() {
-        return (caPublicKeys != null && !caPublicKeys.isEmpty())
-                ? caPublicKeys.get(0) : null;
+        return (caPublicKeys != null && !caPublicKeys.isEmpty()) ? caPublicKeys.get(0) : null;
     }
-    public byte[] getOcspStaplingResponse() { return ocspResponse; }
-    public List<String> getAlpnProtocols() { return alpnProtocols; }
-    public SniCertificateSelector getSniSelector() { return sniSelector; }
-    public int getTicketsToSend() { return ticketsToSend; }
-    public int getSelectedNamedGroup() { return selectedNamedGroup; }
-    public List<OIDFilter> getOidFilters() { return oidFilters; }
+
+    public byte[] getOcspStaplingResponse() {
+        return ocspResponse;
+    }
+
+    public List<String> getAlpnProtocols() {
+        return alpnProtocols;
+    }
+
+    public SniCertificateSelector getSniSelector() {
+        return sniSelector;
+    }
+
+    public int getTicketsToSend() {
+        return ticketsToSend;
+    }
+
+    public int getSelectedNamedGroup() {
+        return selectedNamedGroup;
+    }
+
+    public List<OIDFilter> getOidFilters() {
+        return oidFilters;
+    }
 
     /**
      * Устанавливает OID-фильтры для включения в CertificateRequest
      * (RFC 8446 §4.2.5). Сервер передаёт эти фильтры клиенту, чтобы
-     * тот выбрал сертификат, удовлетворяющий требованиям (УКЭП/УНЭП,
+     * тот выбрал сертификат, удовлетворяющий требованиям (классы KC1/KC2,
      * keyUsage и т.д.).
      *
      * @param filters список OID-фильтров, может быть null (extension не отправляется)

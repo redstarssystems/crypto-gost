@@ -28,8 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Кросс-валидация подписи ГОСТ Р 34.10-2012: crypto-gost vs BouncyCastle.
  *
  * Для каждой кривой (7 кривых):
- * — направление 1: crypto-gost подписывает → BC верифицирует (100 сообщений);
- * — направление 2: BC подписывает → crypto-gost верифицирует (100 сообщений);
+ * — направление 1: crypto-gost подписывает -> BC верифицирует (100 сообщений);
+ * — направление 2: BC подписывает -> crypto-gost верифицирует (100 сообщений);
  * — tamper-тест: испорченная подпись отклоняется обеими библиотеками.
  */
 class BcSignCrossValidationTest {
@@ -60,7 +60,7 @@ class BcSignCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curveParams")
-    @DisplayName("BC dir1: crypto-gost подписывает → BC верифицирует")
+    @DisplayName("BC dir1: crypto-gost подписывает -> BC верифицирует")
     void crossValidateDir1(TestData.CurveSpec spec) {
         CurveCtx c = ctx.get(spec);
         CrossValAssertions.assertForEachMessage(messages, (msg, i) -> {
@@ -71,7 +71,7 @@ class BcSignCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curveParams")
-    @DisplayName("BC dir2: BC подписывает → crypto-gost верифицирует")
+    @DisplayName("BC dir2: BC подписывает -> crypto-gost верифицирует")
     void crossValidateDir2(TestData.CurveSpec spec) {
         CurveCtx c = ctx.get(spec);
         CrossValAssertions.assertForEachMessage(messages, (msg, i) -> {

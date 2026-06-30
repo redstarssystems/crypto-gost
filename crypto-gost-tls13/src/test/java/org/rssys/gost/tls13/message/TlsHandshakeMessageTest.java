@@ -1,13 +1,12 @@
 package org.rssys.gost.tls13.message;
-import org.rssys.gost.tls13.*;
-import org.rssys.gost.tls13.engine.TlsHandshakeMessage;
-
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-
-import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Arrays;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.tls13.*;
+import org.rssys.gost.tls13.engine.TlsHandshakeMessage;
 
 /**
  * Тесты TlsHandshakeMessage — кодирование/декодирование сообщений handshake TLS 1.3.
@@ -21,11 +20,10 @@ class TlsHandshakeMessageTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("encode ClientHello")
+    @DisplayName("кодирование ClientHello")
     void testEncodeClientHello() {
-        byte[] body = new byte[]{0, 1, 2, 3, 4, 5};
-        TlsHandshakeMessage msg = new TlsHandshakeMessage(
-                TlsConstants.HT_CLIENT_HELLO, body);
+        byte[] body = new byte[] {0, 1, 2, 3, 4, 5};
+        TlsHandshakeMessage msg = new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, body);
         byte[] encoded = msg.encode();
 
         assertEquals(TlsConstants.HT_CLIENT_HELLO, encoded[0]);
@@ -35,12 +33,11 @@ class TlsHandshakeMessageTest {
     }
 
     @Test
-    @DisplayName("encode ServerHello")
+    @DisplayName("кодирование ServerHello")
     void testEncodeServerHello() {
         byte[] body = new byte[10];
         Arrays.fill(body, (byte) 0xAB);
-        TlsHandshakeMessage msg = new TlsHandshakeMessage(
-                TlsConstants.HT_SERVER_HELLO, body);
+        TlsHandshakeMessage msg = new TlsHandshakeMessage(TlsConstants.HT_SERVER_HELLO, body);
         byte[] encoded = msg.encode();
         assertEquals(14, encoded.length);
         assertEquals(TlsConstants.HT_SERVER_HELLO, encoded[0]);
@@ -49,12 +46,12 @@ class TlsHandshakeMessageTest {
     @Test
     @DisplayName("encode пустого тела")
     void testEncodeEmptyBody() {
-        TlsHandshakeMessage msg = new TlsHandshakeMessage(
-                TlsConstants.HT_FINISHED, new byte[0]);
+        TlsHandshakeMessage msg = new TlsHandshakeMessage(TlsConstants.HT_FINISHED, new byte[0]);
         byte[] encoded = msg.encode();
         assertEquals(4, encoded.length);
         assertEquals(TlsConstants.HT_FINISHED, encoded[0]);
-        assertEquals(0, ((encoded[1] & 0xFF) << 16) | ((encoded[2] & 0xFF) << 8) | (encoded[3] & 0xFF));
+        assertEquals(
+                0, ((encoded[1] & 0xFF) << 16) | ((encoded[2] & 0xFF) << 8) | (encoded[3] & 0xFF));
     }
 
     @Test
@@ -62,12 +59,12 @@ class TlsHandshakeMessageTest {
     void testEncodeAllTypes() {
         byte[] body = "test".getBytes();
         byte[] types = {
-                TlsConstants.HT_CLIENT_HELLO,
-                TlsConstants.HT_SERVER_HELLO,
-                TlsConstants.HT_ENCRYPTED_EXTENSIONS,
-                TlsConstants.HT_CERTIFICATE,
-                TlsConstants.HT_CERTIFICATE_VERIFY,
-                TlsConstants.HT_FINISHED
+            TlsConstants.HT_CLIENT_HELLO,
+            TlsConstants.HT_SERVER_HELLO,
+            TlsConstants.HT_ENCRYPTED_EXTENSIONS,
+            TlsConstants.HT_CERTIFICATE,
+            TlsConstants.HT_CERTIFICATE_VERIFY,
+            TlsConstants.HT_FINISHED
         };
         for (byte type : types) {
             TlsHandshakeMessage msg = new TlsHandshakeMessage(type, body);
@@ -84,11 +81,10 @@ class TlsHandshakeMessageTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("decode Certificate")
+    @DisplayName("декодирование Certificate")
     void testDecodeCertificate() {
-        byte[] certBody = new byte[]{0, 1, 2, 3};
-        byte[] encoded = new TlsHandshakeMessage(
-                TlsConstants.HT_CERTIFICATE, certBody).encode();
+        byte[] certBody = new byte[] {0, 1, 2, 3};
+        byte[] encoded = new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE, certBody).encode();
 
         TlsHandshakeMessage decoded = TlsHandshakeMessage.decode(encoded);
         assertEquals(TlsConstants.HT_CERTIFICATE, decoded.getType());
@@ -96,12 +92,12 @@ class TlsHandshakeMessageTest {
     }
 
     @Test
-    @DisplayName("decode CertificateVerify")
+    @DisplayName("декодирование CertificateVerify")
     void testDecodeCertificateVerify() {
         byte[] signature = new byte[64];
         Arrays.fill(signature, (byte) 0x42);
-        byte[] encoded = new TlsHandshakeMessage(
-                TlsConstants.HT_CERTIFICATE_VERIFY, signature).encode();
+        byte[] encoded =
+                new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE_VERIFY, signature).encode();
 
         TlsHandshakeMessage decoded = TlsHandshakeMessage.decode(encoded);
         assertEquals(TlsConstants.HT_CERTIFICATE_VERIFY, decoded.getType());
@@ -115,8 +111,7 @@ class TlsHandshakeMessageTest {
         for (int i = 0; i < body.length; i++) {
             body[i] = (byte) (i & 0xFF);
         }
-        byte[] encoded = new TlsHandshakeMessage(
-                TlsConstants.HT_CERTIFICATE, body).encode();
+        byte[] encoded = new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE, body).encode();
 
         TlsHandshakeMessage decoded = TlsHandshakeMessage.decode(encoded);
         assertEquals(TlsConstants.HT_CERTIFICATE, decoded.getType());
@@ -131,23 +126,26 @@ class TlsHandshakeMessageTest {
     @DisplayName("encode->decode roundtrip для разных типов")
     void testEncodeDecodeRoundtrip() {
         byte[][] bodies = {
-                new byte[0],
-                new byte[]{42},
-                "Hello TLS 1.3 GOST".getBytes(),
-                new byte[255],
-                new byte[65535]
+            new byte[0],
+            new byte[] {42},
+            "Hello TLS 1.3 GOST".getBytes(),
+            new byte[255],
+            new byte[65535]
         };
         byte[] types = {
-                TlsConstants.HT_CLIENT_HELLO,
-                TlsConstants.HT_SERVER_HELLO,
-                TlsConstants.HT_CERTIFICATE,
-                TlsConstants.HT_FINISHED
+            TlsConstants.HT_CLIENT_HELLO,
+            TlsConstants.HT_SERVER_HELLO,
+            TlsConstants.HT_CERTIFICATE,
+            TlsConstants.HT_FINISHED
         };
         for (byte[] body : bodies) {
             for (byte type : types) {
                 TlsHandshakeMessage original = new TlsHandshakeMessage(type, body);
                 TlsHandshakeMessage decoded = TlsHandshakeMessage.decode(original.encode());
-                assertEquals(original, decoded, "Roundtrip failed for type=" + type + " len=" + body.length);
+                assertEquals(
+                        original,
+                        decoded,
+                        "Roundtrip не удался для type=" + type + " len=" + body.length);
             }
         }
     }
@@ -159,22 +157,23 @@ class TlsHandshakeMessageTest {
     @Test
     @DisplayName("null тело в конструкторе")
     void testNullBodyThrows() {
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(
+                IllegalArgumentException.class,
                 () -> new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, null));
     }
 
     @Test
-    @DisplayName("decode null")
+    @DisplayName("декодирование null")
     void testDecodeNullThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsHandshakeMessage.decode(null));
+        assertThrows(IllegalArgumentException.class, () -> TlsHandshakeMessage.decode(null));
     }
 
     @Test
     @DisplayName("decode слишком коротких данных")
     void testDecodeTooShortThrows() {
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsHandshakeMessage.decode(new byte[]{1, 2, 3}));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> TlsHandshakeMessage.decode(new byte[] {1, 2, 3}));
     }
 
     @Test
@@ -187,8 +186,7 @@ class TlsHandshakeMessageTest {
         truncated[3] = 100;
         System.arraycopy(new byte[10], 0, truncated, 4, 10);
 
-        assertThrows(IllegalArgumentException.class,
-                () -> TlsHandshakeMessage.decode(truncated));
+        assertThrows(IllegalArgumentException.class, () -> TlsHandshakeMessage.decode(truncated));
     }
 
     // -----------------------------------------------------------------------
@@ -213,11 +211,11 @@ class TlsHandshakeMessageTest {
     @Test
     @DisplayName("getBody возвращает копию")
     void testGetBodyReturnsCopy() {
-        byte[] body = new byte[]{1, 2, 3};
+        byte[] body = new byte[] {1, 2, 3};
         TlsHandshakeMessage msg = new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, body);
         byte[] retrieved = msg.getBody();
         assertArrayEquals(body, retrieved);
         retrieved[0] = 99;
-        assertArrayEquals(new byte[]{1, 2, 3}, msg.getBody());
+        assertArrayEquals(new byte[] {1, 2, 3}, msg.getBody());
     }
 }

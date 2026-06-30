@@ -1,5 +1,7 @@
 package org.rssys.gost.api;
 
+import java.math.BigInteger;
+import java.util.function.Supplier;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
@@ -10,9 +12,6 @@ import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.signature.SignatureCodec;
-
-import java.math.BigInteger;
-import java.util.function.Supplier;
 
 /**
  * API для электронной подписи ГОСТ Р 34.10-2012 (RFC 7091).
@@ -75,7 +74,7 @@ public final class Signature {
         Supplier<Digest> factory = digestFactory(params);
 
         ECDSASigner rawSigner = new ECDSASigner(factory);
-        DigestSigner signer   = new DigestSigner(rawSigner, factory.get());
+        DigestSigner signer = new DigestSigner(rawSigner, factory.get());
 
         signer.init(true, priv);
         signer.update(data, 0, data.length);
@@ -85,7 +84,6 @@ public final class Signature {
             rawSigner.destroy(); // обнуляет временную копию dBytes внутри ECDSASigner
         }
     }
-
 
     /**
      * Проверяет подпись открытым ключом ГОСТ Р 34.10-2012.
@@ -104,7 +102,7 @@ public final class Signature {
         Supplier<Digest> factory = digestFactory(params);
 
         ECDSASigner rawSigner = new ECDSASigner(factory);
-        DigestSigner signer   = new DigestSigner(rawSigner, factory.get());
+        DigestSigner signer = new DigestSigner(rawSigner, factory.get());
 
         signer.init(false, pub);
         signer.update(data, 0, data.length);
@@ -203,14 +201,16 @@ public final class Signature {
     private static void validateHashLength(byte[] hash, ECParameters params) {
         if (hash == null || hash.length != params.hlen) {
             throw new IllegalArgumentException(
-                "Hash length must be " + params.hlen + " bytes for this curve, got "
-                + (hash == null ? "null" : hash.length));
+                    "Hash length must be "
+                            + params.hlen
+                            + " bytes for this curve, got "
+                            + (hash == null ? "null" : hash.length));
         }
     }
 
     /**
      * Возвращает фабрику дайджестов по параметрам кривой:
-     * hlen=32 → Стрибог-256, hlen=64 → Стрибог-512.
+     * hlen=32 -> Стрибог-256, hlen=64 -> Стрибог-512.
      * <p>
      * Используется в двух ролях:
      * <ul>

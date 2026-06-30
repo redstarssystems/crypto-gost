@@ -1,11 +1,5 @@
 package org.rssys.gost.jca.spi;
 
-import org.rssys.gost.api.Signature;
-import org.rssys.gost.jca.key.GostECPrivateKey;
-import org.rssys.gost.jca.key.GostECPublicKey;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
-
 import java.io.ByteArrayOutputStream;
 import java.security.InvalidKeyException;
 import java.security.InvalidParameterException;
@@ -13,7 +7,13 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SignatureException;
 import java.security.SignatureSpi;
-import java.security.spec.AlgorithmParameterSpec;
+import org.rssys.gost.api.Signature;
+import org.rssys.gost.digest.Streebog256;
+import org.rssys.gost.digest.Streebog512;
+import org.rssys.gost.jca.key.GostECPrivateKey;
+import org.rssys.gost.jca.key.GostECPublicKey;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Реализация {@link SignatureSpi} для алгоритма электронной подписи ГОСТ Р 34.10-2012.
@@ -34,7 +34,7 @@ import java.security.spec.AlgorithmParameterSpec;
  * <p>
  * Метод {@link #engineUpdate} накапливает данные в памяти; хэширование выполняется
  * внутри {@link Signature#sign} и {@link Signature#verify} за один вызов.
-
+ *
  */
 public abstract class GostSignatureSpi extends SignatureSpi {
 
@@ -70,15 +70,15 @@ public abstract class GostSignatureSpi extends SignatureSpi {
     protected void engineInitSign(PrivateKey privateKey) throws InvalidKeyException {
         if (!(privateKey instanceof GostECPrivateKey)) {
             throw new InvalidKeyException(
-                "Expected GostECPrivateKey, got: " + privateKey.getClass().getName());
+                    "Expected GostECPrivateKey, got: " + privateKey.getClass().getName());
         }
         GostECPrivateKey gostKey = (GostECPrivateKey) privateKey;
         validateHlen(gostKey.toPrivateKeyParameters().getParams().hlen, "private");
 
-        this.privateKey  = gostKey.toPrivateKeyParameters();
-        this.publicKey   = null;
+        this.privateKey = gostKey.toPrivateKeyParameters();
+        this.publicKey = null;
         this.signingMode = true;
-        this.dataBuffer  = new ByteArrayOutputStream();
+        this.dataBuffer = new ByteArrayOutputStream();
     }
 
     /**
@@ -91,15 +91,15 @@ public abstract class GostSignatureSpi extends SignatureSpi {
     protected void engineInitVerify(PublicKey publicKey) throws InvalidKeyException {
         if (!(publicKey instanceof GostECPublicKey)) {
             throw new InvalidKeyException(
-                "Expected GostECPublicKey, got: " + publicKey.getClass().getName());
+                    "Expected GostECPublicKey, got: " + publicKey.getClass().getName());
         }
         GostECPublicKey gostKey = (GostECPublicKey) publicKey;
         validateHlen(gostKey.toPublicKeyParameters().getParams().hlen, "public");
 
-        this.publicKey   = gostKey.toPublicKeyParameters();
-        this.privateKey  = null;
+        this.publicKey = gostKey.toPublicKeyParameters();
+        this.privateKey = null;
         this.signingMode = false;
-        this.dataBuffer  = new ByteArrayOutputStream();
+        this.dataBuffer = new ByteArrayOutputStream();
     }
 
     /** Добавляет один байт к накапливаемым данным. */
@@ -157,7 +157,8 @@ public abstract class GostSignatureSpi extends SignatureSpi {
             dataBuffer.reset();
             return result;
         } catch (Exception e) {
-            throw new SignatureException("GOST signature verification failed: " + e.getMessage(), e);
+            throw new SignatureException(
+                    "GOST signature verification failed: " + e.getMessage(), e);
         }
     }
 
@@ -169,8 +170,7 @@ public abstract class GostSignatureSpi extends SignatureSpi {
      */
     @Override
     @SuppressWarnings("deprecation")
-    protected void engineSetParameter(String param, Object value)
-            throws InvalidParameterException {
+    protected void engineSetParameter(String param, Object value) throws InvalidParameterException {
         throw new InvalidParameterException("setParameter not supported for ECGOST3410-2012");
     }
 
@@ -193,15 +193,21 @@ public abstract class GostSignatureSpi extends SignatureSpi {
     private void validateHlen(int keyHlen, String keyType) throws InvalidKeyException {
         if (keyHlen != hlen) {
             throw new InvalidKeyException(
-                "Key hlen mismatch for " + keyType + " key: SPI expects " + hlen
-                + " bytes, key has " + keyHlen + " bytes. "
-                + "Use ECGOST3410-2012-256 for 256-bit curves, ECGOST3410-2012-512 for 512-bit");
+                    "Key hlen mismatch for "
+                            + keyType
+                            + " key: SPI expects "
+                            + hlen
+                            + " bytes, key has "
+                            + keyHlen
+                            + " bytes. "
+                            + "Use ECGOST3410-2012-256 for 256-bit curves, ECGOST3410-2012-512 for 512-bit");
         }
     }
 
     private void checkInitialized() throws SignatureException {
         if (dataBuffer == null) {
-            throw new SignatureException("Signature not initialized — call initSign/initVerify first");
+            throw new SignatureException(
+                    "Signature not initialized — call initSign/initVerify first");
         }
     }
 
@@ -215,7 +221,7 @@ public abstract class GostSignatureSpi extends SignatureSpi {
     public static final class Ecgost3410_256Spi extends GostSignatureSpi {
         /** Создаёт SPI для 256-битных кривых (hlen=32). */
         public Ecgost3410_256Spi() {
-            super(32);
+            super(Streebog256.DIGEST_SIZE);
         }
     }
 
@@ -229,7 +235,7 @@ public abstract class GostSignatureSpi extends SignatureSpi {
     public static final class Ecgost3410_512Spi extends GostSignatureSpi {
         /** Создаёт SPI для 512-битных кривых (hlen=64). */
         public Ecgost3410_512Spi() {
-            super(64);
+            super(Streebog512.DIGEST_SIZE);
         }
     }
 }

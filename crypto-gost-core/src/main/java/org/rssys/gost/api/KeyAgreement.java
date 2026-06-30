@@ -1,13 +1,12 @@
 package org.rssys.gost.api;
 
+import java.math.BigInteger;
+import java.util.Arrays;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.Pack;
-
-import java.math.BigInteger;
-import java.util.Arrays;
 
 /**
  * Согласование ключей по схеме VKO (ГОСТ Р 34.10-2012, RFC 7836 §4.3).
@@ -24,8 +23,7 @@ import java.util.Arrays;
  */
 public final class KeyAgreement {
 
-    private KeyAgreement() {
-    }
+    private KeyAgreement() {}
 
     /**
      * Вычисляет VKO shared secret: X-координата {@code (h·d)·Qpeer} в little-endian
@@ -46,8 +44,7 @@ public final class KeyAgreement {
      * @throws IllegalStateException    если результат — точка на бесконечности
      */
     public static byte[] computeSharedSecret(
-            PrivateKeyParameters myPriv,
-            PublicKeyParameters peerPub) {
+            PrivateKeyParameters myPriv, PublicKeyParameters peerPub) {
         if (myPriv == null || peerPub == null) {
             throw new IllegalArgumentException("Keys must not be null");
         }
@@ -60,9 +57,8 @@ public final class KeyAgreement {
 
         // RFC 7836 §4.3: K = (m/q · UKM · x mod q) · (y·P)
         // UKM = 1 (raw ECDH), h = m/q
-        BigInteger scalar = myPriv.getD()
-                .multiply(BigInteger.valueOf(myParams.cofactor))
-                .mod(myParams.n);
+        BigInteger scalar =
+                myPriv.getD().multiply(BigInteger.valueOf(myParams.cofactor)).mod(myParams.n);
         ECPoint shared = peerPub.getQ().multiply(scalar);
         shared = shared.normalize();
         if (shared.isInfinity()) {
@@ -103,9 +99,7 @@ public final class KeyAgreement {
      * @throws IllegalStateException    если результат — точка на бесконечности
      */
     public static byte[] vkoGostR3410_2012_256(
-            PrivateKeyParameters myPriv,
-            PublicKeyParameters peerPub,
-            BigInteger ukm) {
+            PrivateKeyParameters myPriv, PublicKeyParameters peerPub, BigInteger ukm) {
         if (myPriv == null || peerPub == null) {
             throw new IllegalArgumentException("Keys must not be null");
         }
@@ -126,10 +120,11 @@ public final class KeyAgreement {
         }
 
         // RFC 7836 §4.3.1: K = (m/q · UKM · x mod q) · (y·P)
-        BigInteger scalar = myPriv.getD()
-                .multiply(BigInteger.valueOf(myParams.cofactor))
-                .multiply(ukm)
-                .mod(myParams.n);
+        BigInteger scalar =
+                myPriv.getD()
+                        .multiply(BigInteger.valueOf(myParams.cofactor))
+                        .multiply(ukm)
+                        .mod(myParams.n);
         ECPoint shared = peerPub.getQ().multiply(scalar);
         shared = shared.normalize();
         if (shared.isInfinity()) {

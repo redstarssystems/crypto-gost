@@ -23,11 +23,12 @@ public class Ofb extends AbstractStreamMode implements StreamCipher {
     public Ofb(Kuznyechik cipher) {
         super(cipher);
         this.kuz = cipher;
-        this.Y   = new byte[blockSize];
+        this.Y = new byte[blockSize];
     }
 
     @Override
-    public void init(boolean forEncryption, CipherParameters params) throws IllegalArgumentException {
+    public void init(boolean forEncryption, CipherParameters params)
+            throws IllegalArgumentException {
         reset();
         ParametersWithIV ivParams = requireIV(params, "OFB");
         byte[] iv = ivParams.getIV();
@@ -81,7 +82,7 @@ public class Ofb extends AbstractStreamMode implements StreamCipher {
             LONG_BE.set(R, 8, gLo);
             long inHi = (long) LONG_BE.get(in, inOff + i);
             long inLo = (long) LONG_BE.get(in, inOff + i + 8);
-            LONG_BE.set(out, outOff + i,     inHi ^ gHi);
+            LONG_BE.set(out, outOff + i, inHi ^ gHi);
             LONG_BE.set(out, outOff + i + 8, inLo ^ gLo);
         }
         return limit;

@@ -1,24 +1,23 @@
 package org.rssys.gost.jsse.engine;
 
-import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import static org.junit.jupiter.api.Assertions.*;
 
+import java.nio.ByteBuffer;
+import java.security.Security;
+import java.util.Arrays;
+import java.util.List;
+import javax.net.ssl.SSLEngineResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
-
-import javax.net.ssl.SSLEngineResult;
-import java.nio.ByteBuffer;
-import java.security.Security;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 class GostSSLEngineCoalescingTest {
 
@@ -31,14 +30,23 @@ class GostSSLEngineCoalescingTest {
         Security.addProvider(new RssysGostJsseProvider());
         ECParameters params = ECParameters.tc26a256();
         rootCa = TlsTestHelper.createRootCA(params);
-        serverCert = TlsTestHelper.createCertSignedBy(
-                params, rootCa.priv, rootCa.cert.getPublicKey(), rootCa.subjectDn,
-                "240501120000Z", "290501120000Z",
-                new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
-                false, null);
+        serverCert =
+                TlsTestHelper.createCertSignedBy(
+                        params,
+                        rootCa.priv,
+                        rootCa.cert.getPublicKey(),
+                        rootCa.subjectDn,
+                        "240501120000Z",
+                        "290501120000Z",
+                        new String[] {"localhost"},
+                        new byte[] {(byte) 0x80},
+                        null,
+                        false,
+                        null);
         serverKm = new GostX509KeyManager();
-        serverKm.addKeyEntry("default",
-                CertificateBridge.toJcaChain(serverCert.cert, rootCa.cert),
+        serverKm.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
                 serverCert.priv);
     }
 
@@ -53,9 +61,7 @@ class GostSSLEngineCoalescingTest {
 
         // Три записи разного размера
         byte[][] records = {
-                new byte[100],
-                new byte[1024],
-                new byte[16383],
+            new byte[100], new byte[1024], new byte[16383],
         };
         for (int i = 0; i < records.length; i++) {
             Arrays.fill(records[i], (byte) (i + 1));
@@ -65,7 +71,10 @@ class GostSSLEngineCoalescingTest {
         ByteBuffer tmp = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
         ByteBuffer[] encrypted = new ByteBuffer[records.length];
         for (int i = 0; i < records.length; i++) {
-            encrypted[i] = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+            encrypted[i] =
+                    ByteBuffer.allocate(
+                            TlsConstants.MAX_CIPHERTEXT_LENGTH
+                                    + TlsConstants.RECORD_BUFFER_HEADROOM);
             tmp.clear();
             tmp.put(records[i]);
             tmp.flip();
@@ -97,7 +106,9 @@ class GostSSLEngineCoalescingTest {
                 appBuf.flip();
                 byte[] received = new byte[appBuf.remaining()];
                 appBuf.get(received);
-                assertArrayEquals(records[recordIndex], received,
+                assertArrayEquals(
+                        records[recordIndex],
+                        received,
                         "Содержимое записи " + recordIndex + " должно совпадать");
                 recordIndex++;
             }
@@ -109,13 +120,17 @@ class GostSSLEngineCoalescingTest {
         }
 
         // Все записи должны быть получены
-        assertEquals(records.length, recordIndex,
+        assertEquals(
+                records.length,
+                recordIndex,
                 "Должны быть получены все " + records.length + " записей");
 
         // bytesProduced должен равняться сумме всех данных
         int totalData = 0;
         for (byte[] rec : records) totalData += rec.length;
-        assertEquals(totalData, totalProduced,
+        assertEquals(
+                totalData,
+                totalProduced,
                 "bytesProduced должен равняться сумме всех plaintext данных");
     }
 
@@ -137,7 +152,10 @@ class GostSSLEngineCoalescingTest {
         ByteBuffer tmp = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
         ByteBuffer[] encrypted = new ByteBuffer[count];
         for (int i = 0; i < count; i++) {
-            encrypted[i] = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+            encrypted[i] =
+                    ByteBuffer.allocate(
+                            TlsConstants.MAX_CIPHERTEXT_LENGTH
+                                    + TlsConstants.RECORD_BUFFER_HEADROOM);
             tmp.clear();
             tmp.put(records[i]);
             tmp.flip();
@@ -163,34 +181,35 @@ class GostSSLEngineCoalescingTest {
                 appBuf.flip();
                 byte[] received = new byte[appBuf.remaining()];
                 appBuf.get(received);
-                assertArrayEquals(records[recordIndex], received,
-                        "Содержимое записи " + recordIndex);
+                assertArrayEquals(
+                        records[recordIndex], received, "Содержимое записи " + recordIndex);
                 recordIndex++;
             }
 
             if (r.getStatus() == SSLEngineResult.Status.BUFFER_UNDERFLOW) break;
         }
 
-        assertEquals(count, recordIndex,
-                "Должны быть получены все " + count + " записей");
-        assertEquals(count * 100, totalProduced,
-                "bytesProduced должен равняться " + (count * 100));
+        assertEquals(count, recordIndex, "Должны быть получены все " + count + " записей");
+        assertEquals(count * 100, totalProduced, "bytesProduced должен равняться " + (count * 100));
     }
 
     private static GostSSLEngine createClient() {
         return new GostSSLEngine(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "localhost", 0, true);
+                new GostX509KeyManager(),
+                new GostX509TrustManager(null, false),
+                "localhost",
+                0,
+                true);
     }
 
     private static GostSSLEngine createServer() {
         return new GostSSLEngine(
-                serverKm, new GostX509TrustManager(null, false),
-                "localhost", 0, false);
+                serverKm, new GostX509TrustManager(null, false), "localhost", 0, false);
     }
 
-    private static void doHandshake(GostSSLEngine client, GostSSLEngine server,
-                                    InMemoryTlsTransport.Pair pair) throws Exception {
+    private static void doHandshake(
+            GostSSLEngine client, GostSSLEngine server, InMemoryTlsTransport.Pair pair)
+            throws Exception {
         client.beginHandshake();
         server.beginHandshake();
 
@@ -199,28 +218,48 @@ class GostSSLEngineCoalescingTest {
         java.util.concurrent.atomic.AtomicReference<Throwable> serverError =
                 new java.util.concurrent.atomic.AtomicReference<>();
 
-        Thread ct = new Thread(() -> {
-            try {
-                handshakeLoop(client, pair.getClientTransport());
-            } catch (Exception e) { clientError.set(e); }
-        }, "hs-client");
-        Thread st = new Thread(() -> {
-            try {
-                handshakeLoop(server, pair.getServerTransport());
-            } catch (Exception e) { serverError.set(e); }
-        }, "hs-server");
+        Thread ct =
+                new Thread(
+                        () -> {
+                            try {
+                                handshakeLoop(client, pair.getClientTransport());
+                            } catch (Exception e) {
+                                clientError.set(e);
+                            }
+                        },
+                        "hs-client");
+        Thread st =
+                new Thread(
+                        () -> {
+                            try {
+                                handshakeLoop(server, pair.getServerTransport());
+                            } catch (Exception e) {
+                                serverError.set(e);
+                            }
+                        },
+                        "hs-server");
 
-        ct.start(); st.start();
-        ct.join(10000); st.join(10000);
-        if (ct.isAlive()) { ct.interrupt(); fail("Client HS timeout"); }
-        if (st.isAlive()) { st.interrupt(); fail("Server HS timeout"); }
+        ct.start();
+        st.start();
+        ct.join(10000);
+        st.join(10000);
+        if (ct.isAlive()) {
+            ct.interrupt();
+            fail("Тайм-аут рукопожатия клиента");
+        }
+        if (st.isAlive()) {
+            st.interrupt();
+            fail("Тайм-аут рукопожатия сервера");
+        }
         if (clientError.get() != null) throw new RuntimeException(clientError.get());
         if (serverError.get() != null) throw new RuntimeException(serverError.get());
     }
 
-    private static void handshakeLoop(GostSSLEngine engine,
-                                       InMemoryTlsTransport transport) throws Exception {
-        ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+    private static void handshakeLoop(GostSSLEngine engine, InMemoryTlsTransport transport)
+            throws Exception {
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
 
         for (int i = 0; i < 80; i++) {
@@ -239,26 +278,28 @@ class GostSSLEngineCoalescingTest {
                         transport.sendRecord(out);
                     }
                     break;
-                case NEED_UNWRAP: {
-                    byte[] in = transport.receiveRecord();
-                    if (in != null) {
-                        netBuf.clear();
-                        netBuf.put(in);
-                        netBuf.flip();
-                        appBuf.clear();
-                        engine.unwrap(netBuf, appBuf);
-                    } else {
-                        Thread.sleep(10);
+                case NEED_UNWRAP:
+                    {
+                        byte[] in = transport.receiveRecord();
+                        if (in != null) {
+                            netBuf.clear();
+                            netBuf.put(in);
+                            netBuf.flip();
+                            appBuf.clear();
+                            engine.unwrap(netBuf, appBuf);
+                        } else {
+                            Thread.sleep(10);
+                        }
+                        break;
                     }
-                    break;
-                }
-                case NEED_TASK: {
-                    Runnable t = engine.getDelegatedTask();
-                    if (t != null) t.run();
-                    break;
-                }
+                case NEED_TASK:
+                    {
+                        Runnable t = engine.getDelegatedTask();
+                        if (t != null) t.run();
+                        break;
+                    }
             }
         }
-        throw new RuntimeException("Handshake timeout");
+        throw new RuntimeException("Тайм-аут рукопожатия");
     }
 }

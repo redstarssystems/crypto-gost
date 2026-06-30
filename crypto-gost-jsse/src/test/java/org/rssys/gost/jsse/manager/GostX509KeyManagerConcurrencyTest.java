@@ -1,10 +1,6 @@
 package org.rssys.gost.jsse.manager;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.jsse.testkit.GostTestCerts;
-import org.rssys.gost.jsse.testkit.GostTestCerts.CertChain;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
@@ -12,25 +8,28 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.jsse.testkit.GostTestCerts;
+import org.rssys.gost.jsse.testkit.GostTestCerts.CertChain;
 
 /**
  * Тесты thread-safety {@link GostX509KeyManager} под конкурентной нагрузкой.
  * <p>
- * После фикса бага (ArrayList → {@link java.util.concurrent.CopyOnWriteArrayList})
+ * После фикса бага (ArrayList -> {@link java.util.concurrent.CopyOnWriteArrayList})
  * все три теста должны проходить зелёными даже при параллельной записи и чтении.
  * CopyOnWriteArrayList оптимизирован для read-heavy сценария: addKeyEntry() копирует
  * массив (редко), а chooseServerAlias()/getCertificateChain() читают lock-free.
  */
-@DisplayName("Thread-safety GostX509KeyManager")
+@DisplayName("Потокобезопасность GostX509KeyManager")
 @Tag("integration")
 class GostX509KeyManagerConcurrencyTest {
 
     private static final int TIMEOUT_SEC = 30;
 
     @Test
-    @DisplayName("50 параллельных chooseServerAlias (pure reads) — все успешны")
+    @DisplayName("50 параллельных chooseServerAlias (только чтение) — все успешны")
     void concurrentChooseServerAlias() throws Exception {
         GostX509KeyManager km = createKeyManagerWithBothTypes(5);
         int n = 50;
@@ -40,32 +39,36 @@ class GostX509KeyManagerConcurrencyTest {
 
         ExecutorService pool = Executors.newFixedThreadPool(n);
         for (int i = 0; i < n; i++) {
-            pool.submit(() -> {
-                try {
-                    start.await(TIMEOUT_SEC, TimeUnit.SECONDS);
-                    for (int j = 0; j < 100; j++) {
-                        String alias = km.chooseEngineServerAlias(
-                                "ECGOST3410-2012-256", null, null);
-                        if (alias == null) {
+            pool.submit(
+                    () -> {
+                        try {
+                            start.await(TIMEOUT_SEC, TimeUnit.SECONDS);
+                            for (int j = 0; j < 100; j++) {
+                                String alias =
+                                        km.chooseEngineServerAlias(
+                                                "ECGOST3410-2012-256", null, null);
+                                if (alias == null) {
+                                    errorCount.incrementAndGet();
+                                }
+                            }
+                        } catch (Exception e) {
                             errorCount.incrementAndGet();
+                        } finally {
+                            allDone.countDown();
                         }
-                    }
-                } catch (Exception e) {
-                    errorCount.incrementAndGet();
-                } finally {
-                    allDone.countDown();
-                }
-            });
+                    });
         }
 
-        assertTrue(allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS),
+        assertTrue(
+                allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS),
                 "Тест не завершился за " + TIMEOUT_SEC + " с");
-        assertTrue(errorCount.get() == 0,
-                "Ошибок не ожидается при pure reads, получено: " + errorCount.get());
+        assertTrue(
+                errorCount.get() == 0,
+                "Ошибок не ожидается при чтении без записи, получено: " + errorCount.get());
     }
 
     @Test
-    @DisplayName("20 write + 20 read — без CME (CopyOnWriteArrayList)")
+    @DisplayName("20 запись + 20 чтение — без CME (CopyOnWriteArrayList)")
     void concurrentAddKeyEntryDuringRead() throws Exception {
         GostX509KeyManager km = createKeyManagerWithBothTypes(3);
         int nWriters = 20;
@@ -79,47 +82,52 @@ class GostX509KeyManagerConcurrencyTest {
 
         for (int i = 0; i < nWriters; i++) {
             final int idx = i;
-            pool.submit(() -> {
-                try {
-                    start.await(TIMEOUT_SEC, TimeUnit.SECONDS);
-                    for (int j = 0; j < 50; j++) {
-                        CertChain newCert = GostTestCerts.createServerCert();
-                        km.addKeyEntry("writer_" + idx + "_" + j,
-                                newCert.toJca(), newCert.key());
-                    }
-                } catch (Exception e) {
-                    errorCount.incrementAndGet();
-                } finally {
-                    allDone.countDown();
-                }
-            });
+            pool.submit(
+                    () -> {
+                        try {
+                            start.await(TIMEOUT_SEC, TimeUnit.SECONDS);
+                            for (int j = 0; j < 50; j++) {
+                                CertChain newCert = GostTestCerts.createServerCert();
+                                km.addKeyEntry(
+                                        "writer_" + idx + "_" + j, newCert.toJca(), newCert.key());
+                            }
+                        } catch (Exception e) {
+                            errorCount.incrementAndGet();
+                        } finally {
+                            allDone.countDown();
+                        }
+                    });
         }
 
         for (int i = 0; i < nReaders; i++) {
-            pool.submit(() -> {
-                try {
-                    start.await(TIMEOUT_SEC, TimeUnit.SECONDS);
-                    for (int j = 0; j < 100; j++) {
-                        km.chooseEngineServerAlias("ECGOST3410-2012-256", null, null);
-                        km.getCertificateChain("alias_0");
-                        km.getPrivateKey("alias_0");
-                    }
-                } catch (Exception e) {
-                    errorCount.incrementAndGet();
-                } finally {
-                    allDone.countDown();
-                }
-            });
+            pool.submit(
+                    () -> {
+                        try {
+                            start.await(TIMEOUT_SEC, TimeUnit.SECONDS);
+                            for (int j = 0; j < 100; j++) {
+                                km.chooseEngineServerAlias("ECGOST3410-2012-256", null, null);
+                                km.getCertificateChain("alias_0");
+                                km.getPrivateKey("alias_0");
+                            }
+                        } catch (Exception e) {
+                            errorCount.incrementAndGet();
+                        } finally {
+                            allDone.countDown();
+                        }
+                    });
         }
 
-        assertTrue(allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS),
+        assertTrue(
+                allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS),
                 "Тест не завершился за " + TIMEOUT_SEC + " с");
-        assertTrue(errorCount.get() == 0,
-                "Ошибок не ожидается (CopyOnWriteArrayList thread-safe), получено: " + errorCount.get());
+        assertTrue(
+                errorCount.get() == 0,
+                "Ошибок не ожидается (CopyOnWriteArrayList потокобезопасен), получено: "
+                        + errorCount.get());
     }
 
     @Test
-    @DisplayName("Mixed read/write — без CME (CopyOnWriteArrayList)")
+    @DisplayName("Смешанное чтение/запись — без CME (CopyOnWriteArrayList)")
     void mixedReadWriteConcurrency() throws Exception {
         GostX509KeyManager km = createKeyManagerWithBothTypes(3);
         int n = 30;
@@ -130,35 +138,42 @@ class GostX509KeyManagerConcurrencyTest {
         ExecutorService pool = Executors.newFixedThreadPool(n);
         for (int t = 0; t < n; t++) {
             final int threadIdx = t;
-            pool.submit(() -> {
-                try {
-                    start.await(TIMEOUT_SEC, TimeUnit.SECONDS);
-                    for (int j = 0; j < 100; j++) {
-                        int op = (threadIdx + j) % 4;
-                        switch (op) {
-                            case 0 -> {
-                                CertChain newCert = GostTestCerts.createServerCert();
-                                km.addKeyEntry("mixed_" + threadIdx + "_" + j,
-                                        newCert.toJca(), newCert.key());
+            pool.submit(
+                    () -> {
+                        try {
+                            start.await(TIMEOUT_SEC, TimeUnit.SECONDS);
+                            for (int j = 0; j < 100; j++) {
+                                int op = (threadIdx + j) % 4;
+                                switch (op) {
+                                    case 0 -> {
+                                        CertChain newCert = GostTestCerts.createServerCert();
+                                        km.addKeyEntry(
+                                                "mixed_" + threadIdx + "_" + j,
+                                                newCert.toJca(),
+                                                newCert.key());
+                                    }
+                                    case 1 ->
+                                            km.chooseEngineServerAlias(
+                                                    "ECGOST3410-2012-256", null, null);
+                                    case 2 -> km.getCertificateChain("alias_0");
+                                    case 3 -> km.getPrivateKey("alias_0");
+                                }
                             }
-                            case 1 -> km.chooseEngineServerAlias(
-                                    "ECGOST3410-2012-256", null, null);
-                            case 2 -> km.getCertificateChain("alias_0");
-                            case 3 -> km.getPrivateKey("alias_0");
+                        } catch (Exception e) {
+                            errorCount.incrementAndGet();
+                        } finally {
+                            allDone.countDown();
                         }
-                    }
-                } catch (Exception e) {
-                    errorCount.incrementAndGet();
-                } finally {
-                    allDone.countDown();
-                }
-            });
+                    });
         }
 
-        assertTrue(allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS),
+        assertTrue(
+                allDone.await(TIMEOUT_SEC, TimeUnit.SECONDS),
                 "Тест не завершился за " + TIMEOUT_SEC + " с");
-        assertTrue(errorCount.get() == 0,
-                "Ошибок не ожидается (CopyOnWriteArrayList thread-safe), получено: " + errorCount.get());
+        assertTrue(
+                errorCount.get() == 0,
+                "Ошибок не ожидается (CopyOnWriteArrayList потокобезопасен), получено: "
+                        + errorCount.get());
     }
 
     /**

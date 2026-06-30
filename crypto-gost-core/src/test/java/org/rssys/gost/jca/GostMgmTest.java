@@ -1,5 +1,12 @@
 package org.rssys.gost.jca;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.security.Security;
+import java.util.Arrays;
+import javax.crypto.AEADBadTagException;
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -7,15 +14,7 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.MgmCipher;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.jca.key.GostSecretKey;
-
-import javax.crypto.AEADBadTagException;
-import javax.crypto.Cipher;
-import javax.crypto.spec.IvParameterSpec;
 import org.rssys.gost.util.CryptoRandom;
-import java.security.Security;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Тесты JCA-интерфейса для Кузнечик-MGM.
@@ -32,11 +31,13 @@ import static org.junit.jupiter.api.Assertions.*;
 @DisplayName("GostMgmCipherSpi — Кузнечик-MGM через JCA Cipher")
 class GostMgmTest {
 
-    private static final String PROVIDER     = RssysGostProvider.PROVIDER_NAME;
-    private static final String ALGORITHM    = "Kuznyechik-MGM";
+    private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
+    private static final String ALGORITHM = "Kuznyechik-MGM";
 
-    private static final byte[] DATA = "тест MGM через JCA".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-    private static final byte[] AAD  = "ассоциированные данные".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    private static final byte[] DATA =
+            "тест MGM через JCA".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    private static final byte[] AAD =
+            "ассоциированные данные".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 
     @BeforeAll
     static void registerProvider() {
@@ -77,26 +78,28 @@ class GostMgmTest {
         canonicalDec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
         byte[] decrypted = canonicalDec.doFinal(ciphertext);
 
-        assertArrayEquals(DATA, decrypted,
-            "Алиас Kuznyechik/MGM/NoPadding должен давать тот же шифртекст что и Kuznyechik-MGM");
+        assertArrayEquals(
+                DATA,
+                decrypted,
+                "Алиас Kuznyechik/MGM/NoPadding должен давать тот же шифртекст что и Kuznyechik-MGM");
     }
 
     @Test
-    @DisplayName("Roundtrip без AAD: encrypt → decrypt возвращает оригинал")
+    @DisplayName("Roundtrip без AAD: encrypt -> decrypt возвращает оригинал")
     void testRoundtripNoAad() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
 
         // Шифрование: ICN генерируется автоматически
         Cipher enc = Cipher.getInstance(ALGORITHM, PROVIDER);
         enc.init(Cipher.ENCRYPT_MODE, key);
         byte[] ciphertext = enc.doFinal(DATA); // [CT][TAG(16)]
-        byte[] icn        = enc.getIV();
+        byte[] icn = enc.getIV();
 
         assertNotNull(icn, "ICN не должен быть null после шифрования");
         assertEquals(16, icn.length, "ICN должен быть 16 байт");
-        assertEquals(DATA.length + 16, ciphertext.length,
-            "Шифртекст = plaintext + 16-байтовый тег");
+        assertEquals(
+                DATA.length + 16, ciphertext.length, "Шифртекст = plaintext + 16-байтовый тег");
 
         // Расшифрование
         Cipher dec = Cipher.getInstance(ALGORITHM, PROVIDER);
@@ -107,16 +110,16 @@ class GostMgmTest {
     }
 
     @Test
-    @DisplayName("Roundtrip с AAD: encrypt → decrypt возвращает оригинал")
+    @DisplayName("Roundtrip с AAD: encrypt -> decrypt возвращает оригинал")
     void testRoundtripWithAad() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
 
         Cipher enc = Cipher.getInstance(ALGORITHM, PROVIDER);
         enc.init(Cipher.ENCRYPT_MODE, key);
         enc.updateAAD(AAD);
         byte[] ciphertext = enc.doFinal(DATA);
-        byte[] icn        = enc.getIV();
+        byte[] icn = enc.getIV();
 
         Cipher dec = Cipher.getInstance(ALGORITHM, PROVIDER);
         dec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
@@ -129,7 +132,7 @@ class GostMgmTest {
     @Test
     @DisplayName("Пустой plaintext: шифрование даёт только тег (16 байт)")
     void testEmptyPlaintext() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
 
         Cipher enc = Cipher.getInstance(ALGORITHM, PROVIDER);
@@ -137,7 +140,7 @@ class GostMgmTest {
         enc.updateAAD(AAD);
         byte[] ciphertext = enc.doFinal(new byte[0]);
 
-        assertEquals(16, ciphertext.length, "Пустой plaintext → только тег (16 байт)");
+        assertEquals(16, ciphertext.length, "Пустой plaintext -> только тег (16 байт)");
 
         // Расшифрование
         Cipher dec = Cipher.getInstance(ALGORITHM, PROVIDER);
@@ -145,7 +148,7 @@ class GostMgmTest {
         dec.updateAAD(AAD);
         byte[] plaintext = dec.doFinal(ciphertext);
 
-        assertEquals(0, plaintext.length, "Расшифрование пустого CT → пустой PT");
+        assertEquals(0, plaintext.length, "Расшифрование пустого CT -> пустой PT");
     }
 
     // -----------------------------------------------------------------------
@@ -155,13 +158,13 @@ class GostMgmTest {
     @Test
     @DisplayName("Неверный тег: doFinal бросает AEADBadTagException")
     void testInvalidTagThrows() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
 
         Cipher enc = Cipher.getInstance(ALGORITHM, PROVIDER);
         enc.init(Cipher.ENCRYPT_MODE, key);
         byte[] ciphertext = enc.doFinal(DATA);
-        byte[] icn        = enc.getIV();
+        byte[] icn = enc.getIV();
 
         // Портим последний байт тега
         ciphertext[ciphertext.length - 1] ^= 0xFF;
@@ -169,47 +172,50 @@ class GostMgmTest {
         Cipher dec = Cipher.getInstance(ALGORITHM, PROVIDER);
         dec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
 
-        assertThrows(AEADBadTagException.class,
-            () -> dec.doFinal(ciphertext),
-            "Неверный тег должен вызывать AEADBadTagException");
+        assertThrows(
+                AEADBadTagException.class,
+                () -> dec.doFinal(ciphertext),
+                "Неверный тег должен вызывать AEADBadTagException");
     }
 
     @Test
-    @DisplayName("Неверный AAD: доп. данные не совпадают → AEADBadTagException")
+    @DisplayName("Неверный AAD: доп. данные не совпадают -> AEADBadTagException")
     void testInvalidAad() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
 
         Cipher enc = Cipher.getInstance(ALGORITHM, PROVIDER);
         enc.init(Cipher.ENCRYPT_MODE, key);
         enc.updateAAD(AAD);
         byte[] ciphertext = enc.doFinal(DATA);
-        byte[] icn        = enc.getIV();
+        byte[] icn = enc.getIV();
 
         // Расшифровываем с другим AAD
         Cipher dec = Cipher.getInstance(ALGORITHM, PROVIDER);
         dec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
         dec.updateAAD("неверный AAD".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
-        assertThrows(AEADBadTagException.class,
-            () -> dec.doFinal(ciphertext),
-            "Неверный AAD должен вызывать AEADBadTagException");
+        assertThrows(
+                AEADBadTagException.class,
+                () -> dec.doFinal(ciphertext),
+                "Неверный AAD должен вызывать AEADBadTagException");
     }
 
     @Test
     @DisplayName("Слишком короткий пакет: doFinal бросает AEADBadTagException")
     void testTooShortPacket() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
 
-        // ICN = 16 нулевых байт (MSB=0 → ok)
+        // ICN = 16 нулевых байт (MSB=0 -> ok)
         Cipher dec = Cipher.getInstance(ALGORITHM, PROVIDER);
         dec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(new byte[16]));
 
         // 10 байт — меньше минимального (16 для тега)
-        assertThrows(AEADBadTagException.class,
-            () -> dec.doFinal(new byte[10]),
-            "Слишком короткий пакет должен вызывать AEADBadTagException");
+        assertThrows(
+                AEADBadTagException.class,
+                () -> dec.doFinal(new byte[10]),
+                "Слишком короткий пакет должен вызывать AEADBadTagException");
     }
 
     // -----------------------------------------------------------------------
@@ -219,7 +225,7 @@ class GostMgmTest {
     @Test
     @DisplayName("JCA encrypt совместим с MgmCipher.open (расшифровывает API)")
     void testJcaEncryptApiDecrypt() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
 
         byte[] icn = new byte[16];
@@ -234,18 +240,20 @@ class GostMgmTest {
 
         // MgmCipher.open ожидает [ICN][CT][TAG]
         byte[] packet = new byte[16 + ctAndTag.length];
-        System.arraycopy(icn,       0, packet, 0,  16);
-        System.arraycopy(ctAndTag,  0, packet, 16, ctAndTag.length);
+        System.arraycopy(icn, 0, packet, 0, 16);
+        System.arraycopy(ctAndTag, 0, packet, 16, ctAndTag.length);
 
         byte[] plaintext = MgmCipher.open(packet, kp, AAD);
-        assertArrayEquals(DATA, plaintext,
-            "JCA-зашифрованный пакет должен расшифровываться через MgmCipher.open");
+        assertArrayEquals(
+                DATA,
+                plaintext,
+                "JCA-зашифрованный пакет должен расшифровываться через MgmCipher.open");
     }
 
     @Test
     @DisplayName("MgmCipher.seal совместим с JCA decrypt (расшифровывает JCA)")
     void testApiEncryptJcaDecrypt() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
         byte[] icn = new byte[16];
         CryptoRandom.INSTANCE.nextBytes(icn);
@@ -263,8 +271,10 @@ class GostMgmTest {
         dec.updateAAD(AAD);
         byte[] plaintext = dec.doFinal(ctAndTag);
 
-        assertArrayEquals(DATA, plaintext,
-            "API-зашифрованный пакет должен расшифровываться через JCA Cipher");
+        assertArrayEquals(
+                DATA,
+                plaintext,
+                "API-зашифрованный пакет должен расшифровываться через JCA Cipher");
     }
 
     // -----------------------------------------------------------------------
@@ -274,7 +284,7 @@ class GostMgmTest {
     @Test
     @DisplayName("Инкрементальный update + doFinal совпадает с однократным doFinal")
     void testIncrementalUpdate() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
         byte[] icn = new byte[16];
         CryptoRandom.INSTANCE.nextBytes(icn);
@@ -302,7 +312,7 @@ class GostMgmTest {
     @Test
     @DisplayName("engineInit после failed decrypt: recovery возможен")
     void testInitAfterFailedDecrypt() throws Exception {
-        SymmetricKey kp  = KeyGenerator.generateSymmetricKey();
+        SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         GostSecretKey key = new GostSecretKey("Kuznyechik", kp);
         byte[] icn = new byte[16];
         CryptoRandom.INSTANCE.nextBytes(icn);
@@ -319,7 +329,8 @@ class GostMgmTest {
         Cipher dec = Cipher.getInstance(ALGORITHM, PROVIDER);
         dec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
         dec.updateAAD(AAD);
-        assertThrows(AEADBadTagException.class,
+        assertThrows(
+                AEADBadTagException.class,
                 () -> dec.doFinal(ctAndTag),
                 "Порченный тег должен вызывать AEADBadTagException");
 
@@ -328,7 +339,9 @@ class GostMgmTest {
         dec.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
         dec.updateAAD(AAD);
         byte[] plaintext = dec.doFinal(ctAndTag);
-        assertArrayEquals(DATA, plaintext,
+        assertArrayEquals(
+                DATA,
+                plaintext,
                 "После engineInit после failed decrypt расшифрование должно работать");
     }
 }

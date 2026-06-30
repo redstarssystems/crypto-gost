@@ -2,27 +2,30 @@ package org.rssys.gost.tls13.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.pkix.cert.GostPkcs12Parser;
 
 /**
  * Fuzz-тесты для {@link GostPkcs12Parser} и {@link GostPkcs12Loader}.
  * <p>
- * PFX-парсер имеет собственный внутренний DER-парсер (parseConstructed, decodeLength,
- * checkTag, peekLength на строках 442-590) с нулевой защитой границ. В отличие от
- * DerCodec.decodeLength, внутренний decodeLength (строка 569) не проверяет
- * pos[0] >= data.length перед обращением к data[pos[0]].
+ * PFX-парсер делегирует DER-разбор в {@code DerCodec} (core):
+ * {@code checkTag}, {@code decodeLength}, {@code parseOid}, {@code parseInteger},
+ * {@code parseOctetString}, {@code parseSequenceContents}, {@code parseSetContents}.
+ * Собственного DER-парсера больше нет — внутренние методы {@code parseConstructed},
+ * {@code decodeLength}, {@code checkTag}, {@code peekLength} удалены (план 081).
  * <p>
- * ПОЧЕМУ ловим RuntimeException: внутренний парсер кидает AIOOBE/NPE на любом
- * битом PFX. IllegalArgumentException — ожидаемая реакция на неверный тег или
- * структуру. Если бы мы ловили только IllegalArgumentException, fuzzer бы
+ * ПОЧЕМУ ловим RuntimeException: DerCodec кидает IllegalArgumentException
+ * на неверный тег или длину. AIOOBE возможен, если позиция выходит за пределы
+ * массива до проверки тега. PkixException — ожидаемая реакция на битый PFX
+ * (fail-closed). Если бы мы ловили только IllegalArgumentException, fuzzer бы
  * спотыкался об AIOOBE.
  */
 class GostPkcs12FuzzTest {
 
     /**
      * parsePfx — главный entry point парсинга PFX.
-     * Внутри: parseSequence → parseConstructed → checkTag(data, pos, expectedTag)
-     * на строке 583 обращается к data[pos[0]] без проверки границ.
-     * Внутренний decodeLength (строка 569) — без проверки pos[0] >= data.length.
+     * Внутри: parseSequence -> DerCodec.parseSequenceContents -> checkTag.
+     * DerCodec.checkTag обращается к data[offset] без внешней проверки границ,
+     * но DerCodec сам проверяет offset &lt; data.length на входе.
      */
     @FuzzTest
     void fuzzParsePfx(FuzzedDataProvider data) {
@@ -37,7 +40,7 @@ class GostPkcs12FuzzTest {
 
     /**
      * parseSafeContents — разбирает SEQUENCE OF SafeBag.
-     * parseConstructed → checkTag → AIOOBE на пустом входе.
+     * parseSequence -> DerCodec.parseSequenceContents -> checkTag.
      */
     @FuzzTest
     void fuzzParseSafeContents(FuzzedDataProvider data) {
@@ -52,7 +55,7 @@ class GostPkcs12FuzzTest {
 
     /**
      * parseEncryptedPrivateKeyInfo — разбирает EncryptedPrivateKeyInfo.
-     * parseSequence → parseConstructed → AIOOBE на пустом входе.
+     * parseSequence -> DerCodec.parseSequenceContents -> checkTag.
      */
     @FuzzTest
     void fuzzParseEncryptedPrivateKeyInfo(FuzzedDataProvider data) {
@@ -68,7 +71,7 @@ class GostPkcs12FuzzTest {
     /**
      * parsePbes2Params — разбирает PBES2-params.
      * Парсит AlgorithmIdentifier, PBKDF2-params, encryptionScheme с OID и OCTET STRING.
-     * Много точек AIOOBE через внутренний decodeLength/checkTag.
+     * Использует DerCodec.parseOid, parseOctetString — проверка границ на входе.
      */
     @FuzzTest
     void fuzzParsePbes2Params(FuzzedDataProvider data) {
@@ -83,7 +86,7 @@ class GostPkcs12FuzzTest {
 
     /**
      * parseCertBag — разбирает CertBag и возвращает DER-сертификат.
-     * parseSequence → unwrapContextSpecific → decodeLength → AIOOBE.
+     * parseSequence -> unwrapContextSpecific -> decodeLength.
      */
     @FuzzTest
     void fuzzParseCertBag(FuzzedDataProvider data) {

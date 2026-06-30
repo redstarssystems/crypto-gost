@@ -1,29 +1,26 @@
 package org.rssys.gost.jsse.engine;
-import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.lang.System.Logger;
 import java.security.Security;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.ResourceBundle;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.GostCertificate;
 
 class GostSSLEngineLoggerTest {
 
-    private static TlsCertificate serverCert;
-    private static TlsCertificate rootCa;
+    private static GostCertificate serverCert;
+    private static GostCertificate rootCa;
     private static GostX509KeyManager serverKeyManager;
 
     private TestLogger testLogger;
@@ -48,15 +45,20 @@ class GostSSLEngineLoggerTest {
     @Test
     @DisplayName("Лог: handshake start DEBUG при beginHandshake")
     void testHandshakeStartLogged() throws Exception {
-        GostSSLEngine clientEngine = new GostSSLEngine(
-                new GostX509KeyManager(), new GostX509TrustManager(null, false),
-                "example.com", 443, true);
+        GostSSLEngine clientEngine =
+                new GostSSLEngine(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "example.com",
+                        443,
+                        true);
 
         clientEngine.beginHandshake();
 
-        assertTrue(testLogger.containsLevel(Logger.Level.DEBUG),
-                "Должен быть хотя бы один DEBUG лог");
-        assertTrue(testLogger.containsMessage("Handshake started"),
+        assertTrue(
+                testLogger.containsLevel(Logger.Level.DEBUG), "Должен быть хотя бы один DEBUG лог");
+        assertTrue(
+                testLogger.containsMessage("Handshake started"),
                 "Должен содержать 'Handshake started' в любом сообщении");
     }
 
@@ -66,10 +68,14 @@ class GostSSLEngineLoggerTest {
         record LogEntry(Level level, String message) {}
 
         @Override
-        public String getName() { return "test"; }
+        public String getName() {
+            return "test";
+        }
 
         @Override
-        public boolean isLoggable(Level level) { return true; }
+        public boolean isLoggable(Level level) {
+            return true;
+        }
 
         @Override
         public void log(Level level, ResourceBundle bundle, String msg, Throwable thrown) {
@@ -86,7 +92,8 @@ class GostSSLEngineLoggerTest {
         }
 
         boolean containsMessage(String fragment) {
-            return entries.stream().anyMatch(e -> e.message() != null && e.message().contains(fragment));
+            return entries.stream()
+                    .anyMatch(e -> e.message() != null && e.message().contains(fragment));
         }
     }
 }

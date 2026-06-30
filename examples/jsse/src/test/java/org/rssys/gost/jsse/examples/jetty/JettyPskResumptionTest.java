@@ -1,5 +1,12 @@
 package org.rssys.gost.jsse.examples.jetty;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.Security;
 import org.eclipse.jetty.io.Content;
 import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConfiguration;
@@ -16,26 +23,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.examples.JsseCertHelper;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.socket.GostSSLSocket;
 import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.jsse.GostJsseConstants;
-
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.TrustManager;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
-import java.security.Security;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Тест PSK resumption через Jetty 12.
@@ -74,32 +68,38 @@ class JettyPskResumptionTest {
         scf.setIncludeProtocols(GostJsseConstants.PROTOCOL_TLS_1_3);
 
         server = new Server();
-        ServerConnector connector = new ServerConnector(server,
-                new SslConnectionFactory(scf, "http/1.1"),
-                new HttpConnectionFactory(new HttpConfiguration()));
+        ServerConnector connector =
+                new ServerConnector(
+                        server,
+                        new SslConnectionFactory(scf, "http/1.1"),
+                        new HttpConnectionFactory(new HttpConfiguration()));
         connector.setPort(0);
         server.addConnector(connector);
 
-        server.setHandler(new Handler.Abstract() {
-            @Override
-            public boolean handle(Request request, Response response, Callback callback) {
-                try {
-                    String body = Content.Source.asString(request, StandardCharsets.UTF_8).trim();
-                    if ("PING".equals(body)) {
-                        response.setStatus(200);
-                        response.getHeaders().put(
-                                org.eclipse.jetty.http.HttpHeader.CONTENT_TYPE, "text/plain");
-                        Content.Sink.write(response, true, "PONG\n", callback);
-                    } else {
-                        callback.succeeded();
+        server.setHandler(
+                new Handler.Abstract() {
+                    @Override
+                    public boolean handle(Request request, Response response, Callback callback) {
+                        try {
+                            String body =
+                                    Content.Source.asString(request, StandardCharsets.UTF_8).trim();
+                            if ("PING".equals(body)) {
+                                response.setStatus(200);
+                                response.getHeaders()
+                                        .put(
+                                                org.eclipse.jetty.http.HttpHeader.CONTENT_TYPE,
+                                                "text/plain");
+                                Content.Sink.write(response, true, "PONG\n", callback);
+                            } else {
+                                callback.succeeded();
+                            }
+                            return true;
+                        } catch (Exception e) {
+                            callback.failed(e);
+                            return true;
+                        }
                     }
-                    return true;
-                } catch (Exception e) {
-                    callback.failed(e);
-                    return true;
-                }
-            }
-        });
+                });
 
         server.start();
         port = connector.getLocalPort();
@@ -128,7 +128,8 @@ class JettyPskResumptionTest {
 
         // После первого соединения Jetty отправляет NST.
         // Проверяем что PSK действительно сохранён в нашем session context.
-        assertTrue(clientSessionCtx.getPskStore().size() > 0,
+        assertTrue(
+                clientSessionCtx.getPskStore().size() > 0,
                 "PSK должен быть сохранён после первого TLS-соединения");
     }
 
@@ -149,7 +150,8 @@ class JettyPskResumptionTest {
 
         // Проверяем что PSK-тикет не был удалён после второго соединения
         // (если размер 0 — что-то сбросило PSK между соединениями)
-        assertTrue(clientSessionCtx.getPskStore().size() > 0,
+        assertTrue(
+                clientSessionCtx.getPskStore().size() > 0,
                 "PSK должен оставаться в хранилище после второго соединения");
     }
 
@@ -163,24 +165,28 @@ class JettyPskResumptionTest {
      * какой session context будет использован.
      */
     private String doHttpPingPong() throws Exception {
-        GostSSLSocket socket = new GostSSLSocket("localhost", port,
-                clientKm, clientTm, clientSessionCtx);
+        GostSSLSocket socket =
+                new GostSSLSocket("localhost", port, clientKm, clientTm, clientSessionCtx);
 
         socket.setSoTimeout(TIMEOUT_MS);
         try {
             OutputStream out = socket.getOutputStream();
-            byte[] req = ("POST /echo HTTP/1.1\r\n"
-                    + "Host: localhost\r\n"
-                    + "Content-Type: text/plain\r\n"
-                    + "Content-Length: 4\r\n"
-                    + "Connection: close\r\n"
-                    + "\r\n"
-                    + "PING").getBytes(StandardCharsets.US_ASCII);
+            byte[] req =
+                    ("POST /echo HTTP/1.1\r\n"
+                                    + "Host: localhost\r\n"
+                                    + "Content-Type: text/plain\r\n"
+                                    + "Content-Length: 4\r\n"
+                                    + "Connection: close\r\n"
+                                    + "\r\n"
+                                    + "PING")
+                            .getBytes(StandardCharsets.US_ASCII);
             out.write(req);
             out.flush();
 
-            BufferedReader in = new BufferedReader(
-                    new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+            BufferedReader in =
+                    new BufferedReader(
+                            new InputStreamReader(
+                                    socket.getInputStream(), StandardCharsets.US_ASCII));
             String line;
             boolean body = false;
             while ((line = in.readLine()) != null) {

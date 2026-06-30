@@ -1,15 +1,5 @@
 package org.rssys.gost.tls13.examples;
 
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsSession;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.cert.GostPkcs12Loader;
-import org.rssys.gost.tls13.cert.Pkcs12Loader;
-import org.rssys.gost.tls13.cert.TlsCertificate;
-import org.rssys.gost.tls13.config.TlsServerConfig;
-import org.rssys.gost.tls13.transport.SocketTlsTransport;
-
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -17,9 +7,16 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsCiphersuite;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsSession;
+import org.rssys.gost.tls13.config.TlsServerConfig;
+import org.rssys.gost.tls13.transport.SocketTlsTransport;
 
 /**
  * Прокси-сервер для ГОСТ TLS termination.
@@ -42,7 +39,8 @@ public final class TlsHttpProxy {
         int port = 4443;
         String p12Path = null;
         String password = "test";
-        TlsCiphersuite suite = TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        TlsCiphersuite suite =
+                TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         String backendHost = "localhost";
         int backendPort = 8080;
         boolean mtls = false;
@@ -60,18 +58,25 @@ public final class TlsHttpProxy {
                 case "--password":
                     password = args[++i];
                     break;
-                case "--cipher": {
-                    String name = args[++i].toUpperCase();
-                    if (name.equals("L")) {
-                        suite = TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-                    } else if (name.equals("S")) {
-                        suite = TlsCiphersuite.byId(TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-                    } else {
-                        System.err.println("Unknown cipher: " + name + " (use L or S)");
-                        System.exit(1);
+                case "--cipher":
+                    {
+                        String name = args[++i].toUpperCase();
+                        if (name.equals("L")) {
+                            suite =
+                                    TlsCiphersuite.byId(
+                                            TlsConstants
+                                                    .TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+                        } else if (name.equals("S")) {
+                            suite =
+                                    TlsCiphersuite.byId(
+                                            TlsConstants
+                                                    .TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
+                        } else {
+                            System.err.println("Unknown cipher: " + name + " (use L or S)");
+                            System.exit(1);
+                        }
+                        break;
                     }
-                    break;
-                }
                 case "--backend":
                     backendHost = args[++i];
                     backendPort = Integer.parseInt(args[++i]);
@@ -81,8 +86,10 @@ public final class TlsHttpProxy {
                     break;
                 case "--ca":
                     caPath = args[++i];
-                    caPassword = i + 1 < args.length && !args[i + 1].startsWith("--")
-                            ? args[++i] : "test";
+                    caPassword =
+                            i + 1 < args.length && !args[i + 1].startsWith("--")
+                                    ? args[++i]
+                                    : "test";
                     break;
                 default:
                     System.err.println("Unknown flag: " + args[i]);
@@ -91,28 +98,32 @@ public final class TlsHttpProxy {
         }
 
         if (p12Path == null) {
-            System.err.println("Usage: TlsHttpProxy --cert <p12> [--port <port>] [--password <pwd>]"
-                    + " [--cipher L|S] --backend <host> <port>"
-                    + " [--mtls] [--ca <p12> <password>]");
+            System.err.println(
+                    "Usage: TlsHttpProxy --cert <p12> [--port <port>] [--password <pwd>]"
+                            + " [--cipher L|S] --backend <host> <port>"
+                            + " [--mtls] [--ca <p12> <password>]");
             System.exit(1);
         }
 
         GostPkcs12Loader.Result p12;
         try (FileInputStream fis = new FileInputStream(p12Path)) {
-            p12 = Pkcs12Loader.load(fis.readAllBytes(), password.toCharArray());
+            p12 = GostPkcs12Loader.load(fis.readAllBytes(), password.toCharArray(), true);
         }
 
-        List<TlsCertificate> chain = p12.getCertificateChain();
+        List<GostCertificate> chain = p12.getCertificateChain();
         PrivateKeyParameters privKey = p12.getPrivateKey();
         TlsServerConfig config = new TlsServerConfig(suite, chain, privKey);
 
         if (mtls && caPath != null) {
             try (FileInputStream fis = new FileInputStream(caPath)) {
-                GostPkcs12Loader.Result caP12 = Pkcs12Loader.load(fis.readAllBytes(), caPassword.toCharArray());
-                config.withCaPublicKey(caP12.getCertificateChain().stream()
-                    .filter(TlsCertificate::isCA)
-                    .findFirst().orElseThrow()
-                    .getPublicKey());
+                GostPkcs12Loader.Result caP12 =
+                        GostPkcs12Loader.load(fis.readAllBytes(), caPassword.toCharArray(), true);
+                config.withCaPublicKey(
+                        caP12.getCertificateChain().stream()
+                                .filter(GostCertificate::isCA)
+                                .findFirst()
+                                .orElseThrow()
+                                .getPublicKey());
             }
         }
 
@@ -122,7 +133,8 @@ public final class TlsHttpProxy {
 
         try (ServerSocket ss = new ServerSocket(port)) {
             System.out.println("=== GOST TLS HTTP Proxy ===");
-            System.out.println("TLS port: " + port + " (0x" + Integer.toHexString(suite.getId()) + ")");
+            System.out.println(
+                    "TLS port: " + port + " (0x" + Integer.toHexString(suite.getId()) + ")");
             System.out.println("Backend: " + backendHost + ":" + backendPort);
             System.out.println("mTLS: " + mtls);
             System.out.println("Waiting for connections...");
@@ -131,34 +143,40 @@ public final class TlsHttpProxy {
             while (true) {
                 Socket s = ss.accept();
                 final Socket socket = s;
-                new Thread(() -> {
-                    try {
-                        handleConnection(socket, cfg, fHost, fPort);
-                    } catch (Exception e) {
-                        System.err.println("Connection error: " + e.getMessage());
-                        try { socket.close(); } catch (IOException ignored) {}
-                    }
-                }).start();
+                new Thread(
+                                () -> {
+                                    try {
+                                        handleConnection(socket, cfg, fHost, fPort);
+                                    } catch (Exception e) {
+                                        System.err.println("Connection error: " + e.getMessage());
+                                        try {
+                                            socket.close();
+                                        } catch (IOException ignored) {
+                                        }
+                                    }
+                                })
+                        .start();
             }
         }
     }
 
     private static void handleConnection(
-            Socket socket,
-            TlsServerConfig config,
-            String backendHost,
-            int backendPort) throws Exception {
+            Socket socket, TlsServerConfig config, String backendHost, int backendPort)
+            throws Exception {
 
         socket.setTcpNoDelay(true);
         socket.setSoTimeout(30_000); // таймаут на Keep-Alive простой
 
         try (SocketTlsTransport transport = new SocketTlsTransport(socket);
-             TlsSession server = TlsSession.createServer(config, transport)) {
+                TlsSession server = TlsSession.createServer(config, transport)) {
 
             server.handshakeAsServer();
-            System.out.println("Handshake done: "
-                    + ", peer=" + (server.getPeerCertificates() != null
-                    ? server.getPeerCertificates().size() + " certs" : "none"));
+            System.out.println(
+                    "Handshake done: "
+                            + ", peer="
+                            + (server.getPeerCertificates() != null
+                                    ? server.getPeerCertificates().size() + " certs"
+                                    : "none"));
 
             // Keep-Alive цикл: читаем запросы пока клиент шлёт
             while (true) {
@@ -188,9 +206,10 @@ public final class TlsHttpProxy {
                     System.out.println("Response: " + resp.length + " bytes proxied");
                 } catch (Exception e) {
                     System.err.println("Backend error: " + e.getMessage());
-                    String errResp = "HTTP/1.1 502 Bad Gateway\r\n"
-                            + "Content-Length: 0\r\n"
-                            + "Connection: close\r\n\r\n";
+                    String errResp =
+                            "HTTP/1.1 502 Bad Gateway\r\n"
+                                    + "Content-Length: 0\r\n"
+                                    + "Connection: close\r\n\r\n";
                     server.write(errResp.getBytes(StandardCharsets.UTF_8));
                 }
 

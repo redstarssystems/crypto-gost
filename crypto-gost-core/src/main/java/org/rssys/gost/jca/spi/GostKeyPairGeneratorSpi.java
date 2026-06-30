@@ -1,18 +1,17 @@
 package org.rssys.gost.jca.spi;
 
+import java.security.InvalidAlgorithmParameterException;
+import java.security.KeyPair;
+import java.security.KeyPairGeneratorSpi;
+import java.security.SecureRandom;
+import java.security.spec.AlgorithmParameterSpec;
+import java.security.spec.ECGenParameterSpec;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jca.key.GostECPublicKey;
 import org.rssys.gost.jca.spec.GostCurves;
 import org.rssys.gost.signature.ECParameters;
-
-import java.security.InvalidAlgorithmParameterException;
-import java.security.KeyPair;
-import java.security.KeyPairGeneratorSpi;
-import java.security.SecureRandom;
 import org.rssys.gost.util.CryptoRandom;
-import java.security.spec.AlgorithmParameterSpec;
-import java.security.spec.ECGenParameterSpec;
 
 /**
  * Реализация {@link KeyPairGeneratorSpi} для генерации ключевых пар
@@ -61,18 +60,20 @@ public final class GostKeyPairGeneratorSpi extends KeyPairGeneratorSpi {
             throws InvalidAlgorithmParameterException {
         if (!(params instanceof ECGenParameterSpec)) {
             throw new InvalidAlgorithmParameterException(
-                "Expected ECGenParameterSpec, got: "
-                + (params == null ? "null" : params.getClass().getName()));
+                    "Expected ECGenParameterSpec, got: "
+                            + (params == null ? "null" : params.getClass().getName()));
         }
         String curveName = ((ECGenParameterSpec) params).getName();
         try {
             this.curveParams = GostCurves.byName(curveName);
         } catch (IllegalArgumentException e) {
             throw new InvalidAlgorithmParameterException(
-                "Unknown GOST curve: " + curveName
-                + ". Supported: tc26-gost-A-256, tc26-gost-A-512, tc26-gost-B-512, "
-                + "tc26-gost-C-512, cryptopro-A, cryptopro-B, cryptopro-C "
-                + "(or corresponding OIDs)", e);
+                    "Unknown GOST curve: "
+                            + curveName
+                            + ". Supported: tc26-gost-A-256, tc26-gost-A-512, tc26-gost-B-512, "
+                            + "tc26-gost-C-512, cryptopro-A, cryptopro-B, cryptopro-C "
+                            + "(or corresponding OIDs)",
+                    e);
         }
         this.random = (random != null) ? random : CryptoRandom.INSTANCE;
     }
@@ -80,7 +81,7 @@ public final class GostKeyPairGeneratorSpi extends KeyPairGeneratorSpi {
     /**
      * Инициализирует генератор с размером ключа в битах.
      * <p>
-     * Для совместимости: 256 бит → {@code "cryptopro-A"}, 512 бит → {@code "tc26-gost-A-512"}.
+     * Для совместимости: 256 бит -> {@code "cryptopro-A"}, 512 бит -> {@code "tc26-gost-A-512"}.
      * Для выбора конкретной кривой используйте {@link #initialize(AlgorithmParameterSpec, SecureRandom)}.
      *
      * @param keysize 256 или 512
@@ -95,7 +96,7 @@ public final class GostKeyPairGeneratorSpi extends KeyPairGeneratorSpi {
             this.curveParams = ECParameters.tc26a512();
         } else {
             throw new java.security.InvalidParameterException(
-                "ECGOST3410-2012 supports key sizes 256 and 512, got " + keysize);
+                    "ECGOST3410-2012 supports key sizes 256 and 512, got " + keysize);
         }
         this.random = (random != null) ? random : CryptoRandom.INSTANCE;
     }
@@ -109,8 +110,7 @@ public final class GostKeyPairGeneratorSpi extends KeyPairGeneratorSpi {
     public KeyPair generateKeyPair() {
         org.rssys.gost.api.KeyPair gostPair = KeyGenerator.generateKeyPair(curveParams, random);
         return new KeyPair(
-            new GostECPublicKey(gostPair.getPublic()),
-            new GostECPrivateKey(gostPair.getPrivate())
-        );
+                new GostECPublicKey(gostPair.getPublic()),
+                new GostECPrivateKey(gostPair.getPrivate()));
     }
 }

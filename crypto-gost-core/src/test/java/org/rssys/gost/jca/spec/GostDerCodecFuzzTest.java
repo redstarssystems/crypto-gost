@@ -38,8 +38,8 @@ class GostDerCodecFuzzTest {
 
     /**
      * Декодирует закрытый ключ из произвольных DER-байт PrivateKeyInfo.
-     * Вызывает тот же стек: {@code DerCodec.parseSequenceContents} →
-     * {@code DerCodec.parseOid} → {@code DerCodec.parseOctetString}.
+     * Вызывает тот же стек: {@code DerCodec.parseSequenceContents} ->
+     * {@code DerCodec.parseOid} -> {@code DerCodec.parseOctetString}.
      */
     @FuzzTest
     void fuzzDecodePrivateKey(FuzzedDataProvider data) {

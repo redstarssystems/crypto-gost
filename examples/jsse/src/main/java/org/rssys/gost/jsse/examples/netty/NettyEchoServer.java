@@ -1,11 +1,5 @@
 package org.rssys.gost.jsse.examples.netty;
 
-import org.rssys.gost.jsse.examples.ExamplesCertHelper;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.netty.GostSslContext;
-import org.rssys.gost.netty.GostSslContextBuilder;
-
 import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
@@ -20,14 +14,17 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.ssl.SslHandler;
 import io.netty.util.CharsetUtil;
 import io.netty.util.ReferenceCountUtil;
-
 import java.net.InetSocketAddress;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.netty.GostSslContext;
+import org.rssys.gost.netty.GostSslContextBuilder;
 
 /**
  * Демонстрация интеграции crypto-gost-jsse с Netty.
@@ -46,13 +43,9 @@ public final class NettyEchoServer {
         GostX509TrustManager tm = helper.createTrustManager();
 
         // GostSslContextBuilder.build() сам регистрирует RssysGostJsseProvider
-        GostSslContext serverCtx = GostSslContextBuilder.forServer(km)
-                .trustManager(tm)
-                .build();
+        GostSslContext serverCtx = GostSslContextBuilder.forServer(km).trustManager(tm).build();
 
-        GostSslContext clientCtx = GostSslContextBuilder.forClient()
-                .trustManager(tm)
-                .build();
+        GostSslContext clientCtx = GostSslContextBuilder.forClient().trustManager(tm).build();
 
         // Boss = 1 thread (accept), worker = сколько даст NioEventLoopGroup
         // Клиент — отдельная группа, чтобы не конкурировать с worker'ами сервера
@@ -67,15 +60,17 @@ public final class NettyEchoServer {
             ServerBootstrap sb = new ServerBootstrap();
             sb.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
-                    .childHandler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        protected void initChannel(SocketChannel ch) {
-                            // SslHandler — первый в pipeline, ниже — бизнес-логика
-                            ch.pipeline().addLast(
-                                    serverCtx.newHandler(ch.alloc()),
-                                    new ServerEchoHandler());
-                        }
-                    });
+                    .childHandler(
+                            new ChannelInitializer<SocketChannel>() {
+                                @Override
+                                protected void initChannel(SocketChannel ch) {
+                                    // SslHandler — первый в pipeline, ниже — бизнес-логика
+                                    ch.pipeline()
+                                            .addLast(
+                                                    serverCtx.newHandler(ch.alloc()),
+                                                    new ServerEchoHandler());
+                                }
+                            });
 
             // bind(0) — эфемерный порт: netty выделит свободный
             ChannelFuture bindFuture = sb.bind(0).sync();
@@ -90,14 +85,18 @@ public final class NettyEchoServer {
             cl.group(clientGroup)
                     .channel(NioSocketChannel.class)
                     .option(io.netty.channel.ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000)
-                    .handler(new ChannelInitializer<SocketChannel>() {
-                        @Override
-                        protected void initChannel(SocketChannel ch) {
-                            ch.pipeline().addLast(
-                                    clientCtx.newHandler(ch.alloc(), "localhost", port),
-                                    new ClientEchoHandler(clientDone, clientResult));
-                        }
-                    });
+                    .handler(
+                            new ChannelInitializer<SocketChannel>() {
+                                @Override
+                                protected void initChannel(SocketChannel ch) {
+                                    ch.pipeline()
+                                            .addLast(
+                                                    clientCtx.newHandler(
+                                                            ch.alloc(), "localhost", port),
+                                                    new ClientEchoHandler(
+                                                            clientDone, clientResult));
+                                }
+                            });
 
             cl.connect("localhost", port).sync();
 

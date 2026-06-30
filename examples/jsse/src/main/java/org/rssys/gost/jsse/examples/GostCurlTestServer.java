@@ -3,10 +3,8 @@ package org.rssys.gost.jsse.examples;
 import io.undertow.Undertow;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
-
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
@@ -37,10 +35,11 @@ public final class GostCurlTestServer {
         Files.writeString(caPath, caPem);
         caPath.toFile().deleteOnExit();
 
-        Undertow server = Undertow.builder()
-                .addHttpsListener(0, "0.0.0.0", helper.getSslContext())
-                .setHandler(GostCurlTestServer::handleRequest)
-                .build();
+        Undertow server =
+                Undertow.builder()
+                        .addHttpsListener(0, "0.0.0.0", helper.getSslContext())
+                        .setHandler(GostCurlTestServer::handleRequest)
+                        .build();
 
         server.start();
 
@@ -50,10 +49,14 @@ public final class GostCurlTestServer {
         System.out.println("CA cert: " + caPath.toAbsolutePath());
         System.out.println();
         System.out.println("Проверка:");
-        System.out.println("  java -jar gost-curl.jar --ca " + caPath.toAbsolutePath()
-                + " https://localhost:" + port + " -d \"Привет ГОСТ\"");
-        System.out.println("  java -jar gost-curl.jar -k https://localhost:" + port
-                + " -d \"Привет\" -v");
+        System.out.println(
+                "  java -jar gost-curl.jar --ca "
+                        + caPath.toAbsolutePath()
+                        + " https://localhost:"
+                        + port
+                        + " -d \"Привет ГОСТ\"");
+        System.out.println(
+                "  java -jar gost-curl.jar -k https://localhost:" + port + " -d \"Привет\" -v");
         System.out.println();
         System.out.println("Нажмите Ctrl+C для остановки.");
 
@@ -63,17 +66,20 @@ public final class GostCurlTestServer {
 
     /**
      * Эхо-обработчик: возвращает тело запроса как тело ответа.
-     * Позволяет проверить полный цикл: HTTP-запрос → TLS → ГОСТ-расшифровка → HTTP-ответ → TLS → ГОСТ-зашифровка.
+     * Позволяет проверить полный цикл: HTTP-запрос -> TLS -> ГОСТ-расшифровка -> HTTP-ответ -> TLS -> ГОСТ-зашифровка.
      */
     private static void handleRequest(HttpServerExchange exchange) {
-        exchange.getRequestReceiver().receiveFullBytes((ex, bytes) -> {
-            ex.getResponseHeaders().put(Headers.CONTENT_TYPE, "text/plain; charset=utf-8");
-            ex.setStatusCode(200);
-            ex.getResponseSender().send(ByteBuffer.wrap(bytes));
-        });
+        exchange.getRequestReceiver()
+                .receiveFullBytes(
+                        (ex, bytes) -> {
+                            ex.getResponseHeaders()
+                                    .put(Headers.CONTENT_TYPE, "text/plain; charset=utf-8");
+                            ex.setStatusCode(200);
+                            ex.getResponseSender().send(ByteBuffer.wrap(bytes));
+                        });
     }
 
-    /** DER → PEM с разбивкой Base64 по 64 символа. */
+    /** DER -> PEM с разбивкой Base64 по 64 символа. */
     private static String toPem(byte[] der, String label) {
         String b64 = Base64.getEncoder().encodeToString(der);
         StringBuilder sb = new StringBuilder();

@@ -1,24 +1,22 @@
 package org.rssys.gost.api;
 
-import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.cipher.Kuznyechik;
-import org.rssys.gost.cipher.ParametersWithIV;
-import org.rssys.gost.cipher.StreamCipher;
-import org.rssys.gost.cipher.mode.Cbc;
-import org.rssys.gost.cipher.mode.Cfb;
-import org.rssys.gost.cipher.mode.Ctr;
-import org.rssys.gost.cipher.mode.Ofb;
-import org.rssys.gost.util.ISO7816d4Padding;
-import org.rssys.gost.util.Pkcs7Padding;
-
 import java.io.FilterInputStream;
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.security.SecureRandom;
 import java.util.Arrays;
+import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.cipher.StreamCipher;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.cipher.mode.Cbc;
+import org.rssys.gost.cipher.mode.Cfb;
+import org.rssys.gost.cipher.mode.Ctr;
+import org.rssys.gost.cipher.mode.Ofb;
 import org.rssys.gost.util.CryptoRandom;
+import org.rssys.gost.util.ISO7816d4Padding;
+import org.rssys.gost.util.Pkcs7Padding;
 
 /**
  * API для симметричного шифрования по ГОСТ Р 34.12/34.13-2015.
@@ -69,7 +67,6 @@ public final class Cipher {
     public static final int KEY_SIZE = 32;
 
     private Cipher() {}
-
 
     public enum Mode {
         /** Режим гаммирования (CTR/GCTR). IV = 8 байт. Не требует padding. */
@@ -139,8 +136,8 @@ public final class Cipher {
     /**
      * Шифрует данные с явным IV и указанной схемой padding.
      */
-    public static byte[] encrypt(byte[] data, SymmetricKey key, byte[] iv, Mode mode,
-                                 Padding padding) {
+    public static byte[] encrypt(
+            byte[] data, SymmetricKey key, byte[] iv, Mode mode, Padding padding) {
         return encryptWithIV(data, key, iv, mode, padding);
     }
 
@@ -161,9 +158,9 @@ public final class Cipher {
         int ivLen = ivLength(mode);
         if (data.length < ivLen) {
             throw new IllegalArgumentException(
-                "data too short: expected at least " + ivLen + " bytes for IV");
+                    "data too short: expected at least " + ivLen + " bytes for IV");
         }
-        byte[] iv         = Arrays.copyOfRange(data, 0, ivLen);
+        byte[] iv = Arrays.copyOfRange(data, 0, ivLen);
         byte[] ciphertext = Arrays.copyOfRange(data, ivLen, data.length);
         return decryptWithIV(ciphertext, key, iv, mode, padding);
     }
@@ -179,8 +176,8 @@ public final class Cipher {
     /**
      * Расшифровывает данные с явным IV и указанной схемой padding.
      */
-    public static byte[] decrypt(byte[] ciphertext, SymmetricKey key, byte[] iv, Mode mode,
-                                 Padding padding) {
+    public static byte[] decrypt(
+            byte[] ciphertext, SymmetricKey key, byte[] iv, Mode mode, Padding padding) {
         return decryptWithIV(ciphertext, key, iv, mode, padding);
     }
 
@@ -201,9 +198,9 @@ public final class Cipher {
      * @throws IOException если не удалось записать IV в {@code out}
      */
     public static OutputStream encryptingStream(OutputStream out, SymmetricKey key, Mode mode)
-        throws IOException {
+            throws IOException {
         byte[] iv = generateIV(mode);
-        out.write(iv);          // записываем IV первым
+        out.write(iv); // записываем IV первым
         return buildEncryptingStream(out, key, iv, mode);
     }
 
@@ -211,8 +208,8 @@ public final class Cipher {
      * Создаёт шифрующий выходной поток вывода с явным указанием IV.
      * IV в поток не записывается — управление на стороне вызывающего.
      */
-    public static OutputStream encryptingStream(OutputStream out, SymmetricKey key,
-                                                byte[] iv, Mode mode) throws IOException {
+    public static OutputStream encryptingStream(
+            OutputStream out, SymmetricKey key, byte[] iv, Mode mode) throws IOException {
         return buildEncryptingStream(out, key, iv, mode);
     }
 
@@ -228,7 +225,7 @@ public final class Cipher {
      * @throws IOException если не удалось прочитать IV из {@code in}
      */
     public static InputStream decryptingStream(InputStream in, SymmetricKey key, Mode mode)
-        throws IOException {
+            throws IOException {
         // Читаем IV из потока
         int ivLen = ivLength(mode);
         byte[] iv = new byte[ivLen];
@@ -245,8 +242,8 @@ public final class Cipher {
      * Создаёт расшифровывающий поток ввода с явным указанием IV.
      * IV из потока не читается.
      */
-    public static InputStream decryptingStream(InputStream in, SymmetricKey key,
-                                               byte[] iv, Mode mode) throws IOException {
+    public static InputStream decryptingStream(
+            InputStream in, SymmetricKey key, byte[] iv, Mode mode) throws IOException {
         return buildDecryptingStream(in, key, iv, mode);
     }
 
@@ -275,20 +272,23 @@ public final class Cipher {
         switch (padding) {
             case PKCS7:
                 return Pkcs7Padding.addPadding(data, BLOCK_SIZE);
-            case ISO7816_4: {
-                // Вычисляем необходимый padding до следующего кратного blockSize
-                int padLen = BLOCK_SIZE - (data.length % BLOCK_SIZE);
-                byte[] padded = new byte[data.length + padLen];
-                System.arraycopy(data, 0, padded, 0, data.length);
-                // addPadding записывает 0x80 на позицию data.length и заполняет нулями до конца
-                ISO7816d4Padding.addPadding(padded, data.length);
-                return padded;
-            }
+            case ISO7816_4:
+                {
+                    // Вычисляем необходимый padding до следующего кратного blockSize
+                    int padLen = BLOCK_SIZE - (data.length % BLOCK_SIZE);
+                    byte[] padded = new byte[data.length + padLen];
+                    System.arraycopy(data, 0, padded, 0, data.length);
+                    // addPadding записывает 0x80 на позицию data.length и заполняет нулями до конца
+                    ISO7816d4Padding.addPadding(padded, data.length);
+                    return padded;
+                }
             case NONE:
                 if (data.length % BLOCK_SIZE != 0) {
                     throw new IllegalArgumentException(
-                        "CBC/NONE requires data length to be a multiple of " + BLOCK_SIZE +
-                        ", got " + data.length);
+                            "CBC/NONE requires data length to be a multiple of "
+                                    + BLOCK_SIZE
+                                    + ", got "
+                                    + data.length);
                 }
                 return data;
             default:
@@ -302,14 +302,15 @@ public final class Cipher {
         switch (padding) {
             case PKCS7:
                 return Pkcs7Padding.removePadding(data, BLOCK_SIZE);
-            case ISO7816_4: {
-                try {
-                    int padCount = ISO7816d4Padding.padCount(data);
-                    return Arrays.copyOf(data, data.length - padCount);
-                } catch (Exception e) {
-                    throw new IllegalArgumentException("Invalid ISO 7816-4 padding", e);
+            case ISO7816_4:
+                {
+                    try {
+                        int padCount = ISO7816d4Padding.padCount(data);
+                        return Arrays.copyOf(data, data.length - padCount);
+                    } catch (Exception e) {
+                        throw new IllegalArgumentException("Invalid ISO 7816-4 padding", e);
+                    }
                 }
-            }
             case NONE:
                 return data;
             default:
@@ -318,86 +319,94 @@ public final class Cipher {
     }
 
     /** Шифрует данные с явным IV. */
-    private static byte[] encryptWithIV(byte[] data, SymmetricKey key, byte[] iv,
-                                        Mode mode, Padding padding) {
+    private static byte[] encryptWithIV(
+            byte[] data, SymmetricKey key, byte[] iv, Mode mode, Padding padding) {
         byte[] input = applyPadding(data, mode, padding);
 
         switch (mode) {
-            case CTR: {
-                Ctr ctr = new Ctr(new Kuznyechik());
-                ctr.init(true, new ParametersWithIV(key, iv));
-                byte[] out = new byte[input.length];
-                ctr.processBytes(input, 0, input.length, out, 0);
-                return out;
-            }
-            case CFB: {
-                Cfb cfb = new Cfb(new Kuznyechik());
-                cfb.init(true, new ParametersWithIV(key, iv));
-                byte[] out = new byte[input.length];
-                cfb.processBytes(input, 0, input.length, out, 0);
-                return out;
-            }
-            case OFB: {
-                Ofb ofb = new Ofb(new Kuznyechik());
-                ofb.init(true, new ParametersWithIV(key, iv));
-                byte[] out = new byte[input.length];
-                ofb.processBytes(input, 0, input.length, out, 0);
-                return out;
-            }
-            case CBC: {
-                // CBC — блочный режим, обрабатываем поблочно
-                Cbc cbc = new Cbc(new Kuznyechik());
-                cbc.init(true, new ParametersWithIV(key, iv));
-                byte[] out = new byte[input.length];
-                for (int offset = 0; offset < input.length; offset += BLOCK_SIZE) {
-                    cbc.processBlock(input, offset, out, offset);
+            case CTR:
+                {
+                    Ctr ctr = new Ctr(new Kuznyechik());
+                    ctr.init(true, new ParametersWithIV(key, iv));
+                    byte[] out = new byte[input.length];
+                    ctr.processBytes(input, 0, input.length, out, 0);
+                    return out;
                 }
-                return out;
-            }
+            case CFB:
+                {
+                    Cfb cfb = new Cfb(new Kuznyechik());
+                    cfb.init(true, new ParametersWithIV(key, iv));
+                    byte[] out = new byte[input.length];
+                    cfb.processBytes(input, 0, input.length, out, 0);
+                    return out;
+                }
+            case OFB:
+                {
+                    Ofb ofb = new Ofb(new Kuznyechik());
+                    ofb.init(true, new ParametersWithIV(key, iv));
+                    byte[] out = new byte[input.length];
+                    ofb.processBytes(input, 0, input.length, out, 0);
+                    return out;
+                }
+            case CBC:
+                {
+                    // CBC — блочный режим, обрабатываем поблочно
+                    Cbc cbc = new Cbc(new Kuznyechik());
+                    cbc.init(true, new ParametersWithIV(key, iv));
+                    byte[] out = new byte[input.length];
+                    for (int offset = 0; offset < input.length; offset += BLOCK_SIZE) {
+                        cbc.processBlock(input, offset, out, offset);
+                    }
+                    return out;
+                }
             default:
                 throw new IllegalArgumentException("Unknown mode: " + mode);
         }
     }
 
     /** Расшифровывает данные с явным IV. */
-    private static byte[] decryptWithIV(byte[] ciphertext, SymmetricKey key, byte[] iv,
-                                        Mode mode, Padding padding) {
+    private static byte[] decryptWithIV(
+            byte[] ciphertext, SymmetricKey key, byte[] iv, Mode mode, Padding padding) {
         byte[] raw;
         switch (mode) {
-            case CTR: {
-                Ctr ctr = new Ctr(new Kuznyechik());
-                ctr.init(false, new ParametersWithIV(key, iv));
-                raw = new byte[ciphertext.length];
-                ctr.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
-                break;
-            }
-            case CFB: {
-                Cfb cfb = new Cfb(new Kuznyechik());
-                cfb.init(false, new ParametersWithIV(key, iv));
-                raw = new byte[ciphertext.length];
-                cfb.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
-                break;
-            }
-            case OFB: {
-                Ofb ofb = new Ofb(new Kuznyechik());
-                ofb.init(false, new ParametersWithIV(key, iv));
-                raw = new byte[ciphertext.length];
-                ofb.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
-                break;
-            }
-            case CBC: {
-                if (ciphertext.length % BLOCK_SIZE != 0) {
-                    throw new IllegalArgumentException(
-                        "CBC ciphertext length must be a multiple of " + BLOCK_SIZE);
+            case CTR:
+                {
+                    Ctr ctr = new Ctr(new Kuznyechik());
+                    ctr.init(false, new ParametersWithIV(key, iv));
+                    raw = new byte[ciphertext.length];
+                    ctr.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    break;
                 }
-                Cbc cbc = new Cbc(new Kuznyechik());
-                cbc.init(false, new ParametersWithIV(key, iv));
-                raw = new byte[ciphertext.length];
-                for (int offset = 0; offset < ciphertext.length; offset += BLOCK_SIZE) {
-                    cbc.processBlock(ciphertext, offset, raw, offset);
+            case CFB:
+                {
+                    Cfb cfb = new Cfb(new Kuznyechik());
+                    cfb.init(false, new ParametersWithIV(key, iv));
+                    raw = new byte[ciphertext.length];
+                    cfb.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    break;
                 }
-                break;
-            }
+            case OFB:
+                {
+                    Ofb ofb = new Ofb(new Kuznyechik());
+                    ofb.init(false, new ParametersWithIV(key, iv));
+                    raw = new byte[ciphertext.length];
+                    ofb.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    break;
+                }
+            case CBC:
+                {
+                    if (ciphertext.length % BLOCK_SIZE != 0) {
+                        throw new IllegalArgumentException(
+                                "CBC ciphertext length must be a multiple of " + BLOCK_SIZE);
+                    }
+                    Cbc cbc = new Cbc(new Kuznyechik());
+                    cbc.init(false, new ParametersWithIV(key, iv));
+                    raw = new byte[ciphertext.length];
+                    for (int offset = 0; offset < ciphertext.length; offset += BLOCK_SIZE) {
+                        cbc.processBlock(ciphertext, offset, raw, offset);
+                    }
+                    break;
+                }
             default:
                 throw new IllegalArgumentException("Unknown mode: " + mode);
         }
@@ -405,8 +414,8 @@ public final class Cipher {
     }
 
     /** Строит шифрующий выходной поток. */
-    private static OutputStream buildEncryptingStream(OutputStream out, SymmetricKey key,
-                                                      byte[] iv, Mode mode) {
+    private static OutputStream buildEncryptingStream(
+            OutputStream out, SymmetricKey key, byte[] iv, Mode mode) {
         return new FilterOutputStream(out) {
             private final byte[] oneByte = new byte[1];
             private final StreamCipher cipher = initStreamCipher(key, iv, mode, true);
@@ -427,8 +436,8 @@ public final class Cipher {
     }
 
     /** Строит расшифровывающий входной поток. */
-    private static InputStream buildDecryptingStream(InputStream in, SymmetricKey key,
-                                                     byte[] iv, Mode mode) {
+    private static InputStream buildDecryptingStream(
+            InputStream in, SymmetricKey key, byte[] iv, Mode mode) {
         return new FilterInputStream(in) {
             private final StreamCipher cipher = initStreamCipher(key, iv, mode, false);
 
@@ -454,27 +463,30 @@ public final class Cipher {
     /**
      * Инициализирует потоковый шифр.
      */
-    private static StreamCipher initStreamCipher(SymmetricKey key, byte[] iv,
-                                                  Mode mode, boolean encrypt) {
+    private static StreamCipher initStreamCipher(
+            SymmetricKey key, byte[] iv, Mode mode, boolean encrypt) {
         switch (mode) {
-            case CTR: {
-                Ctr ctr = new Ctr(new Kuznyechik());
-                ctr.init(encrypt, new ParametersWithIV(key, iv));
-                return ctr;
-            }
-            case CFB: {
-                Cfb cfb = new Cfb(new Kuznyechik());
-                cfb.init(encrypt, new ParametersWithIV(key, iv));
-                return cfb;
-            }
-            case OFB: {
-                Ofb ofb = new Ofb(new Kuznyechik());
-                ofb.init(encrypt, new ParametersWithIV(key, iv));
-                return ofb;
-            }
+            case CTR:
+                {
+                    Ctr ctr = new Ctr(new Kuznyechik());
+                    ctr.init(encrypt, new ParametersWithIV(key, iv));
+                    return ctr;
+                }
+            case CFB:
+                {
+                    Cfb cfb = new Cfb(new Kuznyechik());
+                    cfb.init(encrypt, new ParametersWithIV(key, iv));
+                    return cfb;
+                }
+            case OFB:
+                {
+                    Ofb ofb = new Ofb(new Kuznyechik());
+                    ofb.init(encrypt, new ParametersWithIV(key, iv));
+                    return ofb;
+                }
             case CBC:
                 throw new UnsupportedOperationException(
-                    "CBC mode is not supported in streaming API. Use static encrypt()/decrypt().");
+                        "CBC mode is not supported in streaming API. Use static encrypt()/decrypt().");
             default:
                 throw new IllegalArgumentException("Unknown mode: " + mode);
         }

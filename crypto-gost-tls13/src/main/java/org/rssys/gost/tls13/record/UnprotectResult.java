@@ -19,7 +19,11 @@ package org.rssys.gost.tls13.record;
  * </ul>
  */
 public final class UnprotectResult {
-    public enum Status { OK, NEED_MORE_INPUT, OUTPUT_TOO_SMALL }
+    public enum Status {
+        OK,
+        NEED_MORE_INPUT,
+        OUTPUT_TOO_SMALL
+    }
 
     public final Status status;
     public final byte contentType;

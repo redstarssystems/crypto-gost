@@ -6,7 +6,7 @@ import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.tls13.cert.TlsCertificateValidator;
 import java.util.ArrayList;
 import java.util.List;
@@ -17,8 +17,8 @@ import java.util.concurrent.TimeUnit;
 @State(Scope.Benchmark)
 public class CertValidationBench {
 
-    private List<TlsCertificate> chain3;
-    private List<TlsCertificate> chain2;
+    private List<GostCertificate> chain3;
+    private List<GostCertificate> chain2;
     private PublicKeyParameters caKey;
 
     @Setup(Level.Trial)

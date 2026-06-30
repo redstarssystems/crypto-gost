@@ -18,6 +18,7 @@ WARNING: *Данная библиотека не является сертифи
 * `crypto-gost-jsse` - Реализация JSSE-провайдера для ГОСТ.
 * `crypto-gost-netty` - Netty SslContext-адаптер для ГОСТ.
 * `crypto-gost-tls13` - Реализация протокола *TLS 1.3* (RFC 8446) с поддержкой российских криптографических алгоритмов согласно *RFC 9367*.
+* `crypto-gost-pkix` - ГОСТ-инфраструктура PKIX: OID-реестр, CMS SignedData/EnvelopedData/SignedAndEnvelopedData, X.509-сертификаты, OCSP, CRL, CSR (PKCS#10), PKCS#12, CAdES-BES/T, TSP.
 * `crypto-gost-core` - криптографическое ядро алгоритмов ГОСТ: Стрибог, Кузнечик, ГОСТ Р 34.10-2012, JCA-провайдер.
 
 *Целевая JDK при сборке модулей библиотеки: JDK 21*.
@@ -29,6 +30,7 @@ WARNING: *Данная библиотека не является сертифи
 * link:crypto-gost-core/README.md[Криптографическое ядро:] базовые функции шифрования, хеширования, электронной подписи, JCA-провайдер и др.
 * link:crypto-gost-tls13/README.md[TLS 1.3] — реализация протокола защищенной передачи данных по сети.
 * link:crypto-gost-jsse/README.md[JSSE-провайдер].
+* link:crypto-gost-pkix/README.md[PKIX-инфраструктура] — ГОСТ-реестр OID, CMS, X.509-сертификаты, OCSP, CRL, CSR, PKCS#12, CAdES-T, TSP.
 
 == Проекты на базе crypto-gost
 
@@ -81,19 +83,25 @@ WARNING: *Данная библиотека не является сертифи
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-core</artifactId>
-    <version>0.5.6</version>
+    <version>0.6.0</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-tls13</artifactId>
-    <version>0.5.6</version>
+    <version>0.6.0</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-jsse</artifactId>
-    <version>0.5.6</version>
+    <version>0.6.0</version>
+</dependency>
+
+<dependency>
+    <groupId>org.rssys</groupId>
+    <artifactId>crypto-gost-pkix</artifactId>
+    <version>0.6.0</version>
 </dependency>
 ----
 
@@ -109,7 +117,7 @@ WARNING: *Данная библиотека не является сертифи
 [source,bash]
 ----
 gpg --import KEYS
-gpg -v v0.5.6
+gpg -v v0.6.0
 ----
 
 == Методики кросс-валидации

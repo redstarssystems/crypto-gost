@@ -9,7 +9,7 @@ import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.jsse.GostJsseConstants;
 
 import org.rssys.gost.util.CryptoRandom;
@@ -21,6 +21,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -41,8 +42,8 @@ final class ServerOpenSslHelper {
     // PKI
     // ========================================================================
 
-    record ServerPkiBundle(TlsCertificate cert, PrivateKeyParameters priv,
-                            TlsCertificate caCert, PublicKeyParameters caPub) {}
+    record ServerPkiBundle(GostCertificate cert, PrivateKeyParameters priv,
+                            GostCertificate caCert, PublicKeyParameters caPub) {}
 
     static ServerPkiBundle createServerPki(ECParameters params) throws Exception {
         TlsTestHelper.CertBundle rootCa = TlsTestHelper.createRootCA(params);
@@ -57,10 +58,10 @@ final class ServerOpenSslHelper {
                 rootCa.cert, caPub);
     }
 
-    static GostX509KeyManager createKeyManager(TlsCertificate serverCert,
-                                                TlsCertificate caCert,
+    static GostX509KeyManager createKeyManager(GostCertificate serverCert,
+                                                GostCertificate caCert,
                                                 PrivateKeyParameters priv) throws Exception {
-        X509Certificate[] jcaChain = CertificateBridge.toJcaChain(serverCert, caCert);
+        X509Certificate[] jcaChain = CertificateBridge.toJca(List.of(serverCert, caCert));
         GostX509KeyManager km = new GostX509KeyManager();
         km.addKeyEntry("default", jcaChain, priv);
         return km;

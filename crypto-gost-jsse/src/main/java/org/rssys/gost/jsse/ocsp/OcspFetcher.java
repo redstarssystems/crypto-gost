@@ -30,7 +30,8 @@ public interface OcspFetcher {
      * @param ocspResponderUri URI OCSP-responder
      * @return OcspFetchResult с OCSP-ответом и nonce
      */
-    default OcspFetchResult fetchWithNonce(byte[] certDer, byte[] issuerDer, String ocspResponderUri) {
+    default OcspFetchResult fetchWithNonce(
+            byte[] certDer, byte[] issuerDer, String ocspResponderUri) {
         return new OcspFetchResult(fetch(certDer, issuerDer, ocspResponderUri), null);
     }
 }

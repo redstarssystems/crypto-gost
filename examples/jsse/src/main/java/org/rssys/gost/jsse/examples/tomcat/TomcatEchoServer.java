@@ -1,9 +1,17 @@
 package org.rssys.gost.jsse.examples.tomcat;
 
-import org.rssys.gost.jsse.GostJsseConstants;
-import org.rssys.gost.jsse.examples.EchoSocketClient;
-import org.rssys.gost.jsse.examples.ExamplesCertHelper;
-
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+import javax.net.ssl.KeyManager;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.SSLSessionContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509KeyManager;
+import javax.net.ssl.X509TrustManager;
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.startup.Tomcat;
 import org.apache.tomcat.util.net.SSLHostConfig;
@@ -11,20 +19,9 @@ import org.apache.tomcat.util.net.SSLHostConfigCertificate;
 import org.apache.tomcat.util.net.SSLImplementation;
 import org.apache.tomcat.util.net.SSLSupport;
 import org.apache.tomcat.util.net.SSLUtil;
-
-import javax.net.ssl.KeyManager;
-import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSessionContext;
-import javax.net.ssl.TrustManager;
-import javax.net.ssl.X509KeyManager;
-import javax.net.ssl.X509TrustManager;
-import java.io.IOException;
-import java.util.List;
-import java.util.Map;
-
-import jakarta.servlet.http.HttpServlet;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.examples.EchoSocketClient;
+import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 
 /**
  * Демонстрация интеграции crypto-gost-jsse с Tomcat 11 (Jakarta EE 10).
@@ -50,15 +47,15 @@ public final class TomcatEchoServer {
         connector.setSecure(true);
         connector.setScheme("https");
         connector.setProperty("SSLEnabled", "true");
-        connector.setProperty("sslImplementationName",
-                GostSSLImplementation.class.getName());
+        connector.setProperty("sslImplementationName", GostSSLImplementation.class.getName());
 
         SSLHostConfig sslHostConfig = new SSLHostConfig();
         sslHostConfig.setHostName("_default_");
         sslHostConfig.setSslProtocol(GostJsseConstants.PROTOCOL_TLS_1_3);
 
-        SSLHostConfigCertificate cert = new SSLHostConfigCertificate(
-                sslHostConfig, SSLHostConfigCertificate.Type.UNDEFINED);
+        SSLHostConfigCertificate cert =
+                new SSLHostConfigCertificate(
+                        sslHostConfig, SSLHostConfigCertificate.Type.UNDEFINED);
         sslHostConfig.addCertificate(cert);
 
         connector.addSslHostConfig(sslHostConfig);
@@ -66,18 +63,25 @@ public final class TomcatEchoServer {
 
         org.apache.catalina.Context appCtx =
                 tomcat.addContext("", System.getProperty("java.io.tmpdir"));
-        Tomcat.addServlet(appCtx, "echo", new HttpServlet() {
-            @Override
-            protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
-                String body = new String(req.getInputStream().readAllBytes(),
-                        java.nio.charset.StandardCharsets.UTF_8).trim();
-                resp.setStatus(200);
-                resp.setContentType("text/plain");
-                if ("PING".equals(body)) {
-                    resp.getWriter().println("PONG");
-                }
-            }
-        });
+        Tomcat.addServlet(
+                appCtx,
+                "echo",
+                new HttpServlet() {
+                    @Override
+                    protected void doPost(HttpServletRequest req, HttpServletResponse resp)
+                            throws IOException {
+                        String body =
+                                new String(
+                                                req.getInputStream().readAllBytes(),
+                                                java.nio.charset.StandardCharsets.UTF_8)
+                                        .trim();
+                        resp.setStatus(200);
+                        resp.setContentType("text/plain");
+                        if ("PING".equals(body)) {
+                            resp.getWriter().println("PONG");
+                        }
+                    }
+                });
         appCtx.addServletMappingDecoded("/*", "echo");
 
         java.util.logging.Logger.getLogger("org.apache.catalina.loader")
@@ -109,8 +113,7 @@ public final class TomcatEchoServer {
      */
     public static final class GostSSLImplementation extends SSLImplementation {
         @Override
-        public SSLSupport getSSLSupport(SSLSession session,
-                                        Map<String, List<String>> additional) {
+        public SSLSupport getSSLSupport(SSLSession session, Map<String, List<String>> additional) {
             return null;
         }
 
@@ -124,6 +127,7 @@ public final class TomcatEchoServer {
         // Все методы должны использовать ОДИН helper — иначе getKeyManagers()
         // и createSSLContext() получат РАЗНЫЕ сертификаты, и TLS упадёт.
         private static final ExamplesCertHelper HELPER;
+
         static {
             try {
                 HELPER = new ExamplesCertHelper();
@@ -149,12 +153,12 @@ public final class TomcatEchoServer {
 
         @Override
         public KeyManager[] getKeyManagers() throws Exception {
-            return new KeyManager[]{HELPER.createKeyManager()};
+            return new KeyManager[] {HELPER.createKeyManager()};
         }
 
         @Override
         public TrustManager[] getTrustManagers() throws Exception {
-            return new TrustManager[]{HELPER.createTrustManager()};
+            return new TrustManager[] {HELPER.createTrustManager()};
         }
 
         @Override

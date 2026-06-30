@@ -1,13 +1,13 @@
 package org.rssys.gost.jca.spi;
 
-import org.rssys.gost.jca.key.GostSecretKey;
-
-import javax.crypto.SecretKey;
-import javax.crypto.SecretKeyFactorySpi;
-import javax.crypto.spec.SecretKeySpec;
 import java.security.InvalidKeyException;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.KeySpec;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactorySpi;
+import javax.crypto.spec.SecretKeySpec;
+import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.jca.key.GostSecretKey;
 
 /**
  * Реализация {@link SecretKeyFactorySpi} для симметричных ключей алгоритма Кузнечик.
@@ -21,7 +21,7 @@ import java.security.spec.KeySpec;
  * <p>
  * Поддерживаемые спецификации:
  * <ul>
- *   <li>{@link SecretKeySpec} с алгоритмом {@code "Kuznyechik"} → {@link GostSecretKey}</li>
+ *   <li>{@link SecretKeySpec} с алгоритмом {@code "Kuznyechik"} -> {@link GostSecretKey}</li>
  * </ul>
  * <p>
  * Регистрируется в провайдере как {@code "Kuznyechik"}.
@@ -43,15 +43,16 @@ public final class GostSecretKeyFactorySpi extends SecretKeyFactorySpi {
             if (raw == null || raw.length == 0) {
                 throw new InvalidKeySpecException("SecretKeySpec contains null or empty key bytes");
             }
-            if (raw.length != 32) {
+            if (raw.length != Kuznyechik.KEY_SIZE) {
                 throw new InvalidKeySpecException(
-                    "Kuznyechik requires 32-byte key, got " + raw.length);
+                        "Kuznyechik requires 32-byte key, got " + raw.length);
             }
             return new GostSecretKey("Kuznyechik", raw);
         }
         throw new InvalidKeySpecException(
-            "Unsupported KeySpec type: " + keySpec.getClass().getName()
-            + ". Expected SecretKeySpec");
+                "Unsupported KeySpec type: "
+                        + keySpec.getClass().getName()
+                        + ". Expected SecretKeySpec");
     }
 
     /**
@@ -69,8 +70,9 @@ public final class GostSecretKeyFactorySpi extends SecretKeyFactorySpi {
             throws InvalidKeySpecException {
         if (!SecretKeySpec.class.isAssignableFrom(keySpec)) {
             throw new InvalidKeySpecException(
-                "Unsupported KeySpec class: " + keySpec.getName()
-                + ". Supported: SecretKeySpec");
+                    "Unsupported KeySpec class: "
+                            + keySpec.getName()
+                            + ". Supported: SecretKeySpec");
         }
         byte[] raw = key.getEncoded();
         if (raw == null) {
@@ -97,14 +99,12 @@ public final class GostSecretKeyFactorySpi extends SecretKeyFactorySpi {
             if (raw == null || raw.length == 0) {
                 throw new InvalidKeyException("Key encoding is null or empty");
             }
-            if (raw.length != 32) {
-                throw new InvalidKeyException(
-                    "Kuznyechik requires 32-byte key, got " + raw.length);
+            if (raw.length != Kuznyechik.KEY_SIZE) {
+                throw new InvalidKeyException("Kuznyechik requires 32-byte key, got " + raw.length);
             }
             return new GostSecretKey("Kuznyechik", raw);
         }
         throw new InvalidKeyException(
-            "Cannot translate key with format '" + key.getFormat()
-            + "'. Expected RAW format");
+                "Cannot translate key with format '" + key.getFormat() + "'. Expected RAW format");
     }
 }

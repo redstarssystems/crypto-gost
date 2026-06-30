@@ -1,21 +1,19 @@
 package org.rssys.gost.jsse;
 
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.rssys.gost.jca.spec.GostDerCodec;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.GostOids;
-import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.cert.GostPbes2;
-import org.rssys.gost.tls13.cert.TlsCertificate;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.rssys.gost.jca.spec.GostDerCodec;
+import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.cert.GostPbes2;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsTestHelper;
 
-import static org.junit.jupiter.api.Assertions.*;
-
-@DisplayName("GostSsl.loadPrivateKey")
+@DisplayName("GostSsl.loadPrivateKey: загрузка закрытых ключей")
 class GostSslTest {
 
     private static byte[] toUtf8Bytes(char[] password) {
@@ -39,10 +37,8 @@ class GostSslTest {
         PrivateKeyParameters fromDer = GostSsl.loadPrivateKey(der);
         PrivateKeyParameters fromPem = GostSsl.loadPrivateKey(pem);
 
-        assertArrayEquals(fromDer.getDBytes(), fromPem.getDBytes(),
-                "d-компонента совпадает");
-        assertEquals(fromDer.getParams().n, fromPem.getParams().n,
-                "порядок кривой (n) совпадает");
+        assertArrayEquals(fromDer.getDBytes(), fromPem.getDBytes(), "d-компонента совпадает");
+        assertEquals(fromDer.getParams().n, fromPem.getParams().n, "порядок кривой (n) совпадает");
     }
 
     @Test
@@ -52,17 +48,18 @@ class GostSslTest {
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
         byte[] passwordBytes = toUtf8Bytes("secret".toCharArray());
 
-        byte[] encryptedDer = GostPbes2.encryptKey(
-                bundle.priv, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, 100);
-        byte[] encryptedPem = pemEncode(encryptedDer, "ENCRYPTED PRIVATE KEY")
-                .getBytes(StandardCharsets.US_ASCII);
+        byte[] encryptedDer =
+                GostPbes2.encryptKey(bundle.priv, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, 100);
+        byte[] encryptedPem =
+                pemEncode(encryptedDer, "ENCRYPTED PRIVATE KEY")
+                        .getBytes(StandardCharsets.US_ASCII);
 
-        PrivateKeyParameters decrypted = GostSsl.loadPrivateKey(encryptedPem, "secret".toCharArray());
+        PrivateKeyParameters decrypted =
+                GostSsl.loadPrivateKey(encryptedPem, "secret".toCharArray());
 
-        assertArrayEquals(bundle.priv.getDBytes(), decrypted.getDBytes(),
-                "d-компонента совпадает");
-        assertEquals(bundle.priv.getParams().n, decrypted.getParams().n,
-                "порядок кривой (n) совпадает");
+        assertArrayEquals(bundle.priv.getDBytes(), decrypted.getDBytes(), "d-компонента совпадает");
+        assertEquals(
+                bundle.priv.getParams().n, decrypted.getParams().n, "порядок кривой (n) совпадает");
     }
 
     @Test
@@ -76,7 +73,6 @@ class GostSslTest {
         PrivateKeyParameters result = GostSsl.loadPrivateKey(pem, "irrelevant".toCharArray());
 
         assertNotNull(result, "Ключ должен быть загружен, пароль игнорируется");
-        assertArrayEquals(bundle.priv.getDBytes(), result.getDBytes(),
-                "d-компонента совпадает");
+        assertArrayEquals(bundle.priv.getDBytes(), result.getDBytes(), "d-компонента совпадает");
     }
 }

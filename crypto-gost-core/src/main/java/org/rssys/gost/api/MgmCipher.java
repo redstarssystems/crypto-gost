@@ -1,13 +1,11 @@
 package org.rssys.gost.api;
 
-import org.rssys.gost.cipher.SymmetricKey;
+import java.util.Arrays;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
+import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.mode.Mgm;
 import org.rssys.gost.util.AuthenticationException;
-
-import java.util.Arrays;
-
 import org.rssys.gost.util.CryptoRandom;
 
 /**
@@ -72,8 +70,7 @@ public final class MgmCipher {
      */
     public static final int MIN_PACKET_LEN = ICN_LEN + TAG_LEN;
 
-    private MgmCipher() {
-    }
+    private MgmCipher() {}
 
     // -----------------------------------------------------------------------
     // Шифрование
@@ -166,7 +163,8 @@ public final class MgmCipher {
      * @return открытый текст
      * @throws AuthenticationException если тег не прошёл проверку
      */
-    public static byte[] open(byte[] encryptedData, SymmetricKey key) throws AuthenticationException {
+    public static byte[] open(byte[] encryptedData, SymmetricKey key)
+            throws AuthenticationException {
         return open(encryptedData, key, new byte[0]);
     }
 
@@ -184,8 +182,10 @@ public final class MgmCipher {
             throws AuthenticationException {
         if (encryptedData.length < MIN_PACKET_LEN) {
             throw new IllegalArgumentException(
-                    "MGM packet too short: minimum " + MIN_PACKET_LEN
-                            + " bytes, got " + encryptedData.length);
+                    "MGM packet too short: minimum "
+                            + MIN_PACKET_LEN
+                            + " bytes, got "
+                            + encryptedData.length);
         }
 
         // Извлекаем ICN, шифртекст и тег

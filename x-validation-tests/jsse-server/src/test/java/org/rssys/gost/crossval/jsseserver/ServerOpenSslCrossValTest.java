@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@DisplayName("JSSE: кросс-валидация серверов приложений ↔ OpenSSL s_client (roundtrip)")
+@DisplayName("JSSE: кросс-валидация серверов приложений <-> OpenSSL s_client (roundtrip)")
 class ServerOpenSslCrossValTest {
 
     @BeforeAll
@@ -31,7 +31,7 @@ class ServerOpenSslCrossValTest {
 
     @ParameterizedTest
     @EnumSource(ServerOpenSslHelper.ServerType.class)
-    @DisplayName("Сервер + s_client GET → INTEROP_OK")
+    @DisplayName("Сервер + s_client GET -> INTEROP_OK")
     void testServerRoundtrip(ServerOpenSslHelper.ServerType serverType) throws Exception {
         ECParameters params = ECParameters.cryptoProA();
         ServerOpenSslHelper.ServerPkiBundle pki =
@@ -73,7 +73,7 @@ class ServerOpenSslCrossValTest {
     }
 
     @Test
-    @DisplayName("Сервер + s_client -maxfraglen 512 → INTEROP_OK")
+    @DisplayName("Сервер + s_client -maxfraglen 512 -> INTEROP_OK")
     void testServerWithMaxFragLength() throws Exception {
         ECParameters params = ECParameters.cryptoProA();
         ServerOpenSslHelper.ServerPkiBundle pki =

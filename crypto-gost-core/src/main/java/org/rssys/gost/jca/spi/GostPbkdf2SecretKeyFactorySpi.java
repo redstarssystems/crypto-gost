@@ -1,16 +1,15 @@
 package org.rssys.gost.jca.spi;
 
-import org.rssys.gost.jca.key.GostSecretKey;
-import org.rssys.gost.kdf.Pbkdf2Streebog;
-
-import javax.crypto.SecretKey;
-import javax.crypto.SecretKeyFactorySpi;
-import javax.crypto.spec.PBEKeySpec;
-import javax.crypto.spec.SecretKeySpec;
 import java.security.InvalidKeyException;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.KeySpec;
 import java.util.Arrays;
+import javax.crypto.SecretKey;
+import javax.crypto.SecretKeyFactorySpi;
+import javax.crypto.spec.PBEKeySpec;
+import javax.crypto.spec.SecretKeySpec;
+import org.rssys.gost.jca.key.GostSecretKey;
+import org.rssys.gost.kdf.Pbkdf2Streebog;
 
 /**
  * Реализация {@link SecretKeyFactorySpi} для PBKDF2 на HMAC-Streebog-512 (RFC 9337 §4).
@@ -25,8 +24,8 @@ import java.util.Arrays;
  * <p>
  * Поддерживаемые спецификации:
  * <ul>
- *   <li>{@link PBEKeySpec} → PBKDF2-выработка</li>
- *   <li>{@link SecretKeySpec} → обёртка сырых байт как {@link GostSecretKey}</li>
+ *   <li>{@link PBEKeySpec} -> PBKDF2-выработка</li>
+ *   <li>{@link SecretKeySpec} -> обёртка сырых байт как {@link GostSecretKey}</li>
  * </ul>
  * <p>
  * Регистрируется в провайдере как {@code "PBKDF2WithHmacStreebog512"}.
@@ -44,8 +43,9 @@ public final class GostPbkdf2SecretKeyFactorySpi extends SecretKeyFactorySpi {
             return translateFromSpec((SecretKeySpec) keySpec);
         }
         throw new InvalidKeySpecException(
-            "Unsupported KeySpec type: " + keySpec.getClass().getName()
-            + ". Expected PBEKeySpec or SecretKeySpec");
+                "Unsupported KeySpec type: "
+                        + keySpec.getClass().getName()
+                        + ". Expected PBEKeySpec or SecretKeySpec");
     }
 
     @Override
@@ -53,17 +53,20 @@ public final class GostPbkdf2SecretKeyFactorySpi extends SecretKeyFactorySpi {
             throws InvalidKeySpecException {
         if (PBEKeySpec.class.equals(keySpec)) {
             throw new InvalidKeySpecException(
-                "PBEKeySpec is not supported as output KeySpec; use SecretKeySpec");
+                    "PBEKeySpec is not supported as output KeySpec; use SecretKeySpec");
         }
         if (!SecretKeySpec.class.isAssignableFrom(keySpec)) {
             throw new InvalidKeySpecException(
-                "Unsupported KeySpec class: " + keySpec.getName()
-                + ". Supported: SecretKeySpec");
+                    "Unsupported KeySpec class: "
+                            + keySpec.getName()
+                            + ". Supported: SecretKeySpec");
         }
         if (!ALGORITHM.equals(key.getAlgorithm())) {
             throw new InvalidKeySpecException(
-                "Incompatible key algorithm: " + key.getAlgorithm()
-                + ". Expected " + ALGORITHM);
+                    "Incompatible key algorithm: "
+                            + key.getAlgorithm()
+                            + ". Expected "
+                            + ALGORITHM);
         }
         byte[] raw = key.getEncoded();
         if (raw == null) {
@@ -77,8 +80,10 @@ public final class GostPbkdf2SecretKeyFactorySpi extends SecretKeyFactorySpi {
         if (key instanceof GostSecretKey) {
             if (!ALGORITHM.equals(key.getAlgorithm())) {
                 throw new InvalidKeyException(
-                    "Incompatible key algorithm: " + key.getAlgorithm()
-                    + ". Expected " + ALGORITHM);
+                        "Incompatible key algorithm: "
+                                + key.getAlgorithm()
+                                + ". Expected "
+                                + ALGORITHM);
             }
             return key;
         }
@@ -90,8 +95,7 @@ public final class GostPbkdf2SecretKeyFactorySpi extends SecretKeyFactorySpi {
             return new GostSecretKey(ALGORITHM, raw);
         }
         throw new InvalidKeyException(
-            "Cannot translate key with format '" + key.getFormat()
-            + "'. Expected RAW format");
+                "Cannot translate key with format '" + key.getFormat() + "'. Expected RAW format");
     }
 
     private static SecretKey generateFromPbe(PBEKeySpec spec) throws InvalidKeySpecException {
@@ -99,7 +103,7 @@ public final class GostPbkdf2SecretKeyFactorySpi extends SecretKeyFactorySpi {
         int keyLengthBytes = keyLengthBits / 8;
         if (keyLengthBits <= 0 || keyLengthBytes < 1) {
             throw new InvalidKeySpecException(
-                "keyLength must be at least 8 bits, got " + keyLengthBits);
+                    "keyLength must be at least 8 bits, got " + keyLengthBits);
         }
 
         byte[] salt = spec.getSalt();
@@ -110,7 +114,7 @@ public final class GostPbkdf2SecretKeyFactorySpi extends SecretKeyFactorySpi {
         int iterationCount = spec.getIterationCount();
         if (iterationCount < 1) {
             throw new InvalidKeySpecException(
-                "iteration count must be >= 1, got " + iterationCount);
+                    "iteration count must be >= 1, got " + iterationCount);
         }
 
         char[] passwordChars = spec.getPassword();

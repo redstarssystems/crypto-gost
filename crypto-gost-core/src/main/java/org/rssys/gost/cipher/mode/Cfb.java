@@ -38,14 +38,15 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
     /** CFB с размером сегмента bitBlockSize бит. */
     public Cfb(Kuznyechik cipher, int bitBlockSize) {
         super(cipher);
-        this.kuz     = cipher;
-        this.s       = bitBlockSize / 8;
+        this.kuz = cipher;
+        this.s = bitBlockSize / 8;
         this.gammaBuf = new byte[blockSize];
-        this.inBuf   = new byte[this.s];
+        this.inBuf = new byte[this.s];
     }
 
     @Override
-    public void init(boolean forEncryption, CipherParameters params) throws IllegalArgumentException {
+    public void init(boolean forEncryption, CipherParameters params)
+            throws IllegalArgumentException {
         reset();
         ParametersWithIV ivParams = requireIV(params, "CFB");
         byte[] iv = ivParams.getIV();
@@ -102,13 +103,13 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
                 long oLo = inLo ^ gLo;
                 LONG_BE.set(R, 0, oHi);
                 LONG_BE.set(R, 8, oLo);
-                LONG_BE.set(out, outOff + i,     oHi);
+                LONG_BE.set(out, outOff + i, oHi);
                 LONG_BE.set(out, outOff + i + 8, oLo);
             } else {
                 // Расшифрование: R = входной шифртекст (до XOR)
                 LONG_BE.set(R, 0, inHi);
                 LONG_BE.set(R, 8, inLo);
-                LONG_BE.set(out, outOff + i,     inHi ^ gHi);
+                LONG_BE.set(out, outOff + i, inHi ^ gHi);
                 LONG_BE.set(out, outOff + i + 8, inLo ^ gLo);
             }
         }

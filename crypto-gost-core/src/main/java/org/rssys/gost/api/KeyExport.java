@@ -1,10 +1,9 @@
 package org.rssys.gost.api;
 
-import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.util.AuthenticationException;
-
 import java.security.MessageDigest;
 import java.util.Arrays;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.util.AuthenticationException;
 
 /**
  * Экспорт и импорт ключей по алгоритмам KExp15/KImp15 (RFC 9189 §8.2.1).
@@ -25,7 +24,7 @@ import java.util.Arrays;
  * <pre>{@code
  * // Отправитель вырабатывает K_ENC и K_MAC из ключа переноса KEK.
  * // Порядок следования K_MAC/K_ENC в keys определяется протоколом,
- * // здесь — условный пример (keys[0..31] → K_MAC, keys[32..63] → K_ENC).
+ * // здесь — условный пример (keys[0..31] -> K_MAC, keys[32..63] -> K_ENC).
  * byte[] ukm = new byte[8];
  * CryptoRandom.INSTANCE.nextBytes(ukm);
  * byte[] keys = KdfTreeGostR3411_2012_256.generate(
@@ -58,8 +57,7 @@ public final class KeyExport {
     /** Размер ключа Кузнечика в байтах. */
     static final int KEY_LENGTH = 32;
 
-    private KeyExport() {
-    }
+    private KeyExport() {}
 
     /**
      * KExp15: экспорт ключа (RFC 9189 §8.2.1).
@@ -76,9 +74,7 @@ public final class KeyExport {
      * @return зашифрованный секрет длиной {@code secret.length + 16} байт
      * @throws IllegalArgumentException при невалидных аргументах
      */
-    public static byte[] kExp15(byte[] secret,
-                                SymmetricKey kMac, SymmetricKey kEnc,
-                                byte[] iv) {
+    public static byte[] kExp15(byte[] secret, SymmetricKey kMac, SymmetricKey kEnc, byte[] iv) {
         if (secret == null || secret.length == 0) {
             throw new IllegalArgumentException("Secret must not be null or empty");
         }
@@ -87,17 +83,13 @@ public final class KeyExport {
         }
         if (iv == null || iv.length != IV_LENGTH) {
             throw new IllegalArgumentException(
-                "IV must be " + IV_LENGTH + " bytes, got "
-                    + (iv == null ? "null" : iv.length));
+                    "IV must be " + IV_LENGTH + " bytes, got " + (iv == null ? "null" : iv.length));
         }
 
         byte[] cekMac = null;
         try {
             // CMAC: OMAC(K_MAC, IV || secret)
-            cekMac = new CmacApi(kMac)
-                .update(iv)
-                .update(secret)
-                .digest();
+            cekMac = new CmacApi(kMac).update(iv).update(secret).digest();
 
             // CTR-Encrypt(K_ENC, IV, secret || CEK_MAC)
             byte[] plaintext = concat(secret, cekMac);
@@ -128,20 +120,18 @@ public final class KeyExport {
      * @throws AuthenticationException если MAC не совпадает
      * @throws IllegalArgumentException при невалидных аргументах
      */
-    public static byte[] kImp15(byte[] sExp,
-                                SymmetricKey kMac, SymmetricKey kEnc,
-                                byte[] iv) throws AuthenticationException {
+    public static byte[] kImp15(byte[] sExp, SymmetricKey kMac, SymmetricKey kEnc, byte[] iv)
+            throws AuthenticationException {
         if (sExp == null || sExp.length < BLOCK_SIZE + 1) {
             throw new IllegalArgumentException(
-                "Wrapped key must be at least " + (BLOCK_SIZE + 1) + " bytes");
+                    "Wrapped key must be at least " + (BLOCK_SIZE + 1) + " bytes");
         }
         if (kEnc == null || kMac == null) {
             throw new IllegalArgumentException("Keys must not be null");
         }
         if (iv == null || iv.length != IV_LENGTH) {
             throw new IllegalArgumentException(
-                "IV must be " + IV_LENGTH + " bytes, got "
-                    + (iv == null ? "null" : iv.length));
+                    "IV must be " + IV_LENGTH + " bytes, got " + (iv == null ? "null" : iv.length));
         }
 
         int secretLen = sExp.length - BLOCK_SIZE;
@@ -160,10 +150,7 @@ public final class KeyExport {
             cekMac = Arrays.copyOfRange(plain, secretLen, sExp.length);
 
             // OMAC(K_MAC, IV || S)
-            expected = new CmacApi(kMac)
-                .update(iv)
-                .update(secret)
-                .digest();
+            expected = new CmacApi(kMac).update(iv).update(secret).digest();
 
             if (!MessageDigest.isEqual(expected, cekMac)) {
                 Arrays.fill(secret, (byte) 0);

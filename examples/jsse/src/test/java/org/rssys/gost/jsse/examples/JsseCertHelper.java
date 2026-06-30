@@ -1,11 +1,10 @@
 package org.rssys.gost.jsse.examples;
 
+import javax.net.ssl.SSLContext;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.testkit.GostTestCerts;
 import org.rssys.gost.jsse.testkit.GostTestContext;
-
-import javax.net.ssl.SSLContext;
 
 public final class JsseCertHelper {
 
