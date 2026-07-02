@@ -18,6 +18,12 @@ public final class Pbkdf2Streebog {
 
     private Pbkdf2Streebog() {}
 
+    /** Минимальное число итераций. Отсечение бессмысленных/некорректных значений. */
+    public static final int MIN_ITERATIONS = 1;
+
+    /** Максимальное число итераций. Защита от CPU DoS при импорте untrusted PFX-файлов. */
+    public static final int MAX_ITERATIONS = 2_000_000;
+
     /**
      * Вырабатывает ключ из пароля по PBKDF2 с PRF = HMAC-Streebog-512.
      *
@@ -49,6 +55,8 @@ public final class Pbkdf2Streebog {
 
     private static byte[] pbkdf2(Mac prf, byte[] salt, int c, int dkLen) {
         if (c < 1) throw new IllegalArgumentException("iteration count must be >= 1");
+        if (c > MAX_ITERATIONS) throw new IllegalArgumentException(
+                "iteration count exceeds maximum " + MAX_ITERATIONS + ", got " + c);
         if (dkLen < 1) throw new IllegalArgumentException("dkLen must be >= 1");
 
         int hLen = prf.getMacSize();

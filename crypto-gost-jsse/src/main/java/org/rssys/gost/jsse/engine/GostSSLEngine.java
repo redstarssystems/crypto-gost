@@ -53,6 +53,9 @@ public final class GostSSLEngine extends SSLEngine {
 
     private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSSLEngine");
 
+    /** Однократное предупреждение об отсутствии проверки hostname на весь JVM-процесс. */
+    private static final AtomicBoolean hostnameVerificationWarned = new AtomicBoolean(false);
+
     // ========================================================================
     // Состояние
     // ========================================================================
@@ -239,12 +242,35 @@ public final class GostSSLEngine extends SSLEngine {
     /**
      * Создаёт клиентский GostSSLEngine с контекстом сессии.
      */
+    /**
+     * Создаёт клиентский GostSSLEngine с проверкой hostname по RFC 6125 (HTTPS).
+     */
     public static GostSSLEngine createForClient(
             GostX509KeyManager keyManager,
             GostX509TrustManager trustManager,
             String host,
             int port,
             GostSSLSessionContext sessionContext) {
+        GostSSLEngine engine =
+                new GostSSLEngine(keyManager, trustManager, host, port, true, sessionContext, null);
+        engine.endpointIdentificationAlgorithm = "HTTPS";
+        return engine;
+    }
+
+    /**
+     * Создаёт клиентский GostSSLEngine БЕЗ проверки hostname.
+     * Только для тестов и изолированных сетей — MITM-уязвимость.
+     */
+    public static GostSSLEngine createForClientNoHostnameCheck(
+            GostX509KeyManager keyManager,
+            GostX509TrustManager trustManager,
+            String host,
+            int port,
+            GostSSLSessionContext sessionContext) {
+        LOG.log(
+                Level.WARNING,
+                "Client SSLEngine created WITHOUT hostname verification. "
+                + "Use createForClient() for production.");
         return new GostSSLEngine(keyManager, trustManager, host, port, true, sessionContext, null);
     }
 
@@ -534,6 +560,14 @@ public final class GostSSLEngine extends SSLEngine {
                 clientMode ? "CLIENT" : "SERVER",
                 peerHost,
                 peerPort);
+        if (clientMode && endpointIdentificationAlgorithm == null
+                && !hostnameVerificationWarned.getAndSet(true)) {
+            LOG.log(
+                    Level.WARNING,
+                    "Client TLS handshake without hostname verification. "
+                    + "Set SSLParameters.setEndpointIdentificationAlgorithm(\"HTTPS\") "
+                    + "or use GostSSLEngine.createForClientNoHostnameCheck(...) for intentional opt-out.");
+        }
     }
 
     // ========================================================================
@@ -1571,6 +1605,14 @@ public final class GostSSLEngine extends SSLEngine {
         if (handshakeEngine != null) {
             handshakeEngine.destroy();
         }
+        if (readerRecord != null) {
+            readerRecord.destroy();
+            readerRecord = null;
+        }
+        if (writerRecord != null) {
+            writerRecord.destroy();
+            writerRecord = null;
+        }
         currentPskTicketIdentity = null;
         pendingCloseRecord = null;
     }
@@ -2016,6 +2058,11 @@ public final class GostSSLEngine extends SSLEngine {
         System.Logger prev = LOG;
         LOG = testLogger;
         return prev;
+    }
+
+    /** Тестовый хелпер: сброс флага однократного предупреждения hostname-verification. */
+    static void resetHostnameVerificationWarning() {
+        hostnameVerificationWarned.set(false);
     }
 
     static byte[] buildPlaintextRecord(byte contentType, byte[] body) {

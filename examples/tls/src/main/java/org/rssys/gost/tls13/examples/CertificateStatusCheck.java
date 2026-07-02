@@ -117,25 +117,23 @@ public final class CertificateStatusCheck {
                 System.out.println("OCSP-ответ получен (" + result.response().length + " байт)");
                 try {
                     OcspVerifier.verify(
-                            result.response(), cert.getSerialNumber(), caCert.getPublicKey());
+                            result.response(), cert.getSerialNumber(), caCert);
                     System.out.println("OCSP: сертификат действителен (good)");
                 } catch (Exception e) {
                     System.out.println("OCSP (по ключу CA): " + e.getMessage());
                 }
 
-                // Пробуем с проверкой имени издателя (subject DN CA) и nonce
+                // Проверка с nonce (RFC 8954), без требования обязательного присутствия
                 try {
                     OcspVerifier.verify(
                             result.response(),
                             cert.getSerialNumber(),
-                            caCert.getPublicKey(),
-                            caCert.getSubjectDnBytes(),
-                            caDer,
+                            caCert,
                             result.nonce(),
                             false);
-                    System.out.println("OCSP (с проверкой DN издателя): сертификат действителен");
+                    System.out.println("OCSP (с nonce): сертификат действителен");
                 } catch (Exception e) {
-                    System.out.println("OCSP (с проверкой DN издателя): " + e.getMessage());
+                    System.out.println("OCSP (с nonce): " + e.getMessage());
                 }
 
                 // Если скачали CA из caIssuers — пробуем и с ним
@@ -144,13 +142,11 @@ public final class CertificateStatusCheck {
                         OcspVerifier.verify(
                                 result.response(),
                                 cert.getSerialNumber(),
-                                caFromIssuer.getPublicKey(),
-                                null,
-                                null,
+                                caFromIssuer,
                                 result.nonce(),
                                 false);
                         System.out.println(
-                                "OCSP (по ключу CA из caIssuers): сертификат действителен");
+                                "OCSP (CA из caIssuers): сертификат действителен");
                     } catch (Exception e) {
                         System.out.println("OCSP (по ключу CA из caIssuers): " + e.getMessage());
                     }

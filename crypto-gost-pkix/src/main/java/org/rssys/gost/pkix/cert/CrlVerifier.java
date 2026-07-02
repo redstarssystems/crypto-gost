@@ -4,6 +4,7 @@ import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Arrays;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PublicKeyParameters;
 
@@ -58,6 +59,26 @@ public final class CrlVerifier {
     public static void verify(
             byte[] crlDer, byte[] certSerial, PublicKeyParameters caKey, byte[] certIssuerDn)
             throws PkixException {
+        verify(crlDer, certSerial, caKey, certIssuerDn, null);
+    }
+
+    /**
+     * Проверяет CRL с проверкой монотонности cRLNumber (защита от CRL rollback, RFC 5280 §5.2.3).
+     *
+     * @param crlDer         DER-encoded CertificateList
+     * @param certSerial     серийный номер проверяемого сертификата (raw DER INTEGER value)
+     * @param caKey          открытый ключ CA
+     * @param certIssuerDn   DER-encoded issuer DN сертификата или null
+     * @param minCrlNumber   минимально допустимый cRLNumber (inclusive) или null — пропустить проверку
+     * @throws PkixException если CRL невалиден, cRLNumber меньше minCrlNumber, или сертификат отозван
+     */
+    public static void verify(
+            byte[] crlDer,
+            byte[] certSerial,
+            PublicKeyParameters caKey,
+            byte[] certIssuerDn,
+            BigInteger minCrlNumber)
+            throws PkixException {
         if (crlDer == null) {
             throw new PkixException("CRL is null");
         }
@@ -87,6 +108,22 @@ public final class CrlVerifier {
 
         // Верификация подписи + парсинг revoked-списка (fail-closed порядок внутри GostCrl)
         crl.verify(caKey);
+
+        // Проверка cRLNumber монотонности (RFC 5280 §5.2.3)
+        if (minCrlNumber != null) {
+            BigInteger actual = crl.getCrlNumber();
+            if (actual == null) {
+                throw new PkixException(
+                        "CRL: no cRLNumber extension, but minCrlNumber was provided");
+            }
+            if (actual.compareTo(minCrlNumber) < 0) {
+                throw new PkixException(
+                        "CRL: cRLNumber downgrade — got "
+                                + actual
+                                + ", min expected "
+                                + minCrlNumber);
+            }
+        }
 
         // Проверка отзыва конкретного сертификата
         if (crl.isRevoked(certSerial)) {
@@ -256,5 +293,92 @@ public final class CrlVerifier {
             return GostDerParser.readTlv(crlDer, pos)[1];
         }
         return pos;
+    }
+
+    /**
+     * Извлекает cRLNumber из CRL без полной верификации.
+     * <p>
+     * cRLNumber (OID 2.5.29.20) находится в CRL-level extensions после revokedCertificates
+     * переменной длины. Возвращает {@code null} если расширение отсутствует или CRL повреждён.
+     *
+     * @param crlDer DER-encoded CertificateList
+     * @return cRLNumber или null
+     */
+    public static BigInteger extractCrlNumber(byte[] crlDer) {
+        if (crlDer == null) {
+            return null;
+        }
+        try {
+            int[] clSeq = GostDerParser.parseSequence(crlDer, 0);
+            int[] tbsSeq = GostDerParser.parseSequence(crlDer, clSeq[0]);
+            int tbPos = tbsSeq[0];
+            int tbEnd = tbsSeq[1];
+
+            // Пропускаем header TBSCertList
+            tbPos = skipCrlVersion(crlDer, tbPos, tbEnd);
+            if (tbPos >= tbEnd || (crlDer[tbPos] & 0xFF) != GostDerParser.TAG_SEQUENCE) return null;
+            tbPos = GostDerParser.readTlv(crlDer, tbPos)[1]; // algorithm
+            if (tbPos >= tbEnd || (crlDer[tbPos] & 0xFF) != GostDerParser.TAG_SEQUENCE) return null;
+            tbPos = GostDerParser.readTlv(crlDer, tbPos)[1]; // issuer
+            if (tbPos >= tbEnd) return null;
+            // thisUpdate
+            int tag = crlDer[tbPos] & 0xFF;
+            if (tag != GostDerParser.TAG_UTC_TIME && tag != GostDerParser.TAG_GENERALIZED_TIME)
+                return null;
+            tbPos = GostDerParser.readTlv(crlDer, tbPos)[1];
+            if (tbPos >= tbEnd) return null;
+            // nextUpdate OPTIONAL
+            tag = crlDer[tbPos] & 0xFF;
+            if (tag == GostDerParser.TAG_UTC_TIME || tag == GostDerParser.TAG_GENERALIZED_TIME) {
+                tbPos = GostDerParser.readTlv(crlDer, tbPos)[1];
+                if (tbPos >= tbEnd) return null;
+            }
+            // Пропускаем revokedCertificates SEQUENCE
+            if (tbPos < tbEnd && (crlDer[tbPos] & 0xFF) == GostDerParser.TAG_SEQUENCE) {
+                tbPos = GostDerParser.readTlv(crlDer, tbPos)[1];
+            }
+            // crlExtensions [0] EXPLICIT
+            if (tbPos >= tbEnd || (crlDer[tbPos] & 0xFF) != 0xA0) {
+                return null;
+            }
+            int[] extExplTlv = GostDerParser.readTlv(crlDer, tbPos);
+            int extPos = extExplTlv[0];
+            int extEnd = extExplTlv[1];
+            if (extPos >= extEnd || (crlDer[extPos] & 0xFF) != GostDerParser.TAG_SEQUENCE)
+                return null;
+            int[] extSeq = GostDerParser.readTlv(crlDer, extPos);
+            int p = extSeq[0];
+            int pe = extSeq[1];
+
+            // Ищем cRLNumber в расширениях
+            while (p < pe) {
+                int[] extTlv = GostDerParser.parseSequence(crlDer, p);
+                int oc = extTlv[0];
+                int oce = extTlv[1];
+                if (oc < oce && (crlDer[oc] & 0xFF) == GostDerParser.TAG_OID) {
+                    int[] oidTlv = GostDerParser.readTlv(crlDer, oc);
+                    if (GostDerParser.matchesOid(
+                            crlDer,
+                            oidTlv[0],
+                            oidTlv[1] - oidTlv[0],
+                            GostDerParser.CRL_NUMBER_OID_BYTES)) {
+                        int afterOid = oidTlv[1];
+                        if (afterOid < oce && (crlDer[afterOid] & 0xFF) == GostDerParser.TAG_OCTET_STRING) {
+                            int[] octTlv = GostDerParser.readTlv(crlDer, afterOid);
+                            if (octTlv[0] < octTlv[1] && (crlDer[octTlv[0]] & 0xFF) == GostDerParser.TAG_INTEGER) {
+                                int[] intTlv = GostDerParser.readTlv(crlDer, octTlv[0]);
+                                return new BigInteger(
+                                        Arrays.copyOfRange(crlDer, intTlv[0], intTlv[1]));
+                            }
+                        }
+                        return null;
+                    }
+                }
+                p = extTlv[1];
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

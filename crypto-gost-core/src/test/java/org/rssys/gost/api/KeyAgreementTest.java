@@ -223,20 +223,14 @@ class KeyAgreementTest {
     // ========================================================================
 
     @Test
-    @DisplayName("ключ удалённой стороны — точка на бесконечности -> IllegalStateException")
+    @DisplayName("ключ удалённой стороны — точка на бесконечности -> IllegalArgumentException")
     void sharedSecret_peerInfinity() {
         ECParameters params = ECParameters.cryptoProA();
-        PrivateKeyParameters priv = new PrivateKeyParameters(D_C_GC256B, params);
         ECPoint infinity = ECPoint.infinity(params);
-        PublicKeyParameters peerPub = new PublicKeyParameters(infinity, params);
-        try {
-            assertThrows(
-                    IllegalStateException.class,
-                    () -> KeyAgreement.computeSharedSecret(priv, peerPub),
-                    "Точка на бесконечности должна давать IllegalStateException");
-        } finally {
-            priv.destroy();
-        }
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new PublicKeyParameters(infinity, params),
+                "Точка на бесконечности должна быть отброшена конструктором PublicKeyParameters");
     }
 
     // ========================================================================
@@ -540,17 +534,29 @@ class KeyAgreementTest {
     }
 
     @Test
-    @DisplayName("VKO: точка на бесконечности -> IllegalStateException")
+    @DisplayName("VKO: точка на бесконечности -> IllegalArgumentException")
     void vko_peerInfinity() {
         ECParameters params = ECParameters.cryptoProA();
-        PrivateKeyParameters priv = new PrivateKeyParameters(D_C_GC256B, params);
         ECPoint infinity = ECPoint.infinity(params);
-        PublicKeyParameters peerPub = new PublicKeyParameters(infinity, params);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new PublicKeyParameters(infinity, params),
+                "Точка на бесконечности должна быть отброшена конструктором PublicKeyParameters");
+    }
+
+    @Test
+    @DisplayName("VKO: точка не на кривой (invalid-curve) -> IllegalArgumentException")
+    void vko_peerOffCurve() {
+        ECParameters params = ECParameters.cryptoProA();
+        PrivateKeyParameters priv = new PrivateKeyParameters(D_C_GC256B, params);
+        ECPoint qBase = ECPoint.affine(params.gx, params.gy, params).normalize();
+        BigInteger badY = qBase.getY().add(BigInteger.ONE).mod(params.p);
+        ECPoint offCurve = ECPoint.affine(qBase.getX(), badY, params);
         try {
             assertThrows(
-                    IllegalStateException.class,
-                    () -> KeyAgreement.vkoGostR3410_2012_256(priv, peerPub, BigInteger.ONE),
-                    "Точка на бесконечности должна давать IllegalStateException");
+                    IllegalArgumentException.class,
+                    () -> new PublicKeyParameters(offCurve, params),
+                    "Точка не на кривой должна быть отброшена конструктором PublicKeyParameters");
         } finally {
             priv.destroy();
         }

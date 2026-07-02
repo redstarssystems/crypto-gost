@@ -304,14 +304,24 @@ public final class CmsSignedDataVerifier {
             }
         }
 
-        if (signedContentTypeOid != null
-                && !java.util.Arrays.equals(eContentTypeOid, signedContentTypeOid)) {
+        // RFC 5652 §5.4: signedAttrs ОБЯЗАН содержать content-type и message-digest
+        if (signedContentTypeOid == null) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "signedAttrs must contain content-type attribute (RFC 5652 §5.4)");
+        }
+        if (!java.util.Arrays.equals(eContentTypeOid, signedContentTypeOid)) {
             throw new PkixException(
                     PkixException.Reason.OTHER,
                     "contentType mismatch: signed-attr does not match eContentType");
         }
 
-        if (encapData != null && expectedDigest != null) {
+        if (expectedDigest == null) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "signedAttrs must contain message-digest attribute (RFC 5652 §5.4)");
+        }
+        if (encapData != null) {
             byte[] actualDigest = digestFor(encapData, digestOid);
             if (!java.security.MessageDigest.isEqual(expectedDigest, actualDigest)) {
                 throw new PkixException(
@@ -368,11 +378,14 @@ public final class CmsSignedDataVerifier {
         return new SignerResult(signerCert, signatureValue, signedAttributes, unsignedAttributes);
     }
 
-    private static byte[] digestFor(byte[] data, String digestOid) {
+    private static byte[] digestFor(byte[] data, String digestOid) throws PkixException {
         if (GostOids.DIGEST_512.equals(digestOid)) {
             return Digest.digest512(data);
         }
-        return Digest.digest256(data);
+        if (GostOids.DIGEST_256.equals(digestOid)) {
+            return Digest.digest256(data);
+        }
+        throw new PkixException("Unsupported digest algorithm: " + digestOid);
     }
 
     private static GostCertificate findCertByIssuerAndSerial(

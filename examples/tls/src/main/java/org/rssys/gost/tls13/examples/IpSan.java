@@ -62,7 +62,8 @@ public final class IpSan {
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs).withServerHostname("127.0.0.1"),
+                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
+                                        .withServerHostname("127.0.0.1"),
                                 clientTp)) {
 
             ExecutorService exec = Executors.newSingleThreadExecutor();

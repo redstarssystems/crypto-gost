@@ -1,12 +1,13 @@
 package org.rssys.gost.tls13.cert;
 
 import java.io.IOException;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.util.Arrays;
 import java.util.List;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.pkix.cert.ChainValidator;
 import org.rssys.gost.pkix.cert.GostCertificate;
-import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
@@ -25,6 +26,9 @@ import org.rssys.gost.tls13.message.TlsEncoding;
  * с соответствующим alert-кодом.
  */
 public final class TlsCertificateValidator {
+
+    private static final Logger LOG =
+            System.getLogger("org.rssys.gost.tls13.cert.TlsCertificateValidator");
 
     private TlsCertificateValidator() {}
 
@@ -93,60 +97,18 @@ public final class TlsCertificateValidator {
                     "Server did not provide OCSP stapling response");
         }
         boolean hasCaKeys = caPublicKeys != null && !caPublicKeys.isEmpty();
-        boolean canVerifyOcsp = hasCaKeys || chain.size() > 1;
-        if (leaf.hasOcspResponse() && canVerifyOcsp) {
-            PublicKeyParameters ocspKey =
-                    chain.size() > 1 ? chain.get(1).getPublicKey() : caPublicKeys.get(0);
+        if (leaf.hasOcspResponse()) {
             GostCertificate issuer = chain.size() > 1 ? chain.get(1) : null;
-            try {
-                TlsCertUtils.verifyOcspResponse(leaf, ocspKey, issuer);
-            } catch (TlsException e) {
-                // Если подпись OCSP не совпала с issuer-ключом — пробуем
-                // делегированные responder-сертификаты из поля certs BasicOCSPResponse
-                List<byte[]> delegatedCerts;
-                try {
-                    delegatedCerts =
-                            new GostOcspResponse(leaf.getOcspResponse()).getDelegatedCertificates();
-                } catch (PkixException pe) {
-                    throw new TlsException(
-                            TlsConstants.ALERT_BAD_CERTIFICATE,
-                            "OCSP delegated certs extraction failed: " + pe.getMessage());
-                }
-                if (!delegatedCerts.isEmpty()) {
-                    boolean verified = false;
-                    for (byte[] dcDer : delegatedCerts) {
-                        GostCertificate dc = new GostCertificate(dcDer);
-                        // 4 pre-checks для delegated responder (RFC 6960 §4.2.2.2):
-                        // дёшево -> дорого: validity, EKU, KU, signature
-                        if (dc.isExpired()) continue;
-                        if (!dc.isOcspSigning()) continue;
-                        if (!dc.isKeyUsageValid()) continue;
-                        boolean delegValid;
-                        if (issuer != null) {
-                            delegValid = dc.verifySignature(issuer.getPublicKey());
-                        } else {
-                            delegValid = false;
-                            for (PublicKeyParameters k : caPublicKeys) {
-                                if (dc.verifySignature(k)) {
-                                    delegValid = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!delegValid) continue;
-                        PublicKeyParameters dcKey = dc.getPublicKey();
-                        try {
-                            TlsCertUtils.verifyOcspResponse(leaf, dcKey, issuer);
-                            verified = true;
-                            break;
-                        } catch (TlsException ignored) {
-                            // Пробуем следующий cert
-                        }
-                    }
-                    if (!verified) throw e; // Ни один delegated cert не подошёл
-                } else {
-                    throw e; // Нет delegated certs — перевыбрасываем оригинальную ошибку
-                }
+            if (issuer != null) {
+                TlsCertUtils.verifyOcspResponse(leaf, issuer);
+            } else if (requireOcspStapling) {
+                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                        "OCSP stapling required but no issuer certificate available"
+                                + " for verification");
+            } else {
+                LOG.log(Level.WARNING,
+                        "OCSP response present but no issuer certificate available"
+                                + " — skipping verification");
             }
         }
 
@@ -157,8 +119,7 @@ public final class TlsCertificateValidator {
         for (int i = 1; i < chain.size() - 1; i++) {
             GostCertificate ic = chain.get(i);
             if (ic.hasOcspResponse()) {
-                GostCertificate icIssuer = chain.get(i + 1);
-                TlsCertUtils.verifyOcspResponse(ic, icIssuer.getPublicKey(), icIssuer);
+                TlsCertUtils.verifyOcspResponse(ic, chain.get(i + 1));
             }
         }
 

@@ -145,8 +145,28 @@ public class Cmac implements Mac {
     @Override
     public void reset() {
         java.util.Arrays.fill(buf, (byte) 0);
+        // mac содержит последний вычисленный блок — затираем для консистентности с destroy().
+        if (mac != null) {
+            java.util.Arrays.fill(mac, (byte) 0);
+        }
         bufOff = 0;
         cipher.reset();
+    }
+
+    @Override
+    public void destroy() {
+        cipher.destroy();
+        if (mac != null) {
+            java.util.Arrays.fill(mac, (byte) 0);
+        }
+        if (Lu != null) {
+            java.util.Arrays.fill(Lu, (byte) 0);
+        }
+        if (Lu2 != null) {
+            java.util.Arrays.fill(Lu2, (byte) 0);
+        }
+        java.util.Arrays.fill(buf, (byte) 0);
+        bufOff = 0;
     }
 
     /**

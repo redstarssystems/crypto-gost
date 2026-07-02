@@ -120,6 +120,13 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         this.crlPolicy = crlPolicy;
         this.crlFetcher = crlFetcher;
         this.crlCache = crlPolicy != CrlPolicy.DISABLED ? new CrlCache() : null;
+        if (caPublicKeys == null || caPublicKeys.isEmpty()) {
+            LOG.log(
+                    Level.WARNING,
+                    "TrustManager created without CA public keys — "
+                    + "certificate chain validation DISABLED. "
+                    + "Use GostSslDev.trustAllClientContextInsecure() if this is intentional.");
+        }
     }
 
     /**
@@ -140,6 +147,13 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         return null;
     }
 
+    // ========================================================================
+    // Интерфейсные stubs X509TrustManager — реальная валидация идёт через
+    // validateChainWithOcsp(), вызываемый напрямую из GostSSLEngine.
+    // Эти методы существуют только для совместимости с JSSE API и не вызываются
+    // провайдером crypto-gost-jsse ни в одном код-пути handshake.
+    // ========================================================================
+
     @Override
     public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket)
             throws CertificateException {
@@ -158,12 +172,26 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         checkClientTrustedImpl(chain);
     }
 
+    /**
+     * Не вызывается GostSSLSocket — реальная валидация серверного сертификата
+     * идёт через {@link #validateChainWithOcsp} из GostSSLEngine.
+     * <p>
+     * {@code socket} игнорируется — {@link SSLSocket} не раскрывает hostname
+     * соединения через стандартный JSSE API. Hostname-проверку на сокет-пути
+     * обеспечивает {@link org.rssys.gost.jsse.GostSsl#socket(String, int, SSLContext)}
+     * вызовом {@code setEndpointIdentificationAlgorithm("HTTPS")}.
+     */
     @Override
     public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket)
             throws CertificateException {
         checkServerTrustedImpl(chain, null);
     }
 
+    /**
+     * Не вызывается GostSSLEngine — реальная валидация серверного сертификата
+     * идёт через {@link #validateChainWithOcsp}, где hostname извлекается
+     * через {@link #extractHostnameForEndpointId(SSLEngine)}.
+     */
     @Override
     public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine)
             throws CertificateException {

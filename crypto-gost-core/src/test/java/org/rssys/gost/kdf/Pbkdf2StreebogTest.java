@@ -260,6 +260,19 @@ class Pbkdf2StreebogTest {
                                 -1));
     }
 
+    @Test
+    @DisplayName("c > MAX_ITERATIONS -> IllegalArgumentException")
+    void testCExceedsMax() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        Pbkdf2Streebog.generate(
+                                "p".getBytes(StandardCharsets.US_ASCII),
+                                "s".getBytes(StandardCharsets.US_ASCII),
+                                Pbkdf2Streebog.MAX_ITERATIONS + 1,
+                                32));
+    }
+
     // ========================================================================
     // helpers
     // ========================================================================

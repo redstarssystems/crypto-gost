@@ -1593,14 +1593,20 @@ public final class TlsHandshakeEngine {
         // PSK
         pskAccepted = false;
         byte[] pskIdentityRaw = TlsMessageParser.parseClientHelloPskIdentity(chBody);
-        // auto-PSK lookup from server store if no explicit pskKey
+        // Авто-поиск PSK в серверном сторе, если явный pskKey не задан
+        boolean pskKeyFromStore = false;
         if (pskIdentityRaw != null && pskKey == null && serverPskStore != null) {
-            PskEntry entry = serverPskStore.get(pskIdentityRaw);
+            // peek() — lookup без удаления из стора. Верификация binder ниже.
+            // Если binder провалится, тикет останется в сторе для повторных попыток.
+            // Неатомарность peek→verify→get не является проблемой безопасности:
+            //   - если другой поток успел забрать тикет между peek и get,
+            //     get() вернёт null → pskAccepted останется false → full handshake;
+            //   - при TCP-ретрансмите второй remove() вернёт null безвредно.
+            // Атомарная синхронизация здесь избыточна и ударила бы по горячему пути.
+            PskEntry entry = serverPskStore.peek(pskIdentityRaw);
             if (entry != null && !entry.isExpired(System.currentTimeMillis())) {
                 pskKey = entry.getPsk();
-            }
-            if (entry != null) {
-                entry.destroy();
+                pskKeyFromStore = true;
             }
         }
         if (pskIdentityRaw != null && pskKey != null) {
@@ -1615,10 +1621,38 @@ public final class TlsHandshakeEngine {
                             TlsConstants.ALERT_HANDSHAKE_FAILURE,
                             "PSK binder verification failed for CH2 after HRR");
                 }
+                // Тикет потреблён в CH1; CH2 только верифицирует binder
+                // (RFC 8446 §4.2.11: PSK в CH2 присутствует только если был в CH1
+                // с корректным binder-ом). Повторный get() не нужен.
+                //
+                // KNOWN EDGE-CASE (не компрометация ключей, но семантически — баг):
+                // При гонке peek->get в CH1 (другое соединение забрало тикет между
+                // peek() и get()) consumed==null -> pskAccepted=false в CH1, но pskKey
+                // уже установлен. Если дополнительно сработал HRR, CH2 завершается
+                // в PSK-режиме без повторного get(). Следствие: два соединения
+                // деривируют сессию из одного тикета — нарушение single-use семантики
+                // RFC 8446 §4.6.1, но сессионные ключи не компрометированы
+                // (разные ECDHE shared secrets -> разные application keys).
+                // Добавление get() здесь сломает штатный HRR+PSK:
+                // при нормальном потоке тикет уже потреблён в CH1 и get() вернёт null.
+                // Правильное исправление — instance-флаги pskConsumedInCh1 + pskFromStore:
+                // CH1 сохраняет факт потребления в pskConsumedInCh1, CH2 проверяет оба флага
+                // и при consumed==null откатывает к full handshake.
+                // Отложено: сценарий требует shared PskStore между соединениями +
+                // узкое окно гонки + HRR. InMemoryPskStore не шарится между JVM.
+                // реализовать при появлении production PskStore (Redis, etc.)
                 pskAccepted = true;
             } else {
                 if (TlsPskHelper.verifyBinder(chBody, pskKey, hashLen)) {
-                    pskAccepted = true;
+                    if (pskKeyFromStore) {
+                        PskEntry consumed = serverPskStore.get(pskIdentityRaw);
+                        if (consumed != null) {
+                            consumed.destroy();
+                            pskAccepted = true;
+                        }
+                    } else {
+                        pskAccepted = true;
+                    }
                 } else {
                     throw new TlsException(
                             TlsConstants.ALERT_HANDSHAKE_FAILURE, "PSK binder verification failed");

@@ -1,7 +1,6 @@
-package org.rssys.gost.tls13.cert;
+package org.rssys.gost.pkix.cert;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.rssys.gost.tls13.TlsTestHelper.*;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -17,7 +16,6 @@ import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 import org.rssys.gost.pkix.cert.Pkcs12Loader;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 @DisplayName("Pkcs12Loader — загрузка PFX-контейнеров через JDK KeyStore")
 @SuppressWarnings("deprecation")
@@ -72,16 +70,16 @@ class Pkcs12LoaderTest {
 
     private static byte[] buildGostPfxViaJdk() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         return storePfx("server", bundle.priv, bundle.cert);
     }
 
     private static byte[] buildGostChainPfxViaJdk() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle ca = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         ca.priv,
                         ca.cert.getPublicKey(),

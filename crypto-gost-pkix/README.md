@@ -97,7 +97,7 @@ X.509-сертификаты и PKCS#12:
     // GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), params);
 
 В production загружайте сертификат и ключ из PKCS#12 через
-`GostPkcs12Loader` (см. раздел [???](#PKCS#12)).
+`GostPkcs12Loader` (см. раздел PKCS#12).
 
 ## GostCertificate — загрузка и верификация X.509
 
@@ -418,7 +418,7 @@ Delta CRL нельзя верифицировать изолированно. П
 
     // CRL-расширения (доступны после verify)
     BigInteger crlNum = crl.getCrlNumber();        // cRLNumber из расширения
-    ReasonCode code = crl.getReason(serial);        // причина отзыва конкретного сертификата
+    ReasonCode code = crl.getReason(cert.getSerialNumber());        // причина отзыва конкретного сертификата
     boolean isDelta = crl.isDelta();                // true если CRL — delta
 
     // Экспорт в PEM
@@ -571,8 +571,8 @@ CA. Позволяет извлечь статус, даты, серийные �
     byte[] extracted = result.data(); // == data
     GostCertificate signer = result.signerCertificate();
 
-`verify()` возвращает первого валидного подписанта (OR-семантика). Если
-нужна гарантия, что **все** подписанты прошли проверку, используйте
+`verifyAny()` возвращает первого валидного подписанта (OR-семантика).
+Если нужна гарантия, что **все** подписанты прошли проверку, используйте
 `verifyAll()` — он вернёт `MultiSignerVerifiedData` со списком всех
 подписантов, либо бросит `PkixException` с указанием, какой именно
 подписант не прошёл верификацию.
@@ -631,7 +631,7 @@ CA. Позволяет извлечь статус, даты, серийные �
 
 ## CAdES — долговременная электронная подпись
 
-### Что такое CAdES и зачем нужен TSP
+### Что такое CAdES и TSP
 
 **CAdES** (CMS Advanced Electronic Signatures, ETSI EN 319 122) —
 стандарт долговременной электронной подписи. Расширяет CMS SignedData
@@ -649,9 +649,13 @@ unsigned-атрибуты SignerInfo. Метка криптографическ�
 подпись существовала на момент `genTime` — сертификат подписанта
 проверяется относительно этого момента, а не текущего.
 
-**Уровни CAdES:** - **CAdES-BES** — базовая подпись: SignedData +
-`signingCertificateV2` (связка подписи с сертификатом). - **CAdES-T** —
-BES + метка времени `signature-time-stamp` в unsigned-атрибутах.
+**Уровни CAdES:**
+
+- **CAdES-BES** — базовая подпись: SignedData + `signingCertificateV2`
+  (связка подписи с сертификатом).
+
+- **CAdES-T** — BES + метка времени `signature-time-stamp` в
+  unsigned-атрибутах.
 
 ### CAdES-BES — базовая электронная подпись
 
@@ -701,11 +705,16 @@ DER, без метки времени. Его можно свободно пер
 Протокол TSP (Time-Stamp Protocol, RFC 3161) — стандарт IETF для
 получения криптографических меток времени от службы TSA.
 
-**Принцип работы:** . Приложение вычисляет хэш данных (signature
-подписанта) и отправляет `TimeStampReq`. . TSA подписывает
-`TimeStampToken` (CMS SignedData с `TSTInfo` внутри) и возвращает
-`TimeStampResp`. . Приложение проверяет подпись TSA и совпадение хэша —
-метка действительна.
+**Принцип работы:**
+
+1.  Приложение вычисляет хэш данных (signature подписанта) и отправляет
+    `TimeStampReq`.
+
+2.  TSA подписывает `TimeStampToken` (CMS SignedData с `TSTInfo` внутри)
+    и возвращает `TimeStampResp`.
+
+3.  Приложение проверяет подпись TSA и совпадение хэша — метка
+    действительна.
 
 TSP-ответ — публичный документ. Его можно проверить с открытым ключом
 TSA. Передача по незащищённому каналу допустима.
@@ -746,7 +755,7 @@ TSA. Передача по незащищённому каналу допуст�
     byte[] tspRespDer = transport.send(tspReq, "http://tsa.example.com/tsa");
 
     // Разбираем ответ
-    TspResponse tspResponse = TspResponse.parse(tspRespDer);
+    TspResponse tspResponse = TspResponse.fromDer(tspRespDer);
 
     // Проверяем статус
     if (tspResponse.status() != GostOids.PKI_STATUS_GRANTED) {
@@ -797,7 +806,7 @@ SignedData). . **Цепочку сертификатов TSA** через `Chain
     byte[] requestDer = ...;  // тело HTTP POST от клиента
 
     // 1. Разбираем запрос
-    TspRequest request = TspRequest.parse(requestDer);
+    TspRequest request = TspRequest.fromDer(requestDer);
 
     // 2. Проверяем алгоритм хэширования
     if (!GostOids.DIGEST_256.equals(request.messageImprintAlgOid())) {

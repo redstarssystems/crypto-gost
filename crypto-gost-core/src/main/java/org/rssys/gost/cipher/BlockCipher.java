@@ -13,4 +13,10 @@ public interface BlockCipher {
             throws DataLengthException, IllegalStateException;
 
     void reset();
+
+    /**
+     * Обнуляет ключевой материал и внутреннее состояние.
+     * После вызова экземпляр можно повторно инициализировать через {@link #init}.
+     */
+    default void destroy() {}
 }

@@ -68,9 +68,8 @@ public final class OcspStapling {
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs)
-                                        .withServerHostname("localhost")
-                                        .withCaPublicKey(ca.getPublicKey()),
+                                new TlsClientConfig(cs, ca.getPublicKey())
+                                        .withServerHostname("localhost"),
                                 clientTp)) {
 
             ExecutorService exec = Executors.newSingleThreadExecutor();

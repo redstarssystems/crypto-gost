@@ -78,11 +78,10 @@
     Все криптографические операции выполняются встроенными средствами
     библиотеки — без внешних зависимостей.
 
-## Быстрый старт — примеры для начинающих
+## Быстрый старт
 
 Примеры ниже используют только публичное API модулей `crypto-gost-core`
-и `crypto-gost-pkix`. Код компилируется и работает сразу после
-добавления `crypto-gost-jsse` в зависимости проекта.
+и `crypto-gost-pkix`.
 
 ### Генерация тестовых сертификатов
 
@@ -193,8 +192,9 @@ PKCS12 (см. ниже).
 ### Взаимная аутентификация (mTLS)
 
 Клиент предоставляет свой сертификат — сервер проверяет его по тому же
-CA. Переменные `params`, `caDn`, `serverPem`, `serverKeyPem`, `caPem` —
-из раздела «Генерация тестовых сертификатов» выше.
+CA. Переменные `params`, `caDn`, `caKp` — из раздела «Генерация тестовых
+сертификатов» выше. Переменные `serverPem`, `serverKeyPem`, `caPem`
+(`byte[]`) — из примера «Эхо-сервер» (результат `Files.readAllBytes`).
 
     // Сервер: требует клиентский сертификат
     SSLContext srv = GostSsl.builder()
@@ -312,7 +312,7 @@ KeyManagerFactory, TrustManagerFactory, JKS.
         Files.readAllBytes(Paths.get("encrypted-key.pem")),
         "password".toCharArray());
 
-### GostSslBuilder — fluent API
+### GostSslBuilder
 
 Полный перечень методов строителя. Терминальные методы —
 `buildServerContext()` и `buildClientContext()`.
@@ -539,10 +539,11 @@ mTLS — клиент предоставляет свой сертификат:
     SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
     ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
 
-Для проверки hostname установите
-`SSLParameters.setEndpointIdentificationAlgorithm("HTTPS")`.
-`GostX509TrustManager` проверяет `dNSName`/`iPAddress` сертификата по
-RFC 6125.
+Без проверки hostname клиент уязвим для MITM-атак.
+`GostSSLEngine.createForClient()` включает проверку hostname по RFC 6125
+автоматически (`endpointIdentificationAlgorithm = "HTTPS"`). Для тестов
+и изолированных сетей используйте `createForClientNoHostnameCheck()`
+(логгирует WARNING при каждом вызове).
 
 ### Выбор клиентского сертификата по OID-фильтрам (oid\_filters)
 
@@ -551,16 +552,13 @@ RFC 6125.
 выбирает подходящий сертификат:
 
     import org.rssys.gost.jsse.manager.GostX509KeyManager;
-    import org.rssys.gost.tls13.config.ClientCertificateSelector;
 
     GostX509KeyManager km = new GostX509KeyManager();
     km.addKeyEntry("kc1", kc1Chain, kc1Key);   // EKU: clientAuth
     km.addKeyEntry("simple", simpleChain, simpleKey);
 
-    ClientCertificateSelector selector = km.asClientCertificateSelector();
-
     GostSSLEngine engine = GostSSLEngine.createForClient(km, tm, "host", 8443, sessionCtx);
-    // При CertificateRequest с oid_filters selector вызывается автоматически
+    // При CertificateRequest с oid_filters engine сам вызывает km.asClientCertificateSelector()
 
 Записи перебираются в порядке добавления. Возвращается первая,
 удовлетворяющая всем фильтрам.
@@ -739,6 +737,10 @@ CRL-ответы кэшируются до `nextUpdate`, с grace-периодо
 ## Интеграция с серверами приложений
 
 ### Общие принципы
+
+Версии серверов в примерах указаны на момент проверки (июнь 2026). При
+смене мажорной версии API может измениться — сверяйтесь с документацией
+сервера.
 
 Во всех примерах ниже используется готовый `SSLContext`, созданный по
 одному из двух шаблонов:
@@ -1093,8 +1095,6 @@ Tomcat 11 не предоставляет публичного API для пря
     import javax.net.ssl.X509TrustManager;
     import java.util.List;
     import java.util.Map;
-
-    ExamplesCertHelper helper = new ExamplesCertHelper();
 
     Connector connector = new Connector("HTTP/1.1");
     connector.setPort(8443);
@@ -1467,7 +1467,7 @@ resumption, reconnect под нагрузкой и таймауты в сете�
 обрывам, выявлени максимума одновременных сессий.
 
 Описание методики стресс-теста приведено [в
-документе](doc/stress-test.md).
+документе](doc/stress-test-05.md).
 
     # Полный прогон (5 минут)
     make -C examples/jsse test-stress

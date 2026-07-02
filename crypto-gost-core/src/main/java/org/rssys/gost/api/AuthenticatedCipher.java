@@ -135,10 +135,14 @@ public final class AuthenticatedCipher {
     static byte[] ctrEncrypt(byte[] data, SymmetricKey key, byte[] iv) {
         if (data.length == 0) return new byte[0];
         Ctr ctr = new Ctr(new Kuznyechik());
-        ctr.init(true, new ParametersWithIV(key, iv));
-        byte[] out = new byte[data.length];
-        ctr.processBytes(data, 0, data.length, out, 0);
-        return out;
+        try {
+            ctr.init(true, new ParametersWithIV(key, iv));
+            byte[] out = new byte[data.length];
+            ctr.processBytes(data, 0, data.length, out, 0);
+            return out;
+        } finally {
+            ctr.destroy();
+        }
     }
 
     /**
@@ -158,13 +162,17 @@ public final class AuthenticatedCipher {
      */
     static byte[] computeCmac(byte[] aad, byte[] data, SymmetricKey key) {
         Cmac cmac = new Cmac(new Kuznyechik());
-        cmac.init(key);
-        if (aad != null) {
-            cmac.update(aad, 0, aad.length);
+        try {
+            cmac.init(key);
+            if (aad != null) {
+                cmac.update(aad, 0, aad.length);
+            }
+            cmac.update(data, 0, data.length);
+            byte[] tag = new byte[cmac.getMacSize()];
+            cmac.doFinal(tag, 0);
+            return tag;
+        } finally {
+            cmac.destroy();
         }
-        cmac.update(data, 0, data.length);
-        byte[] tag = new byte[cmac.getMacSize()];
-        cmac.doFinal(tag, 0);
-        return tag;
     }
 }

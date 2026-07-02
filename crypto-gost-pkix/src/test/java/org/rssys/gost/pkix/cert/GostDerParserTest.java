@@ -231,4 +231,57 @@ class GostDerParserTest {
         assertEquals(
                 "0.9.2342.19200300.100.1.1", result, "UID OID с multi-byte компонентом 19200300");
     }
+
+    // ========================================================================
+    // parseLength: минимальность long-form и запрет indefinite (X.690 §10.1)
+    // ========================================================================
+
+    @Test
+    @DisplayName("parseLength: 0x81 0x05 (влезает в short-form) -> исключение")
+    void parseLengthNonMinimal81() {
+        byte[] der = {(byte) 0x81, 0x05};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> parseLength(der, 0),
+                "неминимальный 0x81 0x05 должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("parseLength: 0x81 0x80 (минимальное валидное long-form) -> 128")
+    void parseLengthMinimal81() {
+        byte[] der = {(byte) 0x81, (byte) 0x80};
+        int[] result = parseLength(der, 0);
+        assertEquals(2, result[0], "байт под длину должно быть 2");
+        assertEquals(128, result[1], "длина должна быть 128");
+    }
+
+    @Test
+    @DisplayName("parseLength: 0x82 0x00 0xFF (влезает в 0x81) -> исключение")
+    void parseLengthNonMinimal82() {
+        byte[] der = {(byte) 0x82, 0x00, (byte) 0xFF};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> parseLength(der, 0),
+                "неминимальный 0x82 0x00 0xFF должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("parseLength: 0x82 0x01 0x00 (минимальное валидное) -> 256")
+    void parseLengthMinimal82() {
+        byte[] der = {(byte) 0x82, 0x01, 0x00};
+        int[] result = parseLength(der, 0);
+        assertEquals(3, result[0], "байт под длину должно быть 3");
+        assertEquals(256, result[1], "длина должна быть 256");
+    }
+
+    @Test
+    @DisplayName("parseLength: 0x80 (BER indefinite) -> исключение")
+    void parseLengthIndefiniteRejected() {
+        // Строгий DER-парсер сертификатов не должен принимать indefinite-length.
+        byte[] der = {(byte) 0x80};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> parseLength(der, 0),
+                "indefinite-length (0x80) должен отклоняться");
+    }
 }

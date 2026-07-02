@@ -41,18 +41,34 @@ public final class Pkcs7Padding {
             throw new IllegalArgumentException("data must not be null or empty");
         }
         if (data.length % blockSize != 0) {
-            throw new IllegalArgumentException(
-                    "data length " + data.length + " is not a multiple of blockSize " + blockSize);
+            throw new IllegalArgumentException("data length is not a multiple of block size");
         }
         int padLen = data[data.length - 1] & 0xFF;
-        if (padLen < 1 || padLen > blockSize) {
-            throw new IllegalArgumentException("invalid PKCS#7 padding byte: " + padLen);
+
+        // Best-effort constant-time: без early-exit и без data-dependent длины цикла.
+        // Полный constant-time в JVM недостижим (JIT, bounds-checks), но убираем
+        // явные тайминг-различия «быстрый reject vs медленная проверка» (Vaudenay).
+        // Единое решение о валидности принимается один раз в конце по маске bad.
+        //
+        // Внимание: длина возвращаемого массива всё равно раскрывает padLen — это
+        // неустранимо на уровне API и не является утечкой сверх факта расшифрования.
+        int lastBlockStart = data.length - blockSize;
+
+        // Проверка диапазона padLen в [1, blockSize] без ветвления: bad != 0 при нарушении.
+        int bad = ((padLen - 1) | (blockSize - padLen)) >> 31;
+
+        // Сканируем весь последний блок фиксированной длины blockSize.
+        // Байт на позиции i относится к padding, если i >= blockSize - padLen.
+        int threshold = blockSize - padLen;
+        for (int i = 0; i < blockSize; i++) {
+            int b = data[lastBlockStart + i] & 0xFF;
+            // isPadMask = 0xFFFFFFFF, если i >= threshold, иначе 0.
+            int isPadMask = (threshold - i - 1) >> 31;
+            bad |= (b ^ padLen) & isPadMask;
         }
-        // Проверяем что все padding-байты одинаковы (защита от некорректных данных)
-        for (int i = data.length - padLen; i < data.length; i++) {
-            if ((data[i] & 0xFF) != padLen) {
-                throw new IllegalArgumentException("invalid PKCS#7 padding: inconsistent bytes");
-            }
+
+        if (bad != 0) {
+            throw new IllegalArgumentException("invalid PKCS#7 padding");
         }
         byte[] result = new byte[data.length - padLen];
         System.arraycopy(data, 0, result, 0, result.length);

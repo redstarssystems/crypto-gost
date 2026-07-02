@@ -164,6 +164,24 @@ abstract class AbstractStreamMode implements BlockCipher {
     }
 
     /**
+     * Обнуляет базовый шифр и затирает регистры сдвига.
+     * После вызова экземпляр непригоден для использования.
+     */
+    @Override
+    public void destroy() {
+        cipher.destroy();
+        if (R != null) {
+            java.util.Arrays.fill(R, (byte) 0);
+            R = null;
+        }
+        if (R_init != null) {
+            java.util.Arrays.fill(R_init, (byte) 0);
+            R_init = null;
+        }
+        initialized = false;
+    }
+
+    /**
      * Извлекает и валидирует IV из параметров.
      * Бросает {@link IllegalArgumentException} если параметры не содержат IV
      * или IV короче размера блока.

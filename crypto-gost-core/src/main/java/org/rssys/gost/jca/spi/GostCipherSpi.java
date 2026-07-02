@@ -12,7 +12,6 @@ import javax.crypto.BadPaddingException;
 import javax.crypto.CipherSpi;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
-import javax.crypto.SecretKey;
 import javax.crypto.ShortBufferException;
 import javax.crypto.spec.IvParameterSpec;
 import org.rssys.gost.cipher.BlockCipher;
@@ -23,7 +22,6 @@ import org.rssys.gost.cipher.mode.Cbc;
 import org.rssys.gost.cipher.mode.Cfb;
 import org.rssys.gost.cipher.mode.Ctr;
 import org.rssys.gost.cipher.mode.Ofb;
-import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.util.ISO7816d4Padding;
 import org.rssys.gost.util.Pkcs7Padding;
@@ -310,6 +308,10 @@ public final class GostCipherSpi extends CipherSpi {
      */
     private void initCipher(SymmetricKey keyParam, byte[] iv) {
         this.currentIv = Arrays.copyOf(iv, iv.length);
+
+        if (cipher != null) {
+            cipher.destroy();
+        }
         this.inputBuffer = new byte[0];
 
         ParametersWithIV params = new ParametersWithIV(keyParam, iv);
@@ -443,7 +445,7 @@ public final class GostCipherSpi extends CipherSpi {
                 return Arrays.copyOf(decrypted, decrypted.length - padCount);
             }
         } catch (Exception e) {
-            throw new BadPaddingException("Invalid padding: " + e.getMessage());
+            throw new BadPaddingException("Invalid padding");
         }
     }
 
@@ -486,31 +488,10 @@ public final class GostCipherSpi extends CipherSpi {
     }
 
     /**
-     * Извлекает {@link SymmetricKey} из JCA-ключа.
-     * Принимает {@link GostSecretKey} или любой {@link SecretKey} с форматом RAW.
+     * Извлекает {@link SymmetricKey} из JCA-ключа через общий {@link SymmetricKeyExtractor}.
      */
     private static SymmetricKey extractSymmetricKey(Key key) throws InvalidKeyException {
-        if (key == null) {
-            throw new InvalidKeyException("Key must not be null");
-        }
-        if (key instanceof GostSecretKey) {
-            return ((GostSecretKey) key).toSymmetricKey();
-        }
-        if (key instanceof SecretKey && "RAW".equals(key.getFormat())) {
-            byte[] encoded = key.getEncoded();
-            if (encoded == null || encoded.length == 0) {
-                throw new InvalidKeyException("Key encoding is null or empty");
-            }
-            if (encoded.length != Kuznyechik.KEY_SIZE) {
-                throw new InvalidKeyException(
-                        "Kuznyechik requires 32-byte key, got " + encoded.length);
-            }
-            return new SymmetricKey(encoded);
-        }
-        throw new InvalidKeyException(
-                "Unsupported key type: "
-                        + key.getClass().getName()
-                        + ". Expected GostSecretKey or SecretKey with RAW format");
+        return SymmetricKeyExtractor.fromKey(key);
     }
 
     private void checkInitialized() {

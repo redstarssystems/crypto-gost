@@ -222,7 +222,7 @@ class OpenSslPkcs12CrossValidationTest {
             OpenSslPkcs12Helper.verifyPfxStructureWithOpenSsl(ourPfxFile, PASSWORD_STR);
 
             // Roundtrip: наш PFX -> loader -> ключ и подпись
-            GostPkcs12Loader.Result r2 = GostPkcs12Loader.load(ourPfx, PASSWORD, true);
+            GostPkcs12Loader.Result r2 = GostPkcs12Loader.load(ourPfx, PASSWORD, true, 50);
             assertNotNull(r2.getPrivateKey(), spec + ": roundtrip privateKey");
 
             byte[] msg = "cross-validation".getBytes(StandardCharsets.UTF_8);

@@ -66,7 +66,7 @@ public final class TlsEncoding {
         BigInteger x = new BigInteger(1, xBe);
         BigInteger y = new BigInteger(1, yBe);
         ECPoint q = ECPoint.affine(x, y, params);
-        if (!q.isOnCurve()) {
+        if (!q.isValidPublicKey()) {
             throw new TlsException(
                     TlsConstants.ALERT_HANDSHAKE_FAILURE,
                     "ECDHE public key point is not on the curve");

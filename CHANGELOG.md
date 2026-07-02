@@ -1,3 +1,272 @@
+# \[0.6.1\] - 02-07-2026
+
+Данный релиз целиком посвящен устранению проблем безопасности,
+выявленных в ходе аудита. Этот релиз содержит также небольшой **breaking
+change**, но он был необходим.
+
+**Новой функциональности в этом релизе нет.**
+
+## Модуль crypto-gost-tls13
+
+### Исправлено (безопасность)
+
+- **Небезопасный дефолт в TLS-клиенте (P0, CWE-295).** `TlsClientConfig`
+  теперь требует CA-ключ обязательно в конструкторе. Прежний конструктор
+  `TlsClientConfig(ciphersuite)` удалён: он позволял создать клиента без
+  проверки сертификата сервера, что открывало MITM-атаку с
+  самоподписанным ГОСТ-сертификатом.
+
+- **Отсутствие проверки hostname при наличии CA (P1).** Прежние фабрики
+  `createClient(transport, cs, cert, key)` и
+  `createClient(transport, cs, cert, key, caKey)` удалены — они не
+  передавали hostname, что позволяло сертификату `evil.example.com` от
+  того же CA пройти при подключении к `api.example.com`.
+
+- **Защита в `TlsSession.createClient()`** — при отсутствии hostname и
+  без явного `withoutHostnameVerification()` создание сессии завершается
+  `IllegalArgumentException`. Это ломающее изменение для кода, который
+  передавал `TlsClientConfig` без hostname.
+
+- **PSK-тикет более не теряется при неверном подтверждении клиента
+  (P1).** Ранее тикет безвозвратно изымался из хранилища до проверки
+  подтверждения — злоумышленник мог уничтожить чужой тикет,
+  подключившись с тем же идентификатором и заведомо неверным
+  подтверждением. Теперь тикет изымается только после успешной проверки.
+  При неудаче тикет остаётся в хранилище, клиент выполняет полное
+  согласование без потери сессии.
+
+### Добавлено
+
+- **`TlsSession.createClientWithoutServerAuth()`** — явный небезопасный
+  путь для тестов и отладки. Имя метода сигнализирует об отсутствии
+  аутентификации сервера, аналогично
+  `GostSslDev.trustAllClientContextInsecure()` в модуле
+  `crypto-gost-jsse`.
+
+- **`TlsClientConfig.withoutHostnameVerification()`** — явное отключение
+  проверки hostname. Для mesh-сервисов, IP-соединений и тестов, где
+  CA-аутентификация обязательна, но DNS-имя не используется. Без вызова
+  этого метода или `withServerHostname()` `createClient()` бросает
+  `IllegalArgumentException`.
+
+### Изменено
+
+- **Перенос логики делегированных OCSP-подписантов в
+  `crypto-gost-pkix`.** Проверка цепочки и полномочий делегированных
+  responder-сертификатов перенесена из `TlsCertificateValidator` в
+  `OcspVerifier`. Код проверки OCSP на транспортном уровне сократился
+  более чем вдвое.
+
+## Модуль crypto-gost-jsse
+
+### Добавлено
+
+- **`SsrfGuard`** — общий утилитный класс для SSRF-защиты при
+  HTTP-запросах по внешним URI. Блокирует private/reserved IP после
+  DNS-разрешения (localhost, loopback, site-local, link-local,
+  multicast). Fail-closed при неразрешаемом хосте.
+
+- **`GostSSLEngine.createForClient()` — теперь включает проверку
+  hostname по RFC 6125 по умолчанию.**
+  `endpointIdentificationAlgorithm = "HTTPS"` устанавливается
+  автоматически. Устранена MITM-уязвимость (CWE-297) при использовании
+  `createForClient()` без явной проверки hostname.
+
+- **`GostSSLEngine.createForClientNoHostnameCheck()`** — явный
+  небезопасный путь для тестов, dev-сред и изолированных сетей. Имя
+  метода и LOG.WARNING при каждом вызове сигнализируют об отсутствии
+  проверки hostname.
+
+### Исправлено
+
+- **SSRF-уязвимость в `JdkHttpOcspFetcher` (CWE-918).** OCSP-запросы по
+  URI из AIA-расширения непроверенного сертификата теперь проходят
+  SSRF-проверку через `SsrfGuard.isPrivateAddress()`. Ранее
+  блокировалась только не-HTTP схема, но не private/reserved IP —
+  злоумышленник мог заставить TrustManager выполнить HTTP-запрос на
+  внутренний адрес (metadata endpoints, админки). `JdkHttpCrlFetcher`
+  переведён на тот же `SsrfGuard` (устранено дублирование).
+
+- **Ключи readerRecord/writerRecord теперь затираются при закрытии
+  соединения.** `destroyHandshakeEngine()` вызывал `destroy()` только на
+  pending-ключах и handshakeEngine — активные traffic-ключи текущей
+  эпохи оставались в heap. Исправлено: `readerRecord.destroy()` +
+  `writerRecord.destroy()` + обнуление ссылок.
+
+- **Добавлены WARNING в `GostSslBuilder.trustAll()` и конструкторе
+  `GostX509TrustManager` при отсутствии CA-ключей.** Защита от
+  случайного использования trust-all в production.
+  `GostSslDev.trustAllClientContextInsecure()` — единственный легитимный
+  путь.
+
+- **SSRF-защита в `SsrfGuard`: устранены два обхода через IPv6.** Адреса
+  `[::]` (IPv6 unspecified) не блокировались — добавлен предикат
+  `isAnyLocalAddress()`. Диапазон `fc00::/7` (RFC 4193, Unique Local
+  Address) не блокировался — добавлена побитовая проверка первого байта.
+
+## Модуль crypto-gost-core
+
+### Исправлено (безопасность)
+
+- **Атака через подмену точки открытого ключа (CWE-347, invalid-curve
+  attack).** Операции скалярного умножения в `ECPoint` не используют
+  параметр `b` кривой, поэтому принимали точку с другой кривой с гладким
+  порядком. Атакующий, контролирующий открытый ключ пира (в CMS, TLS
+  ECDHE, JCA KeyAgreement), мог восстановить приватный ключ через
+  оракул. Добавлен метод `ECPoint.isValidPublicKey()` с проверкой
+  принадлежности кривой и подгруппе; проверка применена во всех точках
+  входа: конструктор `PublicKeyParameters`, `KeyAgreement.vko()`,
+  `GostDerCodec.decodePublicKey()`,
+  `GostKeyFactorySpi.engineGeneratePublic()`,
+  `TlsEncoding.decodePoint()`.
+
+- **Зачистка ключевого материала в режимах шифрования и MAC.** Режимные
+  классы (`Cbc`, `Cfb`, `Ofb`, `Ctr`, `CtrAcpkmMode`, `Mgm`), `Cmac`,
+  `Hmac` и JCA-обёртки (`GostCipherSpi`, `GostMacSpi`) теперь затирают
+  ключевой материал при переинициализации и завершении через
+  `destroy()`. Ранее ключевые байты оставались в heap до сборки GC.
+
+- **Закрытый ключ в `ECDSASigner` затирается при смене роли.** При
+  переинициализации в режим верификации поле `dBytes` обнулялось через
+  `= null` без затирания байтов. Теперь вызывается
+  `Arrays.fill(dBytes, (byte) 0)` перед обнулением ссылки.
+
+- **Constant-time удаление ISO 7816-4 паддинга.**
+  `ISO7816d4Padding.padCount()` переписан без раннего выхода — тайминг
+  не зависит от позиции маркера `0x80`. Добавлена явная проверка нулевых
+  байт между маркером и концом блока.
+
+- **Constant-time удаление PKCS#7 паддинга.**
+  `Pkcs7Padding.removePadding()` переписан без раннего выхода — цикл
+  проверки всегда проходит все padding-байты.
+
+- **MGM: ключевое состояние не затиралось при провале тега
+  аутентификации (CWE-226).** `GostMgmCipherSpi.doFinalDecrypt()` при
+  `AEADBadTagException` затирал только plaintext-буфер — внутреннее
+  key-derived состояние `Mgm` (`mulTabHi/Lo`, счётчики `yHi/zHi`,
+  аккумулятор `sumHi/Lo`) оставалось в heap до следующей инициализации
+  или сборки GC. Теперь `mgm.destroy()` вызывается сразу в error-path.
+
+- **Гонка при конкурентном доступе к `GostSecretKey` (CWE-362).** Поля
+  `keyBytes`/`destroyed` не были синхронизированы: `destroy()`
+  (`Arrays.fill`) и `getEncoded()`/`toSymmetricKey()` (`Arrays.copyOf`),
+  вызванные из разных потоков, могли дать torn-read — чтение частично
+  обнулённого ключа. Добавлен `ReentrantLock` (не `synchronized` — не
+  пиннит virtual threads JDK 21) вокруг всех операций с ключевым
+  материалом.
+
+- **Незатёртые копии ключевого материала в Hmac/KDF/JCA SPI (CWE-226).**
+
+  - `Hmac.initWithKeyBytes()`: хэш-копия ключа (когда
+    `key.length > blockLen`) не затиралась после использования.
+    Затирается сейчас; ветка-алиас (`key.length <= blockLen`, `k = key`)
+    не трогается — это ссылка на массив вызывающего.
+
+  - `KdfGostR3411_2012_256.deriveKey()`: scratch-буфер `block` (фрагмент
+    производного ключа на каждой итерации) не затирался после цикла.
+    Теперь затирается в `finally`, тем же паттерном, что уже применялся
+    в `KdfTreeGostR3411_2012_256`.
+
+  - `GostCipherSpi`, `GostMgmCipherSpi`, `GostCtrAcpkmCipherSpi`: три
+    идентичные копии `extractSymmetricKey()` создавали временный
+    `byte[] encoded = key.getEncoded()`, не затирая его после
+    конструирования `SymmetricKey`. Вынесено в общий
+    `SymmetricKeyExtractor.fromKey()` (устранено тройное дублирование),
+    `encoded` затирается в `finally`.
+
+  - `Cmac.reset()` теперь затирает `mac` (последний вычисленный блок),
+    как и `destroy()` — консистентность.
+
+- **Неканоничное DER-кодирование длины принималось без проверки
+  (malleability, X.690 §10.1).** `DerCodec.decodeLength()` принимал
+  long-form кодирование длины (`0x81`-`0x84`) даже когда значение
+  помещалось в более короткую форму — например, `0x81 0x05` вместо
+  канонического `0x05`. Добавлена проверка минимальности для всех
+  long-form веток. BER indefinite-length (`0x80`) осознанно сохранён —
+  `DerCodec` используется как BER-парсер только для SPKI/PKCS#8 ключей
+  (всегда definite DER на практике), а решения по сертификатам/CMS через
+  него не принимаются.
+
+### Добавлено
+
+- **`Pbkdf2Streebog.MAX_ITERATIONS = 2_000_000`** — максимальное число
+  итераций PBKDF2. Верхний предел в `pbkdf2()` для защиты от
+  CPU-исчерпания при импорте недоверенных PFX-файлов.
+
+## Модуль crypto-gost-pkix
+
+### Исправлено
+
+- **DoS-защита в `GostPkcs12Parser`: верхний предел `iterationCount`
+  (CWE-405).** Параметр `iterationCount` в PBES2-params и `iterations` в
+  MacData парсился из недоверенных DER без ограничения — атакующий мог
+  подложить PFX с `Integer.MAX_VALUE` итераций и исчерпать CPU (два
+  независимых вектора: PBES2 KDF и MAC-верификация). Оба поля теперь
+  валидируются через `Pbkdf2Streebog.MAX_ITERATIONS` на этапе парсинга.
+  Дополнительный эшелон — проверка в `Pbkdf2Streebog.pbkdf2()`
+  (закрывает также JCA `SecretKeyFactory`).
+
+- **Обход проверки атрибутов contentType и messageDigest в CMS (P0).**
+  `CmsSignedDataVerifier` молча пропускал подписанные данные без
+  обязательных атрибутов `contentType` и `messageDigest` — подпись
+  проверялась, а целостность контента нет. Теперь отсутствие любого из
+  атрибутов при наличии подписанных атрибутов вызывает ошибку (RFC 5652
+  §5.4).
+
+- **Отсутствие проверки полномочий подписанта OCSP (P0).**
+  `OcspVerifier` не проверял расширение, разрешающее подпись
+  OCSP-ответов (`id-kp-OCSPSigning`), у делегированных подписантов.
+  Сертификат без этого полномочия мог быть использован для подписи
+  OCSP-ответа — проверка добавлена встроенно, отдельно вызывать не
+  нужно.
+
+- **Неканоничное DER-кодирование длины в `GostDerParser` (malleability,
+  X.690 §10.1).** Аналогично `crypto-gost-core/DerCodec` — long-form
+  длина принималась без проверки минимальности. Добавлена та же
+  проверка. BER indefinite-length (`0x80`) в этом парсере запрещён и был
+  запрещён и ранее — он используется для решений по сертификатам/CMS
+  (fail-closed остаётся неизменным).
+
+- **`digestFor()` в `CmsSignedDataVerifier` принимал неизвестный OID
+  алгоритма хэширования как Streebog-256 без ошибки (fail-open).**
+  `digestAlgorithm` в `SignerInfo` — controlled полем подписанта; при
+  значении, отличном от Streebog-256/512, теперь `PkixException` вместо
+  молчаливого fallback. Затрагивает и content-digest сверку, и
+  `signedAttrsHash`, используемый при проверке подписи.
+
+- **`CAdESExtender.checkCertValidityAtTime()` не учитывал допуск на
+  рассинхронизацию часов.** Сравнение `genTime` TSA с
+  `notBefore`/`notAfter` сертификата теперь, как и везде в библиотеке
+  (`GostCertificate.isExpired()`, `GostCrl`, `OcspVerifier`,
+  `TspResponse`), допускает `GostOids.CLOCK_SKEW_MS` (5 минут).
+
+- **PBKDF2: нижний порог числа итераций для untrusted PFX (CVE-класс:
+  brute-force).** `GostPkcs12Parser` принимал
+  `iterations`/`iterationCount` вплоть до `1`, включая обход через
+  отсутствующее (`OPTIONAL DEFAULT 1`) поле `iterations` в `MacData`.
+  Добавлен `GostOids.MIN_PBKDF2_ITERATIONS_PFX` (1000) — проверяется для
+  обоих полей независимо от того, явно ли они закодированы.
+  `parsePfx()`/`parsePbes2Params()`/`GostPbes2.decryptKey()`/`GostPkcs12Loader.load()`/
+  `decryptPrivateKey()` получили перегрузки с настраиваемым порогом —
+  для legacy-файлов из доверенного источника вызывающий может осознанно
+  его снизить.
+
+- **CRL: не проверялась монотонность `cRLNumber` (CRL rollback, RFC 5280
+  §5.2.3).** `CrlVerifier.verify()` получил перегрузку с `minCrlNumber`
+  — CRL со значением ниже переданного отклоняется как rollback. Добавлен
+  `extractCrlNumber()` для дешёвого извлечения номера без полной
+  верификации (по аналогии с `extractNextUpdate()`). Отслеживание
+  последнего известного `cRLNumber` — на стороне вызывающего кода.
+
+### Изменено
+
+- **Публичный API `OcspVerifier` переведён на сертификат вместо голого
+  ключа.** Все перегрузки, принимающие `PublicKeyParameters`, стали
+  внутренними. Единственный публичный метод принимает `GostCertificate`
+  — полномочия подписанта и сверка связки сертификат-ответ выполняются
+  принудительно, их невозможно пропустить в вызывающем коде. Параметры
+  CertID вычисляются автоматически, исключая риск рассинхронизации.
+
 # \[0.6.0\] - 30-06-2026
 
 Данный релиз вносит **ломающие** изменения в связи с новым модулем
@@ -1342,7 +1611,7 @@ TC26 (см. Исправлено).
   (KdfTreeGostR3411\_2012\_256.java)** — RFC 7836 §4.5. Выработка ключей
   шифрования и подлинности для CTR-ACPKM-OMAC.
 
-- **Режим CTR-ACPKM (CtrAcpkmMode.java)** — RFC 8645, RFC 9337 §5. Два
+- **Режим CTR-ACPKM (CtrAcpkmMode.java)** — PBES2, RFC 9337 §7.3. Два
   варианта: CTR без кода подлинности и с CMAC
   (зашифровать-затем-подписать).
 

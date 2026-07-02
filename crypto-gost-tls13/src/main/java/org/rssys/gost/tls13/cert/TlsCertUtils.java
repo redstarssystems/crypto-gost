@@ -65,29 +65,22 @@ public final class TlsCertUtils {
     /**
      * Верифицирует OCSP-ответ для сертификата (RFC 6960).
      * <p>
-     * Оборачивает {@link PkixException} в {@link TlsException} с alert-кодом
+     * Проверяет подпись, статус, EKU делегированных responder'ов,
+     * CertID — всё встроенно. Оборачивает {@link PkixException}
+     * в {@link TlsException} с alert-кодом
      * {@link TlsConstants#ALERT_BAD_CERTIFICATE}.
      *
-     * @param cert    сертификат с прикреплённым OCSP-ответом
-     * @param caKey   открытый ключ для проверки подписи OCSP-ответа
-     * @param issuer  сертификат издателя (null — только базовая проверка без CertID)
+     * @param cert   сертификат с прикреплённым OCSP-ответом
+     * @param issuer сертификат издателя
      * @throws TlsException при ошибке верификации OCSP
      */
-    public static void verifyOcspResponse(
-            GostCertificate cert, PublicKeyParameters caKey, GostCertificate issuer)
+    public static void verifyOcspResponse(GostCertificate cert, GostCertificate issuer)
             throws TlsException {
         byte[] serialCopy = cert.getSerialNumber();
         byte[] ocspResp = cert.getOcspResponse();
         byte[] nonce = cert.getOcspNonce();
         try {
-            OcspVerifier.verify(
-                    ocspResp,
-                    serialCopy,
-                    caKey,
-                    issuer != null ? cert.getIssuerDnBytes() : null,
-                    issuer != null ? issuer.getEncoded() : null,
-                    nonce,
-                    false);
+            OcspVerifier.verify(ocspResp, serialCopy, issuer, nonce, false);
         } catch (PkixException e) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE, e.getMessage());
         }

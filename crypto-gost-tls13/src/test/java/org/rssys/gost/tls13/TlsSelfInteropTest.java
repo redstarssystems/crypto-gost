@@ -180,7 +180,8 @@ class TlsSelfInteropTest {
                                     // ss.accept() на сервере разблокируется, сервер создаёт конфиг
                                     try (Socket s = new Socket("127.0.0.1", port)) {
                                         SocketTlsTransport ct = new SocketTlsTransport(s);
-                                        TlsClientConfig cc = new TlsClientConfig(cs);
+                                        TlsClientConfig cc = new TlsClientConfig(cs, mTls ? cCerts.caPub : plain.cert.getPublicKey())
+                                                .withoutHostnameVerification();
                                         if (mTls) {
                                             cc =
                                                     cc.withClientCertificateChain(cCerts.cert)

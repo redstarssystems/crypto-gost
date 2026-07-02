@@ -1,4 +1,4 @@
-package org.rssys.gost.tls13.cert;
+package org.rssys.gost.pkix.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
@@ -11,7 +11,7 @@ import org.rssys.gost.pkix.cert.GostPkcs12Parser;
  * {@code checkTag}, {@code decodeLength}, {@code parseOid}, {@code parseInteger},
  * {@code parseOctetString}, {@code parseSequenceContents}, {@code parseSetContents}.
  * Собственного DER-парсера больше нет — внутренние методы {@code parseConstructed},
- * {@code decodeLength}, {@code checkTag}, {@code peekLength} удалены (план 081).
+ * {@code decodeLength}, {@code checkTag}, {@code peekLength} удалены.
  * <p>
  * ПОЧЕМУ ловим RuntimeException: DerCodec кидает IllegalArgumentException
  * на неверный тег или длину. AIOOBE возможен, если позиция выходит за пределы
@@ -34,7 +34,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parsePfx(input);
         } catch (RuntimeException e) {
-            FuzzTestUtils.rethrowIfBug(e);
+            rethrowIfBug(e);
         }
     }
 
@@ -49,7 +49,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parseSafeContents(input);
         } catch (RuntimeException e) {
-            FuzzTestUtils.rethrowIfBug(e);
+            rethrowIfBug(e);
         }
     }
 
@@ -64,7 +64,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parseEncryptedPrivateKeyInfo(input);
         } catch (RuntimeException e) {
-            FuzzTestUtils.rethrowIfBug(e);
+            rethrowIfBug(e);
         }
     }
 
@@ -80,7 +80,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parsePbes2Params(input);
         } catch (RuntimeException e) {
-            FuzzTestUtils.rethrowIfBug(e);
+            rethrowIfBug(e);
         }
     }
 
@@ -95,7 +95,16 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parseCertBag(input);
         } catch (RuntimeException e) {
-            FuzzTestUtils.rethrowIfBug(e);
+            rethrowIfBug(e);
+        }
+    }
+
+    private static void rethrowIfBug(RuntimeException e) {
+        if (e instanceof ArrayIndexOutOfBoundsException
+                || e instanceof IndexOutOfBoundsException
+                || e instanceof NegativeArraySizeException
+                || e instanceof NullPointerException) {
+            throw e;
         }
     }
 }

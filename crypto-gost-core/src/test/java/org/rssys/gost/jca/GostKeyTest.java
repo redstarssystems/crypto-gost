@@ -9,6 +9,7 @@ import java.security.Security;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.SecretKeySpec;
@@ -59,6 +60,71 @@ class GostKeyTest {
         key.destroy();
         assertTrue(key.isDestroyed());
         assertThrows(IllegalStateException.class, key::getEncoded);
+    }
+
+    @Test
+    @DisplayName(
+            "GostSecretKey: конкурентный destroy + getEncoded не отдаёт частично обнулённый ключ")
+    void testGostSecretKeyConcurrentDestroy() throws Exception {
+        // Проверяем отсутствие torn-read: getEncoded() под ReentrantLock обязан вернуть
+        // либо полный исходный ключ, либо бросить IllegalStateException — но не смесь.
+        byte[] original = new byte[32];
+        for (int i = 0; i < original.length; i++) {
+            original[i] = (byte) 0xAB;
+        }
+        byte[] allZero = new byte[32];
+
+        for (int iteration = 0; iteration < 2000; iteration++) {
+            GostSecretKey key = new GostSecretKey("Kuznyechik", original);
+            java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicReference<byte[]> readResult =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicBoolean destroyedSeen =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+
+            Thread reader =
+                    new Thread(
+                            () -> {
+                                await(start);
+                                try {
+                                    readResult.set(key.getEncoded());
+                                } catch (IllegalStateException e) {
+                                    destroyedSeen.set(true);
+                                }
+                            });
+            Thread destroyer =
+                    new Thread(
+                            () -> {
+                                await(start);
+                                key.destroy();
+                            });
+            reader.start();
+            destroyer.start();
+            start.countDown();
+            reader.join();
+            destroyer.join();
+
+            byte[] read = readResult.get();
+            if (read != null) {
+                boolean full = Arrays.equals(read, original);
+                boolean zeroed = Arrays.equals(read, allZero);
+                assertTrue(
+                        full || zeroed,
+                        "getEncoded() вернул частично обнулённый ключ (torn-read): "
+                                + java.util.Arrays.toString(read));
+            } else {
+                assertTrue(destroyedSeen.get(), "reader без результата должен был увидеть destroy");
+            }
+        }
+    }
+
+    private static void await(java.util.concurrent.CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     // -----------------------------------------------------------------------

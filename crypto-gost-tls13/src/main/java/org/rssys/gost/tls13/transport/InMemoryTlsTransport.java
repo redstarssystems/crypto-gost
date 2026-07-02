@@ -111,7 +111,7 @@ public class InMemoryTlsTransport implements TlsTransport {
      * InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
      * TlsSession server = TlsSession.createServer(
      *         pair.getServerTransport(), cs, cert, priv);
-     * TlsSession client = TlsSession.createClient(
+     * TlsSession client = TlsSession.createClientWithoutServerAuth(
      *         pair.getClientTransport(), cs, null, null);
      * }</pre>
      */

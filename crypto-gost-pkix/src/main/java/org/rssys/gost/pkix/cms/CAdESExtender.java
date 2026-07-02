@@ -545,12 +545,12 @@ public final class CAdESExtender {
         Instant notBefore = cert.getNotBefore();
         Instant notAfter = cert.getNotAfter();
 
-        if (notBefore != null && genDate.isBefore(notBefore)) {
+        if (notBefore != null && genDate.isBefore(notBefore.minusMillis(GostOids.CLOCK_SKEW_MS))) {
             throw new PkixException(
                     PkixException.Reason.OTHER,
                     "Certificate not yet valid at timestamp genTime: " + genTime + " < notBefore");
         }
-            if (notAfter != null && genDate.isAfter(notAfter)) {
+        if (notAfter != null && genDate.isAfter(notAfter.plusMillis(GostOids.CLOCK_SKEW_MS))) {
             throw new PkixException(
                     PkixException.Reason.OTHER,
                     "Certificate expired before timestamp genTime: "

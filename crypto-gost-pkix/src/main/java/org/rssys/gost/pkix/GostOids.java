@@ -395,6 +395,9 @@ public final class GostOids {
     /** Итерации PBKDF2 по умолчанию (OpenSSL gost-engine, RFC 9337 §5) */
     public static final int PBE_DEFAULT_ITERATIONS = 2_000;
 
+    /** Минимальное число итераций PBKDF2 при импорте untrusted PFX. */
+    public static final int MIN_PBKDF2_ITERATIONS_PFX = 1_000;
+
     /** Длина хеша Стрибог-256 в байтах */
     public static final int STREEBOG_256_HASH_LEN = 32;
 

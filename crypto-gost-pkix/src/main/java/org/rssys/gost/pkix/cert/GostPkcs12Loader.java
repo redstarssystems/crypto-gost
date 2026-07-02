@@ -60,7 +60,8 @@ public final class GostPkcs12Loader {
     }
 
     /**
-     * Загружает PFX.
+     * Загружает PFX с порогом минимальных итераций PBKDF2 по умолчанию
+     * ({@link GostOids#MIN_PBKDF2_ITERATIONS_PFX} = 1000).
      *
      * @param pfxData           DER-байты PFX
      * @param password          пароль
@@ -68,8 +69,23 @@ public final class GostPkcs12Loader {
      * @return Result с ключом и цепочкой
      */
     public static Result load(byte[] pfxData, char[] password, boolean allowJdkFallback) {
+        return load(pfxData, password, allowJdkFallback, GostOids.MIN_PBKDF2_ITERATIONS_PFX);
+    }
+
+    /**
+     * Загружает PFX с настраиваемым порогом минимальных итераций PBKDF2.
+     * Вызывающий может снизить порог для legacy-файлов из доверенного источника.
+     *
+     * @param pfxData                DER-байты PFX
+     * @param password               пароль
+     * @param allowJdkFallback       {@code true} — разрешить fallback на JDK KeyStore
+     * @param minPbkdf2Iterations    минимально допустимое число итераций PBKDF2
+     * @return Result с ключом и цепочкой
+     */
+    public static Result load(
+            byte[] pfxData, char[] password, boolean allowJdkFallback, int minPbkdf2Iterations) {
         LOG.log(Level.INFO, "Loading PKCS12 container");
-        PfxData pfx = GostPkcs12Parser.parsePfx(pfxData);
+        PfxData pfx = GostPkcs12Parser.parsePfx(pfxData, minPbkdf2Iterations);
         byte[] passwordBytes = toUtf8Bytes(password);
 
         try {
@@ -78,7 +94,7 @@ public final class GostPkcs12Loader {
                 if (md != null) {
                     GostPkcs12Mac.verify(md, passwordBytes, pfx.getAuthSafeRawContent());
                 }
-                return loadGost(pfx, passwordBytes);
+                return loadGost(pfx, passwordBytes, minPbkdf2Iterations);
             }
             if (!allowJdkFallback) {
                 throw new IllegalArgumentException(
@@ -105,11 +121,19 @@ public final class GostPkcs12Loader {
      * @return расшифрованный закрытый ключ
      */
     public static PrivateKeyParameters decryptPrivateKey(byte[] encryptedDer, char[] password) {
+        return decryptPrivateKey(encryptedDer, password, GostOids.MIN_PBKDF2_ITERATIONS_PFX);
+    }
+
+    /**
+     * Расшифровывает standalone EncryptedPrivateKeyInfo с настраиваемым порогом.
+     */
+    public static PrivateKeyParameters decryptPrivateKey(
+            byte[] encryptedDer, char[] password, int minPbkdf2Iterations) {
         GostPkcs12Parser.EncryptedPrivateKeyInfo epki =
                 GostPkcs12Parser.parseEncryptedPrivateKeyInfo(encryptedDer);
         byte[] passwordBytes = toUtf8Bytes(password);
         try {
-            return GostPbes2.decryptKey(epki, passwordBytes);
+            return GostPbes2.decryptKey(epki, passwordBytes, minPbkdf2Iterations);
         } finally {
             Arrays.fill(passwordBytes, (byte) 0);
         }
@@ -161,7 +185,7 @@ public final class GostPkcs12Loader {
      * issuer->subject DER-совпадению. Не сортируется только если цепочка
      * не содержит non-CA сертификатов.
      */
-    private static Result loadGost(PfxData pfx, byte[] passwordBytes) {
+    private static Result loadGost(PfxData pfx, byte[] passwordBytes, int minPbkdf2Iterations) {
         PrivateKeyParameters privateKey = null;
         byte[] keyLocalKeyId = null;
         List<RawCert> rawCerts = new ArrayList<>();
@@ -176,7 +200,7 @@ public final class GostPkcs12Loader {
                     if (privateKey == null) {
                         EncryptedPrivateKeyInfo epki =
                                 GostPkcs12Parser.parseEncryptedPrivateKeyInfo(bag.getBagValue());
-                        privateKey = GostPbes2.decryptKey(epki, passwordBytes);
+                        privateKey = GostPbes2.decryptKey(epki, passwordBytes, minPbkdf2Iterations);
                         keyLocalKeyId = GostPkcs12Parser.findLocalKeyId(bag.getAttributes());
                     }
                 } else if (GostOids.BAG_CERT.equals(bagId)) {

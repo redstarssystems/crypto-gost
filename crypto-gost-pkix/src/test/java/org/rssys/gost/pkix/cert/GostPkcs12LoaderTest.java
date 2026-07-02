@@ -1,15 +1,15 @@
-package org.rssys.gost.tls13.cert;
+package org.rssys.gost.pkix.cert;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostPbes2;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 @DisplayName("GostPkcs12Loader — расшифровка приватного ключа")
 class GostPkcs12LoaderTest {
@@ -22,8 +22,8 @@ class GostPkcs12LoaderTest {
             "Расшифровка EncryptedPrivateKeyInfo через decryptPrivateKey даёт тот же ключ, что и load PFX")
     void testDecryptPrivateKey() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
-        byte[] passwordBytes = toUtf8Bytes(PASSWORD);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
+        byte[] passwordBytes = PkixCertTestHelper.toUtf8Bytes(PASSWORD);
 
         // Избегаем зависимости от внутренней структуры PFX — EncryptedPrivateKeyInfo
         // создаётся независимо через GostPbes2.encryptKey, без обхода через PFX-парсер
@@ -32,7 +32,8 @@ class GostPkcs12LoaderTest {
                         bundle.priv, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, TEST_ITER);
 
         // Расшифровываем через новый метод
-        PrivateKeyParameters decrypted = GostPkcs12Loader.decryptPrivateKey(encryptedDer, PASSWORD);
+        PrivateKeyParameters decrypted =
+                GostPkcs12Loader.decryptPrivateKey(encryptedDer, PASSWORD, 50);
 
         // Сравниваем с исходным ключом
         assertArrayEquals(
@@ -45,8 +46,8 @@ class GostPkcs12LoaderTest {
     @DisplayName("Неверный пароль бросает IllegalArgumentException")
     void testDecryptPrivateKeyWrongPassword() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
-        byte[] passwordBytes = toUtf8Bytes(PASSWORD);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
+        byte[] passwordBytes = PkixCertTestHelper.toUtf8Bytes(PASSWORD);
 
         byte[] encryptedDer =
                 GostPbes2.encryptKey(
@@ -62,17 +63,12 @@ class GostPkcs12LoaderTest {
     @DisplayName("Plain DER PrivateKeyInfo бросает IllegalArgumentException")
     void testDecryptPrivateKeyPlainKey() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
         byte[] plainDer = org.rssys.gost.jca.spec.GostDerCodec.encodePrivateKey(bundle.priv);
 
         assertThrows(
                 IllegalArgumentException.class,
                 () -> GostPkcs12Loader.decryptPrivateKey(plainDer, PASSWORD),
                 "Plain PrivateKeyInfo не является EncryptedPrivateKeyInfo");
-    }
-
-    private static byte[] toUtf8Bytes(char[] password) {
-        if (password == null || password.length == 0) return new byte[0];
-        return new String(password).getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 }

@@ -342,10 +342,12 @@ class OpenSslTls13CrossValidationTest {
                 boolean accepted = OpenSslTls13Helper.waitForString(sServer, "ACCEPT", 10_000);
                 assertTrue(accepted, "s_server не запустился");
 
+                GostCertificate srvCert = GostCertificate.fromPemOrDer(Files.readAllBytes(tmpDir.resolve("cert.pem")));
+
                 try (Socket socket = new Socket(InetAddress.getByName("127.0.0.1"), port);
                      SocketTlsTransport tp = new SocketTlsTransport(socket);
                      TlsSession client = TlsSession.createClient(
-                             new TlsClientConfig(TlsCiphersuite.byId(suiteId)), tp)) {
+                             new TlsClientConfig(TlsCiphersuite.byId(suiteId), srvCert.getPublicKey()).withoutHostnameVerification(), tp)) {
                     client.handshakeAsClient();
                     client.write("GET / HTTP/1.0\r\nHost: localhost\r\n\r\n".getBytes(StandardCharsets.UTF_8));
                     byte[] response = client.read();

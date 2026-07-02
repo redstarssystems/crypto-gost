@@ -44,6 +44,14 @@ public final class GostPbes2 {
      * @return закрытый ключ ГОСТ
      */
     public static PrivateKeyParameters decryptKey(EncryptedPrivateKeyInfo epki, byte[] password) {
+        return decryptKey(epki, password, GostOids.MIN_PBKDF2_ITERATIONS_PFX);
+    }
+
+    /**
+     * Расшифровывает приватный ключ с настраиваемым порогом минимальных итераций PBKDF2.
+     */
+    public static PrivateKeyParameters decryptKey(
+            EncryptedPrivateKeyInfo epki, byte[] password, int minPbkdf2Iterations) {
         String encOid = epki.getEncryptionAlgorithmOid();
         if (!GostOids.PBES2.equals(encOid)) {
             throw new IllegalArgumentException(
@@ -54,7 +62,9 @@ public final class GostPbes2 {
                             + ")");
         }
 
-        Pbes2Params params = GostPkcs12Parser.parsePbes2Params(epki.getEncryptionParams());
+        Pbes2Params params =
+                GostPkcs12Parser.parsePbes2Params(
+                        epki.getEncryptionParams(), minPbkdf2Iterations);
         LOG.log(
                 Level.DEBUG,
                 "Decrypting private key via PBES2 (scheme={0})",

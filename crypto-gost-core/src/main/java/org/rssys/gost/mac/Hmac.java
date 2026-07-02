@@ -75,12 +75,15 @@ public class Hmac implements Mac {
         digest.reset();
 
         byte[] k;
+        boolean hashedCopy;
         if (key.length > blockLen) {
             digest.update(key, 0, key.length);
             k = new byte[digestSize];
             digest.doFinal(k, 0);
+            hashedCopy = true;
         } else {
             k = key;
+            hashedCopy = false;
         }
 
         Arrays.fill(inputPad, IPAD);
@@ -89,6 +92,12 @@ public class Hmac implements Mac {
         for (int i = 0; i < k.length; i++) {
             inputPad[i] ^= k[i];
             outputPad[i] ^= k[i];
+        }
+
+        // Затираем только выделенную хэш-копию ключа. Ветка k = key — алиас входного
+        // массива вызывающего, его затирать нельзя.
+        if (hashedCopy) {
+            Arrays.fill(k, (byte) 0);
         }
 
         digest.reset();
@@ -145,5 +154,10 @@ public class Hmac implements Mac {
         Arrays.fill(inputPad, (byte) 0);
         Arrays.fill(outputPad, (byte) 0);
         digest.reset();
+    }
+
+    @Override
+    public void destroy() {
+        clear();
     }
 }

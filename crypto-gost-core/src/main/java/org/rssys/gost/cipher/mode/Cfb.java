@@ -150,4 +150,12 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
         byteCount = 0;
         cipher.reset();
     }
+
+    @Override
+    public void destroy() {
+        java.util.Arrays.fill(gammaBuf, (byte) 0);
+        java.util.Arrays.fill(inBuf, (byte) 0);
+        byteCount = 0;
+        super.destroy();
+    }
 }

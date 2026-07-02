@@ -6,7 +6,9 @@ import java.math.BigInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
@@ -411,5 +413,108 @@ class CmsSignedDataTest {
                         emptySignerInfos);
 
         return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedData);
+    }
+
+    // ========================================================================
+    // signedAttrs без обязательных атрибутов RFC 5652 §5.4
+    // ========================================================================
+
+    @Test
+    @DisplayName("signedAttrs без messageDigest → PkixException")
+    void signedAttrsWithoutMessageDigest() {
+        byte[] signedData = buildSignedDataMissingAttr("message-digest");
+        assertThrows(
+                PkixException.class,
+                () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                "Отсутствие messageDigest в signedAttrs должно вызывать PkixException");
+    }
+
+    @Test
+    @DisplayName("signedAttrs без contentType → PkixException")
+    void signedAttrsWithoutContentType() {
+        byte[] signedData = buildSignedDataMissingAttr("content-type");
+        assertThrows(
+                PkixException.class,
+                () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                "Отсутствие contentType в signedAttrs должно вызывать PkixException");
+    }
+
+    /**
+     * Строит валидно подписанный CMS SignedData, где signedAttrs содержит
+     * только один из двух обязательных атрибутов (второй опущен намеренно).
+     *
+     * @param missingAttr "message-digest" или "content-type" — какой атрибут опустить
+     */
+    private static byte[] buildSignedDataMissingAttr(String missingAttr) {
+        byte[] data = "test content".getBytes();
+
+        // encapContentInfo
+        byte[] eContentTypeOidDer = DerCodec.encodeOid(GostOids.PKCS7_DATA);
+        byte[] encapContent =
+                DerCodec.encodeSequence(
+                        eContentTypeOidDer,
+                        DerCodec.encodeContextConstructed(0, DerCodec.encodeOctetString(data)));
+
+        byte[] dataDigest = Digest.digest256(data);
+        byte[] digestOctet = DerCodec.encodeOctetString(dataDigest);
+
+        // signedAttrs SET OF — зависит от missingAttr
+        java.util.List<byte[]> attrList = new java.util.ArrayList<>();
+        if (!"content-type".equals(missingAttr)) {
+            attrList.add(CmsAttribute.encode(GostOids.ATTR_CONTENT_TYPE, eContentTypeOidDer));
+        }
+        if (!"message-digest".equals(missingAttr)) {
+            attrList.add(CmsAttribute.encode(GostOids.ATTR_MESSAGE_DIGEST, digestOctet));
+        }
+        byte[][] sortedAttrs = attrList.toArray(new byte[0][]);
+        DerCodec.sortDer(sortedAttrs);
+
+        byte[] signedAttrsForHash = DerCodec.encodeSet(sortedAttrs);
+        byte[] signedAttrsHash = Digest.digest256(signedAttrsForHash);
+        byte[] signatureValue = Signature.signHash(signedAttrsHash, privateKey);
+
+        // [0] IMPLICIT signedAttrs — внутри SignerInfo
+        byte[] signedAttrsWrapped =
+                DerCodec.encodeContextConstructed(0, DerCodec.concat(sortedAttrs));
+
+        // sid: CmsIssuerAndSerialNumber
+        byte[] sid =
+                CmsIssuerAndSerialNumber.encode(
+                        selfSignedCert.getIssuerDnBytes(),
+                        selfSignedCert.getSerialNumberBigInt());
+
+        // Алгоритмы
+        byte[] digestAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.DIGEST_256));
+        byte[] signAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_ALG_256));
+
+        byte[] sigOctet = DerCodec.encodeOctetString(signatureValue);
+
+        // SignerInfo SEQUENCE
+        byte[] signerInfo =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeInteger(CmsConstants.SIGNER_INFO_V1),
+                        sid,
+                        digestAlgId,
+                        signedAttrsWrapped,
+                        signAlgId,
+                        sigOctet);
+
+        // Сертификат подписанта
+        byte[] certDer = selfSignedCert.getEncoded();
+
+        // SignedData
+        byte[] version = DerCodec.encodeInteger(CmsConstants.SIGNED_DATA_V1);
+        byte[] digestAlgs = DerCodec.encodeSetOf(new byte[][] {digestAlgId});
+        byte[] certsField =
+                DerCodec.encodeContextConstructed(
+                        0,
+                        DerCodec.encodeSequence(certDer));
+        byte[] signerInfos = DerCodec.encodeSetOf(new byte[][] {signerInfo});
+
+        byte[] signedDataContent =
+                DerCodec.encodeSequence(
+                        version, digestAlgs, encapContent, certsField, signerInfos);
+
+        return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedDataContent);
     }
 }

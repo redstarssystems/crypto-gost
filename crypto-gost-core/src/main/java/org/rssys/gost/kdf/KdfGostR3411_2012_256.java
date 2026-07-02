@@ -1,5 +1,6 @@
 package org.rssys.gost.kdf;
 
+import java.util.Arrays;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.mac.Hmac;
 
@@ -86,18 +87,23 @@ public final class KdfGostR3411_2012_256 {
         hmac.init(key);
         byte[] block = new byte[HASH_LEN];
 
-        for (int i = 1; i <= n; i++) {
-            buf[0] = (byte) i; // меняем только первый байт
+        try {
+            for (int i = 1; i <= n; i++) {
+                buf[0] = (byte) i; // меняем только первый байт
 
-            hmac.update(buf, 0, buf.length);
-            hmac.doFinal(block, 0); // перезаписывает block
+                hmac.update(buf, 0, buf.length);
+                hmac.doFinal(block, 0); // перезаписывает block
 
-            int copyLen = Math.min(HASH_LEN, outputLength - (i - 1) * HASH_LEN);
-            System.arraycopy(block, 0, result, (i - 1) * HASH_LEN, copyLen);
+                int copyLen = Math.min(HASH_LEN, outputLength - (i - 1) * HASH_LEN);
+                System.arraycopy(block, 0, result, (i - 1) * HASH_LEN, copyLen);
+            }
+
+            return result;
+
+        } finally {
+            hmac.clear();
+            // block содержит фрагменты производного ключевого материала — затираем.
+            Arrays.fill(block, (byte) 0);
         }
-
-        hmac.clear();
-
-        return result;
     }
 }

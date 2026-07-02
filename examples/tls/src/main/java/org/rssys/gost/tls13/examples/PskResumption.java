@@ -43,8 +43,7 @@ public final class PskResumption {
                                 serverTp1);
                 TlsSession client1 =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs)
-                                        .withCaPublicKey(caBundle.cert().getPublicKey())
+                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
                                         .withServerHostname("localhost"),
                                 clientTp1)) {
             server1.setPskStore(sharedStore);
@@ -86,8 +85,7 @@ public final class PskResumption {
                                 serverTp2);
                 TlsSession client2 =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs)
-                                        .withCaPublicKey(caBundle.cert().getPublicKey())
+                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
                                         .withServerHostname("localhost"),
                                 clientTp2)) {
             server2.setPskStore(sharedStore);

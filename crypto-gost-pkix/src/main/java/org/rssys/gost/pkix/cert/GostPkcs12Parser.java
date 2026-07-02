@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import org.rssys.gost.kdf.Pbkdf2Streebog;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.util.DerCodec;
 
@@ -232,12 +233,25 @@ public final class GostPkcs12Parser {
     // ========================================================================
 
     /**
-     * Разбирает PFX-контейнер.
+     * Разбирает PFX-контейнер с порогом минимальных итераций PBKDF2 по умолчанию
+     * ({@link GostOids#MIN_PBKDF2_ITERATIONS_PFX} = 1000).
      *
      * @param pfxData DER-байты PFX
      * @return разобранные данные
      */
     public static PfxData parsePfx(byte[] pfxData) {
+        return parsePfx(pfxData, GostOids.MIN_PBKDF2_ITERATIONS_PFX);
+    }
+
+    /**
+     * Разбирает PFX-контейнер с настраиваемым порогом минимальных итераций PBKDF2.
+     * Вызывающий может снизить порог для legacy-файлов из доверенного источника.
+     *
+     * @param pfxData                DER-байты PFX
+     * @param minPbkdf2Iterations    минимально допустимое число итераций PBKDF2 (MacData и PBES2)
+     * @return разобранные данные
+     */
+    public static PfxData parsePfx(byte[] pfxData, int minPbkdf2Iterations) {
         int[] pos = new int[] {0};
         byte[][] seq = parseSequence(pfxData, pos);
         if (seq.length < 2) {
@@ -261,7 +275,7 @@ public final class GostPkcs12Parser {
 
         MacData macData = null;
         if (seq.length > 2) {
-            macData = parseMacData(seq[2]);
+            macData = parseMacData(seq[2], minPbkdf2Iterations);
         }
 
         return new PfxData(version, authSafe, macData, authSafeRaw);
@@ -296,7 +310,7 @@ public final class GostPkcs12Parser {
     // Разбор MacData
     // ========================================================================
 
-    private static MacData parseMacData(byte[] data) {
+    private static MacData parseMacData(byte[] data, int minPbkdf2Iterations) {
         int[] pos = new int[] {0};
         byte[][] seq = parseSequence(data, pos);
         if (seq.length < 2) {
@@ -322,6 +336,16 @@ public final class GostPkcs12Parser {
         int iterations = 1;
         if (seq.length > 2) {
             iterations = parseInteger(seq[2], new int[] {0}).intValue();
+            if (iterations > Pbkdf2Streebog.MAX_ITERATIONS) {
+                throw new IllegalArgumentException(
+                        "MacData iterations exceeds maximum " + Pbkdf2Streebog.MAX_ITERATIONS
+                        + ", got " + iterations);
+            }
+        }
+        if (iterations < minPbkdf2Iterations) {
+            throw new IllegalArgumentException(
+                    "MacData iterations too low, minimum required "
+                            + minPbkdf2Iterations + ", got " + iterations);
         }
 
         return new MacData(salt, iterations, digestAlgorithm, digestValue);
@@ -413,9 +437,21 @@ public final class GostPkcs12Parser {
     // ========================================================================
 
     /**
-     * Разбирает PBES2-params.
+     * Разбирает PBES2-params с порогом минимальных итераций по умолчанию
+     * ({@link GostOids#MIN_PBKDF2_ITERATIONS_PFX} = 1000).
      */
     public static Pbes2Params parsePbes2Params(byte[] data) {
+        return parsePbes2Params(data, GostOids.MIN_PBKDF2_ITERATIONS_PFX);
+    }
+
+    /**
+     * Разбирает PBES2-params с настраиваемым порогом минимальных итераций.
+     *
+     * @param data                   DER-байты PBES2-params
+     * @param minPbkdf2Iterations    минимально допустимое число итераций PBKDF2
+     * @return разобранные параметры PBES2
+     */
+    public static Pbes2Params parsePbes2Params(byte[] data, int minPbkdf2Iterations) {
         int[] pos = new int[] {0};
         byte[][] seq = parseSequence(data, pos);
         if (seq.length < 2) {
@@ -468,6 +504,16 @@ public final class GostPkcs12Parser {
             // iterationCount: всегда присутствует
             if (kp[0] < end) {
                 iterationCount = parseInteger(kdfParams, kp).intValue();
+                if (iterationCount < minPbkdf2Iterations) {
+                    throw new IllegalArgumentException(
+                            "PBES2 iterationCount too low, minimum required "
+                                    + minPbkdf2Iterations + ", got " + iterationCount);
+                }
+                if (iterationCount > Pbkdf2Streebog.MAX_ITERATIONS) {
+                    throw new IllegalArgumentException(
+                            "PBES2 iterationCount exceeds maximum " + Pbkdf2Streebog.MAX_ITERATIONS
+                            + ", got " + iterationCount);
+                }
             }
             // keyLength OPTIONAL (INTEGER 0x02) или сразу prf
             if (kp[0] < end) {

@@ -238,8 +238,9 @@ RFC 9367) с ГОСТ-криптографией:
     }
 
 Сервер не валидирует свою цепочку — она проверяется клиентом. Для
-проверки со стороны клиента используйте `withCaPublicKey()` в
-`TlsClientConfig` (см. «Клиент с полной валидацией»).
+проверки со стороны клиента передайте публичный ключ CA в конструктор
+`new TlsClientConfig(cs, caPublicKey)` (см. «Клиент с полной
+валидацией»).
 
 Для multi-tenant серверов (разные сертификаты под разные SNI)
 используйте `TlsServerConfig.withSniSelector()`:
@@ -258,11 +259,10 @@ RFC 9367) с ГОСТ-криптографией:
 
 ## Клиентская сессия (анонимная)
 
-Анонимный клиент (без сертификата) подключается к серверу через
-`TlsClientConfig`.
+Анонимный клиент (без сертификата, без валидации сервера) использует
+фабрику `createClientWithoutServerAuth`.
 
     import org.rssys.gost.tls13.*;
-    import org.rssys.gost.tls13.config.TlsClientConfig;
     import org.rssys.gost.tls13.transport.SocketTlsTransport;
     import java.net.Socket;
     import java.nio.charset.StandardCharsets;
@@ -270,9 +270,10 @@ RFC 9367) с ГОСТ-криптографией:
     Socket socket = new Socket("gost-server.example.com", 8443);
     SocketTlsTransport transport = new SocketTlsTransport(socket);
 
-    TlsSession client = TlsSession.createClient(
-            new TlsClientConfig(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L),
-            transport);
+    TlsSession client = TlsSession.createClientWithoutServerAuth(
+            transport,
+            TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+            null, null);
 
     try {
         client.handshakeAsClient();
@@ -283,6 +284,10 @@ RFC 9367) с ГОСТ-криптографией:
     } finally {
         client.close();
     }
+
+Для валидации сервера (проверка сертификата, hostname, OCSP) используйте
+`TlsClientConfig(cs, caPublicKey)` и фабрику
+`TlsSession.createClient(config, transport)`.
 
 Клиент с полной валидацией сертификата сервера (CA-ключ + hostname +
 OCSP):
@@ -301,11 +306,13 @@ OCSP):
     GostCertificate caCert = new GostCertificate(caDer);
     PublicKeyParameters caKey = caCert.getPublicKey();
 
-    TlsSession client = TlsSession.createClient(new TlsClientConfig(
-            TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L)
-            .withCaPublicKey(caKey)
-            .withServerHostname("gost.example.com")
-            .withRequireOcspStapling(true), transport);
+    TlsSession client = TlsSession.createClient(
+            new TlsClientConfig(
+                    TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                    caKey)
+                    .withServerHostname("gost.example.com")
+                    .withRequireOcspStapling(true),
+            transport);
 
     try {
         client.handshakeAsClient();
@@ -315,23 +322,9 @@ OCSP):
         client.close();
     }
 
-Упрощённые фабрики — для сценариев без расширенных настроек (без SNI,
-ALPN, OCSP, mTLS):
-
-    // Клиент (без валидации сервера)
-    TlsSession client = TlsSession.createClient(
-        transport, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-        null, null);
-
-    // Клиент (с валидацией по CA)
-    TlsSession client = TlsSession.createClient(
-        transport, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-        null, null, caPublicKey);
-
-    // Сервер
-    TlsSession server = TlsSession.createServer(
-        transport, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-        serverCert, privateKey);
+Для соединений по IP-адресу или внутренних mesh-сервисов, где DNS-имя не
+используется, вместо `withServerHostname()` вызовите
+`withoutHostnameVerification()` — CA-проверка остаётся активной.
 
 Для SNI, ALPN, OCSP stapling, mTLS и выбора клиентского сертификата по
 OID-фильтрам используйте `TlsClientConfig` / `TlsServerConfig`.
@@ -339,7 +332,7 @@ OID-фильтрам используйте `TlsClientConfig` / `TlsServerConfig
 ALPN: клиент предлагает протоколы прикладного уровня:
 
     TlsSession client = TlsSession.createClient(
-        new TlsClientConfig(cs)
+        new TlsClientConfig(cs, caPublicKey)
             .withAlpnProtocols(List.of("h2", "http/1.1")), transport);
 
 Сервер настраивается через `TlsServerConfig.withAlpnProtocols()`. После

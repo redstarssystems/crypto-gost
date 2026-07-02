@@ -13,7 +13,7 @@ import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
 
 /**
- * Тесты CTR-ACPKM (RFC 8645, RFC 9337 §5) для Кузнечика.
+ * Тесты CTR-ACPKM для PBES2 (RFC 9337 §7.3) для Кузнечика.
  * <p>
  * Два варианта: без OMAC (чистый CTR) и с OMAC (Encrypt-then-MAC).
  */

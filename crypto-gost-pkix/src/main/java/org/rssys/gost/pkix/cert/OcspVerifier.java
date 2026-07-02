@@ -7,6 +7,7 @@ import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.List;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
@@ -14,9 +15,14 @@ import org.rssys.gost.util.DerCodec;
 /**
  * Верификация OCSP-ответа (RFC 6960).
  *
- * <p>Парсинг структуры делегирован в {@link GostOcspResponse}.
- * Статические методы выполняют: поиск серийного номера, проверку статуса,
- * свежести (thisUpdate/nextUpdate), CertID, подписи и nonce.</p>
+ * <p>Публичный API принимает {@link GostCertificate} — сертификат издателя
+ * (CA или делегированного responder'а). EKU-проверка для делегированных
+ * responder-сертификатов выполняется встроенно, отдельно вызывать не нужно.
+ * CertID (issuerNameHash/issuerKeyHash) вычисляется автоматически.</p>
+ *
+ * <p>Низкоуровневые перегрузки, принимающие {@link PublicKeyParameters},
+ * являются package-private — только для тестов и кросс-валидационных сценариев,
+ * где недоступен {@link GostCertificate}.</p>
  */
 public final class OcspVerifier {
 
@@ -26,36 +32,240 @@ public final class OcspVerifier {
 
     private OcspVerifier() {}
 
+    // ========================================================================
+    // Публичный API — по сертификату (проверка политик, EKU, делегирование)
+    // ========================================================================
+
     /**
-     * Верифицирует OCSP-ответ (RFC 6960).
+     * Верифицирует OCSP-ответ (RFC 6960) с полной проверкой политик.
      *
-     * <p>Проверяет подпись и статус сертификата. НЕ проверяет nonce —
-     * ответы без nonce уязвимы к replay-атакам (RFC 6960 §4.4.9, RFC 8954).
-     * Для защиты от replay используйте
-     * {@link #verify(byte[], byte[], PublicKeyParameters, byte[], byte[], byte[], boolean)}
-     * с заданным expectedNonce.</p>
+     * <p>Сначала пробует прямую подпись ключом issuer-сертификата (CA).
+     * Если не сошлось — перебирает делегированные responder-сертификаты
+     * из поля certs BasicOCSPResponse: для каждого проверяется
+     * expiry → EKU (id-kp-OCSPSigning) → KeyUsage → цепочка подписи к issuer.</p>
+     *
+     * <p>CertID (issuerNameHash/issuerKeyHash) вычисляется автоматически
+     * из issuerCert.</p>
      *
      * @param ocspResponse DER-кодированный OCSP-ответ
-     * @param serialNumber серийный номер сертификата
-     * @param caKey        публичный ключ CA (подпись OCSP-ответа)
+     * @param serialNumber серийный номер проверяемого сертификата
+     * @param issuerCert   сертификат издателя
      * @throws PkixException если ответ невалиден
      */
-    public static void verify(byte[] ocspResponse, byte[] serialNumber, PublicKeyParameters caKey)
+    public static void verify(
+            byte[] ocspResponse, byte[] serialNumber, GostCertificate issuerCert)
+            throws PkixException {
+        verifyWithCert(ocspResponse, serialNumber, issuerCert, null, false);
+    }
+
+    /**
+     * Верифицирует OCSP-ответ с проверкой nonce (RFC 8954).
+     *
+     * @param ocspResponse  DER-кодированный OCSP-ответ
+     * @param serialNumber  серийный номер проверяемого сертификата
+     * @param issuerCert    сертификат издателя
+     * @param expectedNonce ожидаемый nonce (из запроса) или null — не проверять
+     * @param strict        true — nonce обязателен в ответе
+     * @throws PkixException если ответ невалиден
+     */
+    public static void verify(
+            byte[] ocspResponse,
+            byte[] serialNumber,
+            GostCertificate issuerCert,
+            byte[] expectedNonce,
+            boolean strict)
+            throws PkixException {
+        verifyWithCert(ocspResponse, serialNumber, issuerCert, expectedNonce, strict);
+    }
+
+    private static void verifyWithCert(
+            byte[] ocspResponse,
+            byte[] serialNumber,
+            GostCertificate issuerCert,
+            byte[] expectedNonce,
+            boolean strict)
+            throws PkixException {
+        if (ocspResponse == null) {
+            throw new PkixException("No OCSP response available");
+        }
+        if (issuerCert == null) {
+            throw new PkixException("issuerCert must not be null");
+        }
+        LOG.log(
+                Level.INFO,
+                "Verifying OCSP response for certificate serial 0x{0}",
+                new BigInteger(1, serialNumber).toString(16));
+
+        GostOcspResponse ocsp = new GostOcspResponse(ocspResponse);
+
+        if (!ocsp.isSuccessful()) {
+            throw new PkixException(
+                    "OCSP: response status = "
+                            + ocsp.getResponseStatus()
+                            + " (expected 0/successful)");
+        }
+
+        // Ищем SingleResponse с совпадающим серийным номером
+        SingleOcspResponse target = findSingleResponse(ocsp, serialNumber);
+
+        // Попытка прямого подписания ключом issuer'а (CA)
+        PublicKeyParameters caPub = issuerCert.getPublicKey();
+        boolean sigOk;
+        try {
+            ocsp.verify(caPub);
+            sigOk = true;
+        } catch (PkixException e) {
+            sigOk = false;
+        }
+
+        // Если подпись CA не подошла — пробуем делегированные responder-сертификаты
+        if (!sigOk) {
+            sigOk = tryDelegatedVerification(ocsp, issuerCert);
+        }
+
+        if (!sigOk) {
+            throw new PkixException(
+                    PkixException.Reason.SIGNATURE_INVALID,
+                    "OCSP signature verification failed");
+        }
+
+        // Статус, свежесть, CertID
+        verifyStatusAndFreshness(target, ocspResponse, expectedNonce, strict);
+
+        // CertID проверка — всегда, автоматически из issuerCert
+        verifyCertId(target, caPub, issuerCert);
+
+        LOG.log(
+                Level.INFO,
+                "OCSP verification passed for certificate serial 0x{0}",
+                new BigInteger(1, serialNumber).toString(16));
+    }
+
+    /**
+     * Перебирает делегированные responder-сертификаты из поля certs.
+     * Порядок pre-checks (дёшево→дорого) из RFC 6960 §4.2.2.2:
+     * expiry → EKU → KeyUsage → подпись делегированного сертификата.
+     *
+     * @return true если делегированный сертификат прошёл все проверки и подписал OCSP-ответ
+     */
+    private static boolean tryDelegatedVerification(
+            GostOcspResponse ocsp, GostCertificate issuerCert) {
+        List<byte[]> dcDers = ocsp.getDelegatedCertificates();
+        if (dcDers.isEmpty()) {
+            return false;
+        }
+
+        for (byte[] dcDer : dcDers) {
+            GostCertificate dc = new GostCertificate(dcDer);
+
+            if (dc.isExpired()) continue;
+            if (!dc.isOcspSigning()) continue;
+            if (!dc.isKeyUsageValid()) continue;
+
+            // Делегированный сертификат должен быть подписан issuer'ом
+            if (!dc.verifySignature(issuerCert.getPublicKey())) continue;
+
+            // Проверяем подпись OCSP-ответа ключом делегированного сертификата
+            try {
+                ocsp.verify(dc.getPublicKey());
+                return true;
+            } catch (PkixException ignored) {
+                // Пробуем следующий delegated cert
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Проверяет CertID (issuerNameHash/issuerKeyHash) автоматически
+     * из issuerCert.
+     */
+    private static void verifyCertId(
+            SingleOcspResponse target, PublicKeyParameters issuerPub, GostCertificate issuerCert)
+            throws PkixException {
+        int hlen = issuerPub.getParams().hlen;
+        int certIdHashLen =
+                hlen == GostOids.STREEBOG_512_HASH_LEN
+                        ? GostOids.STREEBOG_512_HASH_LEN
+                        : GostOids.STREEBOG_256_HASH_LEN;
+
+        // issuerNameHash = hash(subject DN issuer-а)
+        byte[] issuerNameDer = issuerCert.getSubjectDnBytes();
+        byte[] expectedNameHash = GostSignatureHelper.doHash(issuerNameDer, certIdHashLen);
+        if (!Arrays.equals(target.issuerNameHash(), expectedNameHash)) {
+            throw new PkixException("OCSP: issuerNameHash mismatch");
+        }
+
+        // issuerKeyHash = hash(публичного ключа issuer-а)
+        byte[] expectedKeyHash =
+                CertIdHasher.hashIssuerPublicKey(issuerCert.getEncoded(), certIdHashLen);
+        if (!Arrays.equals(target.issuerKeyHash(), expectedKeyHash)) {
+            throw new PkixException("OCSP: issuerKeyHash mismatch");
+        }
+    }
+
+    /**
+     * Проверяет certStatus, свежесть (thisUpdate/nextUpdate) и nonce.
+     * Общая часть для certificate-based и key-based путей верификации.
+     */
+    static void verifyStatusAndFreshness(
+            SingleOcspResponse target,
+            byte[] ocspResponse,
+            byte[] expectedNonce,
+            boolean strict)
+            throws PkixException {
+        // certStatus проверка
+        if (target.isRevoked()) {
+            throw new PkixException(PkixException.Reason.REVOKED, "OCSP: certificate is revoked");
+        }
+        if (!target.isGood()) {
+            throw new PkixException("OCSP: certStatus is not 'good'");
+        }
+
+        // Проверка свежести thisUpdate
+        if (target.thisUpdate().isAfter(Instant.now().plusMillis(GostOids.CLOCK_SKEW_MS))) {
+            throw new PkixException("OCSP: thisUpdate is in the future");
+        }
+
+        // Проверка nextUpdate
+        if (target.nextUpdate() != null && Instant.now().isAfter(target.nextUpdate())) {
+            throw new PkixException("OCSP: response expired (nextUpdate in the past)");
+        }
+
+        // Nonce проверка
+        if (expectedNonce != null) {
+            verifyNonce(ocspResponse, expectedNonce, strict);
+        }
+    }
+
+    private static SingleOcspResponse findSingleResponse(
+            GostOcspResponse ocsp, byte[] serialNumber) throws PkixException {
+        for (SingleOcspResponse sr : ocsp.getResponses()) {
+            if (Arrays.equals(sr.certSerialNumber(), serialNumber)) {
+                return sr;
+            }
+        }
+        throw new PkixException("OCSP: serialNumber not found in any SingleResponse");
+    }
+
+    // ========================================================================
+    // Низкоуровневые перегрузки (package-private) — только для тестов
+    // и кросс-валидационных сценариев без GostCertificate
+    // ========================================================================
+
+    /**
+     * Только для тестов формата DER/подписи. Без проверки политики (EKU).
+     * Для production используйте перегрузку с {@link GostCertificate}.
+     */
+    static void verify(byte[] ocspResponse, byte[] serialNumber, PublicKeyParameters caKey)
             throws PkixException {
         verify(ocspResponse, serialNumber, caKey, null, null);
     }
 
     /**
-     * Верифицирует OCSP-ответ с проверкой CertID (issuerNameHash + issuerKeyHash).
-     *
-     * @param ocspResponse      DER-encoded OCSP-ответ
-     * @param serialNumber      серийный номер проверяемого сертификата
-     * @param caKey             публичный ключ CA (для подписи)
-     * @param expectedIssuerDn  DER-encoded issuer DN (полный TLV) или null
-     * @param issuerCertDer     DER-encoded issuer сертификат или null
-     * @throws PkixException при ошибке верификации
+     * Только для тестов формата DER/подписи. Без проверки политики (EKU).
      */
-    public static void verify(
+    static void verify(
             byte[] ocspResponse,
             byte[] serialNumber,
             PublicKeyParameters caKey,
@@ -79,40 +289,14 @@ public final class OcspVerifier {
                             + " (expected 0/successful)");
         }
 
-        // Ищем SingleResponse с совпадающим серийным номером
-        SingleOcspResponse target = null;
-        for (SingleOcspResponse sr : ocsp.getResponses()) {
-            if (Arrays.equals(sr.certSerialNumber(), serialNumber)) {
-                target = sr;
-                break;
-            }
-        }
-        if (target == null) {
-            throw new PkixException("OCSP: serialNumber not found in any SingleResponse");
-        }
+        SingleOcspResponse target = findSingleResponse(ocsp, serialNumber);
 
         // Проверка подписи — до certStatus (fail-closed, исключает подделку статуса)
         ocsp.verify(caKey);
 
-        // certStatus проверка
-        if (target.isRevoked()) {
-            throw new PkixException(PkixException.Reason.REVOKED, "OCSP: certificate is revoked");
-        }
-        if (!target.isGood()) {
-            throw new PkixException("OCSP: certStatus is not 'good'");
-        }
+        verifyStatusAndFreshness(target, ocspResponse, null, false);
 
-        // Проверка свежести thisUpdate
-        if (target.thisUpdate().isAfter(Instant.now().plusMillis(GostOids.CLOCK_SKEW_MS))) {
-            throw new PkixException("OCSP: thisUpdate is in the future");
-        }
-
-        // Проверка nextUpdate
-        if (target.nextUpdate() != null && Instant.now().isAfter(target.nextUpdate())) {
-            throw new PkixException("OCSP: response expired (nextUpdate in the past)");
-        }
-
-        // CertID defense-in-depth
+        // CertID defense-in-depth (опционально в низкоуровневом API)
         if (expectedIssuerDn != null && issuerCertDer != null) {
             int hlen = caKey.getParams().hlen;
             int certIdHashLen =
@@ -139,18 +323,9 @@ public final class OcspVerifier {
     }
 
     /**
-     * Верифицирует OCSP-ответ с проверкой nonce (RFC 8954).
-     *
-     * @param ocspResponse      DER-encoded OCSP-ответ
-     * @param serialNumber      серийный номер проверяемого сертификата
-     * @param caKey             публичный ключ CA (для подписи)
-     * @param expectedIssuerDn  DER-encoded issuer DN (полный TLV) или null
-     * @param issuerCertDer     DER-encoded issuer сертификат (для CertID) или null
-     * @param expectedNonce     ожидаемый nonce (из запроса) или null — не проверять
-     * @param strict            true — nonce обязателен в ответе
-     * @throws PkixException при ошибке верификации
+     * Только для тестов формата DER/подписи. Без проверки политики (EKU).
      */
-    public static void verify(
+    static void verify(
             byte[] ocspResponse,
             byte[] serialNumber,
             PublicKeyParameters caKey,

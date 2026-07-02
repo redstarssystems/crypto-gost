@@ -155,4 +155,16 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
         byteCount = 0;
         cipher.reset();
     }
+
+    @Override
+    public void destroy() {
+        java.util.Arrays.fill(CTR, (byte) 0);
+        if (IV != null) {
+            java.util.Arrays.fill(IV, (byte) 0);
+            IV = null;
+        }
+        java.util.Arrays.fill(buf, (byte) 0);
+        byteCount = 0;
+        super.destroy();
+    }
 }

@@ -1,5 +1,7 @@
 package org.rssys.gost.jsse;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.util.List;
 import java.util.stream.Collectors;
 import javax.net.ssl.SSLContext;
@@ -13,6 +15,9 @@ import org.rssys.gost.pkix.cert.GostPkcs12Loader;
  * в простые статические методы {@link GostSsl}.
  */
 public class GostSslBuilder {
+
+    private static final Logger LOG =
+            System.getLogger("org.rssys.gost.jsse.GostSslBuilder");
 
     private byte[] certDer;
     private byte[] keyDer;
@@ -140,6 +145,9 @@ public class GostSslBuilder {
      * Включает режим trust-all (только для разработки).
      */
     public GostSslBuilder trustAll() {
+        LOG.log(Level.WARNING,
+                "trustAll() enabled — server certificate validation DISABLED. "
+                + "For production use .trustedCaDer(byte[]) instead.");
         this.trustAll = true;
         return this;
     }

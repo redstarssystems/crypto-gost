@@ -1,4 +1,4 @@
-package org.rssys.gost.tls13.cert;
+package org.rssys.gost.pkix.cert;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -16,7 +16,6 @@ import org.rssys.gost.pkix.cert.GostPkcs12Mac;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.*;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 @DisplayName("GostPkcs12Builder — создание PFX-контейнеров ГОСТ")
 class GostPkcs12BuilderTest {
@@ -32,7 +31,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("Roundtrip OMAC: build -> load -> ключ и цепочка совпадают")
     void testRoundtripOmac() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] pfx =
                 GostPkcs12Builder.create()
@@ -42,7 +41,7 @@ class GostPkcs12BuilderTest {
                         .iterations(TEST_ITER)
                         .build();
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
 
         assertNotNull(result.getPrivateKey(), "приватный ключ");
         assertNotNull(result.getCertificateChain(), "цепочка");
@@ -61,7 +60,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("Roundtrip CTR-ACPKM (без OMAC) -> load проходит")
     void testRoundtripNoOmac() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] pfx =
                 GostPkcs12Builder.create()
@@ -72,7 +71,7 @@ class GostPkcs12BuilderTest {
                         .iterations(TEST_ITER)
                         .build();
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         assertNotNull(result.getPrivateKey(), "приватный ключ");
         assertNotNull(result.getCertificateChain(), "цепочка");
     }
@@ -85,7 +84,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("MAC: verify проходит после build")
     void testMacVerification() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] pfx =
                 GostPkcs12Builder.create()
@@ -96,7 +95,7 @@ class GostPkcs12BuilderTest {
                         .build();
 
         // Разобрать PFX и проверить MAC
-        PfxData parsed = GostPkcs12Parser.parsePfx(pfx);
+        PfxData parsed = GostPkcs12Parser.parsePfx(pfx, 1);
         assertNotNull(parsed.getMacData(), "MacData присутствует");
 
         byte[] passwordBytes =
@@ -116,9 +115,9 @@ class GostPkcs12BuilderTest {
     @DisplayName("Cert chain: builder с 2 CA -> цепочка из 3 сертификатов")
     void testCertChain() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle ca = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         ca.priv,
                         ca.cert.getPublicKey(),
@@ -141,7 +140,7 @@ class GostPkcs12BuilderTest {
                         .iterations(TEST_ITER)
                         .build();
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         List<GostCertificate> chain = result.getCertificateChain();
 
         assertEquals(2, chain.size(), "в цепочке 2 сертификата");
@@ -157,7 +156,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("friendlyName: build -> parse -> атрибут присутствует у ключа и leaf")
     void testFriendlyName() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] pfx =
                 GostPkcs12Builder.create()
@@ -168,7 +167,7 @@ class GostPkcs12BuilderTest {
                         .iterations(TEST_ITER)
                         .build();
 
-        PfxData parsed = GostPkcs12Parser.parsePfx(pfx);
+        PfxData parsed = GostPkcs12Parser.parsePfx(pfx, 1);
         ContentInfoData ci = parsed.getAuthSafe().getContentInfos().get(0);
         byte[] safeContentsDer = GostPkcs12Parser.unwrapOctetString(ci.getContent());
         List<SafeBagData> bags = GostPkcs12Parser.parseSafeContents(safeContentsDer);
@@ -196,7 +195,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("Пустой пароль: build -> load проходит")
     void testEmptyPassword() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] pfx =
                 GostPkcs12Builder.create()
@@ -206,7 +205,7 @@ class GostPkcs12BuilderTest {
                         .iterations(TEST_ITER)
                         .build();
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, new char[0], true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, new char[0], true, 50);
         assertNotNull(result.getPrivateKey(), "приватный ключ с пустым паролем");
         assertNotNull(result.getCertificateChain(), "цепочка с пустым паролем");
     }
@@ -215,7 +214,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("password=null -> преобразуется в пустой -> load проходит")
     void testNullPassword() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] pfx =
                 GostPkcs12Builder.create()
@@ -225,7 +224,7 @@ class GostPkcs12BuilderTest {
                         .iterations(TEST_ITER)
                         .build();
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, new char[0], true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, new char[0], true, 50);
         assertNotNull(result.getPrivateKey(), "null пароль: ключ загружен");
     }
 
@@ -237,7 +236,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("localKeyId: ключ и leaf имеют одинаковый localKeyId")
     void testLocalKeyId() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] pfx =
                 GostPkcs12Builder.create()
@@ -247,7 +246,7 @@ class GostPkcs12BuilderTest {
                         .iterations(TEST_ITER)
                         .build();
 
-        PfxData parsed = GostPkcs12Parser.parsePfx(pfx);
+        PfxData parsed = GostPkcs12Parser.parsePfx(pfx, 1);
         ContentInfoData ci = parsed.getAuthSafe().getContentInfos().get(0);
         byte[] safeContentsDer = GostPkcs12Parser.unwrapOctetString(ci.getContent());
         List<SafeBagData> bags = GostPkcs12Parser.parseSafeContents(safeContentsDer);
@@ -268,7 +267,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("Повреждённые данные: мутация байта -> load падает с ошибкой")
     void testCorruptedData() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] pfx =
                 GostPkcs12Builder.create()
@@ -283,7 +282,7 @@ class GostPkcs12BuilderTest {
 
         assertThrows(
                 Exception.class,
-                () -> GostPkcs12Loader.load(pfx, PASSWORD, true),
+                () -> GostPkcs12Loader.load(pfx, PASSWORD, true, 50),
                 "повреждённые данные: load падает");
     }
 
@@ -295,7 +294,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("buildAndWriteTo: запись -> чтение файла -> load проходит")
     void testBuildAndWriteTo() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         Path tmpFile = Files.createTempFile("pfx-test-", ".p12");
         try {
@@ -309,7 +308,7 @@ class GostPkcs12BuilderTest {
             byte[] fromFile = Files.readAllBytes(tmpFile);
             assertTrue(fromFile.length > 0, "файл не пуст");
 
-            GostPkcs12Loader.Result result = GostPkcs12Loader.load(fromFile, PASSWORD, true);
+            GostPkcs12Loader.Result result = GostPkcs12Loader.load(fromFile, PASSWORD, true, 50);
             assertNotNull(result.getPrivateKey(), "ключ из файла");
         } finally {
             Files.deleteIfExists(tmpFile);
@@ -324,7 +323,7 @@ class GostPkcs12BuilderTest {
     @DisplayName("отсутствует ключ -> IllegalStateException")
     void testMissingKey() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
         assertThrows(
                 IllegalStateException.class,
                 () ->

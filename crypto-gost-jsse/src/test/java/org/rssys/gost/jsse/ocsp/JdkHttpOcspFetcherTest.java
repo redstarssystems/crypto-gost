@@ -81,7 +81,7 @@ class JdkHttpOcspFetcherTest {
     @DisplayName("Успешный OCSP-запрос: 200 + тело -> fetcher возвращает тело")
     void testFetchSuccess() throws Exception {
         startMock(SENTINEL, 200);
-        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536);
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         byte[] result = fetcher.fetch(certDer, issuerDer, "http://localhost:" + port);
         assertArrayEquals(SENTINEL, result, "Fetcher должен вернуть контрольное тело");
     }
@@ -90,7 +90,7 @@ class JdkHttpOcspFetcherTest {
     @DisplayName("HTTP 500 -> fetcher возвращает null")
     void testFetchServerError() throws Exception {
         startMock(SENTINEL, 500);
-        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536);
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         assertNull(fetcher.fetch(certDer, issuerDer, "http://localhost:" + port));
     }
 
@@ -108,7 +108,7 @@ class JdkHttpOcspFetcherTest {
     void testFetchOversizeResponse() throws Exception {
         byte[] largeResponse = new byte[70000];
         startMock(largeResponse, 200);
-        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536);
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         assertNull(fetcher.fetch(certDer, issuerDer, "http://localhost:" + port));
     }
 
@@ -119,5 +119,32 @@ class JdkHttpOcspFetcherTest {
         assertNull(fetcher.fetch(null, issuerDer, "http://localhost/"));
         assertNull(fetcher.fetch(certDer, null, "http://localhost/"));
         assertNull(fetcher.fetch(certDer, issuerDer, null));
+    }
+
+    @Test
+    @DisplayName("private IP (127.0.0.1) блокируется -> null")
+    void testPrivateIpBlocked() {
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher();
+        assertNull(
+                fetcher.fetch(certDer, issuerDer, "http://127.0.0.1/"),
+                "127.0.0.1 должен блокироваться SSRF-защитой");
+    }
+
+    @Test
+    @DisplayName("localhost блокируется -> null")
+    void testLocalhostBlocked() {
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher();
+        assertNull(
+                fetcher.fetch(certDer, issuerDer, "http://localhost/"),
+                "localhost должен блокироваться SSRF-защитой");
+    }
+
+    @Test
+    @DisplayName("file:// URI -> null (запрещённая схема)")
+    void testFileSchemeRejected() {
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher();
+        assertNull(
+                fetcher.fetch(certDer, issuerDer, "file:///etc/ocsp"),
+                "file:// схема должна отклоняться");
     }
 }

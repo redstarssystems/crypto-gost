@@ -11,26 +11,34 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 
+import org.rssys.gost.jsse.SsrfGuard;
+
 /**
- * Реализация {@link OcspFetcher} на JDK HttpClient.
+ * Реализация {@link OcspFetcher} на JDK HttpClient с SSRF-защитой.
  * <p>
  * vthread-friendly с JDK 21: HttpClient блокирует vthread, не carrier thread.
  * Используется как singleton поверх TrustManager.
+ * SSRF-защита: только http:// схема, блокировка private/reserved IP
+ * после DNS-разрешения.
  */
 public final class JdkHttpOcspFetcher implements OcspFetcher {
 
     private static final Logger LOG =
             System.getLogger("org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher");
 
+    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(5);
+    private static final int DEFAULT_MAX_RESPONSE_SIZE = 65536; // 64 KB
+
     private final HttpClient client;
     private final Duration timeout;
     private final int maxResponseSize;
+    private final boolean skipSsrfCheck;
 
     /**
      * Создаёт fetcher с таймаутом 5 с и лимитом ответа 64 КБ.
      */
     public JdkHttpOcspFetcher() {
-        this(Duration.ofSeconds(5), 65536);
+        this(DEFAULT_TIMEOUT, DEFAULT_MAX_RESPONSE_SIZE, false);
     }
 
     /**
@@ -38,9 +46,15 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
      * @param maxResponseSize  максимальный размер OCSP-ответа в байтах (защита от OOM)
      */
     public JdkHttpOcspFetcher(Duration timeout, int maxResponseSize) {
+        this(timeout, maxResponseSize, false);
+    }
+
+    /** Для тестов — отключает SSRF-проверку (localhost mock). */
+    JdkHttpOcspFetcher(Duration timeout, int maxResponseSize, boolean skipSsrfCheck) {
         this.client = HttpClient.newHttpClient();
         this.timeout = timeout;
         this.maxResponseSize = maxResponseSize;
+        this.skipSsrfCheck = skipSsrfCheck;
     }
 
     @Override
@@ -112,6 +126,14 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
             return null;
         }
 
+        if (!skipSsrfCheck && SsrfGuard.isPrivateAddress(requestUri)) {
+            LOG.log(
+                    Level.WARNING,
+                    "OCSP fetch skipped: private/reserved IP resolved from {0}",
+                    uri);
+            return null;
+        }
+
         HttpRequest request =
                 HttpRequest.newBuilder()
                         .uri(requestUri)
@@ -125,6 +147,11 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
 
         if (response.statusCode() != 200) {
             response.body().close();
+            LOG.log(
+                    Level.WARNING,
+                    "OCSP fetch failed: HTTP {0} for {1}",
+                    response.statusCode(),
+                    uri);
             return null;
         }
 
@@ -134,7 +161,14 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
             int total = 0;
             int n;
             while ((n = is.read(buf)) != -1) {
-                if (total > maxResponseSize - n) return null;
+                if (total > maxResponseSize - n) {
+                    LOG.log(
+                            Level.WARNING,
+                            "OCSP fetch aborted: response exceeds {0} bytes for {1}",
+                            maxResponseSize,
+                            uri);
+                    return null;
+                }
                 total += n;
                 baos.write(buf, 0, n);
             }

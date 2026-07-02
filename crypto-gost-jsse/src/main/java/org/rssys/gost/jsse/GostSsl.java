@@ -228,10 +228,13 @@ public final class GostSsl {
     // Методы создания сокетов
     // ========================================================================
 
-    /** Создаёт SSLSocket и выполняет handshake. */
+    /** Создаёт SSLSocket с проверкой hostname (RFC 6125) и выполняет handshake. */
     public static SSLSocket socket(String host, int port, SSLContext ctx) throws GostSslException {
         try {
             SSLSocket s = (SSLSocket) ctx.getSocketFactory().createSocket(host, port);
+            SSLParameters params = s.getSSLParameters();
+            params.setEndpointIdentificationAlgorithm("HTTPS");
+            s.setSSLParameters(params);
             s.startHandshake();
             return s;
         } catch (Exception e) {
@@ -334,6 +337,9 @@ public final class GostSsl {
 
             try (SSLSocket s =
                     (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port)) {
+                SSLParameters params = s.getSSLParameters();
+                params.setEndpointIdentificationAlgorithm("HTTPS");
+                s.setSSLParameters(params);
                 s.startHandshake();
             }
 

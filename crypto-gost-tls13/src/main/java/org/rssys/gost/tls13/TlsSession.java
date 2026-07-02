@@ -126,6 +126,11 @@ public final class TlsSession implements AutoCloseable {
      * Закрывать transport нужно явно после session.close() (try-with-resources с правильным порядком).
      */
     public static TlsSession createClient(TlsClientConfig config, TlsTransport transport) {
+        if (config.getServerHostname() == null && !config.isHostnameVerificationDisabled()) {
+            throw new IllegalArgumentException(
+                    "Server hostname not set."
+                    + " Call withServerHostname() or withoutHostnameVerification()");
+        }
         TlsSession session =
                 new TlsSession(
                         transport,
@@ -141,30 +146,26 @@ public final class TlsSession implements AutoCloseable {
         return session;
     }
 
-    /** Создаёт сессию для клиента (прямые параметры, без конфига). */
-    public static TlsSession createClient(
+    /**
+     * Создаёт клиентскую сессию БЕЗ проверки сертификата сервера.
+     * <strong>Только для тестов и отладки.</strong> В production используйте
+     * {@link #createClient(TlsClientConfig, TlsTransport)}
+     * с {@link TlsClientConfig#TlsClientConfig(TlsCiphersuite, List)}.
+     *
+     * @param transport       транспорт для связи с сервером
+     * @param ciphersuite     cipher suite
+     * @param clientCertificate сертификат клиента (null — без mTLS)
+     * @param clientPrivateKey  закрытый ключ клиента (null — без mTLS)
+     * @return клиентская TLS-сессия без аутентификации сервера
+     */
+    public static TlsSession createClientWithoutServerAuth(
             TlsTransport transport,
             TlsCiphersuite ciphersuite,
-            GostCertificate ourCertificate,
-            PrivateKeyParameters ourPrivateKey) {
-        return createClient(transport, ciphersuite, ourCertificate, ourPrivateKey, null);
-    }
-
-    /** Создаёт сессию для клиента с валидацией CA. */
-    public static TlsSession createClient(
-            TlsTransport transport,
-            TlsCiphersuite ciphersuite,
-            GostCertificate ourCertificate,
-            PrivateKeyParameters ourPrivateKey,
-            PublicKeyParameters caPublicKey) {
-        List<PublicKeyParameters> keys =
-                caPublicKey != null ? Collections.singletonList(caPublicKey) : null;
-        return createClient(
-                new TlsClientConfig(ciphersuite)
-                        .withClientCertificateChain(ourCertificate)
-                        .withClientPrivateKey(ourPrivateKey)
-                        .withCaPublicKeys(keys),
-                transport);
+            GostCertificate clientCertificate,
+            PrivateKeyParameters clientPrivateKey) {
+        List<GostCertificate> chain =
+                clientCertificate != null ? Collections.singletonList(clientCertificate) : null;
+        return new TlsSession(transport, ciphersuite, chain, clientPrivateKey, null, null, false, null);
     }
 
     /**

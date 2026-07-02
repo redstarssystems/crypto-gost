@@ -1,7 +1,6 @@
 package org.rssys.gost.tls13.config;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -13,9 +12,9 @@ import org.rssys.gost.tls13.TlsUtils;
  * Конфигурация клиента TLS 1.3.
  *
  * <pre>{@code
- * TlsSession session = TlsSession.createClient(new TlsClientConfig(cs)
- *     .withCaPublicKey(caKey)
- *     .withServerHostname("example.com"), transport);
+ * TlsSession session = TlsSession.createClient(
+ *     new TlsClientConfig(cs, caKey)
+ *         .withServerHostname("example.com"), transport);
  * }</pre>
  */
 public final class TlsClientConfig {
@@ -24,19 +23,37 @@ public final class TlsClientConfig {
     private PrivateKeyParameters clientPrivateKey;
     private List<PublicKeyParameters> caPublicKeys;
     private String serverHostname;
+    private boolean hostnameVerificationDisabled;
     private boolean requireOcspStapling;
     private List<String> alpnProtocols;
     private ClientCertificateSelector clientCertificateSelector;
 
     /**
-     * Создаёт конфигурацию клиента без транспорта.
+     * Создаёт конфигурацию клиента с обязательной аутентификацией сервера.
      * Transport передаётся отдельно в {@code TlsSession.createClient(config, transport)}.
      *
-     * @param ciphersuite cipher suite (не null)
+     * @param ciphersuite  cipher suite (не null)
+     * @param caPublicKeys список доверенных ключей CA (не null, не пустой)
+     * @throws IllegalArgumentException если caPublicKeys null или пуст
      */
-    public TlsClientConfig(TlsCiphersuite ciphersuite) {
+    public TlsClientConfig(TlsCiphersuite ciphersuite, List<PublicKeyParameters> caPublicKeys) {
         if (ciphersuite == null) throw new IllegalArgumentException("ciphersuite must not be null");
+        if (caPublicKeys == null || caPublicKeys.isEmpty()) {
+            throw new IllegalArgumentException("caPublicKeys must not be null or empty");
+        }
         this.ciphersuite = ciphersuite;
+        this.caPublicKeys = List.copyOf(caPublicKeys);
+    }
+
+    /**
+     * Создаёт конфигурацию клиента с одним доверенным ключом CA.
+     *
+     * @param ciphersuite cipher suite (не null)
+     * @param caPublicKey доверенный ключ CA (не null)
+     * @throws IllegalArgumentException если caPublicKey null
+     */
+    public TlsClientConfig(TlsCiphersuite ciphersuite, PublicKeyParameters caPublicKey) {
+        this(ciphersuite, List.of(caPublicKey));
     }
 
     /**
@@ -71,20 +88,32 @@ public final class TlsClientConfig {
     }
 
     /**
-     * @param caPubKeys список доверенных ключей CA (null или пустой = не проверять цепочку)
+     * Заменяет список доверенных ключей CA.
+     *
+     * @param caPubKeys список доверенных ключей CA (не null, не пустой)
      * @return this
+     * @throws IllegalArgumentException если caPubKeys null или пуст
      */
     public TlsClientConfig withCaPublicKeys(List<PublicKeyParameters> caPubKeys) {
-        this.caPublicKeys = caPubKeys;
+        if (caPubKeys == null || caPubKeys.isEmpty()) {
+            throw new IllegalArgumentException("caPublicKeys must not be null or empty");
+        }
+        this.caPublicKeys = List.copyOf(caPubKeys);
         return this;
     }
 
     /**
-     * @param caPub открытый ключ CA (null = не проверять цепочку)
+     * Заменяет доверенный ключ CA одним ключом.
+     *
+     * @param caPub открытый ключ CA (не null)
      * @return this
+     * @throws IllegalArgumentException если caPub null
      */
     public TlsClientConfig withCaPublicKey(PublicKeyParameters caPub) {
-        return withCaPublicKeys(caPub != null ? Collections.singletonList(caPub) : null);
+        if (caPub == null) {
+            throw new IllegalArgumentException("caPublicKey must not be null");
+        }
+        return withCaPublicKeys(List.of(caPub));
     }
 
     /**
@@ -143,6 +172,22 @@ public final class TlsClientConfig {
 
     public String getServerHostname() {
         return serverHostname;
+    }
+
+    /**
+     * Отключает проверку hostname в сертификате сервера.
+     * Только для mesh-сервисов, внутренних соединений и тестов,
+     * где проверка hostname не нужна, но аутентификация CA обязательна.
+     *
+     * @return this
+     */
+    public TlsClientConfig withoutHostnameVerification() {
+        this.hostnameVerificationDisabled = true;
+        return this;
+    }
+
+    public boolean isHostnameVerificationDisabled() {
+        return hostnameVerificationDisabled;
     }
 
     public List<String> getAlpnProtocols() {

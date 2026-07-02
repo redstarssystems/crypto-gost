@@ -67,6 +67,9 @@ public abstract class GostMacSpi extends MacSpi {
                     "No algorithm parameters supported for GOST MAC");
         }
         SymmetricKey keyParam = extractSymmetricKey(key);
+        if (delegate != null) {
+            delegate.destroy();
+        }
         // Создаём свежий делегат при каждой инициализации
         delegate = createDelegate();
         delegate.init(keyParam);

@@ -81,9 +81,8 @@ public final class ThreeCertChain {
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs)
-                                        .withServerHostname("localhost")
-                                        .withCaPublicKey(root.getPublicKey()),
+                                new TlsClientConfig(cs, root.getPublicKey())
+                                        .withServerHostname("localhost"),
                                 clientTp)) {
 
             ExecutorService exec = Executors.newSingleThreadExecutor();

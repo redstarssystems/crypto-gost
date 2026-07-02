@@ -467,6 +467,83 @@ class DerCodecTest {
     }
 
     // ========================================================================
+    // decodeLength: минимальность long-form (X.690 §10.1) — защита от malleability
+    // ========================================================================
+
+    @Test
+    @DisplayName("decodeLength: 0x81 0x05 (значение влезает в short-form) -> исключение")
+    void decodeLengthNonMinimal81() {
+        // Значение 5 обязано кодироваться как 0x05 (short-form), long-form 0x81 0x05 —
+        // неканоническое кодирование (malleability).
+        byte[] data = {(byte) 0x81, 0x05};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.decodeLength(data, 0),
+                "неминимальный 0x81 0x05 должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("decodeLength: 0x81 0x7F (граница short-form) -> исключение")
+    void decodeLengthNonMinimal81Boundary() {
+        // 0x7F=127 ещё влезает в short-form, поэтому 0x81 0x7F неминимально.
+        byte[] data = {(byte) 0x81, 0x7F};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.decodeLength(data, 0),
+                "неминимальный 0x81 0x7F должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("decodeLength: 0x81 0x80 (минимальное валидное long-form) -> 128")
+    void decodeLengthMinimal81() {
+        // 128 не влезает в short-form, поэтому 0x81 0x80 — минимально корректно.
+        byte[] data = {(byte) 0x81, (byte) 0x80};
+        int[] result = DerCodec.decodeLength(data, 0);
+        assertEquals(128, result[0], "длина должна быть 128");
+        assertEquals(2, result[1], "байт под длину должно быть 2");
+    }
+
+    @Test
+    @DisplayName("decodeLength: 0x82 0x00 0x05 (влезает в short-form) -> исключение")
+    void decodeLengthNonMinimal82() {
+        byte[] data = {(byte) 0x82, 0x00, 0x05};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.decodeLength(data, 0),
+                "неминимальный 0x82 0x00 0x05 должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("decodeLength: 0x82 0x00 0xFF (влезает в 0x81) -> исключение")
+    void decodeLengthNonMinimal82AsShort() {
+        // 255 влезает в 0x81 0xFF, поэтому 0x82 0x00 0xFF неминимально.
+        byte[] data = {(byte) 0x82, 0x00, (byte) 0xFF};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.decodeLength(data, 0),
+                "неминимальный 0x82 0x00 0xFF должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("decodeLength: 0x82 0x01 0x00 (минимальное валидное) -> 256")
+    void decodeLengthMinimal82() {
+        byte[] data = {(byte) 0x82, 0x01, 0x00};
+        int[] result = DerCodec.decodeLength(data, 0);
+        assertEquals(256, result[0], "длина должна быть 256");
+        assertEquals(3, result[1], "байт под длину должно быть 3");
+    }
+
+    @Test
+    @DisplayName("decodeLength: 0x83 0x00 0x01 0x00 (влезает в 0x82) -> исключение")
+    void decodeLengthNonMinimal83() {
+        byte[] data = {(byte) 0x83, 0x00, 0x01, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.decodeLength(data, 0),
+                "неминимальный 0x83 должен отклоняться");
+    }
+
+    // ========================================================================
     // findEoc: защита от crash-инпута фаззера (отрицательная длина 0x84)
     // ========================================================================
 
@@ -639,18 +716,27 @@ class DerCodecTest {
     }
 
     @Test
-    @DisplayName("parseOid: дуга с 9 continuation-байтами → переполнение long → IllegalArgumentException")
+    @DisplayName(
+            "parseOid: дуга с 9 continuation-байтами → переполнение long → IllegalArgumentException")
     void parseOidArcOverflow() {
         // 9 continuation-байт × 7 бит = 63 бита → 10-й байт вызывает переполнение.
         // Строим DER вручную: тег OID (0x06), длина, 1.0 + 9×0xFF + 1 байт.
-        byte[] data = new byte[] {
-            0x06, 0x0B, // OID tag, length 11
-            0x28,       // 1.0 (first=40 → 1.0)
-            (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
-            (byte) 0xFF, (byte) 0xFF, (byte) 0xFF,
-            (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, // 9 continuation-байт → value = 2^63-1 (63 бита)
-            0x01        // 10-й байт — проверка переполнения ДО сдвига value << 7
-        };
+        byte[] data =
+                new byte[] {
+                    0x06,
+                    0x0B, // OID tag, length 11
+                    0x28, // 1.0 (first=40 → 1.0)
+                    (byte) 0xFF,
+                    (byte) 0xFF,
+                    (byte) 0xFF,
+                    (byte) 0xFF,
+                    (byte) 0xFF,
+                    (byte) 0xFF,
+                    (byte) 0xFF,
+                    (byte) 0xFF,
+                    (byte) 0xFF, // 9 continuation-байт → value = 2^63-1 (63 бита)
+                    0x01 // 10-й байт — проверка переполнения ДО сдвига value << 7
+                };
         assertThrows(
                 IllegalArgumentException.class,
                 () -> DerCodec.parseOid(data, 0),

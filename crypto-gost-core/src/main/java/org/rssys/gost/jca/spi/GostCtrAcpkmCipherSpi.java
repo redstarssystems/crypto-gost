@@ -1,5 +1,7 @@
 package org.rssys.gost.jca.spi;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.security.AlgorithmParameters;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
@@ -12,18 +14,19 @@ import javax.crypto.AEADBadTagException;
 import javax.crypto.BadPaddingException;
 import javax.crypto.CipherSpi;
 import javax.crypto.IllegalBlockSizeException;
-import javax.crypto.SecretKey;
 import javax.crypto.ShortBufferException;
 import javax.crypto.spec.IvParameterSpec;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.mode.CtrAcpkmMode;
-import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.util.CryptoRandom;
 
 /**
- * JCA SPI для Кузнечик-CTR-ACPKM (RFC 9337 §5).
+ * JCA SPI для OID {@code id-gostr3412-2015-kuznyechik-ctracpkm}
+ * (RFC 9337 §7.3, схема PBES2). Реализует ГОСТ Р 34.13-2015 CTR без
+ * секционной смены ключа ACPKM (RFC 8645 §6.2.2), поскольку объём данных
+ * в сценарии PBES2 (шифрование ключей) всегда умещается в одну секцию.
  * <p>
  * Два варианта — два внутренних подкласса, регистрируются как отдельные
  * {@code Cipher.*} в {@link org.rssys.gost.jca.RssysGostProvider}:
@@ -33,24 +36,35 @@ import org.rssys.gost.util.CryptoRandom;
  * </ul>
  * <p>
  * Внутреннее использование в {@code GostPbes2} предпочтительнее через прямой
- * вызов {@link CtrAcpkmMode}, не через JCA — так обходятся накладные расходы
+ * вызов {@link CtrAcpkmMode}, не через JCA — обходятся накладные расходы
  * JCA на маршаллинг ключей и параметров.
+ * <p>
+ * <b>Предупреждение:</b> при обработке объёма данных &gt; 64 КБ через этот
+ * SPI в одном сеансе шифрования (без переинициализации ключа) будет выдано
+ * предупреждение в лог — секционная смена ключа не выполняется, и стойкость
+ * CTR-режима снижается.
  */
 public class GostCtrAcpkmCipherSpi extends CipherSpi {
 
-    /** Без OMAC — чистый CTR-ACPKM. */
+    /** Без OMAC — чистый CTR (ГОСТ Р 34.13-2015). */
     public static final class WithoutOmac extends GostCtrAcpkmCipherSpi {
         public WithoutOmac() {
             super(false);
         }
     }
 
-    /** С OMAC — CTR-ACPKM с CMAC (Encrypt-then-MAC). */
+    /** С OMAC — CTR + CMAC, Encrypt-then-MAC. */
     public static final class WithOmac extends GostCtrAcpkmCipherSpi {
         public WithOmac() {
             super(true);
         }
     }
+
+    private static final Logger LOG =
+            System.getLogger("org.rssys.gost.jca.spi.GostCtrAcpkmCipherSpi");
+
+    /** Порог, выше которого предупреждаем об отсутствии секционной смены ключа. */
+    private static final long ACPKM_SECTION_WARN_BYTES = 65536L;
 
     private static final int UKM_LEN = 16;
     private static final int TAG_LEN = 16;
@@ -61,6 +75,7 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     private CtrAcpkmMode mode;
     private byte[] ukm;
     private boolean initialized;
+    private long processedBytes;
 
     private byte[] inputBuffer = new byte[0];
 
@@ -146,9 +161,13 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
             throw new InvalidAlgorithmParameterException("Use IvParameterSpec for CTR-ACPKM");
         }
 
+        if (this.mode != null) {
+            this.mode.destroy();
+        }
         this.mode = new CtrAcpkmMode(new Kuznyechik(), useOmac);
         this.mode.init(forEncryption, new ParametersWithIV(keyParam, ukm));
         this.inputBuffer = new byte[0];
+        this.processedBytes = 0L;
         this.initialized = true;
     }
 
@@ -184,6 +203,7 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
         }
         byte[] result = new byte[inputLen];
         mode.processBytes(input, inputOffset, inputLen, result, 0);
+        accumulatedProcessed(inputLen);
         return result;
     }
 
@@ -211,11 +231,13 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
             if (!useOmac) {
                 byte[] result = new byte[inputBuffer.length];
                 mode.processBytes(inputBuffer, 0, inputBuffer.length, result, 0);
+                accumulatedProcessed(inputBuffer.length);
                 return result;
             }
             if (forEncryption) {
                 byte[] ct = new byte[inputBuffer.length];
                 mode.processBytes(inputBuffer, 0, inputBuffer.length, ct, 0);
+                accumulatedProcessed(inputBuffer.length);
                 byte[] tag = mode.getMacTag();
                 byte[] out = new byte[ct.length + TAG_LEN];
                 System.arraycopy(ct, 0, out, 0, ct.length);
@@ -231,6 +253,7 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
 
             byte[] plaintext = new byte[ctLen];
             mode.processBytes(ct, 0, ctLen, plaintext, 0);
+            accumulatedProcessed(ctLen);
             byte[] computedTag = mode.getMacTag();
 
             if (!MessageDigest.isEqual(computedTag, expectedTag)) {
@@ -259,18 +282,21 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     }
 
     private static SymmetricKey extractSymmetricKey(Key key) throws InvalidKeyException {
-        if (key == null) throw new InvalidKeyException("Key must not be null");
-        if (key instanceof GostSecretKey gsk) return gsk.toSymmetricKey();
-        if (key instanceof SecretKey && "RAW".equals(key.getFormat())) {
-            byte[] encoded = key.getEncoded();
-            if (encoded == null || encoded.length != Kuznyechik.KEY_SIZE) {
-                throw new InvalidKeyException(
-                        "Kuznyechik requires 32-byte key, got "
-                                + (encoded == null ? "null" : encoded.length));
-            }
-            return new SymmetricKey(encoded);
+        return SymmetricKeyExtractor.fromKey(key);
+    }
+
+    private void accumulatedProcessed(int len) {
+        long prev = processedBytes;
+        processedBytes += len;
+        if (prev < ACPKM_SECTION_WARN_BYTES && processedBytes >= ACPKM_SECTION_WARN_BYTES) {
+            LOG.log(
+                    Level.WARNING,
+                    "Kuznyechik/CTR-ACPKM: processed {0} bytes on a single key "
+                            + "without ACPKM section re-keying (RFC 8645 §6.2.2). "
+                            + "For PBES2 key encryption this is expected; "
+                            + "for bulk data, reinitialize the cipher with a fresh key.",
+                    processedBytes);
         }
-        throw new InvalidKeyException("Unsupported key type: " + key.getClass().getName());
     }
 
     private void appendToBuffer(byte[] input, int offset, int len) {

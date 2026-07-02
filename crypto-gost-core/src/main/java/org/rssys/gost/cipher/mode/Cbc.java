@@ -115,4 +115,10 @@ public class Cbc extends AbstractStreamMode {
         java.util.Arrays.fill(scratchBuf, (byte) 0);
         cipher.reset();
     }
+
+    @Override
+    public void destroy() {
+        java.util.Arrays.fill(scratchBuf, (byte) 0);
+        super.destroy();
+    }
 }

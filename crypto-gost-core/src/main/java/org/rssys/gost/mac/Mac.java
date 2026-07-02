@@ -17,4 +17,10 @@ public interface Mac {
     int doFinal(byte[] out, int outOff) throws DataLengthException, IllegalStateException;
 
     void reset();
+
+    /**
+     * Обнуляет ключевой материал и внутреннее состояние.
+     * После вызова экземпляр можно повторно инициализировать через {@link #init}.
+     */
+    default void destroy() {}
 }

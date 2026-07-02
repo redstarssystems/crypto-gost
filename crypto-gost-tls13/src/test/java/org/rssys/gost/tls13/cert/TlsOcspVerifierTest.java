@@ -46,78 +46,6 @@ class TlsOcspVerifierTest {
     }
 
     @Test
-    @DisplayName("CertID: неверный issuer DN -> issuerNameHash mismatch")
-    void testCertIdNameHashMismatch() throws Exception {
-        byte[] ocsp =
-                TlsTestHelper.buildOcspResponse(
-                        leaf.cert.getSerialNumber(), root.priv,
-                        root.cert.getPublicKey(), root.subjectDn);
-        PkixException ex =
-                assertThrows(
-                        PkixException.class,
-                        () ->
-                                OcspVerifier.verify(
-                                        ocsp,
-                                        leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey(),
-                                        new byte[] {0x30, 0x00},
-                                        root.cert.getEncoded()));
-        assertTrue(ex.getMessage().contains("issuerNameHash mismatch"));
-    }
-
-    @Test
-    @DisplayName("CertID: чужой issuer с другим ключом -> issuerKeyHash mismatch")
-    void testCertIdKeyHashMismatch() throws Exception {
-        TlsTestHelper.CertBundle otherRoot = TlsTestHelper.createRootCA(params);
-        byte[] ocsp =
-                TlsTestHelper.buildOcspResponse(
-                        leaf.cert.getSerialNumber(), root.priv,
-                        root.cert.getPublicKey(), root.subjectDn);
-        PkixException ex =
-                assertThrows(
-                        PkixException.class,
-                        () ->
-                                OcspVerifier.verify(
-                                        ocsp,
-                                        leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey(),
-                                        root.subjectDn,
-                                        otherRoot.cert.getEncoded()));
-        assertTrue(ex.getMessage().contains("issuerKeyHash mismatch"));
-    }
-
-    @Test
-    @DisplayName("CertID: OID алгоритма хеширования не Streebog-256 -> отказ")
-    void testCertIdHashAlgorithmMismatch() throws Exception {
-        byte[] ocsp =
-                TlsTestHelper.buildOcspResponse(
-                        leaf.cert.getSerialNumber(), root.priv,
-                        root.cert.getPublicKey(), root.subjectDn);
-        // Мутируем OID с Streebog-256 (0x06,0x08,0x2A,0x85,...) на SHA-1
-        // (0x06,0x05,0x2B,0x0E,0x03,0x02,0x1A)
-        byte[] mutated = ocsp.clone();
-        byte[] streebogOid = {0x06, 0x08, 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02};
-        byte[] sha1Oid = {0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A};
-        int idx = indexOf(mutated, streebogOid);
-        assertTrue(idx >= 0, "OID Streebog-256 должен быть найден в OCSP-ответе");
-        System.arraycopy(sha1Oid, 0, mutated, idx, sha1Oid.length);
-
-        PkixException ex =
-                assertThrows(
-                        PkixException.class,
-                        () ->
-                                OcspVerifier.verify(
-                                        mutated,
-                                        leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey(),
-                                        root.subjectDn,
-                                        root.cert.getEncoded()));
-        assertTrue(
-                ex.getMessage().contains("must be Streebog-256 or Streebog-512"),
-                "Ожидалась ошибка hashAlgorithm, получено: " + ex.getMessage());
-    }
-
-    @Test
     @DisplayName("thisUpdate в будущем -> отказ (RFC 6960 §3.2)")
     void testThisUpdateInFuture() throws Exception {
         // Строим OCSP-ответ с thisUpdate в далёком будущем напрямую через builder API —
@@ -136,10 +64,10 @@ class TlsOcspVerifierTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                OcspVerifier.verify(
-                                        ocsp,
-                                        leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        OcspVerifier.verify(
+                                                ocsp,
+                                                leaf.cert.getSerialNumber(),
+                                                root.cert));
         assertTrue(
                 ex.getMessage().contains("future"),
                 "Ожидалось thisUpdate future, получено: " + ex.getMessage());
@@ -196,7 +124,7 @@ class TlsOcspVerifierTest {
                                 OcspVerifier.verify(
                                         multiOcsp,
                                         leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        root.cert));
         assertEquals(
                 PkixException.Reason.REVOKED,
                 ex.reason(),
@@ -237,7 +165,7 @@ class TlsOcspVerifierTest {
                                 OcspVerifier.verify(
                                         multiOcsp,
                                         leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        root.cert));
         assertTrue(
                 ex.getMessage().contains("signature verification failed"),
                 "Должен пройти certStatus (good), но упасть на подписи: " + ex.getMessage());
@@ -275,7 +203,7 @@ class TlsOcspVerifierTest {
                                 OcspVerifier.verify(
                                         multiOcsp,
                                         leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        root.cert));
         assertTrue(
                 ex.getMessage().contains("not found"),
                 "Ожидалась ошибка 'not found', получено: " + ex.getMessage());

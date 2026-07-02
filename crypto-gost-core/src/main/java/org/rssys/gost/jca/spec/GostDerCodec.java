@@ -158,6 +158,9 @@ public final class GostDerCodec {
         BigInteger y = new BigInteger(1, Pack.reverseBytes(yLE));
 
         ECPoint q = ECPoint.affine(x, y, params);
+        if (!q.isValidPublicKey()) {
+            throw new IllegalArgumentException("decoded public key point is not on the curve");
+        }
         return new PublicKeyParameters(q, params);
     }
 

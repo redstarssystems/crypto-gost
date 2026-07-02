@@ -17,8 +17,8 @@
 - **MGM (Multilinear Galois Mode)** — AEAD-режим для Кузнечика,
   RFC 9058. Совместим с OpenSSL.
 
-- **CTR-ACPKM и CTR-ACPKM-OMAC** — режимы шифрования с ACPKM
-  (Re-keying), RFC 8645, RFC 9337 §5.
+- **CTR-ACPKM и CTR-ACPKM-OMAC** — режимы шифрования для PBES2 (ГОСТ Р
+  34.13-2015 CTR), RFC 9337 §7.3.
 
 - **KDF\_GOSTR3411\_2012\_256 и KDF\_TREE\_GOSTR3411\_2012\_256** —
   функции выработки ключевого материала, RFC 7836 §4.4 и §4.5.
@@ -656,7 +656,7 @@ CipherOutputStream / CipherInputStream это строительные блок�
 Для потоков с аутентификацией целостности используйте
 `AuthenticatedStream` из `org.rssys.gost.api`.
 
-## Режимы CTR-ACPKM и CTR-ACPKM-OMAC (RFC 8645, RFC 9337 §5)
+## Режимы CTR-ACPKM и CTR-ACPKM-OMAC (PBES2, RFC 9337 §7.3)
 
 **Данные режимы являются строительными блоками и требуется понимание их
 использования.**

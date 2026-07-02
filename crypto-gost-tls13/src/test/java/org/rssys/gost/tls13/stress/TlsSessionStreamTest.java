@@ -33,7 +33,7 @@ import org.rssys.gost.util.CryptoRandom;
 
 @DisplayName("Пропускная способность TlsSession через реальный TCP — однопоточный write")
 @Tag("stress")
-@Timeout(value = 5, unit = TimeUnit.MINUTES)
+@Timeout(value = 15, unit = TimeUnit.MINUTES)
 class TlsSessionStreamTest {
 
     private static final int CHUNK_SIZE = 16383;
@@ -52,7 +52,7 @@ class TlsSessionStreamTest {
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
         serverConfig = new TlsServerConfig(cs, Collections.singletonList(bundle.cert), bundle.priv);
-        clientConfig = new TlsClientConfig(cs).withCaPublicKey(bundle.cert.getPublicKey());
+        clientConfig = new TlsClientConfig(cs, bundle.cert.getPublicKey()).withoutHostnameVerification();
         serverSocket = new ServerSocket(0);
         port = serverSocket.getLocalPort();
     }

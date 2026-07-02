@@ -5,6 +5,7 @@ import java.io.NotSerializableException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.Arrays;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.crypto.SecretKey;
 import javax.security.auth.Destroyable;
 import org.rssys.gost.cipher.SymmetricKey;
@@ -47,6 +48,18 @@ public final class GostSecretKey implements SecretKey, Destroyable {
 
     /** Признак уничтожения ключа. */
     private boolean destroyed = false;
+
+    /**
+     * Защищает совместный доступ к {@link #keyBytes}/{@link #destroyed}.
+     * <p>
+     * Одного {@code volatile} недостаточно: {@link #destroy()} обнуляет массив
+     * ({@code Arrays.fill}) параллельно с чтением ({@code Arrays.copyOf}) в
+     * {@link #getEncoded()}/{@link #toSymmetricKey()} — это data race на элементах
+     * массива (torn read), при котором мог бы вернуться частично обнулённый ключ.
+     * {@link ReentrantLock} (а не {@code synchronized}) выбран из-за виртуальных
+     * потоков JDK 21: {@code synchronized} пиннит carrier thread.
+     */
+    private final transient ReentrantLock lock = new ReentrantLock();
 
     /**
      * Создаёт ключ из сырых байт.
@@ -98,8 +111,13 @@ public final class GostSecretKey implements SecretKey, Destroyable {
      */
     @Override
     public byte[] getEncoded() {
-        checkNotDestroyed();
-        return Arrays.copyOf(keyBytes, keyBytes.length);
+        lock.lock();
+        try {
+            checkNotDestroyed();
+            return Arrays.copyOf(keyBytes, keyBytes.length);
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -108,15 +126,25 @@ public final class GostSecretKey implements SecretKey, Destroyable {
      */
     @Override
     public void destroy() {
-        if (!destroyed) {
-            Arrays.fill(keyBytes, (byte) 0);
-            destroyed = true;
+        lock.lock();
+        try {
+            if (!destroyed) {
+                Arrays.fill(keyBytes, (byte) 0);
+                destroyed = true;
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
     @Override
     public boolean isDestroyed() {
-        return destroyed;
+        lock.lock();
+        try {
+            return destroyed;
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -126,8 +154,13 @@ public final class GostSecretKey implements SecretKey, Destroyable {
      * @throws IllegalStateException если ключ уничтожен
      */
     public SymmetricKey toSymmetricKey() {
-        checkNotDestroyed();
-        return new SymmetricKey(keyBytes);
+        lock.lock();
+        try {
+            checkNotDestroyed();
+            return new SymmetricKey(keyBytes);
+        } finally {
+            lock.unlock();
+        }
     }
 
     private void checkNotDestroyed() {

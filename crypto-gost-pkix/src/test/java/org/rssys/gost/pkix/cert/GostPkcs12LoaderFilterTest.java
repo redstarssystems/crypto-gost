@@ -1,4 +1,4 @@
-package org.rssys.gost.tls13.cert;
+package org.rssys.gost.pkix.cert;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -13,7 +13,6 @@ import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 import org.rssys.gost.pkix.cert.GostPkcs12Mac;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.util.DerCodec;
 
@@ -32,7 +31,7 @@ class GostPkcs12LoaderFilterTest {
             "certBag с localKeyId физически до keyBag — отфильтрован, chain пуст -> IllegalArgumentException")
     void testCertBagBeforeKeyBagWrongLocalKeyId() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] keyLkid = new byte[] {0x01, 0x02, 0x03};
         byte[] certLkid = new byte[] {0x0A, 0x0B, 0x0C};
@@ -41,7 +40,7 @@ class GostPkcs12LoaderFilterTest {
 
         assertThrows(
                 IllegalArgumentException.class,
-                () -> GostPkcs12Loader.load(pfx, PASSWORD, true),
+                () -> GostPkcs12Loader.load(pfx, PASSWORD, true, 50),
                 "должно упасть с пустой цепочкой после фильтрации");
     }
 
@@ -49,13 +48,13 @@ class GostPkcs12LoaderFilterTest {
     @DisplayName("certBag без localKeyId физически до keyBag — проходит (CA-сертификат)")
     void testCertBagWithoutLocalKeyIdBeforeKeyBag() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] keyLkid = new byte[] {0x01, 0x02, 0x03};
 
         byte[] pfx = buildPfxCertFirst(bundle.priv, keyLkid, bundle.cert, null);
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         assertNotNull(result.getPrivateKey(), "ключ загружен");
         assertNotNull(result.getCertificateChain(), "цепочка не null");
         assertFalse(result.getCertificateChain().isEmpty(), "цепочка не пуста");
@@ -65,13 +64,13 @@ class GostPkcs12LoaderFilterTest {
     @DisplayName("ключ без localKeyId — все сертификаты проходят (нет регрессии)")
     void testKeyWithoutLocalKeyId() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] certLkid = new byte[] {0x0A, 0x0B, 0x0C};
 
         byte[] pfx = buildPfx(bundle.priv, null, new CertBagDef(bundle.cert, certLkid));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         assertNotNull(result.getPrivateKey(), "ключ загружен");
         assertEquals(1, result.getCertificateChain().size(), "сертификат загружен");
     }
@@ -84,15 +83,16 @@ class GostPkcs12LoaderFilterTest {
     @DisplayName("CA перед leaf — цепочка leaf-first")
     void testCaBeforeLeaf() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle ca = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         ca.priv,
                         ca.cert.getPublicKey(),
                         ca.subjectDn,
                         "20240501120000Z",
                         "21060101120000Z",
+                        null,
                         null,
                         null,
                         null,
@@ -109,7 +109,7 @@ class GostPkcs12LoaderFilterTest {
                         new CertBagDef(ca.cert, null),
                         new CertBagDef(leaf.cert, keyLkid));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         List<GostCertificate> chain = result.getCertificateChain();
         assertEquals(2, chain.size());
         assertFalse(chain.get(0).isCA(), "chain[0] — leaf (не CA)");
@@ -120,9 +120,9 @@ class GostPkcs12LoaderFilterTest {
     @DisplayName("intermediate CA — топологическая сортировка leaf->intermediate->root")
     void testIntermediateCa() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle intermediate =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle root = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle intermediate =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         root.priv,
                         root.cert.getPublicKey(),
@@ -132,16 +132,18 @@ class GostPkcs12LoaderFilterTest {
                         null,
                         null,
                         null,
+                        null,
                         true,
                         null);
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         intermediate.priv,
                         intermediate.cert.getPublicKey(),
                         intermediate.subjectDn,
                         "20240501120000Z",
                         "21060101120000Z",
+                        null,
                         null,
                         null,
                         null,
@@ -159,7 +161,7 @@ class GostPkcs12LoaderFilterTest {
                         new CertBagDef(intermediate.cert, null),
                         new CertBagDef(leaf.cert, keyLkid));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         List<GostCertificate> chain = result.getCertificateChain();
         assertEquals(3, chain.size(), "три сертификата");
         assertFalse(chain.get(0).isCA(), "chain[0] — конечный (не CA)");
@@ -185,8 +187,8 @@ class GostPkcs12LoaderFilterTest {
     @DisplayName("два leaf с одинаковым localKeyId — не падает, берётся первый")
     void testTwoLeafSameLocalKeyId() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle leaf1 = TlsTestHelper.createCertWithKey(params);
-        TlsTestHelper.CertBundle leaf2 = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle leaf1 = PkixCertTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle leaf2 = PkixCertTestHelper.createCertWithKey(params);
 
         byte[] keyLkid = new byte[20];
         CryptoRandom.INSTANCE.nextBytes(keyLkid);
@@ -198,7 +200,7 @@ class GostPkcs12LoaderFilterTest {
                         new CertBagDef(leaf1.cert, keyLkid),
                         new CertBagDef(leaf2.cert, keyLkid));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         assertEquals(2, result.getCertificateChain().size(), "два сертификата");
     }
 
@@ -206,14 +208,14 @@ class GostPkcs12LoaderFilterTest {
     @DisplayName("только CA (без leaf) — как есть, без падения")
     void testOnlyCaNoLeaf() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle ca = PkixCertTestHelper.createRootCA(params);
 
         byte[] keyLkid = new byte[20];
         CryptoRandom.INSTANCE.nextBytes(keyLkid);
 
         byte[] pfx = buildPfx(ca.priv, keyLkid, new CertBagDef(ca.cert, null));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         assertEquals(1, result.getCertificateChain().size(), "один CA-сертификат");
         assertTrue(result.getCertificateChain().get(0).isCA(), "это УЦ");
     }
@@ -222,15 +224,16 @@ class GostPkcs12LoaderFilterTest {
     @DisplayName("нормальный порядок (keyBag, leaf, CA) — не сломан сортировкой")
     void testNormalOrderNotBroken() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle ca = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         ca.priv,
                         ca.cert.getPublicKey(),
                         ca.subjectDn,
                         "20240501120000Z",
                         "21060101120000Z",
+                        null,
                         null,
                         null,
                         null,
@@ -247,7 +250,7 @@ class GostPkcs12LoaderFilterTest {
                         new CertBagDef(leaf.cert, keyLkid),
                         new CertBagDef(ca.cert, null));
 
-        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true);
+        GostPkcs12Loader.Result result = GostPkcs12Loader.load(pfx, PASSWORD, true, 50);
         List<GostCertificate> chain = result.getCertificateChain();
         assertEquals(2, chain.size());
         assertFalse(chain.get(0).isCA(), "chain[0] — конечный (не CA)");
@@ -258,15 +261,10 @@ class GostPkcs12LoaderFilterTest {
     // Хелперы сборки PFX
     // ========================================================================
 
-    private static byte[] toUtf8Bytes(char[] password) {
-        if (password == null || password.length == 0) return new byte[0];
-        return new String(password).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-    }
-
     private static byte[] buildPfx(
             PrivateKeyParameters key, byte[] keyLocalKeyId, CertBagDef... certBags)
             throws Exception {
-        byte[] passwordBytes = toUtf8Bytes(PASSWORD);
+        byte[] passwordBytes = PkixCertTestHelper.toUtf8Bytes(PASSWORD);
 
         byte[] encryptedKeyBytes =
                 GostPbes2.encryptKey(key, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, TEST_ITER);
@@ -306,7 +304,7 @@ class GostPkcs12LoaderFilterTest {
             GostCertificate cert,
             byte[] certLocalKeyId)
             throws Exception {
-        byte[] passwordBytes = toUtf8Bytes(PASSWORD);
+        byte[] passwordBytes = PkixCertTestHelper.toUtf8Bytes(PASSWORD);
 
         byte[] encryptedKeyBytes =
                 GostPbes2.encryptKey(key, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, TEST_ITER);

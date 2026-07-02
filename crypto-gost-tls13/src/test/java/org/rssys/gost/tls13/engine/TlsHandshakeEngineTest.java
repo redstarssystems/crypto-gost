@@ -15,6 +15,7 @@ import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.message.TlsEncoding;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
 import org.rssys.gost.tls13.message.TlsMessageParser;
+import org.rssys.gost.tls13.psk.*;
 import org.rssys.gost.util.CryptoRandom;
 
 /**
@@ -1362,6 +1363,57 @@ class TlsHandshakeEngineTest {
         server.receive(cf);
         assertEquals(TlsHandshakeEngine.State.POST_HANDSHAKE, server.getState());
         assertTrue(server.isDone());
+    }
+
+    @Test
+    @DisplayName("PSK: explicit setServerPsk + setServerPskStore одновременно — pskKeyFromStore флаг корректно различает источник")
+    void testPskExplicitWithStore() throws Exception {
+        byte[] psk = new byte[TlsConstants.STREEBOG_256_HASH_LEN];
+        CryptoRandom.INSTANCE.nextBytes(psk);
+        byte[] pskIdentity = "explicit-with-store".getBytes();
+
+        PskStore store = new InMemoryPskStore(100);
+        byte[] storeTicket = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(storeTicket);
+        byte[] wrongPsk = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(wrongPsk);
+        store.onTicketReceived(
+                new PskEntry(storeTicket, 86400, 0, new byte[8], wrongPsk, System.currentTimeMillis()));
+
+        TlsHandshakeEngine client =
+                new TlsHandshakeEngine(
+                        TlsHandshakeEngine.Role.CLIENT,
+                        cs(),
+                        new TlsMessageBuilder(
+                                cs(), List.of(cs().getId()),
+                                TlsConstants.GRP_GC256B, SIG_SCHEME, null, null, HASH_LEN),
+                        ECParameters.cryptoProA(),
+                        TlsConstants.GRP_GC256B,
+                        SIG_SCHEME,
+                        HASH_LEN, null, false, null);
+        client.setPsk(psk, pskIdentity, 0);
+
+        TlsHandshakeEngine server =
+                new TlsHandshakeEngine(
+                        TlsHandshakeEngine.Role.SERVER,
+                        cs(),
+                        new TlsMessageBuilder(
+                                cs(), List.of(cs().getId()),
+                                TlsConstants.GRP_GC256B, SIG_SCHEME,
+                                serverCert.priv, List.of(serverCert.cert), HASH_LEN),
+                        ECParameters.cryptoProA(),
+                        TlsConstants.GRP_GC256B,
+                        SIG_SCHEME,
+                        HASH_LEN, null, false, null);
+        server.setServerPsk(psk);
+        server.setServerPskStore(store);
+
+        byte[] ch1 = client.start();
+        assertNotNull(ch1);
+        server.receive(ch1);
+        assertTrue(
+                server.isPskAccepted(),
+                "Явный PSK должен быть принят даже при наличии store");
     }
 
     @Test

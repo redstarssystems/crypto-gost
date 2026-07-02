@@ -344,7 +344,8 @@ final class OpenSslJsseHelper {
                 flags,
                 new String[]{"-key", keyPem.toString(),
                         "-out", certPem.toString(),
-                        "-subj", "/CN=TestServer",
+                        "-subj", "/CN=localhost",
+                        "-addext", "subjectAltName=DNS:localhost",
                         "-days", "365",
                         "-config", "/dev/null"}));
     }

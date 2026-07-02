@@ -136,7 +136,7 @@ class GostOcspPolicyTest {
                 });
         mockServer.start();
 
-        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536);
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         GostX509TrustManager tm =
                 new GostX509TrustManager(
                         root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, fetcher);
@@ -194,7 +194,7 @@ class GostOcspPolicyTest {
                 });
         mockServer.start();
 
-        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536);
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         GostX509TrustManager tm =
                 new GostX509TrustManager(
                         root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, fetcher);
@@ -257,7 +257,7 @@ class GostOcspPolicyTest {
                 });
         mockServer.start();
 
-        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536);
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         GostX509TrustManager tm =
                 new GostX509TrustManager(
                         root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, fetcher);
@@ -404,7 +404,7 @@ class GostOcspPolicyTest {
                 });
         mockServer.start();
 
-        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536);
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         GostX509TrustManager tm =
                 new GostX509TrustManager(
                         root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, fetcher);

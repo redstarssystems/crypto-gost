@@ -120,4 +120,11 @@ public class Ofb extends AbstractStreamMode implements StreamCipher {
         byteCount = 0;
         cipher.reset();
     }
+
+    @Override
+    public void destroy() {
+        java.util.Arrays.fill(Y, (byte) 0);
+        byteCount = 0;
+        super.destroy();
+    }
 }

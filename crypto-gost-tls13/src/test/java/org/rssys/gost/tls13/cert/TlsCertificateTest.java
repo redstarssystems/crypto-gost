@@ -574,7 +574,7 @@ class TlsCertificateTest {
                 TlsException.class,
                 () ->
                         TlsCertUtils.verifyOcspResponse(
-                                bundle.cert, bundle.cert.getPublicKey(), null));
+                                bundle.cert, bundle.cert));
     }
 
     @Test
@@ -592,7 +592,7 @@ class TlsCertificateTest {
         assertDoesNotThrow(
                 () ->
                         TlsCertUtils.verifyOcspResponse(
-                                bundle.cert, bundle.cert.getPublicKey(), null));
+                                bundle.cert, bundle.cert));
     }
 
     @Test

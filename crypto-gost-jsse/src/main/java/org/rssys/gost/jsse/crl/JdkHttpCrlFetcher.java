@@ -5,13 +5,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
-import java.net.InetAddress;
 import java.net.URI;
-import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+
+import org.rssys.gost.jsse.SsrfGuard;
 
 /**
  * Реализация {@link CrlFetcher} на JDK HttpClient с SSRF-защитой.
@@ -73,7 +73,7 @@ public final class JdkHttpCrlFetcher implements CrlFetcher {
             return null;
         }
 
-        if (!skipSsrfCheck && isPrivateAddress(uri)) {
+        if (!skipSsrfCheck && SsrfGuard.isPrivateAddress(uri)) {
             LOG.log(
                     Level.WARNING,
                     "CRL fetch skipped: private/reserved IP resolved from {0}",
@@ -122,28 +122,4 @@ public final class JdkHttpCrlFetcher implements CrlFetcher {
         }
     }
 
-    /**
-     * Проверяет, что URI не указывает на private/reserved IP-адрес (SSRF-защита).
-     */
-    private static boolean isPrivateAddress(URI uri) {
-        String host = uri.getHost();
-        if (host == null) return true;
-        // Локальные имена (localhost, loopback) без резолва
-        if ("localhost".equalsIgnoreCase(host)
-                || "127.0.0.1".equals(host)
-                || "[::1]".equals(host)
-                || "0.0.0.0".equals(host)) {
-            return true;
-        }
-        try {
-            InetAddress addr = InetAddress.getByName(host);
-            return addr.isLoopbackAddress()
-                    || addr.isSiteLocalAddress()
-                    || addr.isLinkLocalAddress()
-                    || addr.isMulticastAddress();
-        } catch (UnknownHostException e) {
-            // Если хост не резолвится — блокируем (fail-closed)
-            return true;
-        }
-    }
 }

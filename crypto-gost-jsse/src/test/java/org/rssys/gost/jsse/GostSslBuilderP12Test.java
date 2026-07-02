@@ -61,7 +61,7 @@ class GostSslBuilderP12Test {
                         .certificate(serverBundle.cert)
                         .caCertificate(caBundle.cert)
                         .password(PASSWORD)
-                        .iterations(100)
+                        .iterations(1000)
                         .build();
 
         // 4. CA-only PFX (без приватного ключа — но GostPkcs12Builder кладёт ключ всегда;
@@ -72,7 +72,7 @@ class GostSslBuilderP12Test {
                         .key(caKp.getPrivate())
                         .certificate(caBundle.cert)
                         .password(PASSWORD)
-                        .iterations(100)
+                        .iterations(1000)
                         .build();
     }
 
@@ -191,7 +191,7 @@ class GostSslBuilderP12Test {
                         .certificate(intermediate.cert)
                         .caCertificate(root.cert)
                         .password(PASSWORD)
-                        .iterations(100)
+                        .iterations(1000)
                         .build();
 
         byte[] serverPfx =
@@ -200,7 +200,7 @@ class GostSslBuilderP12Test {
                         .certificate(server.cert)
                         .caCertificate(intermediate.cert)
                         .password(PASSWORD)
-                        .iterations(100)
+                        .iterations(1000)
                         .build();
 
         SSLContext serverCtx =

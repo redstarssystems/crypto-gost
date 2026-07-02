@@ -79,6 +79,11 @@ public final class ECDSASigner implements Destroyable {
 
     public void init(boolean forSigning, CipherParameters params) {
         if (destroyed) throw new IllegalStateException("ECDSASigner has been destroyed");
+        // Затираем старый ключ перед перезаписью — защита от переинициализации без destroy()
+        if (this.dBytes != null) {
+            java.util.Arrays.fill(this.dBytes, (byte) 0);
+            this.dBytes = null;
+        }
         this.forSigning = forSigning;
         if (forSigning) {
             if (!(params instanceof PrivateKeyParameters)) {
@@ -102,10 +107,7 @@ public final class ECDSASigner implements Destroyable {
             this.params = pub.getParams();
             this.dBytes = null;
 
-            ECPoint norm = q.normalize();
-            if (norm.isInfinity()
-                    || !norm.isOnCurve()
-                    || !norm.multiply(this.params.n).isInfinity()) {
+            if (!q.isValidPublicKey()) {
                 throw new IllegalArgumentException("public key point is not valid");
             }
         }
@@ -134,6 +136,7 @@ public final class ECDSASigner implements Destroyable {
         ECPoint rPoint = cachedG.multiply(k);
         BigInteger r = rPoint.getX().mod(params.n);
 
+        // см. crypto-gost-core/doc/adr/adr-01.md
         BigInteger dVal = new BigInteger(1, dBytes);
         BigInteger s = r.multiply(dVal).add(k.multiply(e)).mod(params.n);
 

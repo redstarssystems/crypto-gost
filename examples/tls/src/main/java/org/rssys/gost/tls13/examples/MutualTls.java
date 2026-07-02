@@ -43,9 +43,8 @@ public final class MutualTls {
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs)
+                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
                                         .withServerHostname("localhost")
-                                        .withCaPublicKey(caBundle.cert().getPublicKey())
                                         .withClientCertificateChain(clientBundle.cert())
                                         .withClientPrivateKey(clientBundle.priv()),
                                 clientTp)) {

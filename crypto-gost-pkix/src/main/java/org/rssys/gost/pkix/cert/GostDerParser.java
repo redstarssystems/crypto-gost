@@ -302,6 +302,15 @@ public final class GostDerParser {
         for (int i = 1; i <= numBytes; i++) {
             len = (len << 8) | (der[offset + i] & 0xFF);
         }
+        // Минимальность кодирования (X.690 §10.1): long-form не должен применяться
+        // для значений, помещающихся в меньшее число байт (неканоническая malleability).
+        // Минимально допустимое значение при numBytes: >= 0x80 для 1 байта,
+        // >= 0x100 для 2 байт и т.д. Проверяем через минимальную границу.
+        int minAllowed = (numBytes == 1) ? 0x80 : (1 << (8 * (numBytes - 1)));
+        if (len < minAllowed) {
+            throw new IllegalArgumentException(
+                    "Non-minimal DER length encoding at offset " + offset);
+        }
         return new int[] {1 + numBytes, len};
     }
 

@@ -125,12 +125,12 @@ class GostSSLEngineLoopbackTest {
                         false);
 
         GostSSLEngine clientEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         doLoopback(clientEngine, serverEngine, pair);
     }
@@ -166,12 +166,12 @@ class GostSSLEngineLoopbackTest {
         serverEngine.setNeedClientAuth(true);
 
         GostSSLEngine clientEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         clientKeyManager,
                         new GostX509TrustManager(caPub, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         doLoopback(clientEngine, serverEngine, pair);
     }
@@ -207,12 +207,12 @@ class GostSSLEngineLoopbackTest {
         serverEngine.setWantClientAuth(true);
 
         GostSSLEngine clientEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         clientKeyManager,
                         new GostX509TrustManager(caPub, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         doLoopback(clientEngine, serverEngine, pair);
     }
@@ -244,12 +244,12 @@ class GostSSLEngineLoopbackTest {
         serverEngine.setSSLParameters(serverParams);
 
         GostSSLEngine clientEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
         javax.net.ssl.SSLParameters clientParams = clientEngine.getSSLParameters();
         clientParams.setApplicationProtocols(new String[] {"h2", "http/1.1"});
         clientEngine.setSSLParameters(clientParams);
@@ -284,12 +284,12 @@ class GostSSLEngineLoopbackTest {
                         serverKeyManager, new GostX509TrustManager(null, false), "", 0, false);
 
         GostSSLEngine clientEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "api.example.com",
                         0,
-                        true);
+                        null);
 
         doLoopback(clientEngine, serverEngine, pair);
 
@@ -322,12 +322,12 @@ class GostSSLEngineLoopbackTest {
         serverEngine.setNeedClientAuth(true);
 
         GostSSLEngine clientEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         Exception ex =
                 assertThrows(
@@ -360,12 +360,12 @@ class GostSSLEngineLoopbackTest {
         serverEngine.setWantClientAuth(true);
 
         GostSSLEngine clientEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         doLoopback(clientEngine, serverEngine, pair);
 
@@ -407,12 +407,12 @@ class GostSSLEngineLoopbackTest {
         serverThread.start();
 
         GostSSLEngine clientEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         clientEngine.beginHandshake();
         doClientHandshake(clientEngine, pair);
@@ -443,7 +443,7 @@ class GostSSLEngineLoopbackTest {
                 new GostSSLEngine(
                         serverKeyManager, new GostX509TrustManager(null, false), "", 0, false);
 
-        TlsClientConfig clientConfig = new TlsClientConfig(cs);
+        TlsClientConfig clientConfig = new TlsClientConfig(cs, caPub).withoutHostnameVerification();
         TlsSession clientSession = TlsSession.createClient(clientConfig, pair.getClientTransport());
 
         AtomicReference<Throwable> clientError = new AtomicReference<>();
@@ -477,12 +477,12 @@ class GostSSLEngineLoopbackTest {
     @DisplayName("ALPN обратимость: getSSLParameters возвращает applicationProtocols")
     void testAlpnRoundTrip() {
         GostSSLEngine engine =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
         SSLParameters params = new SSLParameters();
         params.setApplicationProtocols(new String[] {"h2", "http/1.1"});
         engine.setSSLParameters(params);
@@ -514,7 +514,7 @@ class GostSSLEngineLoopbackTest {
                 new GostSSLEngine(
                         skm, new GostX509TrustManager(null, false), "localhost", 0, false);
         GostSSLEngine clientEngine =
-                new GostSSLEngine(ckm, new GostX509TrustManager(null, false), "localhost", 0, true);
+                GostSSLEngine.createForClient(ckm, new GostX509TrustManager(null, false), "localhost", 0, null);
 
         SSLParameters serverParams = new SSLParameters();
         serverParams.setApplicationProtocols(new String[] {"h2", "http/1.1"});
@@ -607,7 +607,7 @@ class GostSSLEngineLoopbackTest {
 
         GostSSLEngine serverEngine = new GostSSLEngine(serverKm, tm, "localhost", 0, false);
         GostSSLEngine clientEngine =
-                new GostSSLEngine(new GostX509KeyManager(), tm, "localhost", 0, true);
+                GostSSLEngine.createForClient(new GostX509KeyManager(), tm, "localhost", 0, null);
 
         doLoopback(clientEngine, serverEngine, pair);
     }
@@ -652,7 +652,7 @@ class GostSSLEngineLoopbackTest {
 
         GostSSLEngine serverEngine = new GostSSLEngine(serverKm, tm, "localhost", 0, false);
         GostSSLEngine clientEngine =
-                new GostSSLEngine(new GostX509KeyManager(), tm, "localhost", 0, true);
+                GostSSLEngine.createForClient(new GostX509KeyManager(), tm, "localhost", 0, null);
 
         RuntimeException ex =
                 assertThrows(
@@ -864,12 +864,12 @@ class GostSSLEngineLoopbackTest {
                 new GostSSLEngine(
                         skm, new GostX509TrustManager(null, false), "localhost", 0, false);
         GostSSLEngine client =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
         doLoopback(client, server, pair);
         // после handshake getHandshakeStatus должен быть NOT_HANDSHAKING
         assertEquals(
@@ -899,12 +899,12 @@ class GostSSLEngineLoopbackTest {
                 new GostSSLEngine(
                         skm, new GostX509TrustManager(null, false), "localhost", 0, false);
         GostSSLEngine client =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
         doLoopback(client, server, pair);
         // после handshake writerRecord с app-ключами, seqNum=0 —
         // Client Finished ушёл с handshake-ключами (не app)
@@ -969,12 +969,12 @@ class GostSSLEngineLoopbackTest {
 
         // Клиент без сертификата (чистый клиент)
         GostSSLEngine client =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         doLoopback(client, server, pair);
 
@@ -1021,12 +1021,12 @@ class GostSSLEngineLoopbackTest {
                         skm, new GostX509TrustManager(null, false), "localhost", 0, false);
 
         GostSSLEngine client =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         doLoopback(client, server, pair);
 
@@ -1082,12 +1082,12 @@ class GostSSLEngineLoopbackTest {
                 new GostSSLEngine(
                         skm, new GostX509TrustManager(null, false), "localhost", 0, false);
         GostSSLEngine client =
-                new GostSSLEngine(
+                GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
                         new GostX509TrustManager(null, false),
                         "localhost",
                         0,
-                        true);
+                        null);
 
         doLoopback(client, server, pair);
 

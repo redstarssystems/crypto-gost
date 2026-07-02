@@ -54,6 +54,9 @@ public final class KeyAgreement {
         if (!curvesMatch(myParams, peerParams)) {
             throw new IllegalArgumentException("Key curve mismatch");
         }
+        if (!peerPub.getQ().isValidPublicKey()) {
+            throw new IllegalArgumentException("peer public key point is not valid");
+        }
 
         // RFC 7836 §4.3: K = (m/q · UKM · x mod q) · (y·P)
         // UKM = 1 (raw ECDH), h = m/q
@@ -117,6 +120,9 @@ public final class KeyAgreement {
         ECParameters peerParams = peerPub.getParams();
         if (!curvesMatch(myParams, peerParams)) {
             throw new IllegalArgumentException("Key curve mismatch");
+        }
+        if (!peerPub.getQ().isValidPublicKey()) {
+            throw new IllegalArgumentException("peer public key point is not valid");
         }
 
         // RFC 7836 §4.3.1: K = (m/q · UKM · x mod q) · (y·P)

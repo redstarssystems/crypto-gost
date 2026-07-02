@@ -12,17 +12,24 @@ import org.rssys.gost.mac.Mac;
 import org.rssys.gost.util.AuthenticationException;
 
 /**
- * Режим CTR-ACPKM (RFC 8645, RFC 9337 §5) для Кузнечика.
+ * Режим шифрования для OID {@code id-gostr3412-2015-kuznyechik-ctracpkm}
+ * (RFC 9337 §7.3, схема PBES2).
  * <p>
  * Два варианта:
  * <ul>
  *   <li><b>Без OMAC</b> ({@code id-gostr3412-2015-kuznyechik-ctracpkm}):
- *       чистый CTR с S' = ukm[0..7]. Ключ = DK.</li>
+ *       ГОСТ Р 34.13-2015 CTR с S' = ukm[0..7]. Ключ = DK.</li>
  *   <li><b>С OMAC</b> ({@code id-gostr3412-2015-kuznyechik-ctracpkm-omac}):
- *       KDF_TREE(DK, "kdf tree", ukm[8..15]) -> K(1)||K(2).
+ *       KDF_TREE(DK, "kdf tree", ukm[8..15]) ~> K(1)||K(2).
  *       Encrypt-then-MAC: шифрование CTR с K(1), CMAC с K(2).</li>
  * </ul>
  * Симметричен: encrypt = decrypt для CTR-части.
+ * <p>
+ * <b>Примечание.</b> ACPKM-секционная смена ключа (RFC 8645 §6.2.2)
+ * в данной реализации не выполняется, поскольку для целевого сценария
+ * PBES2 (RFC 9337 §5.1.1) объём шифруемых данных всегда умещается
+ * в одну секцию при любом разумном N. Для потокового bulk-шифрования
+ * с ACPKM-режимом используйте специализированную реализацию.
  */
 public final class CtrAcpkmMode {
 
@@ -320,7 +327,7 @@ public final class CtrAcpkmMode {
         Arrays.fill(ctr, (byte) 0);
         Arrays.fill(gammaBuf, (byte) 0);
         if (mac != null) {
-            mac.reset();
+            mac.destroy();
         }
         computedTag = null;
         initialized = false;

@@ -327,37 +327,53 @@ public final class Cipher {
             case CTR:
                 {
                     Ctr ctr = new Ctr(new Kuznyechik());
-                    ctr.init(true, new ParametersWithIV(key, iv));
-                    byte[] out = new byte[input.length];
-                    ctr.processBytes(input, 0, input.length, out, 0);
-                    return out;
+                    try {
+                        ctr.init(true, new ParametersWithIV(key, iv));
+                        byte[] out = new byte[input.length];
+                        ctr.processBytes(input, 0, input.length, out, 0);
+                        return out;
+                    } finally {
+                        ctr.destroy();
+                    }
                 }
             case CFB:
                 {
                     Cfb cfb = new Cfb(new Kuznyechik());
-                    cfb.init(true, new ParametersWithIV(key, iv));
-                    byte[] out = new byte[input.length];
-                    cfb.processBytes(input, 0, input.length, out, 0);
-                    return out;
+                    try {
+                        cfb.init(true, new ParametersWithIV(key, iv));
+                        byte[] out = new byte[input.length];
+                        cfb.processBytes(input, 0, input.length, out, 0);
+                        return out;
+                    } finally {
+                        cfb.destroy();
+                    }
                 }
             case OFB:
                 {
                     Ofb ofb = new Ofb(new Kuznyechik());
-                    ofb.init(true, new ParametersWithIV(key, iv));
-                    byte[] out = new byte[input.length];
-                    ofb.processBytes(input, 0, input.length, out, 0);
-                    return out;
+                    try {
+                        ofb.init(true, new ParametersWithIV(key, iv));
+                        byte[] out = new byte[input.length];
+                        ofb.processBytes(input, 0, input.length, out, 0);
+                        return out;
+                    } finally {
+                        ofb.destroy();
+                    }
                 }
             case CBC:
                 {
                     // CBC — блочный режим, обрабатываем поблочно
                     Cbc cbc = new Cbc(new Kuznyechik());
-                    cbc.init(true, new ParametersWithIV(key, iv));
-                    byte[] out = new byte[input.length];
-                    for (int offset = 0; offset < input.length; offset += BLOCK_SIZE) {
-                        cbc.processBlock(input, offset, out, offset);
+                    try {
+                        cbc.init(true, new ParametersWithIV(key, iv));
+                        byte[] out = new byte[input.length];
+                        for (int offset = 0; offset < input.length; offset += BLOCK_SIZE) {
+                            cbc.processBlock(input, offset, out, offset);
+                        }
+                        return out;
+                    } finally {
+                        cbc.destroy();
                     }
-                    return out;
                 }
             default:
                 throw new IllegalArgumentException("Unknown mode: " + mode);
@@ -372,25 +388,37 @@ public final class Cipher {
             case CTR:
                 {
                     Ctr ctr = new Ctr(new Kuznyechik());
-                    ctr.init(false, new ParametersWithIV(key, iv));
-                    raw = new byte[ciphertext.length];
-                    ctr.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    try {
+                        ctr.init(false, new ParametersWithIV(key, iv));
+                        raw = new byte[ciphertext.length];
+                        ctr.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    } finally {
+                        ctr.destroy();
+                    }
                     break;
                 }
             case CFB:
                 {
                     Cfb cfb = new Cfb(new Kuznyechik());
-                    cfb.init(false, new ParametersWithIV(key, iv));
-                    raw = new byte[ciphertext.length];
-                    cfb.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    try {
+                        cfb.init(false, new ParametersWithIV(key, iv));
+                        raw = new byte[ciphertext.length];
+                        cfb.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    } finally {
+                        cfb.destroy();
+                    }
                     break;
                 }
             case OFB:
                 {
                     Ofb ofb = new Ofb(new Kuznyechik());
-                    ofb.init(false, new ParametersWithIV(key, iv));
-                    raw = new byte[ciphertext.length];
-                    ofb.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    try {
+                        ofb.init(false, new ParametersWithIV(key, iv));
+                        raw = new byte[ciphertext.length];
+                        ofb.processBytes(ciphertext, 0, ciphertext.length, raw, 0);
+                    } finally {
+                        ofb.destroy();
+                    }
                     break;
                 }
             case CBC:
@@ -400,10 +428,14 @@ public final class Cipher {
                                 "CBC ciphertext length must be a multiple of " + BLOCK_SIZE);
                     }
                     Cbc cbc = new Cbc(new Kuznyechik());
-                    cbc.init(false, new ParametersWithIV(key, iv));
-                    raw = new byte[ciphertext.length];
-                    for (int offset = 0; offset < ciphertext.length; offset += BLOCK_SIZE) {
-                        cbc.processBlock(ciphertext, offset, raw, offset);
+                    try {
+                        cbc.init(false, new ParametersWithIV(key, iv));
+                        raw = new byte[ciphertext.length];
+                        for (int offset = 0; offset < ciphertext.length; offset += BLOCK_SIZE) {
+                            cbc.processBlock(ciphertext, offset, raw, offset);
+                        }
+                    } finally {
+                        cbc.destroy();
                     }
                     break;
                 }
@@ -432,6 +464,15 @@ public final class Cipher {
                 cipher.processBytes(b, off, len, encBuf, 0);
                 out.write(encBuf, 0, len);
             }
+
+            @Override
+            public void close() throws IOException {
+                try {
+                    out.close();
+                } finally {
+                    cipher.destroy();
+                }
+            }
         };
     }
 
@@ -456,6 +497,15 @@ public final class Cipher {
                 cipher.processBytes(buf, off, n, dec, 0);
                 System.arraycopy(dec, 0, buf, off, n);
                 return n;
+            }
+
+            @Override
+            public void close() throws IOException {
+                try {
+                    in.close();
+                } finally {
+                    cipher.destroy();
+                }
             }
         };
     }

@@ -358,4 +358,25 @@ public final class ECPoint {
         BigInteger rhs = x3.add(params.a.multiply(bx)).add(params.b).mod(p);
         return y2.equals(rhs);
     }
+
+    /**
+     * Проверяет, что точка является корректным открытым ключом:
+     * лежит на кривой и принадлежит подгруппе простого порядка n.
+     * <p>
+     * Для кривых с кофактором 1 (все стандартные ГОСТ-кривые, кроме TC26_C_512)
+     * проверка ограничивается {@link #isOnCurve()}, поскольку все точки на кривой
+     * автоматически принадлежат подгруппе. Для кривых с кофактором &gt; 1
+     * (TC26_C_512, h = 4) дополнительно проверяется {@code multiply(n).isInfinity()}.
+     *
+     * @return {@code true} если точка является валидным открытым ключом
+     */
+    public boolean isValidPublicKey() {
+        if (!isOnCurve()) {
+            return false;
+        }
+        if (params.cofactor == 1) {
+            return true;
+        }
+        return multiply(params.n).isInfinity();
+    }
 }

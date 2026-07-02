@@ -33,7 +33,7 @@ public final class MinimalClient {
         // 3. Создаём сессии сервера и клиента
         TlsSession server =
                 TlsSession.createServer(serverTp, cs, serverBundle.cert(), serverBundle.priv());
-        TlsSession client = TlsSession.createClient(clientTp, cs, null, null);
+        TlsSession client = TlsSession.createClientWithoutServerAuth(clientTp, cs, null, null);
 
         ExecutorService exec = Executors.newSingleThreadExecutor();
         try {

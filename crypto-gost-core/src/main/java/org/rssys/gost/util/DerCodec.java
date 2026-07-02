@@ -289,7 +289,14 @@ public final class DerCodec {
                         "Truncated DER length (0x81): need 1 byte, have "
                                 + (data.length - offset - 1));
             }
-            return new int[] {data[offset + 1] & 0xFF, 2};
+            int len = data[offset + 1] & 0xFF;
+            // Минимальность кодирования (X.690 §10.1): значение <= 0x7F обязано
+            // кодироваться short-form, long-form здесь — неканоническая malleability.
+            if (len < 0x80) {
+                throw new IllegalArgumentException(
+                        "Non-minimal DER length encoding (0x81) at offset " + offset);
+            }
+            return new int[] {len, 2};
         } else if (first == 0x82) {
             if (offset + 2 >= data.length) {
                 throw new IllegalArgumentException(
@@ -297,6 +304,10 @@ public final class DerCodec {
                                 + (data.length - offset - 1));
             }
             int len = ((data[offset + 1] & 0xFF) << 8) | (data[offset + 2] & 0xFF);
+            if (len < 0x100) {
+                throw new IllegalArgumentException(
+                        "Non-minimal DER length encoding (0x82) at offset " + offset);
+            }
             return new int[] {len, 3};
         } else if (first == 0x83) {
             if (offset + 3 >= data.length) {
@@ -308,6 +319,10 @@ public final class DerCodec {
                     ((data[offset + 1] & 0xFF) << 16)
                             | ((data[offset + 2] & 0xFF) << 8)
                             | (data[offset + 3] & 0xFF);
+            if (len < 0x10000) {
+                throw new IllegalArgumentException(
+                        "Non-minimal DER length encoding (0x83) at offset " + offset);
+            }
             return new int[] {len, 4};
         } else if (first == 0x84) {
             if (offset + 4 >= data.length) {
@@ -327,6 +342,10 @@ public final class DerCodec {
                                 + " at offset "
                                 + offset
                                 + " exceeds Integer.MAX_VALUE");
+            }
+            if (len < 0x1000000) {
+                throw new IllegalArgumentException(
+                        "Non-minimal DER length encoding (0x84) at offset " + offset);
             }
             return new int[] {len, 5};
         } else if (first == 0x80) {

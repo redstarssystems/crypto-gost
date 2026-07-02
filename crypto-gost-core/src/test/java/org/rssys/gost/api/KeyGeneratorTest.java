@@ -2,6 +2,7 @@ package org.rssys.gost.api;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.math.BigInteger;
 import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -140,5 +141,36 @@ class KeyGeneratorTest {
         assertFalse(
                 Arrays.equals(k1.getKey(), k2.getKey()),
                 "Разные пароли должны давать разные ключи");
+    }
+
+    // -----------------------------------------------------------------------
+    // isValidPublicKey — защита от invalid-curve атаки
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("isValidPublicKey: валидный ключ на всех 7 кривых")
+    void testIsValidPublicKeyAllCurves() {
+        ECParameters[] curves = {
+            ECParameters.tc26a256(), ECParameters.tc26a512(), ECParameters.tc26b512(),
+            ECParameters.tc26c512(), ECParameters.cryptoProA(), ECParameters.cryptoProB(),
+            ECParameters.cryptoProC()
+        };
+        for (ECParameters params : curves) {
+            KeyPair pair = KeyGenerator.generateKeyPair(params);
+            assertTrue(pair.getPublic().getQ().isValidPublicKey(),
+                    () -> "Валидный ключ должен проходить isValidPublicKey: " + params);
+        }
+    }
+
+    @Test
+    @DisplayName("isValidPublicKey: точка не на кривой — false")
+    void testIsValidPublicKeyOffCurve() {
+        ECParameters params = ECParameters.cryptoProA();
+        KeyPair pair = KeyGenerator.generateKeyPair(params);
+        ECPoint q = pair.getPublic().getQ().normalize();
+        BigInteger badY = q.getY().add(BigInteger.ONE).mod(params.p);
+        ECPoint offCurve = ECPoint.affine(q.getX(), badY, params);
+        assertFalse(offCurve.isValidPublicKey(),
+                "Точка не на кривой должна возвращать false");
     }
 }

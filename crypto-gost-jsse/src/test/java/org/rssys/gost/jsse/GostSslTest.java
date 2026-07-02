@@ -49,7 +49,7 @@ class GostSslTest {
         byte[] passwordBytes = toUtf8Bytes("secret".toCharArray());
 
         byte[] encryptedDer =
-                GostPbes2.encryptKey(bundle.priv, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, 100);
+                GostPbes2.encryptKey(bundle.priv, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, 1000);
         byte[] encryptedPem =
                 pemEncode(encryptedDer, "ENCRYPTED PRIVATE KEY")
                         .getBytes(StandardCharsets.US_ASCII);

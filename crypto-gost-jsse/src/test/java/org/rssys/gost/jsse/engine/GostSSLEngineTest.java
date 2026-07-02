@@ -43,7 +43,12 @@ class GostSSLEngineTest {
         Security.addProvider(new RssysGostJsseProvider());
         cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
 
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle bundle =
+                TlsTestHelper.createCertWithKey(
+                        ECParameters.tc26a256(),
+                        "20250101000000Z",
+                        "21010101000000Z",
+                        new String[] {"localhost"});
         serverCert = bundle.cert;
         serverPriv = bundle.priv;
 
@@ -102,7 +107,7 @@ class GostSSLEngineTest {
         GostX509TrustManager trustManager = new GostX509TrustManager(null, false);
         GostX509KeyManager keyManager = new GostX509KeyManager();
         GostSSLEngine clientEngine =
-                new GostSSLEngine(keyManager, trustManager, "localhost", 0, true);
+                GostSSLEngine.createForClient(keyManager, trustManager, "localhost", 0, null);
 
         clientEngine.beginHandshake();
         doHandshake(clientEngine, pair);

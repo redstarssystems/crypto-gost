@@ -39,7 +39,7 @@ public class GostTlsDumpDemo {
                 new TlsServerConfig(cs, Collections.singletonList(bundle.cert), bundle.priv);
 
         TlsClientConfig clientConfig =
-                new TlsClientConfig(cs).withCaPublicKey(bundle.cert.getPublicKey());
+                new TlsClientConfig(cs, bundle.cert.getPublicKey()).withoutHostnameVerification();
 
         // Сервер на случайном порту
         ServerSocket serverSocket = new ServerSocket(0);

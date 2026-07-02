@@ -645,7 +645,7 @@ public final class PkixDemo {
         check(ocspResp.length > 0, "OCSP-ответ построен, размер " + ocspResp.length + " байт");
 
         // Проверка
-        OcspVerifier.verify(ocspResp, serial, caPubKey);
+        OcspVerifier.verify(ocspResp, serial, caCert);
         check(true, "OcspVerifier.verify() — успешно");
 
         System.out.println("  OK: OCSP — построение и проверка");

@@ -40,8 +40,7 @@ public class FullHandshakeBench {
         TlsServerConfig serverConfig = new TlsServerConfig(
                 cs, Collections.singletonList(serverBundle.cert), serverBundle.priv);
 
-        TlsClientConfig clientConfig = new TlsClientConfig(cs)
-                .withCaPublicKey(serverBundle.caPublicKey);
+        TlsClientConfig clientConfig = new TlsClientConfig(cs, serverBundle.caPublicKey).withoutHostnameVerification();
 
         TlsSession server = TlsSession.createServer(serverConfig, pair.getServerTransport());
         TlsSession client = TlsSession.createClient(clientConfig, pair.getClientTransport());
