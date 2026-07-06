@@ -12,9 +12,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.jca.RssysGostProvider;
 import org.rssys.gost.jca.key.GostECPrivateKey;
-import org.rssys.gost.pkix.cert.GostCertificate;
-import org.rssys.gost.pkix.cert.GostPkcs12Loader;
-import org.rssys.gost.pkix.cert.Pkcs12Loader;
 import org.rssys.gost.signature.ECParameters;
 
 @DisplayName("Pkcs12Loader — загрузка PFX-контейнеров через JDK KeyStore")

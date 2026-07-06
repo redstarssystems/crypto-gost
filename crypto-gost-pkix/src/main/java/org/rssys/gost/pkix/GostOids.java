@@ -109,6 +109,9 @@ public final class GostOids {
     /** id-ce-extKeyUsage */
     public static final String EXT_EKU = "2.5.29.37";
 
+    /** id-ce-nameConstraints (RFC 5280 §4.2.1.10) */
+    public static final String EXT_NAME_CONSTRAINTS = "2.5.29.30";
+
     /** id-pe-authorityInfoAccess (RFC 5280 §4.2.2.1) */
     public static final String EXT_AIA = "1.3.6.1.5.5.7.1.1";
 
@@ -247,18 +250,25 @@ public final class GostOids {
 
     /** PKIFailureInfo: неизвестный или неподдерживаемый алгоритм */
     public static final int PKI_FAIL_BAD_ALG = 1 << 0;
+
     /** PKIFailureInfo: некорректный запрос */
     public static final int PKI_FAIL_BAD_REQUEST = 1 << 2;
+
     /** PKIFailureInfo: неверный формат данных (включая длину хэша) */
     public static final int PKI_FAIL_BAD_DATA_FORMAT = 1 << 5;
+
     /** PKIFailureInfo: время TSA недоступно */
     public static final int PKI_FAIL_TIME_NOT_AVAILABLE = 1 << 14;
+
     /** PKIFailureInfo: неподдерживаемая политика */
     public static final int PKI_FAIL_UNACCEPTED_POLICY = 1 << 15;
+
     /** PKIFailureInfo: неподдерживаемое расширение */
     public static final int PKI_FAIL_UNACCEPTED_EXTENSION = 1 << 16;
+
     /** PKIFailureInfo: дополнительная информация недоступна */
     public static final int PKI_FAIL_ADD_INFO_NOT_AVAILABLE = 1 << 17;
+
     /** PKIFailureInfo: внутренняя ошибка TSA */
     public static final int PKI_FAIL_SYSTEM_FAILURE = 1 << 25;
 
@@ -406,6 +416,9 @@ public final class GostOids {
 
     /** Допуск расхождения часов при проверке thisUpdate/nextUpdate/genTime (5 минут) */
     public static final long CLOCK_SKEW_MS = 5 * 60 * 1000L;
+
+    /** Максимальный возраст OCSP-ответа без nextUpdate (RFC 6960 §2.4 — локальная политика) */
+    public static final long MAX_OCSP_AGE_MS = 24 * 60 * 60 * 1000L;
 
     /** Длина соли PBES2 в байтах (RFC 9337 §5) */
     public static final int PBES2_SALT_LEN = 16;

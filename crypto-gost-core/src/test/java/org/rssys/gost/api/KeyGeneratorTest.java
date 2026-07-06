@@ -157,7 +157,8 @@ class KeyGeneratorTest {
         };
         for (ECParameters params : curves) {
             KeyPair pair = KeyGenerator.generateKeyPair(params);
-            assertTrue(pair.getPublic().getQ().isValidPublicKey(),
+            assertTrue(
+                    pair.getPublic().getQ().isValidPublicKey(),
                     () -> "Валидный ключ должен проходить isValidPublicKey: " + params);
         }
     }
@@ -170,7 +171,6 @@ class KeyGeneratorTest {
         ECPoint q = pair.getPublic().getQ().normalize();
         BigInteger badY = q.getY().add(BigInteger.ONE).mod(params.p);
         ECPoint offCurve = ECPoint.affine(q.getX(), badY, params);
-        assertFalse(offCurve.isValidPublicKey(),
-                "Точка не на кривой должна возвращать false");
+        assertFalse(offCurve.isValidPublicKey(), "Точка не на кривой должна возвращать false");
     }
 }

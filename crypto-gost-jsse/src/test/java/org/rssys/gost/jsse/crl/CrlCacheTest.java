@@ -2,6 +2,7 @@ package org.rssys.gost.jsse.crl;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.math.BigInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -12,27 +13,33 @@ import org.junit.jupiter.api.Test;
 class CrlCacheTest {
 
     @Test
-    @DisplayName("get() для отсутствующего ключа -> null")
-    void testGetMissing() {
+    @DisplayName("lookup() для отсутствующего ключа -> crlDer=null, crlNumber=null")
+    void testLookupMissing() {
         CrlCache cache = new CrlCache();
-        assertNull(cache.get("http://crl.example.com/root.crl"));
+        CrlCache.CrlCacheEntry entry = cache.lookup("http://crl.example.com/root.crl");
+        assertNull(entry.crlDer(), "отсутствующий ключ: crlDer должен быть null");
+        assertNull(entry.lastKnownCrlNumber(), "отсутствующий ключ: crlNumber должен быть null");
     }
 
     @Test
-    @DisplayName("put + get возвращает данные")
-    void testPutGet() {
+    @DisplayName("put + lookup возвращает данные и cRLNumber")
+    void testPutLookup() {
         CrlCache cache = new CrlCache();
         byte[] data = new byte[] {0x30, 0x00};
         cache.put("http://crl.example.com/root.crl", data);
-        assertArrayEquals(data, cache.get("http://crl.example.com/root.crl"));
+        CrlCache.CrlCacheEntry entry = cache.lookup("http://crl.example.com/root.crl");
+        assertNotNull(entry.crlDer(), "crlDer не должен быть null после put");
+        assertEquals(data.length, entry.crlDer().length, "длина данных");
     }
 
     @Test
-    @DisplayName("put для другого ключа не виден в get")
+    @DisplayName("put для другого ключа не виден в lookup")
     void testDifferentKeys() {
         CrlCache cache = new CrlCache();
         cache.put("http://crl.example.com/a.crl", new byte[] {0x01});
-        assertNull(cache.get("http://crl.example.com/b.crl"));
+        CrlCache.CrlCacheEntry entry = cache.lookup("http://crl.example.com/b.crl");
+        assertNull(entry.crlDer(), "разный ключ: crlDer должен быть null");
+        assertNull(entry.lastKnownCrlNumber(), "разный ключ: crlNumber должен быть null");
     }
 
     @Test
@@ -42,7 +49,8 @@ class CrlCacheTest {
         cache.put("http://crl.example.com/root.crl", new byte[] {0x30, 0x00});
         cache.clear();
         assertEquals(0, cache.size());
-        assertNull(cache.get("http://crl.example.com/root.crl"));
+        CrlCache.CrlCacheEntry entry = cache.lookup("http://crl.example.com/root.crl");
+        assertNull(entry.crlDer(), "после clear: crlDer должен быть null");
     }
 
     @Test
@@ -72,9 +80,65 @@ class CrlCacheTest {
     }
 
     @Test
-    @DisplayName("get с null URI -> NullPointerException")
-    void testGetNullUri() {
+    @DisplayName("lookup с null URI -> NullPointerException")
+    void testLookupNullUri() {
         CrlCache cache = new CrlCache();
-        assertThrows(NullPointerException.class, () -> cache.get(null));
+        assertThrows(NullPointerException.class, () -> cache.lookup(null));
+    }
+
+    // ========================================================================
+    // Тесты cRLNumber (RFC 5280 §5.2.3)
+    // ========================================================================
+
+    @Test
+    @DisplayName("lookup() для отсутствующего ключа -> lastKnownCrlNumber=null")
+    void testLookupMissingCrlNumber() {
+        CrlCache cache = new CrlCache();
+        assertNull(
+                cache.lookup("http://crl.example.com/none.crl").lastKnownCrlNumber(),
+                "отсутствующий ключ должен вернуть crlNumber=null");
+    }
+
+    @Test
+    @DisplayName("lookup() после put -> crlNumber=ожидаемое")
+    void testPutLookupCrlNumber() {
+        CrlCache cache = new CrlCache();
+        BigInteger crlNum = BigInteger.valueOf(42);
+        cache.putForTest(
+                "http://crl.example.com/root.crl",
+                new byte[] {0x30, 0x00},
+                crlNum,
+                System.currentTimeMillis() + 3600_000L);
+        CrlCache.CrlCacheEntry entry = cache.lookup("http://crl.example.com/root.crl");
+        assertNotNull(entry.crlDer(), "crlDer не должен быть null");
+        assertEquals(crlNum, entry.lastKnownCrlNumber(), "crlNumber должен совпадать");
+    }
+
+    @Test
+    @DisplayName("lookup() для expired записи -> crlDer=null, crlNumber сохраняется")
+    void testLookupExpiredKeepsCrlNumber() {
+        CrlCache cache = new CrlCache();
+        BigInteger crlNum = BigInteger.valueOf(5);
+        cache.putForTest("http://crl.example.com/root.crl", new byte[] {0x30, 0x00}, crlNum, 0L);
+        CrlCache.CrlCacheEntry entry = cache.lookup("http://crl.example.com/root.crl");
+        assertNull(entry.crlDer(), "expired запись: crlDer должен быть null");
+        assertEquals(
+                crlNum,
+                entry.lastKnownCrlNumber(),
+                "expired запись: crlNumber должен сохраняться для rollback-защиты");
+    }
+
+    @Test
+    @DisplayName("put CRL без cRLNumber -> crlNumber=null в lookup")
+    void testPutCrlWithoutCrlNumber() {
+        CrlCache cache = new CrlCache();
+        cache.putForTest(
+                "http://crl.example.com/root.crl",
+                new byte[] {0x30, 0x00},
+                null,
+                System.currentTimeMillis() + 3600_000L);
+        assertNull(
+                cache.lookup("http://crl.example.com/root.crl").lastKnownCrlNumber(),
+                "CRL без cRLNumber: crlNumber должен быть null");
     }
 }

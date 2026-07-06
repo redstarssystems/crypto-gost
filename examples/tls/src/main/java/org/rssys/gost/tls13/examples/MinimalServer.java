@@ -39,8 +39,11 @@ public final class MinimalServer {
                                         Collections.singletonList(serverBundle.cert()),
                                         serverBundle.priv()),
                                 serverTp);
-                TlsSession client = TlsSession.createClient(
-                                new TlsClientConfig(cs, caBundle.cert().getPublicKey()), clientTp)) {
+                TlsSession client =
+                        TlsSession.createClient(
+                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
+                                        .withoutHostnameVerification(),
+                                clientTp)) {
 
             ExecutorService exec = Executors.newSingleThreadExecutor();
             try {

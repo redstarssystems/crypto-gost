@@ -50,7 +50,7 @@ public class Hmac implements Mac {
      * где ключевой материал существует только как временный {@code byte[]} и не должен
      * оборачиваться в {@link SymmetricKey}.
      *
-     * @param key ключевой материал (не копируется, используется напрямую)
+     * @param key ключевой материал (defensive copy)
      */
     public void init(byte[] key) {
         if (key == null) {
@@ -75,15 +75,12 @@ public class Hmac implements Mac {
         digest.reset();
 
         byte[] k;
-        boolean hashedCopy;
         if (key.length > blockLen) {
             digest.update(key, 0, key.length);
             k = new byte[digestSize];
             digest.doFinal(k, 0);
-            hashedCopy = true;
         } else {
-            k = key;
-            hashedCopy = false;
+            k = Arrays.copyOf(key, key.length);
         }
 
         Arrays.fill(inputPad, IPAD);
@@ -94,11 +91,7 @@ public class Hmac implements Mac {
             outputPad[i] ^= k[i];
         }
 
-        // Затираем только выделенную хэш-копию ключа. Ветка k = key — алиас входного
-        // массива вызывающего, его затирать нельзя.
-        if (hashedCopy) {
-            Arrays.fill(k, (byte) 0);
-        }
+        Arrays.fill(k, (byte) 0);
 
         digest.reset();
         digest.update(inputPad, 0, blockLen);

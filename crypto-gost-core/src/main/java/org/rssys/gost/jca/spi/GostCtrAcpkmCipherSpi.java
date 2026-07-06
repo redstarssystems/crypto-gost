@@ -166,6 +166,8 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
         }
         this.mode = new CtrAcpkmMode(new Kuznyechik(), useOmac);
         this.mode.init(forEncryption, new ParametersWithIV(keyParam, ukm));
+        // Затираем прежний буфер (мог содержать plaintext/ciphertext) перед сбросом.
+        Arrays.fill(this.inputBuffer, (byte) 0);
         this.inputBuffer = new byte[0];
         this.processedBytes = 0L;
         this.initialized = true;
@@ -263,6 +265,7 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
         } catch (AEADBadTagException e) {
             throw e;
         } finally {
+            Arrays.fill(inputBuffer, (byte) 0);
             inputBuffer = new byte[0];
             keyParam = null;
         }

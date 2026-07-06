@@ -15,6 +15,10 @@
     <artifactId>examples-jsse</artifactId>
     <packaging>jar</packaging>
 
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
     <name>examples-jsse</name>
     <description>Примеры интеграции crypto-gost-jsse с серверами приложений</description>
 

@@ -30,6 +30,19 @@ import org.rssys.gost.util.Pkcs7Padding;
  * Реализация {@link CipherSpi} для алгоритма шифрования Кузнечик (ГОСТ Р 34.12-2015)
  * <b>Важно:</b> JCE управляет буферизацией. Для потоковых режимов (CTR/CFB/OFB)
  * {@code engineUpdate} возвращает байты по мере поступления. Для CBC — блоками.
+ *
+ * <p><b>Безопасность (режим CTR):</b> при инициализации без параметров nonce
+ * генерируется случайно и составляет всего 64 бита (блок счётчика по
+ * ГОСТ Р 34.13-2015 §4.4 = IV(8 байт) ‖ counter(8 байт), младшая половина —
+ * счётчик, поэтому расширить nonce нельзя). Безопасный предел — не более
+ * ~2^16 сообщений на одном ключе. При его превышении растёт вероятность
+ * коллизии nonce по «парадоксу дней рождения» (≈50% к ~2^32 сообщений):
+ * совпадение nonce даёт одинаковый keystream (счётчик у обоих стартует с 0),
+ * и XOR двух шифртекстов раскрывает открытый текст — потеря
+ * конфиденциальности. Для больших объёмов передавайте явный уникальный nonce
+ * через {@link IvParameterSpec} (например, монотонный счётчик) либо
+ * используйте {@code Kuznyechik/CTR-ACPKM} (детерминированный UKM + секционная
+ * смена ключа). Подробности — ADR-06 (crypto-gost-core/doc/adr/adr-06.adoc).
  */
 public final class GostCipherSpi extends CipherSpi {
 
@@ -166,6 +179,10 @@ public final class GostCipherSpi extends CipherSpi {
      * <p>
      * Принимает {@link IvParameterSpec} для IV. Если параметры {@code null} —
      * IV генерируется случайным образом через {@code random}.
+     * <p>
+     * Для CTR авто-nonce ограничен 64 битами и безопасен лишь до ~2^16
+     * сообщений на ключ (см. Javadoc класса / ADR-06); для контроля над
+     * уникальностью передавайте {@link IvParameterSpec} с явным значением.
      */
     @Override
     protected void engineInit(
@@ -233,6 +250,8 @@ public final class GostCipherSpi extends CipherSpi {
         if (!mode.equals(MODE_CBC)) {
             // Потоковые режимы: шифруем весь накопленный буфер немедленно
             byte[] result = processStreamBytes(inputBuffer, 0, inputBuffer.length);
+            // Затираем прежний буфер (мог содержать plaintext/ciphertext) перед сбросом.
+            Arrays.fill(inputBuffer, (byte) 0);
             inputBuffer = new byte[0];
             return result;
         }
@@ -285,7 +304,8 @@ public final class GostCipherSpi extends CipherSpi {
             result = doFinalCbc();
         }
 
-        // Сбрасываем буфер после завершения
+        // Сбрасываем буфер после завершения; затираем прежнее содержимое.
+        Arrays.fill(inputBuffer, (byte) 0);
         inputBuffer = new byte[0];
         return result;
     }
@@ -312,6 +332,8 @@ public final class GostCipherSpi extends CipherSpi {
         if (cipher != null) {
             cipher.destroy();
         }
+        // Затираем прежний буфер (мог содержать plaintext/ciphertext) перед сбросом.
+        Arrays.fill(this.inputBuffer, (byte) 0);
         this.inputBuffer = new byte[0];
 
         ParametersWithIV params = new ParametersWithIV(keyParam, iv);
@@ -458,7 +480,11 @@ public final class GostCipherSpi extends CipherSpi {
         inputBuffer = newBuf;
     }
 
-    /** Генерирует случайный IV нужной длины для текущего режима. */
+    /** Генерирует случайный IV нужной длины для текущего режима.
+     * <p>
+     * Для CTR это 64-битный nonce (BLOCK_SIZE/2 = 8 байт): при > ~2^16
+     * сообщений на одном ключе возникает birthday-риск коллизии nonce
+     * (повтор keystream -> раскрытие plaintext); см. Javadoc класса и ADR-06. */
     private byte[] generateIv(SecureRandom random) {
         int ivLen = mode.equals(MODE_CTR) ? BLOCK_SIZE / 2 : BLOCK_SIZE;
         byte[] iv = new byte[ivLen];

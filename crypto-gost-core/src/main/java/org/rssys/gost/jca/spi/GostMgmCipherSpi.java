@@ -161,6 +161,8 @@ public final class GostMgmCipherSpi extends CipherSpi {
         mgm = new Mgm(new Kuznyechik());
         mgm.init(forEncryption, new ParametersWithIV(keyParam, icn));
 
+        // Затираем прежний буфер (мог содержать plaintext/ciphertext) перед сбросом.
+        Arrays.fill(inputBuffer, (byte) 0);
         inputBuffer = new byte[0];
         aadUpdated = false;
         initialized = true;
@@ -247,7 +249,8 @@ public final class GostMgmCipherSpi extends CipherSpi {
                 return doFinalDecrypt();
             }
         } finally {
-            // Сбрасываем буфер после завершения
+            // Сбрасываем буфер после завершения; затираем прежнее содержимое.
+            Arrays.fill(inputBuffer, (byte) 0);
             inputBuffer = new byte[0];
         }
     }

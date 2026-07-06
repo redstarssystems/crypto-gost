@@ -234,7 +234,7 @@ class BcCAdESCrossValidationTest {
                 CmsTestUtils.createSelfSignedCert(signerKp.getPrivate(), signerKp.getPublic());
         KeyPair tsaKp = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
         GostCertificate tsaCert =
-                CmsTestUtils.createSelfSignedCert(tsaKp.getPrivate(), tsaKp.getPublic());
+                CmsTestUtils.createTsaCert(tsaKp.getPrivate(), tsaKp.getPublic());
 
         byte[] data = "CAdES-T full verify".getBytes();
         byte[] cadesBes = TestData.buildCAdESBES(data, signerKp.getPrivate(), signerCert);

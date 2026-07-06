@@ -18,8 +18,10 @@
   9367**.
 
 - `crypto-gost-pkix` - ГОСТ-инфраструктура PKIX: OID-реестр, CMS
-  SignedData/EnvelopedData/SignedAndEnvelopedData, X.509-сертификаты,
-  OCSP, CRL, CSR (PKCS#10), PKCS#12, CAdES-BES/T, TSP.
+  SignedData/EnvelopedData/SignedAndEnvelopedData, извлечение и
+  формирование сертификатов из PKCS#7/.p7b (`GostPkcs7`),
+  X.509-сертификаты, OCSP, CRL, CSR (PKCS#10), PKCS#12, CAdES-BES/T,
+  TSP.
 
 - `crypto-gost-core` - криптографическое ядро алгоритмов ГОСТ: Стрибог,
   Кузнечик, ГОСТ Р 34.10-2012, JCA-провайдер.
@@ -106,25 +108,25 @@
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-core</artifactId>
-        <version>0.6.1</version>
+        <version>0.6.2</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-tls13</artifactId>
-        <version>0.6.1</version>
+        <version>0.6.2</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-jsse</artifactId>
-        <version>0.6.1</version>
+        <version>0.6.2</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-pkix</artifactId>
-        <version>0.6.1</version>
+        <version>0.6.2</version>
     </dependency>
 
 - **Способ 2.** Клонируйте репозиторий и выполните сборку и установку в
@@ -137,7 +139,7 @@
   При необходимости проверить подпись релизного тега можно так:
 
       gpg --import KEYS
-      gpg -v v0.6.1
+      gpg -v v0.6.2
 
 # Методики кросс-валидации
 

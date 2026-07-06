@@ -23,7 +23,6 @@ import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.GostCsrBuilder;
-import org.rssys.gost.pkix.cert.ReasonCode;
 import org.rssys.gost.pkix.cert.GostCsrParser;
 import org.rssys.gost.pkix.cert.GostDnParser;
 import org.rssys.gost.pkix.cert.GostOcspRequest;
@@ -45,6 +44,7 @@ import org.rssys.gost.pkix.cms.CmsKeyWrap;
 import org.rssys.gost.pkix.cms.CmsSignedAndEnvelopedData;
 import org.rssys.gost.pkix.cms.CmsSignedDataBuilder;
 import org.rssys.gost.pkix.cms.CmsSignedDataVerifier;
+import org.rssys.gost.pkix.cms.GostPkcs7;
 import org.rssys.gost.pkix.cms.Kexp15CmsKeyWrap;
 import org.rssys.gost.pkix.cms.VerifiedCAdESData;
 import org.rssys.gost.pkix.cms.VerifiedSignedData;
@@ -611,7 +611,7 @@ public final class PkixDemo {
 
         // Проверка: сертификат отозван
         try {
-            CrlVerifier.verify(crlDer, serial, caPubKey);
+            CrlVerifier.verify(crlDer, serial, caPubKey, caCert.getSubjectDnBytes());
             check(false, "Отозванный сертификат должен вызывать PkixException");
         } catch (PkixException e) {
             check(
@@ -692,6 +692,25 @@ public final class PkixDemo {
                         .addCertificate(caCert)
                         .build();
         VerifiedSignedData chainResult = CmsSignedDataVerifier.verifyAny(chainSigned, cmsCert);
+
+        // Извлечение встроенных сертификатов через GostPkcs7 (обратная операция к addCertificate)
+        List<GostCertificate> p7bCerts = GostPkcs7.extractCertificates(chainSigned);
+        boolean caPresent =
+                p7bCerts.stream()
+                        .anyMatch(
+                                c ->
+                                        c.getSerialNumberBigInt()
+                                                .equals(caCert.getSerialNumberBigInt()));
+        check(
+                !p7bCerts.isEmpty() && caPresent,
+                "GostPkcs7.extractCertificates() — извлечено сертификатов: " + p7bCerts.size());
+
+        // Формирование certs-only .p7b (обратная операция к extractCertificates)
+        byte[] certsOnlyP7b = GostPkcs7.buildCertsOnly(cmsCert, caCert);
+        List<GostCertificate> roundTrip = GostPkcs7.extractCertificates(certsOnlyP7b);
+        check(
+                roundTrip.size() == 2,
+                "GostPkcs7.buildCertsOnly() — round-trip сертификатов: " + roundTrip.size());
 
         // Пользовательские signed-атрибуты
         byte[] attrSigned =
@@ -910,7 +929,7 @@ public final class PkixDemo {
 
         // Проверка первой записи
         try {
-            CrlVerifier.verify(crlDer, serial1, caPubKey);
+            CrlVerifier.verify(crlDer, serial1, caPubKey, caCert.getSubjectDnBytes());
             check(false, "serial1 должен быть отозван");
         } catch (PkixException e) {
             check(e.reason() == PkixException.Reason.REVOKED, "serial1 отозван");
@@ -1265,39 +1284,44 @@ public final class PkixDemo {
 
         // Клиент: строим запрос
         BigInteger nonce = BigInteger.valueOf(12345);
-        byte[] reqDer = TspRequestBuilder.create()
-                .messageImprint(hash, GostOids.DIGEST_256)
-                .nonce(nonce)
-                .build();
+        byte[] reqDer =
+                TspRequestBuilder.create()
+                        .messageImprint(hash, GostOids.DIGEST_256)
+                        .nonce(nonce)
+                        .build();
         check(reqDer.length > 0, "TSP-запрос построен");
 
         // Сервер: разбираем запрос
         TspRequest request = TspRequest.fromDer(reqDer);
-        check(request.messageImprintAlgOid().equals(GostOids.DIGEST_256),
+        check(
+                request.messageImprintAlgOid().equals(GostOids.DIGEST_256),
                 "Алгоритм дайджеста в запросе");
         check(request.nonce().equals(nonce), "Nonce в запросе");
 
         // Given алгоритм — отклоняем с failInfo
-        byte[] rejectionDer = TspResponseBuilder.buildRejected(
-                "Unsupported algorithm", GostOids.PKI_FAIL_BAD_ALG);
+        byte[] rejectionDer =
+                TspResponseBuilder.buildRejected(
+                        "Unsupported algorithm", GostOids.PKI_FAIL_BAD_ALG);
         check(rejectionDer.length > 0, "Rejection с failInfo построен");
         try {
             TspResponse.fromDer(rejectionDer);
             check(false, "Rejection должен бросать PkixException");
         } catch (PkixException e) {
-            check(e.getMessage().contains("rejection"),
+            check(
+                    e.getMessage().contains("rejection"),
                     "PkixException содержит 'rejection': " + e.getMessage());
         }
 
         // Granted: строим ответ с accuracy и ordering
-        byte[] responseDer = TspResponseBuilder.create(request)
-                .signer(tsaKey, tsaCert)
-                .policyOid("1.3.6.1.4.1.4146.1.2.1")
-                .serialNumber(BigInteger.ONE)
-                .accuracy(1, 500)
-                .withCAdES()
-                .ordering(true)
-                .buildGranted();
+        byte[] responseDer =
+                TspResponseBuilder.create(request)
+                        .signer(tsaKey, tsaCert)
+                        .policyOid("1.3.6.1.4.1.4146.1.2.1")
+                        .serialNumber(BigInteger.ONE)
+                        .accuracy(1, 500)
+                        .withCAdES()
+                        .ordering(true)
+                        .buildGranted();
         check(responseDer.length > 0, "Granted ответ построен");
 
         // Клиент: разбираем и верифицируем ответ
@@ -1320,7 +1344,7 @@ public final class PkixDemo {
     private static void section26_deltaCrl() throws Exception {
         section("§26 Delta CRL: базовый + delta CRL с merge-верификацией");
 
-        byte[] serial1 = leafCert.getSerialNumber();     // отозван в base, удалён в delta
+        byte[] serial1 = leafCert.getSerialNumber(); // отозван в base, удалён в delta
         byte[] serial2 = new BigInteger("999999999").toByteArray(); // отозван в base, не в delta
 
         // 1. Базовый CRL: два отозванных сертификата + cRLNumber
@@ -1328,11 +1352,20 @@ public final class PkixDemo {
                 GostCrlBuilder.create(caKey, "CN=Demo Root CA,O=DemoOrg,C=RU")
                         .withCrlNumber(1)
                         .nextUpdate("270801120000Z")
-                        .addRevoked(List.of(
-                                new RevokedEntry(serial1, "260801120000Z",
-                                        ReasonCode.KEY_COMPROMISE, null, null),
-                                new RevokedEntry(serial2, "260801120000Z",
-                                        ReasonCode.CERTIFICATE_HOLD, null, null)))
+                        .addRevoked(
+                                List.of(
+                                        new RevokedEntry(
+                                                serial1,
+                                                "260801120000Z",
+                                                ReasonCode.KEY_COMPROMISE,
+                                                null,
+                                                null),
+                                        new RevokedEntry(
+                                                serial2,
+                                                "260801120000Z",
+                                                ReasonCode.CERTIFICATE_HOLD,
+                                                null,
+                                                null)))
                         .build();
         check(baseCrl.length > 0, "Base CRL построен, cRLNumber=1");
 
@@ -1341,45 +1374,51 @@ public final class PkixDemo {
                 GostCrlBuilder.create(caKey, "CN=Demo Root CA,O=DemoOrg,C=RU")
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .addRevoked(List.of(
-                                new RevokedEntry(serial1, "260901120000Z",
-                                        ReasonCode.REMOVE_FROM_CRL, null, null)))
+                        .addRevoked(
+                                List.of(
+                                        new RevokedEntry(
+                                                serial1,
+                                                "260901120000Z",
+                                                ReasonCode.REMOVE_FROM_CRL,
+                                                null,
+                                                null)))
                         .build();
         check(deltaCrl.length > 0, "Delta CRL построен, ссылается на base cRLNumber=1");
 
         // 3. GostCrl: чтение метаданных (cRLNumber доступен без verify)
         GostCrl base = GostCrl.fromDer(baseCrl);
         base.verify(caPubKey);
-        check(base.getCrlNumber().equals(BigInteger.valueOf(1)),
-                "Base CRL: getCrlNumber() = 1");
+        check(base.getCrlNumber().equals(BigInteger.valueOf(1)), "Base CRL: getCrlNumber() = 1");
 
         // Delta CRL: изолированная верификация — rejected
         try {
             new GostCrl(deltaCrl).verify(caPubKey);
             check(false, "Delta CRL должен быть rejected");
         } catch (PkixException e) {
-            check(e.getMessage().contains("delta CRL not supported"),
+            check(
+                    e.getMessage().contains("delta CRL not supported"),
                     "Delta CRL rejected при изолированной верификации");
         }
 
         // 4. Merge-верификация: serial1 удалён → не отозван
-        CrlVerifier.verify(baseCrl, deltaCrl, serial1, caPubKey);
+        CrlVerifier.verify(baseCrl, deltaCrl, serial1, caPubKey, caCert.getSubjectDnBytes());
         System.out.println("  serial1 прошёл — удалён из CRL через REMOVE_FROM_CRL");
 
         // 5. serial2 остался только в base → отозван
         try {
-            CrlVerifier.verify(baseCrl, deltaCrl, serial2, caPubKey);
+            CrlVerifier.verify(baseCrl, deltaCrl, serial2, caPubKey, caCert.getSubjectDnBytes());
             check(false, "serial2 должен быть отозван");
         } catch (PkixException e) {
-            check(e.reason() == PkixException.Reason.REVOKED,
+            check(
+                    e.reason() == PkixException.Reason.REVOKED,
                     "serial2 отозван в base CRL, delta не удаляла");
         }
 
         // 6. Base CRL: getReason читает причину из entry extensions
-        check(base.getReason(serial1) == ReasonCode.KEY_COMPROMISE,
+        check(
+                base.getReason(serial1) == ReasonCode.KEY_COMPROMISE,
                 "getReason(serial1) = KEY_COMPROMISE");
-        check(base.getRevokedCertificates().size() == 2,
-                "Base CRL: две записи в revoked-списке");
+        check(base.getRevokedCertificates().size() == 2, "Base CRL: две записи в revoked-списке");
 
         System.out.println("  OK: Delta CRL — base+delta merge");
     }

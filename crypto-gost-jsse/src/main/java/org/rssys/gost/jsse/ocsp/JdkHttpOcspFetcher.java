@@ -10,8 +10,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-
-import org.rssys.gost.jsse.SsrfGuard;
+import org.rssys.gost.pkix.util.SsrfGuard;
 
 /**
  * Реализация {@link OcspFetcher} на JDK HttpClient с SSRF-защитой.
@@ -19,7 +18,16 @@ import org.rssys.gost.jsse.SsrfGuard;
  * vthread-friendly с JDK 21: HttpClient блокирует vthread, не carrier thread.
  * Используется как singleton поверх TrustManager.
  * SSRF-защита: только http:// схема, блокировка private/reserved IP
- * после DNS-разрешения.
+ * после DNS-разрешения (проверяются все резолвнутые адреса, fail-closed).
+ * <p>
+ * <b>Остаточный риск (простыми словами):</b> адрес проверяется до запроса, но
+ * само соединение делает {@code HttpClient}, который заново обращается к DNS —
+ * между этими моментами атакующий с контролем DNS может подменить публичный
+ * адрес на внутренний (DNS-rebinding TOCTOU). Штатными средствами HttpClient не
+ * закрывается. Риск ограничен: украсть данные нельзя (ответ OCSP проверяется по
+ * подписи), возможно лишь probing внутренней сети. Полное закрытие требует
+ * ручного HTTP (raw socket + SNI), которое мы пока не планируем делать.
+ * Подробнее — {@link org.rssys.gost.pkix.util.SsrfGuard}.
  */
 public final class JdkHttpOcspFetcher implements OcspFetcher {
 
@@ -27,7 +35,7 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
             System.getLogger("org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher");
 
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(5);
-    private static final int DEFAULT_MAX_RESPONSE_SIZE = 65536; // 64 KB
+    private static final int DEFAULT_MAX_RESPONSE_SIZE = 262_144; // 256 KB
 
     private final HttpClient client;
     private final Duration timeout;
@@ -35,7 +43,7 @@ public final class JdkHttpOcspFetcher implements OcspFetcher {
     private final boolean skipSsrfCheck;
 
     /**
-     * Создаёт fetcher с таймаутом 5 с и лимитом ответа 64 КБ.
+     * Создаёт fetcher с таймаутом 5 с и лимитом ответа 256 КБ.
      */
     public JdkHttpOcspFetcher() {
         this(DEFAULT_TIMEOUT, DEFAULT_MAX_RESPONSE_SIZE, false);

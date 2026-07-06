@@ -572,9 +572,7 @@ class TlsCertificateTest {
         bundle.cert.setOcspResponse(ocsp);
         assertThrows(
                 TlsException.class,
-                () ->
-                        TlsCertUtils.verifyOcspResponse(
-                                bundle.cert, bundle.cert));
+                () -> TlsCertUtils.verifyOcspResponse(bundle.cert, bundle.cert));
     }
 
     @Test
@@ -589,10 +587,7 @@ class TlsCertificateTest {
                         bundle.subjectDn,
                         null);
         bundle.cert.setOcspResponse(ocsp);
-        assertDoesNotThrow(
-                () ->
-                        TlsCertUtils.verifyOcspResponse(
-                                bundle.cert, bundle.cert));
+        assertDoesNotThrow(() -> TlsCertUtils.verifyOcspResponse(bundle.cert, bundle.cert));
     }
 
     @Test

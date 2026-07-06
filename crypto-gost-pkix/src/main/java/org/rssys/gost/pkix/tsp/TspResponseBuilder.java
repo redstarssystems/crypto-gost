@@ -107,7 +107,9 @@ public final class TspResponseBuilder {
         this.tsaCert = Objects.requireNonNull(cert, "cert must not be null");
         int hlen = privateKey.getParams().hlen;
         this.digestOid =
-                (hlen == GostOids.STREEBOG_512_HASH_LEN) ? GostOids.DIGEST_512 : GostOids.DIGEST_256;
+                (hlen == GostOids.STREEBOG_512_HASH_LEN)
+                        ? GostOids.DIGEST_512
+                        : GostOids.DIGEST_256;
         return this;
     }
 
@@ -281,7 +283,8 @@ public final class TspResponseBuilder {
         // policy OID
         byte[] policy = DerCodec.encodeOid(policyOid);
 
-        // messageImprint: SEQUENCE { hashAlgorithm AlgorithmIdentifier, hashedMessage OCTET STRING }
+        // messageImprint: SEQUENCE { hashAlgorithm AlgorithmIdentifier, hashedMessage OCTET STRING
+        // }
         byte[] hashAlgId = CmsAlgorithmIdentifier.encode(messageImprintAlgOid);
         byte[] hashedMessage = DerCodec.encodeOctetString(messageImprintHash);
         byte[] messageImprint = DerCodec.encodeSequence(hashAlgId, hashedMessage);
@@ -372,14 +375,13 @@ public final class TspResponseBuilder {
         return wrapResponse(status, statusString, timeStampTokenDer, 0);
     }
 
-    private static byte[] wrapResponse(int status, String statusString,
-            byte[] timeStampTokenDer, int failInfo) {
+    private static byte[] wrapResponse(
+            int status, String statusString, byte[] timeStampTokenDer, int failInfo) {
         List<byte[]> pkiParts = new ArrayList<>();
         pkiParts.add(DerCodec.encodeInteger(BigInteger.valueOf(status)));
         if (statusString != null) {
             // PKIFreeText ::= SEQUENCE SIZE (1..MAX) OF UTF8String (RFC 4210)
-            byte[] freeText = DerCodec.encodeSequence(
-                    DerCodec.encodeUTF8String(statusString));
+            byte[] freeText = DerCodec.encodeSequence(DerCodec.encodeUTF8String(statusString));
             pkiParts.add(freeText);
         }
         if (failInfo != 0) {

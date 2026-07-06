@@ -54,6 +54,7 @@ toc::[]
 * Только resumption PSK (0-RTT и external PSK не поддерживаются).
 * Только `psk_dhe_ke` (pure PSK без ECDHE не поддерживается).
 * Только ГОСТ (non-GOST cipher suites не поддерживаются).
+* `exporter_secret` (RFC 8446 §7.5) не реализован — `exportKeyingMaterial()` и channel binding не поддерживаются.
 
 +
 Все криптографические операции выполняются встроенными средствами библиотеки — без внешних зависимостей.
@@ -69,6 +70,12 @@ public interface TlsTransport extends AutoCloseable {
     void sendRecord(byte[] record) throws IOException;
     /** Блокирующее чтение: [header(5) || body(length)]. */
     byte[] receiveRecord() throws IOException;
+    /** Zero-alloc перегрузка: читает запись напрямую в переданный ByteBuffer. */
+    default int receiveRecord(ByteBuffer dst) throws IOException {
+        byte[] record = receiveRecord();
+        dst.put(record);
+        return record.length;
+    }
     void close() throws IOException;
 }
 ----
@@ -348,21 +355,30 @@ try {
 // Клиент (mTLS)
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
-byte[] clientCertDer = Files.readAllBytes(Paths.get("client.der"));
-byte[] clientKeyDer  = Files.readAllBytes(Paths.get("client.key"));
+byte[] caDer          = Files.readAllBytes(Paths.get("ca.der"));
+byte[] clientCertDer  = Files.readAllBytes(Paths.get("client.der"));
+byte[] clientKeyDer   = Files.readAllBytes(Paths.get("client.key"));
 
-GostCertificate clientCert   = new GostCertificate(clientCertDer);
+PublicKeyParameters caKey     = new GostCertificate(caDer).getPublicKey();
+GostCertificate clientCert    = new GostCertificate(clientCertDer);
 PrivateKeyParameters clientPriv = org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(clientKeyDer);
 
 TlsSession client = TlsSession.createClient(
-        new TlsClientConfig(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L)
+        new TlsClientConfig(
+                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                caKey)
+        .withServerHostname("gost.example.com")  // hostname обязателен
         .withClientCertificateChain(clientCert)
         .withClientPrivateKey(clientPriv), transport);
+// Альтернативы:
+// .withoutHostnameVerification()  — CA-проверка остаётся, hostname не сверяется (IP, mesh-сервисы)
+// createClientWithoutServerAuth() — без проверки сервера вообще (только тесты/отладка)
 
 try {
     client.handshakeAsClient();
@@ -690,12 +706,12 @@ GostCertificate cert = new GostCertificate(certDer);
 org.rssys.gost.signature.PublicKeyParameters pubKey = cert.getPublicKey();
 
 // Проверка самоподписанного сертификата (CA = тот же ключ)
-boolean valid = cert.verify(pubKey);
+boolean valid = cert.verifySignature(pubKey);
 
 // В типовом сценарии серверный сертификат проверяется по CA:
 GostCertificate caCert = new GostCertificate(Files.readAllBytes(Paths.get("ca.der")));
 GostCertificate serverCert = new GostCertificate(Files.readAllBytes(Paths.get("server.der")));
-boolean serverValid = serverCert.verify(caCert.getPublicKey());
+boolean serverValid = serverCert.verifySignature(caCert.getPublicKey());
 
 ----
 
@@ -793,13 +809,14 @@ boolean dnMatch = Arrays.equals(issuer, parentSubject);
 
 // OCSP Stapling (RFC 6960): проверка ответа
 // cert.getOcspResponse() — сырой OCSPResponse из CertificateEntry
-// cert.verifyOcspResponse(caKey) — проверяет подпись и serialNumber
+// TlsCertUtils.verifyOcspResponse(cert, issuer)        — проверяет подпись, serialNumber и срок (24 ч)
+// TlsCertUtils.verifyOcspResponse(cert, issuer, maxMs) — с настраиваемой политикой свежести
 
 // Проверка консистентности алгоритма (RFC 5280 §4.1.1.2)
 boolean algOk = cert.isAlgConsistent();
 
 // Проверка подписи сертификата (CA = издатель)
-boolean sigValid = cert.verify(caPublicKey);
+boolean sigValid = cert.verifySignature(caPublicKey);
 ----
 
 === Выбор API
@@ -839,7 +856,7 @@ try (TlsSession session = TlsSession.createClient(config, transport)) {
 
 [source,sh]
 ----
-# По умолчанию: 5 прогонов × ~20 с ≈ 100 с
+# По умолчанию: 5 прогонов × ≈20 с ≈ 100 с
 make test-stress-tlssession
 
 # Управление временем (прогрев, замер, число прогонов)

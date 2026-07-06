@@ -77,7 +77,8 @@ class TlsSessionStressTest {
         bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
 
         serverConfig = new TlsServerConfig(cs, Collections.singletonList(bundle.cert), bundle.priv);
-        clientConfig = new TlsClientConfig(cs, bundle.cert.getPublicKey()).withoutHostnameVerification();
+        clientConfig =
+                new TlsClientConfig(cs, bundle.cert.getPublicKey()).withoutHostnameVerification();
 
         serverSocket = new ServerSocket(0, 1024);
         port = serverSocket.getLocalPort();

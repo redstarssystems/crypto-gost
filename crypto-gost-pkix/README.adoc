@@ -205,6 +205,10 @@ GostPkcs12Loader.Result result = GostPkcs12Loader.load(
 PrivateKeyParameters key = result.getPrivateKey();
 List<GostCertificate> chain = result.getCertificateChain();
 GostCertificate leaf = chain.get(0);
+
+// Для загрузки legacy-файлов из доверенного источника — перегрузка
+// с настраиваемым нижним порогом итераций PBKDF2 (по умолчанию 1000):
+// GostPkcs12Loader.load(pfxData, password, allowJdkFallback, minPbkdf2Iterations);
 ----
 
 === CSR (PKCS#10) — запрос сертификата
@@ -338,7 +342,8 @@ import java.time.Instant;
 // PkixException если сертификат отозван или CRL невалиден
 CrlVerifier.verify(crlDer,
         cert.getSerialNumberBigInt().toByteArray(),
-        caPublicKey);
+        caPublicKey,
+        cert.getIssuerDnBytes());
 
 // Проверить дату следующего обновления CRL
 Instant nextUpdate = CrlVerifier.extractNextUpdate(crlDer);
@@ -430,14 +435,24 @@ boolean isDelta = crl.isDelta();                // true если CRL — delta
 String crlPem = crl.toPem();
 ----
 
+`GostCrl` поддерживает автоопределение формата через `fromPemOrDer()` — метод
+принимает PEM или DER и возвращает распарсенный CRL, аналогично `GostCertificate.fromPemOrDer()`.
+
+По умолчанию CRL ограничен `DEFAULT_MAX_CRL_SIZE` = 64 МБ и
+`DEFAULT_MAX_REVOKED_ENTRIES` = 1 000 000 отозванных записей.
+Для крупных CRL национальных УЦ доступны перегрузки `GostCrl(byte[], int, int)`,
+`fromDer(byte[], int, int)` и `fromPemOrDer(byte[], int, int)` с настраиваемыми
+лимитами. Аналогичные лимиты есть у `CrlVerifier.verify()`.
+
 === OCSP — онлайн-проверка статуса сертификата
 
 Online Certificate Status Protocol (RFC 6960) — альтернатива CRL для проверки
 отзыва в реальном времени.
 
 
-OCSP-ответ — публичный документ, подписанный CA. Для проверки нужен только
-открытый ключ CA. Допустима передача по незащищённому каналу.
+OCSP-ответ — публичный документ, подписанный CA. Для проверки нужен
+сертификат CA (OcspVerifier автоматически вычисляет CertID по issuer и проверяет
+EKU OCSP-подписанта). Допустима передача по незащищённому каналу.
 
 ==== Построение OCSP-ответа — `GostOcspResponseBuilder`
 
@@ -451,6 +466,16 @@ byte[] ocspResp = GostOcspResponseBuilder.create(cert.getSerialNumberBigInt().to
         .signer(caPrivateKey, caPublicKey)
         .issuerDn(caSubjectDer)
         .build();
+
+// nextUpdate по умолчанию — now + 3 года.
+// noNextUpdate() убирает поле (RFC 6960 §2.4 — опционально).
+// В этом случае relying party применяет локальную политику свежести
+// через maxOcspAgeMs в OcspVerifier.
+byte[] noNuOcsp = GostOcspResponseBuilder.create(cert.getSerialNumberBigInt().toByteArray())
+        .signer(caPrivateKey, caPublicKey)
+        .issuerDn(caSubjectDer)
+        .noNextUpdate()
+        .build();
 ----
 
 ==== Проверка OCSP-ответа — `OcspVerifier`
@@ -460,10 +485,24 @@ byte[] ocspResp = GostOcspResponseBuilder.create(cert.getSerialNumberBigInt().to
 import org.rssys.gost.pkix.cert.OcspVerifier;
 
 // PkixException если сертификат отозван или ответ невалиден
+// CertID (issuerNameHash/issuerKeyHash) вычисляется из caCert автоматически
 OcspVerifier.verify(ocspResp,
         cert.getSerialNumberBigInt().toByteArray(),
-        caPublicKey);
+        caCert);
+
+// Для ответов без nextUpdate — настраиваемая политика свежести:
+// OcspVerifier.verify(ocspResp, cert.getSerialNumberBigInt().toByteArray(),
+//         caCert, expectedNonce, maxOcspAgeMs);
 ----
+
+NOTE: Есть аддитивные перегрузки с раздельными ролями RFC 6960 —
+`verify(..., certIdIssuer, responderAuthority, ...)`. В обычной конфигурации оба
+параметра — один и тот же сертификат CA (как в перегрузках с одним `caCert`).
+Разделение нужно лишь для редких легитимных сценариев (например, плановая смена
+ключа CA с действующим кросс-сертификатом): `certIdIssuer` — источник CertID-хэшей
+истинного издателя листа, `responderAuthority` — authority подписи ответа. Authority
+обязан криптографически цепляться к истинному издателю; совпадение лишь Subject DN
+доверия не создаёт (иначе — fail-closed отказ).
 
 ==== Разбор OCSP-ответа — `GostOcspResponse`
 
@@ -639,6 +678,52 @@ byte[] signedData = CmsSignedDataBuilder.create()
 VerifiedSignedData result =
         CmsSignedDataVerifier.verifyAny(signedData, rootCaCert);
 ----
+
+==== Извлечение сертификатов из .p7b — `GostPkcs7`
+
+Формат `.p7b` (PKCS#7/CMS SignedData, у которого заполнено поле `certificates`,
+а подписантов обычно нет) — распространённый способ обмена сертификатами и их
+цепочками. `GostPkcs7.extractCertificates()` разбирает контейнер и
+возвращает список `GostCertificate`. Это обратная операция к `addCertificate()`.
+
+[source,java]
+----
+import org.rssys.gost.pkix.cms.GostPkcs7;
+import org.rssys.gost.pkix.cert.GostCertificate;
+
+// Автоопределение DER/PEM (-----BEGIN PKCS7-----) по первому байту
+byte[] p7b = Files.readAllBytes(Path.of("chain.p7b"));
+List<GostCertificate> certs = GostPkcs7.extractCertificates(p7b);
+
+// Перегрузка с явным потолком числа сертификатов (по умолчанию MAX_P7B_CERTS = 256)
+List<GostCertificate> limited = GostPkcs7.extractCertificates(p7b, 16);
+----
+
+CAUTION: `extractCertificates()` выполняет только разбор DER — без проверки подписи,
+цепочки, срока действия и отзыва. Извлечённые сертификаты нужно проверять отдельно
+(`ChainValidator`, `CrlVerifier`, `OcspVerifier`). Потолки `MAX_P7B_CERTS` и
+`MAX_P7B_SIZE` (10 МиБ) защищают от DoS на подготовленном входе.
+
+==== Формирование certs-only .p7b — `GostPkcs7.buildCertsOnly`
+
+Обратная операция к `extractCertificates`: собирает `.p7b` (SignedData без
+подписантов, только сертификаты) для обмена цепочками.
+
+[source,java]
+----
+import org.rssys.gost.pkix.cms.GostPkcs7;
+
+byte[] p7b = GostPkcs7.buildCertsOnly(leafCert, intermediateCaCert, rootCaCert);
+Files.write(Path.of("chain.p7b"), p7b);
+
+// round-trip: обратно извлекаются те же сертификаты
+List<GostCertificate> back = GostPkcs7.extractCertificates(p7b);
+----
+
+Эквивалентно `CmsSignedDataBuilder.create().certsOnly().addCertificate(...).build()`.
+
+NOTE: порядок сертификатов в контейнере не сохраняется — поле `certificates` есть
+`SET OF` и кодируется в DER лексикографически отсортированным (X.690 §11.6).
 
 ==== Пользовательские signed-атрибуты
 
@@ -1400,9 +1485,8 @@ byte[] ocspDer = GostOcspResponseBuilder.create(leafCert.getSerialNumber())
         .good()
         .build();
 
-// 4. Проверяем ответ
-OcspVerifier.verify(ocspDer, leafCert.getSerialNumber(), interCert.getPublicKey());
-OcspVerifier.verifyNonce(ocspDer, expectedNonce, true);  // strict
+// 4. Проверяем ответ (nonce проверяется внутри OcspVerifier)
+OcspVerifier.verify(ocspDer, leafCert.getSerialNumber(), interCert, expectedNonce);
 
 // 5. Разбираем ответ для деталей
 GostOcspResponse response = GostOcspResponse.fromDer(ocspDer);

@@ -324,9 +324,21 @@ KeyManagerFactory, TrustManagerFactory, JKS.
         .trustCa(pfxData, pfxPassword)      // CA из PKCS12 (извлекает isCA=true)
         .trustCaFromPem(pemChain)           // CA из PEM-цепочки
         .ocsp(true)                         // включить OCSP-степплинг
+        .ocspFetcher(new JdkHttpOcspFetcher())   // client-side OCSP-fetcher (по умолчанию нет)
+        .maxOcspAgeMs(6 * 3600_000L)        // макс. возраст OCSP-ответа без nextUpdate (RFC 6960)
+        .crlPolicy(CrlPolicy.IF_CDP_PRESENT)     // политика CRL (по умолчанию DISABLED)
+        .crlFetcher(new JdkHttpCrlFetcher())     // fetcher CRL по CDP URI
+        .maxCrlSize(16 * 1024 * 1024)       // лимит размера CRL в байтах
+        .maxRevokedEntries(500_000)         // лимит числа отозванных записей
         .sessionCacheSize(5000)             // размер кэша сессий (0=без ограничения)
         .trustAll()                         // отключить проверку (только dev)
         .buildServerContext();              // или buildClientContext()
+
+Лимиты `maxCrlSize`/`maxRevokedEntries`/`maxOcspAgeMs` имеют безопасные
+дефолты и нужны только для тюнинга под конкретную PKI. При
+`crlPolicy(null)` CRL-проверка трактуется как `DISABLED`. Лимит
+`maxResponseSize` у `JdkHttpCrlFetcher` должен быть ≥ `maxCrlSize`,
+иначе CRL не дойдёт до парсера.
 
 Примеры:
 
@@ -348,6 +360,15 @@ KeyManagerFactory, TrustManagerFactory, JKS.
         .ocsp(true)
         .sessionCacheSize(5000)
         .buildServerContext();
+
+    // Клиент с CRL-проверкой и настроенными лимитами
+    SSLContext cli = GostSsl.builder()
+        .trustCa(caPem)
+        .crlPolicy(CrlPolicy.IF_CDP_PRESENT)
+        .crlFetcher(new JdkHttpCrlFetcher())
+        .maxRevokedEntries(1_000_000)
+        .maxOcspAgeMs(12 * 3600_000L)
+        .buildClientContext();
 
 ### Ограничения GostSsl
 
@@ -486,6 +507,49 @@ PEM-файлы (авто-определение формата):
 - `CrlPolicy`: `DISABLED` (не проверять), `IF_CDP_PRESENT` (проверять
   если CRL DP в сертификате), `REQUIRE` (требовать CRL всегда).
 
+Конструктор с настраиваемыми лимитами CRL/OCSP:
+
+    GostX509TrustManager tm = new GostX509TrustManager(
+        List.of(caKey1, caKey2),
+        OcspPolicy.STAPLING_OR_FETCH,
+        new JdkHttpOcspFetcher(),
+        CrlPolicy.IF_CDP_PRESENT,
+        new JdkHttpCrlFetcher(),
+        16 * 1024 * 1024,                 //  maxCrlSize (байты)
+        500_000,                          //  maxRevokedEntries
+        12 * 3600_000L);                  //  maxOcspAgeMs (RFC 6960 §2.4)
+
+- Максимальный размер CRL. Лимит `maxResponseSize` у `JdkHttpCrlFetcher`
+  должен быть ≥ этого значения.
+
+- Максимальное число отозванных записей в CRL (защита от
+  DoS-раздувания).
+
+- Максимальный возраст OCSP-ответа без `nextUpdate` — локальная политика
+  свежести relying party. Перегрузка без `maxOcspAgeMs` использует
+  дефолт `GostOids.MAX_OCSP_AGE_MS` (24 ч).
+
+Через фабрику JSSE (`TrustManagerFactory`) с параметрами:
+
+    import org.rssys.gost.jsse.manager.GostTrustManagerParameters;
+
+    GostTrustManagerParameters params = GostTrustManagerParameters.builder()
+        .caPublicKeys(List.of(caKey))
+        .ocspPolicy(OcspPolicy.IF_PRESENT)
+        .crlPolicy(CrlPolicy.IF_CDP_PRESENT)
+        .maxCrlSize(16 * 1024 * 1024)
+        .maxRevokedEntries(500_000)
+        .maxOcspAgeMs(12 * 3600_000L)
+        .build();
+
+    TrustManagerFactory tmf =
+        TrustManagerFactory.getInstance("GostX509", GostJsseConstants.PROVIDER_NAME);
+    tmf.init(params);   // 
+
+- Штатный JSSE-путь `TrustManagerFactory.init(ManagerFactoryParameters)`
+  — прокидывает лимиты в `GostX509TrustManager` без «сырого» вызова
+  конструктора.
+
 Trust-all (только для разработки):
 
     GostX509TrustManager tm = new GostX509TrustManager(null, false);
@@ -525,7 +589,7 @@ Trust-all (только для разработки):
     SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
     ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
 
-    // Клиентский SSLEngine
+    // Клиентский SSLEngine — при непустом host проверка hostname (HTTPS) включена по умолчанию
     SSLEngine engine = ctx.createSSLEngine("host", 8443);
     engine.setUseClientMode(true);
     // Или socket factory
@@ -539,11 +603,18 @@ mTLS — клиент предоставляет свой сертификат:
     SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
     ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
 
-Без проверки hostname клиент уязвим для MITM-атак.
-`GostSSLEngine.createForClient()` включает проверку hostname по RFC 6125
-автоматически (`endpointIdentificationAlgorithm = "HTTPS"`). Для тестов
-и изолированных сетей используйте `createForClientNoHostnameCheck()`
-(логгирует WARNING при каждом вызове).
+Без проверки hostname клиент уязвим для MITM-атак. И socket-путь, и
+engine-путь включают проверку hostname по RFC 6125 по умолчанию:
+`ctx.getSocketFactory()`-сокеты и `ctx.createSSLEngine(host, port)` с
+непустым host получают `endpointIdentificationAlgorithm = "HTTPS"`
+автоматически. Явный отказ (тесты, изолированные сети) — по контракту
+`SSLParameters`: `params.setEndpointIdentificationAlgorithm(null)` (или
+`""`) и `engine.setSSLParameters(params)`; этот путь отключает проверку,
+но каждое клиентское рукопожатие без проверки hostname логгирует WARNING
+(снятие safe-default неотличимо от случайного). Для осознанного отказа
+без per-connection логов —
+`GostSSLEngine.createForClientNoHostnameCheck()`: намерение объявляется
+однократным WARNING при создании, рукопожатия не логгируются.
 
 ### Выбор клиентского сертификата по OID-фильтрам (oid\_filters)
 
@@ -636,7 +707,7 @@ fail-closed при отсутствии</p></td>
     import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
     import java.time.Duration;
 
-    // С настройками по умолчанию: таймаут 5 с, лимит ответа 64 КБ
+    // С настройками по умолчанию: таймаут 5 с, лимит ответа 256 КБ
     OcspFetcher fetcher = new JdkHttpOcspFetcher();
     // Кастомные настройки
     OcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(10), 131072);

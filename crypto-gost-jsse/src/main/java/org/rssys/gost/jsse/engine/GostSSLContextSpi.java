@@ -89,14 +89,10 @@ public final class GostSSLContextSpi extends SSLContextSpi {
     @Override
     protected SSLEngine engineCreateSSLEngine(String host, int port) {
         checkInitialized();
-        return new GostSSLEngine(
-                keyManager,
-                trustManager,
-                host,
-                port,
-                true,
-                clientSessionContext,
-                serverSessionContext);
+        // Safe-by-default: при непустом host клиентский engine получает hostname
+        // verification (HTTPS), как socket-путь. Устраняет расхождение socket vs engine.
+        return GostSSLEngine.createForContextClient(
+                keyManager, trustManager, host, port, clientSessionContext, serverSessionContext);
     }
 
     @Override

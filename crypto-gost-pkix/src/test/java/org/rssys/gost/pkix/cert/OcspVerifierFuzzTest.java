@@ -47,6 +47,37 @@ class OcspVerifierFuzzTest {
         }
     }
 
+    /**
+     * Targeted: публичный API с GostCertificate (вместо package-private с сырым ключом).
+     * Фикс 0.6.2: nonce теперь извлекается единым парсером, verify публичный.
+     * Фаззер подаёт случайный OCSP-ответ + случайный серийный номер + случайный сертификат-issuer.
+     */
+    @FuzzTest
+    void fuzzVerifyWithGostCertificate(FuzzedDataProvider data) {
+        byte[] ocspResponse = data.consumeBytes(data.consumeInt(0, 65536));
+        byte[] serialNumber = data.consumeBytes(data.consumeInt(1, 32));
+        byte[] issuerCertDer = data.consumeBytes(data.consumeInt(0, 65536));
+        if (ocspResponse.length == 0 || issuerCertDer.length == 0) return;
+        GostCertificate issuerCert;
+        try {
+            issuerCert = new GostCertificate(issuerCertDer);
+        } catch (RuntimeException e) {
+            if (e instanceof ArrayIndexOutOfBoundsException
+                    || e instanceof IndexOutOfBoundsException
+                    || e instanceof NegativeArraySizeException
+                    || e instanceof NullPointerException) {
+                throw e;
+            }
+            return;
+        }
+        try {
+            OcspVerifier.verify(ocspResponse, serialNumber, issuerCert);
+        } catch (PkixException e) {
+        } catch (RuntimeException e) {
+            rethrowIfBug(e);
+        }
+    }
+
     private static void rethrowIfBug(RuntimeException e) {
         if (e instanceof ArrayIndexOutOfBoundsException
                 || e instanceof IndexOutOfBoundsException

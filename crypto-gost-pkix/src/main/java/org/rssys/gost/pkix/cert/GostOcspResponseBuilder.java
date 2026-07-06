@@ -47,6 +47,7 @@ public final class GostOcspResponseBuilder {
     private PublicKeyParameters caPub;
     private byte[] caSubjectDer;
     private String nextUpdate;
+    private boolean omitNextUpdate;
     private String producedAt;
     private String thisUpdate;
     private byte[][] delegatedCertsDer;
@@ -100,6 +101,16 @@ public final class GostOcspResponseBuilder {
     /** @param time nextUpdate как Instant (UTC) */
     public GostOcspResponseBuilder nextUpdate(Instant time) {
         this.nextUpdate = GostSignatureHelper.formatGeneralizedTime(time);
+        return this;
+    }
+
+    /**
+     * Не включать поле nextUpdate в SingleResponse (RFC 6960 §2.4 — опционально).
+     * В этом режиме relying party применяет локальную политику свежести
+     * (см. {@code maxOcspAgeMs} в {@link OcspVerifier}).
+     */
+    public GostOcspResponseBuilder noNextUpdate() {
+        this.omitNextUpdate = true;
         return this;
     }
 
@@ -201,7 +212,10 @@ public final class GostOcspResponseBuilder {
         PublicKeyParameters caKey = caPub != null ? caPub : signerPub;
         String pa = producedAt != null ? producedAt : GostSignatureHelper.nowGeneralizedTime();
         String tu = thisUpdate != null ? thisUpdate : GostSignatureHelper.nowGeneralizedTime();
-        String nu = nextUpdate != null ? nextUpdate : GostSignatureHelper.nowPlusYears(3);
+        String nu =
+                omitNextUpdate
+                        ? null
+                        : (nextUpdate != null ? nextUpdate : GostSignatureHelper.nowPlusYears(3));
 
         byte[] statusDer =
                 certStatusDer != null ? certStatusDer : DerCodec.encodeTlv(0x80, new byte[0]);

@@ -6,6 +6,7 @@ import java.nio.ByteBuffer;
 import java.security.Security;
 import java.util.List;
 import javax.net.ssl.SSLEngineResult;
+import javax.net.ssl.SSLException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -588,6 +589,82 @@ class GostSSLEnginePostHandshakeTest {
 
         // Данные после KU — проверяем шифрование на новых ключах
         sendAndReceiveAppData(clientEngine, serverEngine, pair, "post-ku-data");
+    }
+
+    // ========================================================================
+    // Rate-limit входящих KeyUpdate (hardening против флуда, RFC 8446bis)
+    // ========================================================================
+
+    @Test
+    @DisplayName("KeyUpdate rate-limit: флуд входящих KU -> SSLException(unexpected_message)")
+    void testKeyUpdateRateLimit() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        GostX509KeyManager serverKeyManager = new GostX509KeyManager();
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
+                serverCert.priv);
+
+        GostSSLEngine serverEngine =
+                new GostSSLEngine(
+                        serverKeyManager,
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        false);
+        GostSSLEngine clientEngine =
+                new GostSSLEngine(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "localhost",
+                        0,
+                        true);
+
+        doLoopback(clientEngine, serverEngine, pair);
+
+        ByteBuffer netBuf =
+                ByteBuffer.allocate(
+                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
+        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
+
+        // Клиент шлёт KU потоком (update_requested=false, ответ не требуется), сервер
+        // принимает подряд. Цикл укладывается в окно rate-limit -> флуд отсекается.
+        SSLException thrown = null;
+        int accepted = 0;
+        for (int i = 0; i < 30; i++) {
+            clientEngine.initiateKeyUpdate(false);
+            netBuf.clear();
+            clientEngine.wrap(ByteBuffer.allocate(0), netBuf);
+            netBuf.flip();
+            byte[] ku = new byte[netBuf.remaining()];
+            netBuf.get(ku);
+            if (ku.length == 0) continue;
+            pair.getClientTransport().sendRecord(ku);
+
+            byte[] serverIn = pair.getServerTransport().receiveRecord();
+            if (serverIn == null) continue;
+            netBuf.clear();
+            netBuf.put(serverIn);
+            netBuf.flip();
+            appBuf.clear();
+            try {
+                serverEngine.unwrap(netBuf, appBuf);
+                accepted++;
+            } catch (SSLException e) {
+                thrown = e;
+                break;
+            }
+        }
+
+        assertNotNull(thrown, "Флуд KeyUpdate должен привести к SSLException");
+        assertTrue(
+                thrown.getMessage().toLowerCase().contains("rate limit")
+                        || thrown.getMessage().toLowerCase().contains("unexpected"),
+                "Сообщение должно указывать на превышение лимита: " + thrown.getMessage());
+        assertTrue(
+                accepted >= 10,
+                "До срабатывания лимита легитимные KU должны приниматься, принято: " + accepted);
     }
 
     /**

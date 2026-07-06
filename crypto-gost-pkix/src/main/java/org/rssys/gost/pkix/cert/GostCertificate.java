@@ -25,6 +25,11 @@ import org.rssys.gost.signature.PublicKeyParameters;
  */
 public final class GostCertificate {
 
+    /** Максимальный размер одного сертификата в DER (256 КБ).
+     *  Совпадает с {@code TlsConstants.MAX_CERT_SIZE} в tls13-модуле
+     *  (модуль pkix не зависит от tls13, поэтому константа продублирована). */
+    private static final int MAX_CERT_SIZE = 262_144;
+
     // Индексы SEQUENCE в TBSCertificate для навигации (RFC 5280 §4.1)
     // SPKI — 5-я, Validity — 3-я SEQUENCE
     private static final int TBS_VALIDITY_SEQUENCE_INDEX = 3;
@@ -94,6 +99,8 @@ public final class GostCertificate {
     private final byte[][] cpOids;
     // Множество всех OID расширений, присутствующих в сертификате (dot-нотация)
     private final Set<String> presentExtensionOids;
+    // Name Constraints (RFC 5280 §4.2.1.10)
+    private final NameConstraintsData nameConstraints;
 
     /**
      * Парсит DER-закодированный X.509 сертификат.
@@ -116,6 +123,13 @@ public final class GostCertificate {
     public GostCertificate(byte[] derEncoded) {
         if (derEncoded == null) {
             throw new IllegalArgumentException("Certificate DER must not be null");
+        }
+        if (derEncoded.length > MAX_CERT_SIZE) {
+            throw new IllegalArgumentException(
+                    "Certificate DER exceeds maximum size "
+                            + MAX_CERT_SIZE
+                            + ", got "
+                            + derEncoded.length);
         }
         this.certData = derEncoded.clone();
 
@@ -244,6 +258,7 @@ public final class GostCertificate {
         this.ekuOids = ext.ekuOids;
         this.cpOids = ext.cpOids;
         this.presentExtensionOids = ext.presentExtensionOids;
+        this.nameConstraints = ext.nameConstraints;
 
         // Проверка согласованности алгоритма (RFC 5280 §4.1.1.2):
         // signatureAlgorithm (вне TBS) должен совпадать с TBSCertificate.signature
@@ -294,10 +309,10 @@ public final class GostCertificate {
         // Whitelist допустимых OID алгоритма подписи (defense-in-depth)
         if (!matchesOid(sigAlgOidBytes, 0, sigAlgOidBytes.length, GOST_SIGN_256_OID_BYTES)
                 && !matchesOid(sigAlgOidBytes, 0, sigAlgOidBytes.length, GOST_SIGN_512_OID_BYTES)
-                && !matchesOid(sigAlgOidBytes, 0, sigAlgOidBytes.length,
-                        GOST_SIGN_DIGEST_256_OID_BYTES)
-                && !matchesOid(sigAlgOidBytes, 0, sigAlgOidBytes.length,
-                        GOST_SIGN_DIGEST_512_OID_BYTES)) {
+                && !matchesOid(
+                        sigAlgOidBytes, 0, sigAlgOidBytes.length, GOST_SIGN_DIGEST_256_OID_BYTES)
+                && !matchesOid(
+                        sigAlgOidBytes, 0, sigAlgOidBytes.length, GOST_SIGN_DIGEST_512_OID_BYTES)) {
             return false;
         }
         int hlen = caPublicKey.getParams().hlen;
@@ -525,6 +540,16 @@ public final class GostCertificate {
         return hasUnknownCritical;
     }
 
+    /**
+     * Возвращает данные расширения Name Constraints (RFC 5280 §4.2.1.10).
+     *
+     * @return распарсенные ограничения имён или {@link NameConstraintsData#EMPTY} если расширение отсутствует
+     */
+    public NameConstraintsData getNameConstraints() {
+        NameConstraintsData nc = nameConstraints;
+        return nc != null ? nc : NameConstraintsData.EMPTY;
+    }
+
     /** @return true если SignatureAlgorithm внутри и вне TBS совпадает (RFC 5280 §4.1.1.2) */
     public boolean isAlgConsistent() {
         return algConsistent;
@@ -653,6 +678,16 @@ public final class GostCertificate {
      * напрямую из certData через {@link GostDerParser#arrayRangeEquals} — без копирования,
      * детерминированно и пригоден для security-решений.
      * Используется в {@code ChainValidator} для подсчёта self-issued сертификатов в pathLen.
+     * <p>
+     * <b>Осознанный трейд-офф:</b> сравнение побайтовое, а не семантическое
+     * (через X500Name). RFC 5280 §4.1.2.4 требует DER (каноническая кодировка) —
+     * два семантически эквивалентных DN обязаны иметь идентичное DER-представление.
+     * Единственное реалистичное последствие — false positive: легитимный self-issued
+     * сертификат с неканоничным DER-кодированием DN посчитается как не-self-issued
+     * → более строгий pathLen (fail-closed, не security bypass). Обратная ситуация
+     * (обход pathLen) нереалистична — DN контролируется CA.
+     * Исторически «умная» нормализация DN (X500Name, LdapName) сама была источником
+     * реальных уязвимостей в PKI-реализациях: Unicode confusables, whitespace-нормализация.
      *
      * @param a первый сертификат
      * @param b второй сертификат

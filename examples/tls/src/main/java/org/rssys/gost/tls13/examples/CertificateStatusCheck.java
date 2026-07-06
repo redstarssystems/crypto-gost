@@ -116,21 +116,16 @@ public final class CertificateStatusCheck {
             if (result.response() != null) {
                 System.out.println("OCSP-ответ получен (" + result.response().length + " байт)");
                 try {
-                    OcspVerifier.verify(
-                            result.response(), cert.getSerialNumber(), caCert);
+                    OcspVerifier.verify(result.response(), cert.getSerialNumber(), caCert);
                     System.out.println("OCSP: сертификат действителен (good)");
                 } catch (Exception e) {
-                    System.out.println("OCSP (по ключу CA): " + e.getMessage());
+                    System.out.println("OCSP (по сертификату CA): " + e.getMessage());
                 }
 
                 // Проверка с nonce (RFC 8954), без требования обязательного присутствия
                 try {
                     OcspVerifier.verify(
-                            result.response(),
-                            cert.getSerialNumber(),
-                            caCert,
-                            result.nonce(),
-                            false);
+                            result.response(), cert.getSerialNumber(), caCert, result.nonce());
                     System.out.println("OCSP (с nonce): сертификат действителен");
                 } catch (Exception e) {
                     System.out.println("OCSP (с nonce): " + e.getMessage());
@@ -143,10 +138,8 @@ public final class CertificateStatusCheck {
                                 result.response(),
                                 cert.getSerialNumber(),
                                 caFromIssuer,
-                                result.nonce(),
-                                false);
-                        System.out.println(
-                                "OCSP (CA из caIssuers): сертификат действителен");
+                                result.nonce());
+                        System.out.println("OCSP (CA из caIssuers): сертификат действителен");
                     } catch (Exception e) {
                         System.out.println("OCSP (по ключу CA из caIssuers): " + e.getMessage());
                     }
@@ -196,7 +189,11 @@ public final class CertificateStatusCheck {
             if (crlDer != null) {
                 System.out.println("CRL загружен с " + usedCdp + " (" + crlDer.length + " байт)");
                 try {
-                    CrlVerifier.verify(crlDer, cert.getSerialNumber(), caCert.getPublicKey());
+                    CrlVerifier.verify(
+                            crlDer,
+                            cert.getSerialNumber(),
+                            caCert.getPublicKey(),
+                            caCert.getSubjectDnBytes());
                     System.out.println("CRL: сертификат не отозван");
                 } catch (Exception e) {
                     System.out.println("CRL: " + e.getMessage());

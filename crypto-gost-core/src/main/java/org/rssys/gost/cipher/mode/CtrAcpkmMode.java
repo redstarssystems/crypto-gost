@@ -111,7 +111,10 @@ public final class CtrAcpkmMode {
             Arrays.fill(encKey, (byte) 0);
             Arrays.fill(macKey, (byte) 0);
 
-            this.mac = new Cmac(cipher);
+            // Отдельный экземпляр Kuznyechik: иначе cipher.init(encKey) ниже перезатёр бы
+            // общее расписание раундовых ключей, и CMAC считался бы под ключом шифрования,
+            // а не под MAC-ключом K(2) — разделение ключей KDF_TREE было бы потеряно.
+            this.mac = new Cmac(new Kuznyechik());
             this.mac.init(macKeyObj);
 
             cipher.init(true, encKeyObj);
@@ -189,10 +192,15 @@ public final class CtrAcpkmMode {
      */
     public static byte[] decryptOnly(CipherParameters dk, byte[] ukm, byte[] data) {
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false);
-        mode.init(false, ukm != null ? new ParametersWithIV(dk, ukm) : dk);
-        byte[] result = new byte[data.length];
-        mode.processBytes(data, 0, data.length, result, 0);
-        return result;
+        try {
+            mode.init(false, ukm != null ? new ParametersWithIV(dk, ukm) : dk);
+            byte[] result = new byte[data.length];
+            mode.processBytes(data, 0, data.length, result, 0);
+            return result;
+        } finally {
+            // Затираем развёрнутые subKeys Kuznyechik сразу, не дожидаясь GC.
+            mode.destroy();
+        }
     }
 
     /**
@@ -225,14 +233,20 @@ public final class CtrAcpkmMode {
      */
     public static byte[] encryptWithMac(CipherParameters dk, byte[] ukm, byte[] data) {
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true);
-        mode.init(true, new ParametersWithIV(dk, ukm));
+        try {
+            mode.init(true, new ParametersWithIV(dk, ukm));
 
-        byte[] ct = new byte[data.length + MAC_TAG_LEN];
-        mode.processBytes(data, 0, data.length, ct, 0);
+            byte[] ct = new byte[data.length + MAC_TAG_LEN];
+            mode.processBytes(data, 0, data.length, ct, 0);
 
-        byte[] tag = mode.getMacTag();
-        System.arraycopy(tag, 0, ct, data.length, MAC_TAG_LEN);
-        return ct;
+            byte[] tag = mode.getMacTag();
+            System.arraycopy(tag, 0, ct, data.length, MAC_TAG_LEN);
+            return ct;
+        } finally {
+            // Затираем производные ключи (encKey/macKey) и развёрнутые subKeys
+            // обоих экземпляров Kuznyechik сразу, не дожидаясь GC.
+            mode.destroy();
+        }
     }
 
     /**
@@ -255,19 +269,25 @@ public final class CtrAcpkmMode {
         byte[] expectedTag = Arrays.copyOfRange(data, data.length - MAC_TAG_LEN, data.length);
 
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true);
-        mode.init(false, new ParametersWithIV(dk, ukm));
+        try {
+            mode.init(false, new ParametersWithIV(dk, ukm));
 
-        byte[] plaintext = new byte[ct.length];
-        mode.processBytes(ct, 0, ct.length, plaintext, 0);
+            byte[] plaintext = new byte[ct.length];
+            mode.processBytes(ct, 0, ct.length, plaintext, 0);
 
-        // CMAC считается по принятому шифртексту (EtM)
-        byte[] computedTag = mode.getMacTag();
+            // CMAC считается по принятому шифртексту (EtM)
+            byte[] computedTag = mode.getMacTag();
 
-        if (!MessageDigest.isEqual(computedTag, expectedTag)) {
-            throw new AuthenticationException("CTR-ACPKM-OMAC authentication tag mismatch");
+            if (!MessageDigest.isEqual(computedTag, expectedTag)) {
+                throw new AuthenticationException("CTR-ACPKM-OMAC authentication tag mismatch");
+            }
+
+            return plaintext;
+        } finally {
+            // Затираем производные ключи (encKey/macKey) и развёрнутые subKeys
+            // обоих экземпляров Kuznyechik сразу, не дожидаясь GC.
+            mode.destroy();
         }
-
-        return plaintext;
     }
 
     /** @return имя алгоритма */

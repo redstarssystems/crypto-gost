@@ -124,7 +124,7 @@ capacity одного ядра около 100 одновременных handsha
 секунду — при условии, что cert-validation отключена.
 
 **mTLS дороже на 26 %.** Время handshake растёт с 10.0 ms до 13.5 ms —
-добавляется ~3.5 ms на клиентский `CertificateVerify` (sign на клиенте +
+добавляется ≈3.5 ms на клиентский `CertificateVerify` (sign на клиенте +
 verify на сервере). Это согласуется с измеренными отдельно операциями
 ГОСТ Р 34.10 (`sign` + `verify` = 1.24 + 1.85 ≈ 3.1 ms — близко к
 измеренной разнице).
@@ -236,7 +236,7 @@ unwrap по стоимости равен wrap.
 
 ## Интерпретация
 
-**Throughput на 16 KB record — 50.0 MB/s (wrap).** Ускорение **~9×**
+**Throughput на 16 KB record — 50.0 MB/s (wrap).** Ускорение **≈9×**
 относительно предыдущего прогона (5.6 MB/s). Причина — новая реализация
 арифметики Кузнечика и MGM.
 
@@ -455,21 +455,21 @@ ms.</p></td>
 <tr>
 <td style="text-align: left;"><p>Установка новых соединений (server-only
 TLS, без cert-validation)</p></td>
-<td style="text-align: left;"><p>~100/sec</p></td>
+<td style="text-align: left;"><p>≈100/sec</p></td>
 <td style="text-align: left;"><p>Верхняя граница. Реальный TrustManager
 с OCSP даст меньше.</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Установка новых соединений (mTLS, без
 cert-validation)</p></td>
-<td style="text-align: left;"><p>~74/sec</p></td>
+<td style="text-align: left;"><p>≈74/sec</p></td>
 <td style="text-align: left;"><p>Добавляется клиентский
 CertificateVerify.</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Пропускная способность установленной
 сессии (max-size records)</p></td>
-<td style="text-align: left;"><p>~50.0 MB/s</p></td>
+<td style="text-align: left;"><p>≈50.0 MB/s</p></td>
 <td style="text-align: left;"><p>Один поток. Многопоточность не
 измерена.</p></td>
 </tr>
@@ -513,7 +513,7 @@ N. JVM lock contention, GC, scheduling — всё влияет на реальн
 5.  **Сравнение Кузнечик-MGM с независимой реализацией.** 50.0 MB/s —
     это много или мало для чистой Java реализации Кузнечика? Без
     сравнения с независимой реализацией интерпретация невозможна.
-    Исходные 5.6 MB/s были улучшены до 50.0 MB/s (~9×) за счёт
+    Исходные 5.6 MB/s были улучшены до 50.0 MB/s (≈9×) за счёт
     оптимизации арифметики.
 
 6.  **Многопоточный handshake throughput.** Текущие бенчи однопоточные

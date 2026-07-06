@@ -15,6 +15,7 @@ import javax.net.ssl.HandshakeCompletedEvent;
 import javax.net.ssl.HandshakeCompletedListener;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLEngineResult;
+import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSocket;
@@ -498,9 +499,25 @@ public final class GostSSLSocket extends SSLSocket {
             }
         }
 
+        // Закрываем inbound после отправки close_notify — единая точка
+        // destroyHandshakeEngine() зачищает record-ключи во всех сценариях close
+        // (штатная ветка closeOutbound() не разрушает engine до получения close_notify пира).
+        // Порядок строгий: pollOutboundRecord() выше уже забрал pendingCloseRecord,
+        // иначе destroyHandshakeEngine() обнулил бы его и close_notify потерялся.
+        try {
+            engine.closeInbound();
+        } catch (SSLException ignored) {
+            // closeInbound без close_notify пира легален (RFC 8446 §6.1)
+        }
+
         if (autoCloseUnderlying) {
             socket.close();
         }
+    }
+
+    /** Только для тестов пакета: доступ к engine без рефлексии. Не часть публичного API SSLSocket. */
+    GostSSLEngine engine() {
+        return engine;
     }
 
     // ========================================================================

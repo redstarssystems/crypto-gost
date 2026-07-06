@@ -122,7 +122,7 @@ style="text-align: left;"><p><code>expandLabel(secret, "finished", ..., hashLen)
 <tr>
 <td style="text-align: left;"><p><code>hmacInit_only</code></p></td>
 <td style="text-align: left;"><p>1 156 693</p></td>
-<td style="text-align: left;"><p>~0 B/op</p></td>
+<td style="text-align: left;"><p>≈0 B/op</p></td>
 <td style="text-align: left;"><p>—</p></td>
 </tr>
 <tr>
@@ -259,8 +259,8 @@ style="text-align: left;"><p><code>expandLabel(secret, "finished", ..., hashLen)
 </tr>
 <tr>
 <td style="text-align: left;"><p><code>hmacInit_only</code></p></td>
-<td style="text-align: left;"><p>~0 MB/sec</p></td>
-<td style="text-align: left;"><p>~0 B/op</p></td>
+<td style="text-align: left;"><p>≈0 MB/sec</p></td>
+<td style="text-align: left;"><p>≈0 B/op</p></td>
 <td style="text-align: left;"><p>≈0</p></td>
 <td style="text-align: left;"><p>—</p></td>
 </tr>
@@ -296,12 +296,12 @@ extract в секунду в синтетическом тесте). В реал
 
 Реалистичная оценка для production-сервера:
 
-- 1 handshake: <sub>15\ вызовов\ `newHmac()`\ +</sub> 1 048 B/op на
-  вызов ≈ **~15 KB**
+- 1 handshake: ≈15 вызовов `newHmac()` + ≈1 048 B/op на вызов ≈ **≈15
+  KB**
 
-- 1 000 handshake/с: ~15.7 MB/s в young gen
+- 1 000 handshake/с: ≈15.7 MB/s в young gen
 
-- При Eden ~200–500 MB: minor GC один раз в 12–30 секунд, длительность
+- При Eden ≈200–500 MB: minor GC один раз в 12–30 секунд, длительность
   &lt;1 ms
 
 Это **незначимое** GC-давление.
@@ -332,7 +332,7 @@ WONTFIX)</strong></p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>GC impact</p></td>
-<td style="text-align: left;"><p>Шум: ~15.7 MB/s при 1K handshakes/с,
+<td style="text-align: left;"><p>Шум: ≈15.7 MB/s при 1K handshakes/с,
 minor GC раз в 12–30 сек</p></td>
 </tr>
 <tr>

@@ -200,4 +200,11 @@ class GostOcspRequestTest {
                 fromFactory.getCertIds().get(0).serialNumber());
         assertArrayEquals(fromConstructor.getNonce(), fromFactory.getNonce());
     }
+
+    @Test
+    @DisplayName("GostOcspRequest(byte[]): массив > MAX_OCSP_REQUEST_SIZE -> PkixException")
+    void testOcspRequestOversizedRejected() {
+        byte[] oversizedDer = new byte[65_537]; // на 1 больше MAX_OCSP_REQUEST_SIZE = 65_536
+        assertThrows(PkixException.class, () -> GostOcspRequest.fromDer(oversizedDer));
+    }
 }

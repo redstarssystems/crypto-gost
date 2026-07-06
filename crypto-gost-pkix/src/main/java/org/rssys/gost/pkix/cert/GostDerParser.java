@@ -41,6 +41,12 @@ public final class GostDerParser {
     public static final int TAG_CTX_3 = 0xA3;
     public static final int TAG_DNS_NAME = 0x82;
     public static final int TAG_IP_ADDRESS = 0x87;
+    // GeneralName: rfc822Name [1] -- не поддерживается в Name Constraints, reject
+    public static final int TAG_RFC822_NAME = 0x81;
+    // GeneralName: directoryName [4] EXPLICIT -- не поддерживается в Name Constraints, reject
+    public static final int TAG_DIRECTORY_NAME = 0xA4;
+    // GeneralName: uniformResourceIdentifier [6] -- не поддерживается в Name Constraints, reject
+    public static final int TAG_URI = 0x86;
 
     // OID: SubjectAltName 2.5.29.17
     public static final byte[] SAN_OID_BYTES = {0x55, 0x1D, 0x11};
@@ -86,6 +92,8 @@ public final class GostDerParser {
     public static final byte[] FRESHEST_CRL_OID_BYTES = {0x55, 0x1D, 0x2E};
     // OID: CertificatePolicies 2.5.29.32
     public static final byte[] CP_OID_BYTES = {0x55, 0x1D, 0x20};
+    // OID: NameConstraints 2.5.29.30
+    public static final byte[] NC_OID_BYTES = {0x55, 0x1D, 0x1E};
 
     // ========================================================================
     // OID Extended Key Usage (RFC 5280 §4.2.1.12)
@@ -225,6 +233,23 @@ public final class GostDerParser {
         (byte) 0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x02
     };
 
+    /**
+     * Максимальное количество base-128 байт одного subidentifier OID.
+     * Потолок для 63-битного long: 9 байт × 7 бит = 63 бита.
+     * Превышение — некорректный (malformed) OID, fail-closed.
+     */
+    private static final int MAX_OID_SUBIDENTIFIER_BYTES = 9;
+
+    /**
+     * Максимальное общее число суб-идентификаторов (арок) в одном OID.
+     * {@link #MAX_OID_SUBIDENTIFIER_BYTES} ограничивает размер каждой отдельной арки,
+     * но не их количество: OID из тысяч однобайтовых арок распарсился бы легитимно
+     * и раздул бы StringBuilder пропорционально числу арок (defense-in-depth против
+     * амплификации в пределах MAX_CERT_SIZE). Реальные OID редко превышают 10-15 арок;
+     * 128 даёт запас на порядок. Превышение — malformed OID, fail-closed.
+     */
+    private static final int MAX_OID_SUBIDENTIFIERS = 128;
+
     private GostDerParser() {}
 
     /**
@@ -317,6 +342,10 @@ public final class GostDerParser {
     /**
      * Сравнивает два диапазона byte[] без копирования.
      *
+     * <p>Намеренно НЕ constant-time: используется для сравнения публичных данных
+     * (Subject/Issuer DN, OID алгоритма подписи), где временного оракула на секрет нет.
+     * Сравнение секретов и хэшей выполняется через {@code MessageDigest.isEqual}.</p>
+     *
      * @param a    первый массив
      * @param aOff смещение в первом массиве
      * @param aLen длина в первом массиве
@@ -361,11 +390,17 @@ public final class GostDerParser {
         int tag = der[offset] & 0xFF;
         int[] lenRes = parseLength(der, offset + 1);
         int contentStart = offset + 1 + lenRes[LEN_BYTES_USED];
+        int contentLen = lenRes[LEN_CONTENT];
+        int contentEnd = contentStart + contentLen;
+        if (contentLen < 0 || contentEnd < contentStart || contentEnd > der.length) {
+            throw new IllegalArgumentException(
+                    "Truncated DER: time content length exceeds available data at offset " + offset);
+        }
         String s =
                 new String(
                         der,
                         contentStart,
-                        lenRes[LEN_CONTENT],
+                        contentLen,
                         java.nio.charset.StandardCharsets.US_ASCII);
         if (!s.endsWith("Z")) {
             throw new IllegalArgumentException("Only UTC (Z) timezone supported: " + s);
@@ -421,17 +456,31 @@ public final class GostDerParser {
      * @return OID в точечной нотации (например {@code "1.2.643.7.1.1.2.2"})
      */
     public static String oidBytesToDottedString(byte[] der, int start, int len) {
-        if (len < 1) return "";
+        if (len < 2) {
+            throw new IllegalArgumentException("OID too short: " + len + " bytes, minimum 2");
+        }
         StringBuilder sb = new StringBuilder();
         int first = der[start] & 0xFF;
         sb.append(first / 40).append('.').append(first % 40);
         int pos = start + 1;
         int end = start + len;
+        // Первый байт кодирует две первые арки (40*arc1 + arc2).
+        int subIdCount = 2;
         while (pos < end) {
+            if (++subIdCount > MAX_OID_SUBIDENTIFIERS) {
+                throw new IllegalArgumentException(
+                        "OID subidentifier count exceeds " + MAX_OID_SUBIDENTIFIERS);
+            }
             long val = 0;
+            int subIdBytes = 0;
             while (pos < end) {
                 int b = der[pos++] & 0xFF;
                 val = (val << 7) | (b & 0x7F);
+                subIdBytes++;
+                if (subIdBytes > MAX_OID_SUBIDENTIFIER_BYTES) {
+                    throw new IllegalArgumentException(
+                            "OID subidentifier exceeds " + MAX_OID_SUBIDENTIFIER_BYTES + " bytes");
+                }
                 if ((b & 0x80) == 0) break;
             }
             sb.append('.').append(val);

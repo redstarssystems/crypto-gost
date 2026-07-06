@@ -105,7 +105,7 @@ CPU governor `performance`.
 <tbody>
 <tr>
 <td style="text-align: left;"><p>GC (всего)</p></td>
-<td style="text-align: left;"><p>~27 440 за 30 минут</p></td>
+<td style="text-align: left;"><p>≈27 440 за 30 минут</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>GC/req</p></td>
@@ -114,7 +114,7 @@ CPU governor `performance`.
 </tr>
 <tr>
 <td style="text-align: left;"><p>Heap (пик)</p></td>
-<td style="text-align: left;"><p>~1 735 MB (22 % от 7 924 MB)</p></td>
+<td style="text-align: left;"><p>≈1 735 MB (22 % от 7 924 MB)</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Heap (финал)</p></td>
@@ -192,12 +192,12 @@ G1 GC, адаптирующего пороги old-gen под смешанную
 <tbody>
 <tr>
 <td style="text-align: left;"><p>Максимум одновременных</p></td>
-<td style="text-align: left;"><p>~8 150 (остановка при 85 %
+<td style="text-align: left;"><p>≈8 150 (остановка при 85 %
 heap)</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Память на соединение</p></td>
-<td style="text-align: left;"><p>~434 KB (черновая оценка, не для
+<td style="text-align: left;"><p>≈434 KB (черновая оценка, не для
 сайзинга)</p></td>
 </tr>
 </tbody>
@@ -217,7 +217,7 @@ heap)</p></td>
 2.  Утечки памяти не обнаружено — нижняя граница heap во второй половине
     теста не растёт, G1 GC удерживает сборку под контролем.
 
-3.  Предел одновременных соединений: ~8 150 (ограничение heap, не
+3.  Предел одновременных соединений: ≈8 150 (ограничение heap, не
     протокола).
 
 4.  Отношение GC/req = 0.0098 — нагрузка на сборщик равномерна, без

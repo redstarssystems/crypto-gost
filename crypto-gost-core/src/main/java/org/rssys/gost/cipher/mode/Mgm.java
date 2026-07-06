@@ -579,6 +579,11 @@ public final class Mgm {
      * </pre>
      * {@code mulW4(r)} = r · w^4: 4 последовательных multiply-by-w,
      * каждый = 2 сдвига + 1 условный XOR с 0x87.
+     *
+     * <p>Таблица mulTab строится из публичного Y, но индексируется нибблами
+     * секретного X (= H_i = E_K(Z_i)) — создавая теоретический cache-timing
+     * побочный канал (~1 бит/ниббл). На практике недостижимо (меняющийся H_i,
+     * 256-байтовая таблица). Анализ — см. doc/adr/adr-03.md.
      */
     private void gf128MulTo(long xHi, long xLo, long yHi, long yLo) {
         // ---- Шаг 1: tab[k] = k · Y в scratch-полях mulTabHi/mulTabLo ----

@@ -514,7 +514,8 @@ class GostSSLEngineLoopbackTest {
                 new GostSSLEngine(
                         skm, new GostX509TrustManager(null, false), "localhost", 0, false);
         GostSSLEngine clientEngine =
-                GostSSLEngine.createForClient(ckm, new GostX509TrustManager(null, false), "localhost", 0, null);
+                GostSSLEngine.createForClient(
+                        ckm, new GostX509TrustManager(null, false), "localhost", 0, null);
 
         SSLParameters serverParams = new SSLParameters();
         serverParams.setApplicationProtocols(new String[] {"h2", "http/1.1"});

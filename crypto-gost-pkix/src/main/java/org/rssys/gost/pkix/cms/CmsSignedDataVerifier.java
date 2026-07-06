@@ -198,28 +198,14 @@ public final class CmsSignedDataVerifier {
         }
 
         // [3] certificates [0] IMPLICIT OPTIONAL
-        List<GostCertificate> embeddedCerts = new ArrayList<>();
+        List<GostCertificate> embeddedCerts;
         if (partIdx < signedDataParts.length
                 && DerCodec.isContextTag(signedDataParts[partIdx], 0)) {
-            byte[] certsField = signedDataParts[partIdx++];
-            int[] lenInfo = DerCodec.decodeLength(certsField, 1);
-            int certsStart = 1 + lenInfo[1];
-            int certsEnd = certsField.length;
-            int pos = certsStart;
-            while (pos < certsEnd) {
-                int[] certLen = DerCodec.decodeLength(certsField, pos + 1);
-                int certTotal = 1 + certLen[1] + certLen[0];
-                byte[] certDer = java.util.Arrays.copyOfRange(certsField, pos, pos + certTotal);
-                try {
-                    embeddedCerts.add(parseCert(certDer));
-                } catch (java.security.cert.CertificateException e) {
-                    LOG.log(
-                            Level.WARNING,
-                            "Corrupted certificate in SignedData certificates field, skipping",
-                            e);
-                }
-                pos += certTotal;
-            }
+            embeddedCerts =
+                    parseEmbeddedCertificates(
+                            signedDataParts[partIdx++], CmsConstants.MAX_EMBEDDED_CERTS);
+        } else {
+            embeddedCerts = new ArrayList<>();
         }
 
         // [4] crls [1] IMPLICIT OPTIONAL
@@ -234,8 +220,61 @@ public final class CmsSignedDataVerifier {
         }
         byte[] signerInfosField = signedDataParts[partIdx];
         byte[][] signerInfos = DerCodec.parseSetContents(signerInfosField, 0);
+        if (signerInfos.length > CmsConstants.MAX_SIGNER_INFOS) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "SignedData signerInfos exceed maximum " + CmsConstants.MAX_SIGNER_INFOS);
+        }
 
         return new SignedDataParsed(encapData, signerInfos, eContentTypeOid, embeddedCerts);
+    }
+
+    /**
+     * Разбирает поле certificates {@code [0] IMPLICIT SET OF Certificate} SignedData
+     * (RFC 5652 §5.1) в список сертификатов.
+     *
+     * <p>Вынесен из {@link #parseSignedData} как независимый от подписантов шаг: так
+     * {@link GostPkcs7} переиспользует разбор certificates-only {@code .p7b} (без
+     * signerInfos), не наследуя требование {@code signerInfos > 0}, которое к
+     * извлечению сертификатов отношения не имеет.
+     *
+     * @param certsField DER-байты поля {@code [0]} (контекстный тег 0)
+     * @param maxCerts   потолок числа сертификатов (защита от DoS)
+     * @return список разобранных сертификатов (возможно пустой)
+     * @throws PkixException если превышен лимит или сертификат повреждён (fail-closed)
+     */
+    static List<GostCertificate> parseEmbeddedCertificates(byte[] certsField, int maxCerts)
+            throws PkixException {
+        List<GostCertificate> certs = new ArrayList<>();
+        int[] lenInfo = DerCodec.decodeLength(certsField, 1);
+        int certsStart = 1 + lenInfo[1];
+        int certsEnd = certsField.length;
+        int pos = certsStart;
+        int certCount = 0;
+        while (pos < certsEnd) {
+            if (certCount >= maxCerts) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "SignedData embedded certificates exceed maximum " + maxCerts);
+            }
+            certCount++;
+            int[] certLen = DerCodec.decodeLength(certsField, pos + 1);
+            int certTotal = 1 + certLen[1] + certLen[0];
+            byte[] certDer = Arrays.copyOfRange(certsField, pos, pos + certTotal);
+            try {
+                certs.add(parseCert(certDer));
+            } catch (CertificateException e) {
+                // Fail-closed: битый сертификат в поле certificates не пропускаем молча —
+                // иначе атакующий, контролирующий SignedData, может стратегически портить
+                // DER, влияя на состав пула для построения цепочки.
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "Corrupted certificate in SignedData certificates field",
+                        e);
+            }
+            pos += certTotal;
+        }
+        return certs;
     }
 
     private static SignerResult verifyOneSigner(

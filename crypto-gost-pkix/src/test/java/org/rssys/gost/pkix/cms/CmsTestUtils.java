@@ -61,6 +61,29 @@ public final class CmsTestUtils {
     }
 
     /**
+     * Создаёт самоподписанный TSA-сертификат с EKU id-kp-timeStamping.
+     *
+     * <p>RFC 3161 §2.3 требует наличия id-kp-timeStamping у TSA-сертификата, поэтому
+     * для успешной верификации TSP/CAdES-T нужен именно такой сертификат, а не
+     * минимальный без extensions.</p>
+     *
+     * @param privKey закрытый ключ
+     * @param pubKey  открытый ключ
+     * @return самоподписанный TSA-сертификат с timeStamping EKU
+     */
+    public static GostCertificate createTsaCert(
+            PrivateKeyParameters privKey, PublicKeyParameters pubKey) {
+        return org.rssys.gost.pkix.cert.GostCertificateBuilder.create(
+                        pubKey.getParams(), "CN=Test TSA")
+                .publicKey(pubKey)
+                .notBefore("260101000000Z")
+                .notAfter("360101000000Z")
+                .basicConstraints(false, null)
+                .extendedKeyUsage(GostOids.EXT_TIME_STAMPING)
+                .assembleCert(privKey);
+    }
+
+    /**
      * Формирует минимальный Distinguished Name (DN) с единственным атрибутом CN.
      *
      * @param cn значение Common Name

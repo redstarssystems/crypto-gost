@@ -429,9 +429,7 @@ class GostCertificateBuilderTest {
         ECParameters params = ECParameters.tc26a256();
         assertThrows(
                 IllegalArgumentException.class,
-                () ->
-                        GostCertificateBuilder.create(params, "CN=Test")
-                                .basicConstraints(false, 5),
+                () -> GostCertificateBuilder.create(params, "CN=Test").basicConstraints(false, 5),
                 "fluent setter с pathLen без isCA=true должен бросать IllegalArgumentException");
     }
 
@@ -515,9 +513,10 @@ class GostCertificateBuilderTest {
         // Этот OID встречается дважды: внутри TBS (inner) и вне (outer).
         // Портим внешний (второе вхождение), заменяя 0x02 -> 0x13.
         byte[] corrupted = signedDer.clone();
-        byte[] oidTlv = new byte[] {
-            0x06, 0x08, (byte) 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x03, 0x02
-        };
+        byte[] oidTlv =
+                new byte[] {
+                    0x06, 0x08, (byte) 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x03, 0x02
+                };
         int first = findBytes(corrupted, oidTlv, 0);
         int second = -1;
         if (first >= 0) {
@@ -560,9 +559,7 @@ class GostCertificateBuilderTest {
         ECParameters params = ECParameters.tc26a256();
         assertThrows(
                 IllegalArgumentException.class,
-                () ->
-                        GostCertificateBuilder.create(params, "CN=Test")
-                                .serial(BigInteger.ZERO),
+                () -> GostCertificateBuilder.create(params, "CN=Test").serial(BigInteger.ZERO),
                 "Нулевой serial должен бросать IllegalArgumentException");
     }
 
@@ -583,13 +580,11 @@ class GostCertificateBuilderTest {
     void testSerialTooLongThrows() {
         ECParameters params = ECParameters.tc26a256();
         BigInteger longSerial = new BigInteger("ff".repeat(21), 16);
-        assertEquals(21, (longSerial.bitLength() + 7) / 8,
-                "Предусловие: serial должен быть 21 байт");
+        assertEquals(
+                21, (longSerial.bitLength() + 7) / 8, "Предусловие: serial должен быть 21 байт");
         assertThrows(
                 IllegalArgumentException.class,
-                () ->
-                        GostCertificateBuilder.create(params, "CN=Test")
-                                .serial(longSerial),
+                () -> GostCertificateBuilder.create(params, "CN=Test").serial(longSerial),
                 "Serial > 20 октетов должен бросать IllegalArgumentException");
     }
 
@@ -600,10 +595,12 @@ class GostCertificateBuilderTest {
         // 20-байтный serial с MSB=1: BigInteger.toByteArray() = 21 байт (ведущий 0x00),
         // но bitLength() корректно даёт 160 бит → (160+7)/8 = 20 → проходит.
         BigInteger serial20Msb1 = new BigInteger("ff".repeat(20), 16);
-        assertEquals(21, serial20Msb1.toByteArray().length,
+        assertEquals(
+                21,
+                serial20Msb1.toByteArray().length,
                 "Предусловие: toByteArray для 20-байтного serial с MSB=1 = 21 байт");
-        assertEquals(20, (serial20Msb1.bitLength() + 7) / 8,
-                "Но bitLength показывает 20 байт значения");
+        assertEquals(
+                20, (serial20Msb1.bitLength() + 7) / 8, "Но bitLength показывает 20 байт значения");
         // Не должно бросать исключение
         GostCertificateBuilder.create(params, "CN=Test").serial(serial20Msb1);
     }
@@ -630,5 +627,64 @@ class GostCertificateBuilderTest {
         assertTrue(
                 actualNotBefore.toEpochMilli() >= now.toEpochMilli() - 1000,
                 "notBefore должен быть >= now - 1с (допуск на округление)");
+    }
+
+    @Test
+    @DisplayName("BasicConstraints pathLen INTEGER длиннее 4 байт -> IllegalArgumentException")
+    void testPathLenIntegerOverflowRejected() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] dn = GostDnParser.encodeDn("CN=Test CA Overflow");
+
+        byte[] malformedBcExt =
+                new byte[] {
+                    0x30,
+                    0x16, // SEQUENCE (22 байта)
+                    0x06,
+                    0x03,
+                    0x55,
+                    0x1D,
+                    0x13, // OID 2.5.29.19 (BC)
+                    0x01,
+                    0x01,
+                    (byte) 0xFF, // BOOLEAN TRUE (critical)
+                    0x04,
+                    0x0C, // OCTET STRING (12 байт)
+                    0x30,
+                    0x0A, // SEQUENCE (10 байт)
+                    0x01,
+                    0x01,
+                    (byte) 0xFF, // BOOLEAN TRUE (isCA)
+                    0x02,
+                    0x05, // INTEGER (5 байт — malformed)
+                    0x01,
+                    0x00,
+                    0x00,
+                    0x00,
+                    0x64 // value 4294967396
+                };
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostCertificateBuilder.create(params, dn)
+                                .publicKey(kp.getPublic())
+                                .notBefore("20250101000000Z")
+                                .notAfter("20351231235959Z")
+                                .additionalExtensions(malformedBcExt)
+                                .issuerDn(dn)
+                                .assembleCert(kp.getPrivate()));
+    }
+
+    @Test
+    @DisplayName("GostCertificate(byte[]): массив > MAX_CERT_SIZE -> IllegalArgumentException")
+    void testGostCertificateOversizedRejected() {
+        byte[] oversizedDer = new byte[262_145]; // на 1 больше MAX_CERT_SIZE = 262_144
+        IllegalArgumentException ex =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new GostCertificate(oversizedDer));
+        assertTrue(
+                ex.getMessage().contains("exceeds maximum size"),
+                "должен быть reject по превышению размера: " + ex.getMessage());
     }
 }

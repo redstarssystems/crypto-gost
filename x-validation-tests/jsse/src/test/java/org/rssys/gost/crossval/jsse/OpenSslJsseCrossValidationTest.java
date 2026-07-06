@@ -176,7 +176,7 @@ class OpenSslJsseCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("allCurves")
-    @Disabled("Падает с GC512A/B: SSLHandshakeException Handshake error (pre-existing, см. issue #XXX)")
+    @Disabled("Падает с GC512A/B: SSLHandshakeException Handshake error (pre-existing, несовместимость с текущей версией openssl-gost)")
     @DisplayName("s_server + Engine-клиент: все кривые (GC256B..GC512B)")
     void testEngineClientAllCurves(String curveName, int groupId) throws Exception {
         runEngineClientTest(SUITE_L_ID, curveName);

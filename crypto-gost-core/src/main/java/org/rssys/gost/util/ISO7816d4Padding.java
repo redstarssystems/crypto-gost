@@ -25,6 +25,7 @@ public class ISO7816d4Padding {
         // Best-effort constant-time: проход фиксированной длины in.length (не зависит
         // от markerPos), все байты строго после маркера обязаны быть нулевыми.
         // Ранее длина цикла зависела от позиции маркера — это давало тайминг-утечку.
+        // см. crypto-gost-core/doc/adr/adr-04.md
         int mismatch = 0;
         for (int i = 0; i < in.length; i++) {
             // afterMarker = 0xFFFFFFFF, если i > markerPos, иначе 0.

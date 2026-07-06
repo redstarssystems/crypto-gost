@@ -213,4 +213,60 @@ class DerCodecFuzzTest {
             FuzzTestUtils.rethrowIfBug(e);
         }
     }
+
+    // ======================================================================
+    // Targeted-тесты — indefinite-length (0x80) для примитивных типов
+    // (фикс 0.6.2: decodeDefiniteLength, X.690 §8.1.3.6)
+    // ======================================================================
+
+    /**
+     * Подаёт INTEGER (0x02) с indefinite-length (0x80) на вход decodeDefiniteLength.
+     * До 0.6.2 0x80 молча принимался (X.690 violation), сейчас должен выбрасывать
+     * {@code IllegalArgumentException}.
+     * <p>
+     * Inject-паттерн: prefix = тег примитивного типа + 0x80, тело = fuzzed-байты.
+     */
+    @FuzzTest
+    void fuzzPrimitiveIndefiniteLength(FuzzedDataProvider data) {
+        byte[] body = data.consumeBytes(data.consumeInt(0, 65536));
+        byte[] input = new byte[body.length + 2];
+        int tag = data.consumeInt(0, 1) == 0 ? 0x02 : 0x01;
+        input[0] = (byte) tag;
+        input[1] = (byte) 0x80;
+        if (body.length > 0) {
+            System.arraycopy(body, 0, input, 2, body.length);
+        }
+        try {
+            if (tag == 0x02) {
+                DerCodec.parseInteger(input, 0);
+            } else {
+                DerCodec.parseBoolean(input, 0);
+            }
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * Non-canonical DER-длина: 0x81 0x05 (long-form для 5 байт) вместо канонического 0x05.
+     * Фикс 0.6.2: проверка минимальности в decodeLength (X.690 §10.1).
+     * <p>
+     * Inject-паттерн: тег INTEGER + 0x81 0x05 + 5 байт тела.
+     */
+    @FuzzTest
+    void fuzzNonCanonicalLength(FuzzedDataProvider data) {
+        byte[] body = data.consumeBytes(data.consumeInt(0, 65536));
+        byte[] input = new byte[body.length + 3];
+        input[0] = 0x02;
+        input[1] = (byte) 0x81;
+        input[2] = (byte) 0x05;
+        if (body.length > 0) {
+            System.arraycopy(body, 0, input, 3, body.length);
+        }
+        try {
+            DerCodec.parseInteger(input, 0);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
 }

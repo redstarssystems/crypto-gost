@@ -9,7 +9,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.kdf.Pbkdf2Streebog;
 import org.rssys.gost.pkix.GostOids;
-import org.rssys.gost.pkix.cert.GostPkcs12Parser;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.*;
 
 /**
@@ -63,7 +62,8 @@ class GostPkcs12ParserTest {
         byte[] kdfAlgId =
                 encodeSequence(
                         encodeOid(GostOids.PBKDF2),
-                        encodeSequence(encodeOctetString(salt), encodeInteger(iterationCount), prfAlgId));
+                        encodeSequence(
+                                encodeOctetString(salt), encodeInteger(iterationCount), prfAlgId));
         return encodeSequence(kdfAlgId, encAlgId);
     }
 
@@ -101,7 +101,8 @@ class GostPkcs12ParserTest {
 
     /** ContentInfo (pkcs7-data) ::= SEQUENCE { OID, [0] EXPLICIT OCTET STRING } */
     private static byte[] buildDataContentInfo(byte[] contentOctets) {
-        return encodeSequence(encodeOid(GostOids.PKCS7_DATA), ctx0(encodeOctetString(contentOctets)));
+        return encodeSequence(
+                encodeOid(GostOids.PKCS7_DATA), ctx0(encodeOctetString(contentOctets)));
     }
 
     /** AuthenticatedSafe ::= SEQUENCE OF ContentInfo */
@@ -172,14 +173,15 @@ class GostPkcs12ParserTest {
                 encodeSequence(
                         encodeInteger(2),
                         encodeSequence(
-                                encodeOid(GostOids.PKCS7_DATA), ctx0(encodeOctetString(new byte[1]))));
+                                encodeOid(GostOids.PKCS7_DATA),
+                                ctx0(encodeOctetString(new byte[1]))));
         assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx));
     }
 
     @Test
     @DisplayName("parseMacData: без поля iterations -> default 1 ниже MIN_PBKDF2_ITERATIONS_PFX")
     void testParseMacDataNoIterations() {
-        byte[] salt = hex("01 02 03 04");
+        byte[] salt = hex("01 02 03 04 05 06 07 08");
         byte[] digestVal = hex("11 22 33 44");
         // MacData без iterations: SEQUENCE { DigestInfo, OCTET STRING salt }
         byte[] macData =
@@ -189,9 +191,7 @@ class GostPkcs12ParserTest {
 
         byte[] pfx = buildFullPfx(encodeSequence(), macData);
         IllegalArgumentException ex =
-                assertThrows(
-                        IllegalArgumentException.class,
-                        () -> GostPkcs12Parser.parsePfx(pfx));
+                assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx));
         assertTrue(ex.getMessage().contains("MacData iterations too low"));
     }
 
@@ -199,7 +199,7 @@ class GostPkcs12ParserTest {
     @DisplayName("разбор SafeContents: pkcs8ShroudedKeyBag + certBag")
     void testParseSafeContents() {
         byte[] ukm = new byte[16];
-        byte[] salt = hex("01 02 03 04");
+        byte[] salt = hex("01 02 03 04 05 06 07 08");
         byte[] encData = hex("AB CD EF");
 
         byte[] pbes2Params =
@@ -241,7 +241,7 @@ class GostPkcs12ParserTest {
     @DisplayName("разбор EncryptedPrivateKeyInfo: PBES2, OID, encryptedData")
     void testParseEncryptedPrivateKeyInfo() {
         byte[] ukm = new byte[16];
-        byte[] salt = hex("01 02 03 04");
+        byte[] salt = hex("01 02 03 04 05 06 07 08");
         byte[] encData = hex("AB CD EF 01 02");
         byte[] pbes2Params =
                 buildPbes2Params(
@@ -276,7 +276,7 @@ class GostPkcs12ParserTest {
     void testParsePbes2ParamsNoKeyLength() {
         // PBKDF2-params: SEQUENCE { salt OCTET STRING, iterationCount INTEGER, prf
         // AlgorithmIdentifier }
-        byte[] salt = hex("01 02 03 04");
+        byte[] salt = hex("01 02 03 04 05 06 07 08");
         byte[] prfAlgId = encodeSequence(encodeOid(GostOids.HMAC_STREEBOG_256));
         byte[] kdfParams = encodeSequence(encodeOctetString(salt), encodeInteger(4096), prfAlgId);
         byte[] kdfAlgId = encodeSequence(encodeOid(GostOids.PBKDF2), kdfParams);
@@ -326,14 +326,18 @@ class GostPkcs12ParserTest {
     }
 
     @Test
-    @DisplayName("parsePbes2Params: iterationCount превышает MAX_ITERATIONS -> IllegalArgumentException")
+    @DisplayName(
+            "parsePbes2Params: iterationCount превышает MAX_ITERATIONS -> IllegalArgumentException")
     void testParsePbes2ParamsIterationExceedsMax() {
         byte[] ukm = new byte[16];
         byte[] salt = hex("01 02 03 04 05 06 07 08");
         byte[] pbes2Params =
                 buildPbes2Params(
-                        salt, Pbkdf2Streebog.MAX_ITERATIONS + 1, ukm,
-                        GostOids.HMAC_STREEBOG_512, GostOids.KUZ_CTR_ACPKM_OMAC);
+                        salt,
+                        Pbkdf2Streebog.MAX_ITERATIONS + 1,
+                        ukm,
+                        GostOids.HMAC_STREEBOG_512,
+                        GostOids.KUZ_CTR_ACPKM_OMAC);
         IllegalArgumentException ex =
                 assertThrows(
                         IllegalArgumentException.class,
@@ -344,18 +348,68 @@ class GostPkcs12ParserTest {
     @Test
     @DisplayName("MacData iterations превышает MAX_ITERATIONS -> IllegalArgumentException")
     void testMacDataIterationsExceedsMax() {
-        byte[] salt = hex("01 02 03 04");
+        byte[] salt = hex("01 02 03 04 05 06 07 08");
         byte[] digestVal = hex("11 22 33 44");
         byte[] macDataDer =
                 buildMacData(
-                        salt, Pbkdf2Streebog.MAX_ITERATIONS + 1,
-                        GostOids.HMAC_STREEBOG_512, digestVal);
+                        salt,
+                        Pbkdf2Streebog.MAX_ITERATIONS + 1,
+                        GostOids.HMAC_STREEBOG_512,
+                        digestVal);
         byte[] pfx = buildFullPfx(encodeSequence(), macDataDer);
+        IllegalArgumentException ex =
+                assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx));
+        assertTrue(ex.getMessage().contains("MacData iterations exceeds maximum"));
+    }
+
+    @Test
+    @DisplayName(
+            "MacData iterations больше Integer.MAX_VALUE, младшие 32 бита в допустимом диапазоне"
+                    + " -> отвергается по BigInteger, без молчаливого усечения")
+    void testMacDataIterationsBigIntegerTruncationRejected() {
+        // 0x1_0000_03E8 усекается intValue() до 1000 (в диапазоне), но реальное значение огромно.
+        byte[] salt = hex("01 02 03 04 05 06 07 08");
+        byte[] digestVal = hex("11 22 33 44");
+        byte[] macDataDer =
+                encodeSequence(
+                        buildDigestInfo(GostOids.HMAC_STREEBOG_512, digestVal),
+                        encodeOctetString(salt),
+                        encodeInteger(new java.math.BigInteger("1000003E8", 16)));
+        byte[] pfx = buildFullPfx(encodeSequence(), macDataDer);
+        IllegalArgumentException ex =
+                assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx));
+        assertTrue(
+                ex.getMessage().contains("MacData iterations exceeds maximum"),
+                "должно отвергаться как превышение максимума, а не проходить как усечённое 1000: "
+                        + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName(
+            "parsePbes2Params iterationCount больше Integer.MAX_VALUE, младшие 32 бита в диапазоне"
+                    + " -> отвергается по BigInteger, без молчаливого усечения")
+    void testParsePbes2ParamsBigIntegerTruncationRejected() {
+        byte[] ukm = new byte[16];
+        byte[] salt = hex("01 02 03 04 05 06 07 08");
+        byte[] prfAlgId = encodeSequence(encodeOid(GostOids.HMAC_STREEBOG_512));
+        byte[] encParams = encodeSequence(encodeOctetString(ukm));
+        byte[] encAlgId = encodeSequence(encodeOid(GostOids.KUZ_CTR_ACPKM_OMAC), encParams);
+        byte[] kdfAlgId =
+                encodeSequence(
+                        encodeOid(GostOids.PBKDF2),
+                        encodeSequence(
+                                encodeOctetString(salt),
+                                encodeInteger(new java.math.BigInteger("1000003E8", 16)),
+                                prfAlgId));
+        byte[] pbes2Params = encodeSequence(kdfAlgId, encAlgId);
         IllegalArgumentException ex =
                 assertThrows(
                         IllegalArgumentException.class,
-                        () -> GostPkcs12Parser.parsePfx(pfx));
-        assertTrue(ex.getMessage().contains("MacData iterations exceeds maximum"));
+                        () -> GostPkcs12Parser.parsePbes2Params(pbes2Params));
+        assertTrue(
+                ex.getMessage().contains("PBES2 iterationCount exceeds maximum"),
+                "должно отвергаться как превышение максимума, а не проходить как усечённое 1000: "
+                        + ex.getMessage());
     }
 
     // ========================================================================
@@ -379,7 +433,8 @@ class GostPkcs12ParserTest {
     void testFindLocalKeyIdMatch() {
         byte[] keyId = new byte[] {0x01, 0x02, 0x03, 0x04};
         BagAttribute attr =
-                new BagAttribute(GostOids.ATTR_LOCAL_KEY_ID, new byte[][] {encodeOctetString(keyId)});
+                new BagAttribute(
+                        GostOids.ATTR_LOCAL_KEY_ID, new byte[][] {encodeOctetString(keyId)});
         assertArrayEquals(keyId, GostPkcs12Parser.findLocalKeyId(List.of(attr)));
     }
 

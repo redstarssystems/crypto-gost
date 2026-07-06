@@ -18,6 +18,9 @@ public final class GostPkcs12Parser {
 
     private GostPkcs12Parser() {}
 
+    private static final int MAX_SAFE_BAGS = 10_000;
+    private static final int MIN_PBKDF2_SALT_SIZE = 8;
+
     /** Результат разбора PFX. */
     public static final class PfxData {
         private final int version;
@@ -332,20 +335,29 @@ public final class GostPkcs12Parser {
         byte[] digestValue = parseOctetString(di[1], new int[] {0});
 
         byte[] salt = parseOctetString(seq[1], new int[] {0});
+        if (salt.length < MIN_PBKDF2_SALT_SIZE) {
+            throw new IllegalArgumentException(
+                    "MacData salt too short: " + salt.length + ", minimum " + MIN_PBKDF2_SALT_SIZE);
+        }
 
         int iterations = 1;
         if (seq.length > 2) {
-            iterations = parseInteger(seq[2], new int[] {0}).intValue();
-            if (iterations > Pbkdf2Streebog.MAX_ITERATIONS) {
+            BigInteger rawIterations = parseInteger(seq[2], new int[] {0});
+            if (rawIterations.compareTo(BigInteger.valueOf(Pbkdf2Streebog.MAX_ITERATIONS)) > 0) {
                 throw new IllegalArgumentException(
-                        "MacData iterations exceeds maximum " + Pbkdf2Streebog.MAX_ITERATIONS
-                        + ", got " + iterations);
+                        "MacData iterations exceeds maximum "
+                                + Pbkdf2Streebog.MAX_ITERATIONS
+                                + ", got "
+                                + rawIterations);
             }
+            iterations = rawIterations.intValue();
         }
         if (iterations < minPbkdf2Iterations) {
             throw new IllegalArgumentException(
                     "MacData iterations too low, minimum required "
-                            + minPbkdf2Iterations + ", got " + iterations);
+                            + minPbkdf2Iterations
+                            + ", got "
+                            + iterations);
         }
 
         return new MacData(salt, iterations, digestAlgorithm, digestValue);
@@ -361,6 +373,10 @@ public final class GostPkcs12Parser {
     public static List<SafeBagData> parseSafeContents(byte[] data) {
         int[] pos = new int[] {0};
         byte[][] bags = parseSequence(data, pos);
+        if (bags.length > MAX_SAFE_BAGS) {
+            throw new IllegalArgumentException(
+                    "Too many SafeBags: " + bags.length + ", maximum " + MAX_SAFE_BAGS);
+        }
         List<SafeBagData> result = new ArrayList<>();
         for (byte[] bag : bags) {
             result.add(parseSafeBag(bag));
@@ -503,16 +519,22 @@ public final class GostPkcs12Parser {
             }
             // iterationCount: всегда присутствует
             if (kp[0] < end) {
-                iterationCount = parseInteger(kdfParams, kp).intValue();
+                BigInteger rawIterations = parseInteger(kdfParams, kp);
+                if (rawIterations.compareTo(BigInteger.valueOf(Pbkdf2Streebog.MAX_ITERATIONS))
+                        > 0) {
+                    throw new IllegalArgumentException(
+                            "PBES2 iterationCount exceeds maximum "
+                                    + Pbkdf2Streebog.MAX_ITERATIONS
+                                    + ", got "
+                                    + rawIterations);
+                }
+                iterationCount = rawIterations.intValue();
                 if (iterationCount < minPbkdf2Iterations) {
                     throw new IllegalArgumentException(
                             "PBES2 iterationCount too low, minimum required "
-                                    + minPbkdf2Iterations + ", got " + iterationCount);
-                }
-                if (iterationCount > Pbkdf2Streebog.MAX_ITERATIONS) {
-                    throw new IllegalArgumentException(
-                            "PBES2 iterationCount exceeds maximum " + Pbkdf2Streebog.MAX_ITERATIONS
-                            + ", got " + iterationCount);
+                                    + minPbkdf2Iterations
+                                    + ", got "
+                                    + iterationCount);
                 }
             }
             // keyLength OPTIONAL (INTEGER 0x02) или сразу prf
@@ -527,6 +549,14 @@ public final class GostPkcs12Parser {
                 byte[][] prfId = parseSequence(kdfParams, kp);
                 prfOid = parseOid(prfId[0], new int[] {0});
             }
+        }
+
+        if (salt == null || salt.length < MIN_PBKDF2_SALT_SIZE) {
+            throw new IllegalArgumentException(
+                    "PBES2 salt too short: "
+                            + (salt == null ? 0 : salt.length)
+                            + ", minimum "
+                            + MIN_PBKDF2_SALT_SIZE);
         }
 
         return new Pbes2Params(salt, iterationCount, prfOid, encOid, ukm);

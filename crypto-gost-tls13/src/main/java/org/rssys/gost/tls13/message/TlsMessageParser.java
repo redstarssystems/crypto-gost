@@ -1105,6 +1105,24 @@ public final class TlsMessageParser {
      * @throws TlsException при выходе за границы массива
      */
     public static byte[] parseClientHelloPskIdentity(byte[] body) throws TlsException {
+        return parseClientHelloPskIdentityAndAge(body, null);
+    }
+
+    /**
+     * Извлекает PSK identity и obfuscated_ticket_age из ClientHello (RFC 8446 §4.2.11).
+     * <p>
+     * PskIdentity: identity_len(2) + identity(N) + obfuscated_ticket_age(4).
+     * <p>
+     * Возвращает identity (null если расширение отсутствует),
+     * записывает obfuscated_ticket_age в {@code ageOut[0]}.
+     *
+     * @param body   тело ClientHello
+     * @param ageOut [1] для получения obfuscated_ticket_age (uint32); null если не нужен
+     * @return PSK-идентификатор или null
+     * @throws TlsException при выходе за границы массива
+     */
+    public static byte[] parseClientHelloPskIdentityAndAge(byte[] body, long[] ageOut)
+            throws TlsException {
         String ctx = "ClientHello";
         int extEnd = findExtensionsStart(body, false);
         if (extEnd < 0) return null;
@@ -1116,7 +1134,6 @@ public final class TlsMessageParser {
             checkBounds(body, pos + 4, extDataLen, ctx);
             pos += 4;
             if (extType == TlsConstants.EXT_PRE_SHARED_KEY) {
-                // identities: identities_len(2) || identity_len(2) || identity(N) || …
                 if (extDataLen < 4) return null;
                 int identitiesLen = ((body[pos] & 0xFF) << 8) | (body[pos + 1] & 0xFF);
                 if (identitiesLen < 4) return null;
@@ -1124,7 +1141,17 @@ public final class TlsMessageParser {
                 if (2 + identitiesLen > extDataLen
                         || identityLen < 1
                         || identityLen + 6 > identitiesLen) return null;
-                return Arrays.copyOfRange(body, pos + 4, pos + 4 + identityLen);
+                byte[] identity = Arrays.copyOfRange(body, pos + 4, pos + 4 + identityLen);
+                // obfuscated_ticket_age: 4 байта после identity (uint32)
+                if (ageOut != null && ageOut.length > 0) {
+                    int ageOffset = pos + 4 + identityLen;
+                    ageOut[0] =
+                            ((long) (body[ageOffset] & 0xFF) << 24)
+                                    | ((long) (body[ageOffset + 1] & 0xFF) << 16)
+                                    | ((long) (body[ageOffset + 2] & 0xFF) << 8)
+                                    | (long) (body[ageOffset + 3] & 0xFF);
+                }
+                return identity;
             }
             pos += extDataLen;
         }

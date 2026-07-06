@@ -3,6 +3,7 @@ package org.rssys.gost.jsse.manager;
 import java.io.IOException;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.math.BigInteger;
 import java.net.Socket;
 import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
@@ -15,13 +16,16 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.X509ExtendedTrustManager;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.crl.CrlCache;
+import org.rssys.gost.jsse.crl.CrlCache.CrlCacheEntry;
 import org.rssys.gost.jsse.crl.CrlFetcher;
 import org.rssys.gost.jsse.crl.CrlPolicy;
 import org.rssys.gost.jsse.ocsp.OcspFetchResult;
 import org.rssys.gost.jsse.ocsp.OcspFetcher;
 import org.rssys.gost.jsse.ocsp.OcspPolicy;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.CrlVerifier;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -47,6 +51,9 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
     private final CrlPolicy crlPolicy;
     private final CrlFetcher crlFetcher;
     private final CrlCache crlCache;
+    private final int maxCrlSize;
+    private final int maxRevokedEntries;
+    private final long maxOcspAgeMs;
 
     /** Кэш OCSP-ответов: key = (issuerSerialHex, certSerialHex) -> CachedStatus. TTL = 1 час */
     private long ocspCacheTtlMs = 3600_000L;
@@ -101,6 +108,10 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
     }
 
     /**
+     * Использует лимиты CRL по умолчанию: {@value GostCrl#DEFAULT_MAX_CRL_SIZE} байт размера,
+     * {@value GostCrl#DEFAULT_MAX_REVOKED_ENTRIES} отозванных записей.
+     * Для настройки лимитов используйте {@link #GostX509TrustManager(List, OcspPolicy, OcspFetcher, CrlPolicy, CrlFetcher, int, int, long)}.
+     *
      * @param caPublicKeys список доверенных ключей CA (null или пустой = без проверки цепочки)
      * @param ocspPolicy   политика проверки OCSP
      * @param ocspFetcher  fetcher для client-side OCSP-запросов (может быть null)
@@ -113,6 +124,78 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
             OcspFetcher ocspFetcher,
             CrlPolicy crlPolicy,
             CrlFetcher crlFetcher) {
+        this(
+                caPublicKeys,
+                ocspPolicy,
+                ocspFetcher,
+                crlPolicy,
+                crlFetcher,
+                GostCrl.DEFAULT_MAX_CRL_SIZE,
+                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+    }
+
+    /**
+     * Базовый конструктор с настраиваемыми лимитами CRL.
+     * <p>
+     * Лимит fetcher'а CRL (если используется) должен быть &ge; {@code maxCrlSize},
+     * иначе скачанные данные не дойдут до парсера. При использовании
+     * {@link org.rssys.gost.jsse.crl.JdkHttpCrlFetcher} передавайте
+     * {@code maxResponseSize} &ge; {@code maxCrlSize} в его конструктор.
+     *
+     * @param caPublicKeys      список доверенных ключей CA (null или пустой = без проверки цепочки)
+     * @param ocspPolicy        политика проверки OCSP
+     * @param ocspFetcher       fetcher для client-side OCSP-запросов (может быть null)
+     * @param crlPolicy         политика проверки CRL
+     * @param crlFetcher        fetcher для CRL по CDP URI (может быть null)
+     * @param maxCrlSize        максимальный размер CRL в байтах
+     * @param maxRevokedEntries максимальное число отозванных записей
+     */
+    public GostX509TrustManager(
+            List<PublicKeyParameters> caPublicKeys,
+            OcspPolicy ocspPolicy,
+            OcspFetcher ocspFetcher,
+            CrlPolicy crlPolicy,
+            CrlFetcher crlFetcher,
+            int maxCrlSize,
+            int maxRevokedEntries) {
+        this(
+                caPublicKeys,
+                ocspPolicy,
+                ocspFetcher,
+                crlPolicy,
+                crlFetcher,
+                maxCrlSize,
+                maxRevokedEntries,
+                GostOids.MAX_OCSP_AGE_MS);
+    }
+
+    /**
+     * Базовый конструктор с настраиваемыми лимитами CRL и политикой свежести OCSP.
+     * <p>
+     * Лимит fetcher'а CRL (если используется) должен быть &ge; {@code maxCrlSize},
+     * иначе скачанные данные не дойдут до парсера. При использовании
+     * {@link org.rssys.gost.jsse.crl.JdkHttpCrlFetcher} передавайте
+     * {@code maxResponseSize} &ge; {@code maxCrlSize} в его конструктор.
+     *
+     * @param caPublicKeys      список доверенных ключей CA (null или пустой = без проверки цепочки)
+     * @param ocspPolicy        политика проверки OCSP
+     * @param ocspFetcher       fetcher для client-side OCSP-запросов (может быть null)
+     * @param crlPolicy         политика проверки CRL
+     * @param crlFetcher        fetcher для CRL по CDP URI (может быть null)
+     * @param maxCrlSize        максимальный размер CRL в байтах
+     * @param maxRevokedEntries максимальное число отозванных записей
+     * @param maxOcspAgeMs      максимальный возраст OCSP-ответа без {@code nextUpdate} в мс
+     *                          (RFC 6960 §2.4 — локальная политика свежести relying party)
+     */
+    public GostX509TrustManager(
+            List<PublicKeyParameters> caPublicKeys,
+            OcspPolicy ocspPolicy,
+            OcspFetcher ocspFetcher,
+            CrlPolicy crlPolicy,
+            CrlFetcher crlFetcher,
+            int maxCrlSize,
+            int maxRevokedEntries,
+            long maxOcspAgeMs) {
         this.caPublicKeys = caPublicKeys;
         this.ocspPolicy = ocspPolicy;
         this.ocspFetcher = ocspFetcher;
@@ -120,12 +203,15 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         this.crlPolicy = crlPolicy;
         this.crlFetcher = crlFetcher;
         this.crlCache = crlPolicy != CrlPolicy.DISABLED ? new CrlCache() : null;
+        this.maxCrlSize = maxCrlSize;
+        this.maxRevokedEntries = maxRevokedEntries;
+        this.maxOcspAgeMs = maxOcspAgeMs;
         if (caPublicKeys == null || caPublicKeys.isEmpty()) {
             LOG.log(
                     Level.WARNING,
                     "TrustManager created without CA public keys — "
-                    + "certificate chain validation DISABLED. "
-                    + "Use GostSslDev.trustAllClientContextInsecure() if this is intentional.");
+                            + "certificate chain validation DISABLED. "
+                            + "Use GostSslDev.trustAllClientContextInsecure() if this is intentional.");
         }
     }
 
@@ -254,7 +340,7 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         try {
             boolean needOcsp = requireOcsp || (ocspPolicy == OcspPolicy.STAPLING_OR_FETCH);
             TlsCertificateValidator.checkServerCertificateChain(
-                    chain, hostname, needOcsp, caPublicKeys);
+                    chain, hostname, needOcsp, caPublicKeys, maxOcspAgeMs);
         } catch (TlsException e) {
             String msg = e.getMessage();
             if (msg != null && (msg.contains("revoked") || msg.contains("OCSP"))) {
@@ -304,7 +390,8 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         }
         try {
             List<GostCertificate> gostChain = CertificateBridge.toGost(chain);
-            TlsCertificateValidator.checkClientCertificateChain(gostChain, caPublicKeys);
+            TlsCertificateValidator.checkClientCertificateChain(
+                    gostChain, caPublicKeys, maxOcspAgeMs);
             // CRL для client certificate (по аналогии с серверной проверкой)
             if (crlPolicy != CrlPolicy.DISABLED && gostChain.size() >= 2) {
                 GostCertificate leaf = gostChain.get(0);
@@ -401,7 +488,8 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
      * Сетевые ошибки (IOException) при fetch приводят к переходу к следующему CDP mirror
      * (или reject при REQUIRE). TlsException из {@code verify} (битая подпись,
      * expired, revoked) пробрасывается немедленно — никаких fallback mirror'ов.
-     * Кэш CRL (CrlCache) проверяется до HTTP-запроса.
+     * Кэш CRL (CrlCache) проверяется до HTTP-запроса и передаёт последний известный
+     * cRLNumber в {@link CrlVerifier} для защиты от CRL rollback (RFC 5280 §5.2.3).
      *
      * @param cert   проверяемый сертификат (leaf или intermediate)
      * @param issuer issuer сертификата (cert[i+1] в цепочке)
@@ -430,7 +518,9 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         for (String crlUri : cdps) {
             if (crlUri == null || crlUri.isEmpty()) continue;
             try {
-                byte[] crlDer = crlCache != null ? crlCache.get(crlUri) : null;
+                CrlCacheEntry entry = crlCache != null ? crlCache.lookup(crlUri) : null;
+                BigInteger minCrlNumber = entry != null ? entry.lastKnownCrlNumber() : null;
+                byte[] crlDer = entry != null ? entry.crlDer() : null;
                 if (crlDer == null) {
                     try {
                         crlDer = crlFetcher.fetch(crlUri);
@@ -451,7 +541,10 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
                         crlDer,
                         cert.getSerialNumber(),
                         issuer.getPublicKey(),
-                        cert.getIssuerDnBytes());
+                        cert.getIssuerDnBytes(),
+                        minCrlNumber,
+                        this.maxCrlSize,
+                        this.maxRevokedEntries);
                 return; // чистый CRL — прерываем цикл
             } catch (PkixException e) {
                 String msg = e.getMessage();

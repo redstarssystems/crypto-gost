@@ -27,6 +27,13 @@ public final class SignatureCodec {
         byte[] out = new byte[2 * rolen];
         byte[] rBytes = r.toByteArray();
         byte[] sBytes = s.toByteArray();
+        // Fail-closed: валидная компонента (0 < x < n) укладывается в rolen байт;
+        // BigInteger.toByteArray() добавляет не более одного знакового байта (rolen+1).
+        // Больший размер означает x >= 2^(8*rolen) -> тихое усечение исказило бы кодировку.
+        if (rBytes.length > rolen + 1 || sBytes.length > rolen + 1) {
+            throw new IllegalArgumentException(
+                    "signature component exceeds " + rolen + "-byte field width");
+        }
         int rLen = Math.min(rBytes.length, rolen);
         int sLen = Math.min(sBytes.length, rolen);
         System.arraycopy(sBytes, Math.max(0, sBytes.length - sLen), out, rolen - sLen, sLen);

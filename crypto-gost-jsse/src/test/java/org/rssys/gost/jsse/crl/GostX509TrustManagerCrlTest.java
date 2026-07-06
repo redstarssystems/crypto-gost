@@ -14,6 +14,7 @@ import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.ocsp.OcspPolicy;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
@@ -281,6 +282,55 @@ class GostX509TrustManagerCrlTest {
                         null,
                         CrlPolicy.IF_CDP_PRESENT,
                         mockFetcher);
+
+        tm.validateChainWithOcsp(chain, null, false);
+    }
+
+    @Test
+    @DisplayName("TrustManager с кастомным maxCrlSize отвергает валидный CRL при превышении лимита")
+    void testCustomMaxCrlSizeRejected() throws Exception {
+        TlsTestHelper.CertBundle leaf = createLeafWithCdp("http://crl.example.com/root.crl");
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+
+        CrlFetcher mockFetcher = uri -> testCrl.clone();
+
+        GostX509TrustManager tm =
+                new GostX509TrustManager(
+                        caKeys(),
+                        OcspPolicy.IF_PRESENT,
+                        null,
+                        CrlPolicy.IF_CDP_PRESENT,
+                        mockFetcher,
+                        testCrl.length - 1,
+                        GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+
+        CertificateException ex =
+                assertThrows(
+                        CertificateException.class,
+                        () -> tm.validateChainWithOcsp(chain, null, false));
+        assertTrue(
+                ex.getMessage().contains("Failed to parse CRL")
+                        || ex.getMessage().contains("CRL validation failed"),
+                "Ожидается ошибка лимита размера, получено: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("TrustManager с кастомным maxCrlSize=10000 принимает валидный CRL")
+    void testCustomMaxCrlSizeWithinLimit() throws Exception {
+        TlsTestHelper.CertBundle leaf = createLeafWithCdp("http://crl.example.com/root.crl");
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+
+        CrlFetcher mockFetcher = uri -> testCrl.clone();
+
+        GostX509TrustManager tm =
+                new GostX509TrustManager(
+                        caKeys(),
+                        OcspPolicy.IF_PRESENT,
+                        null,
+                        CrlPolicy.IF_CDP_PRESENT,
+                        mockFetcher,
+                        10_000,
+                        GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
 
         tm.validateChainWithOcsp(chain, null, false);
     }

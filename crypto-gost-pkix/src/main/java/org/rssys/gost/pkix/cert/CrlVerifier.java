@@ -15,7 +15,7 @@ import org.rssys.gost.signature.PublicKeyParameters;
  * Indirect CRL (issuingDistributionPoint с indirectCRL) не поддерживается.
  * Partial CRL (issuingDistributionPoint с onlyContains...) не поддерживается.
  * Delta CRL (deltaCRLIndicator) — изолированно не поддерживается,
- * но поддерживается в паре base+delta через {@link #verify(byte[], byte[], byte[], PublicKeyParameters)}.
+ * но поддерживается в паре base+delta через {@link #verify(byte[], byte[], byte[], PublicKeyParameters, byte[])}.
  * <p>
  * Порядок проверки (fail-closed):
  * <ol>
@@ -35,40 +35,37 @@ public final class CrlVerifier {
     private CrlVerifier() {}
 
     /**
-     * Проверяет CRL: подпись, срок, отсутствие indirect/partial, и отзыв сертификата.
-     *
-     * @param crlDer       DER-encoded CertificateList (RFC 5280 §5.1)
-     * @param certSerial   серийный номер проверяемого сертификата (raw DER INTEGER value)
-     * @param caKey        открытый ключ CA, подписавшего CRL (должен совпадать с issuer сертификата)
-     * @throws PkixException если CRL невалиден (подпись, срок, indirect) или сертификат отозван
-     */
-    public static void verify(byte[] crlDer, byte[] certSerial, PublicKeyParameters caKey)
-            throws PkixException {
-        verify(crlDer, certSerial, caKey, null);
-    }
-
-    /**
      * Проверяет CRL: подпись, срок, issuer DN, отсутствие indirect/partial, и отзыв сертификата.
+     * Использует лимиты по умолчанию ({@link GostCrl#DEFAULT_MAX_CRL_SIZE},
+     * {@link GostCrl#DEFAULT_MAX_REVOKED_ENTRIES}).
      *
      * @param crlDer        DER-encoded CertificateList (RFC 5280 §5.1)
      * @param certSerial    серийный номер проверяемого сертификата (raw DER INTEGER value)
      * @param caKey         открытый ключ CA, подписавшего CRL
-     * @param certIssuerDn  DER-encoded issuer DN сертификата (полный SEQUENCE TLV) или null
+     * @param certIssuerDn  DER-encoded issuer DN сертификата (полный SEQUENCE TLV)
      * @throws PkixException если CRL невалиден или сертификат отозван
      */
     public static void verify(
             byte[] crlDer, byte[] certSerial, PublicKeyParameters caKey, byte[] certIssuerDn)
             throws PkixException {
-        verify(crlDer, certSerial, caKey, certIssuerDn, null);
+        verify(
+                crlDer,
+                certSerial,
+                caKey,
+                certIssuerDn,
+                null,
+                GostCrl.DEFAULT_MAX_CRL_SIZE,
+                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
     }
 
     /**
      * Проверяет CRL с проверкой монотонности cRLNumber (защита от CRL rollback, RFC 5280 §5.2.3).
+     * Использует лимиты по умолчанию.
      *
      * @param crlDer         DER-encoded CertificateList
      * @param certSerial     серийный номер проверяемого сертификата (raw DER INTEGER value)
      * @param caKey          открытый ключ CA
-     * @param certIssuerDn   DER-encoded issuer DN сертификата или null
+     * @param certIssuerDn   DER-encoded issuer DN сертификата
      * @param minCrlNumber   минимально допустимый cRLNumber (inclusive) или null — пропустить проверку
      * @throws PkixException если CRL невалиден, cRLNumber меньше minCrlNumber, или сертификат отозван
      */
@@ -79,31 +76,63 @@ public final class CrlVerifier {
             byte[] certIssuerDn,
             BigInteger minCrlNumber)
             throws PkixException {
+        verify(
+                crlDer,
+                certSerial,
+                caKey,
+                certIssuerDn,
+                minCrlNumber,
+                GostCrl.DEFAULT_MAX_CRL_SIZE,
+                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+    }
+
+    /**
+     * Проверяет CRL с настраиваемыми лимитами размера и числа записей.
+     *
+     * @param crlDer             DER-encoded CertificateList
+     * @param certSerial         серийный номер проверяемого сертификата (raw DER INTEGER value)
+     * @param caKey              открытый ключ CA
+     * @param certIssuerDn       DER-encoded issuer DN сертификата
+     * @param minCrlNumber       минимально допустимый cRLNumber или null
+     * @param maxCrlSize         максимальный размер CRL в байтах
+     * @param maxRevokedEntries  максимальное число отозванных записей
+     * @throws PkixException если CRL невалиден, cRLNumber меньше minCrlNumber, или сертификат отозван
+     */
+    public static void verify(
+            byte[] crlDer,
+            byte[] certSerial,
+            PublicKeyParameters caKey,
+            byte[] certIssuerDn,
+            BigInteger minCrlNumber,
+            int maxCrlSize,
+            int maxRevokedEntries)
+            throws PkixException {
         if (crlDer == null) {
             throw new PkixException("CRL is null");
         }
         if (certSerial == null) {
             throw new PkixException("certSerial must not be null");
         }
+        if (certIssuerDn == null) {
+            throw new PkixException("certIssuerDn must not be null");
+        }
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "Verifying CRL for certificate serial 0x{0}",
                 new BigInteger(1, certSerial).toString(16));
 
         GostCrl crl;
         try {
-            crl = new GostCrl(crlDer);
+            crl = new GostCrl(crlDer, maxCrlSize, maxRevokedEntries);
         } catch (RuntimeException e) {
             throw new PkixException(PkixException.Reason.PARSE_ERROR, "Failed to parse CRL DER", e);
         }
 
         // Сверка issuer DN CRL с issuer DN сертификата (RFC 5280 §6.3.3(c))
-        if (certIssuerDn != null) {
-            byte[] crlIssuerDn = crl.getIssuerDnBytes();
-            if (!GostDerParser.arrayRangeEquals(
-                    crlIssuerDn, 0, crlIssuerDn.length, certIssuerDn, 0, certIssuerDn.length)) {
-                throw new PkixException("CRL: issuer DN does not match certificate issuer DN");
-            }
+        byte[] crlIssuerDn = crl.getIssuerDnBytes();
+        if (!GostDerParser.arrayRangeEquals(
+                crlIssuerDn, 0, crlIssuerDn.length, certIssuerDn, 0, certIssuerDn.length)) {
+            throw new PkixException("CRL: issuer DN does not match certificate issuer DN");
         }
 
         // Верификация подписи + парсинг revoked-списка (fail-closed порядок внутри GostCrl)
@@ -131,13 +160,14 @@ public final class CrlVerifier {
         }
 
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "CRL verification passed for certificate serial 0x{0}",
                 new BigInteger(1, certSerial).toString(16));
     }
 
     /**
      * Проверяет пару base CRL + delta CRL с merge-логикой (RFC 5280 §5.2.4).
+     * Использует лимиты по умолчанию.
      *
      * <p>Порядок (fail-closed):
      * <ol>
@@ -145,43 +175,91 @@ public final class CrlVerifier {
      *   <li>delta.isDelta()</li>
      *   <li>delta.baseCrlNumber == base.crlNumber</li>
      *   <li>delta.thisUpdate >= base.thisUpdate</li>
+     *   <li>Сверка issuer DN (base == certIssuerDn)</li>
      *   <li>Сверка issuer DN (base == delta)</li>
      *   <li>Merge: delta перекрывает base; REMOVE_FROM_CRL в delta удаляет из base</li>
      *   <li>Проверка certSerial в merged-наборе</li>
      * </ol>
      *
-     * @param baseCrlDer  DER-encoded base CRL
-     * @param deltaCrlDer DER-encoded delta CRL
-     * @param certSerial  серийный номер проверяемого сертификата (raw DER INTEGER)
-     * @param caKey       открытый ключ CA
+     * @param baseCrlDer   DER-encoded base CRL
+     * @param deltaCrlDer  DER-encoded delta CRL
+     * @param certSerial   серийный номер проверяемого сертификата (raw DER INTEGER)
+     * @param caKey        открытый ключ CA
+     * @param certIssuerDn DER-encoded issuer DN сертификата (полный SEQUENCE TLV)
      * @throws PkixException если любой CRL невалиден, несовместим или сертификат отозван
      */
     public static void verify(
-            byte[] baseCrlDer, byte[] deltaCrlDer,
-            byte[] certSerial, PublicKeyParameters caKey) throws PkixException {
+            byte[] baseCrlDer,
+            byte[] deltaCrlDer,
+            byte[] certSerial,
+            PublicKeyParameters caKey,
+            byte[] certIssuerDn)
+            throws PkixException {
+        verify(
+                baseCrlDer,
+                deltaCrlDer,
+                certSerial,
+                caKey,
+                certIssuerDn,
+                GostCrl.DEFAULT_MAX_CRL_SIZE,
+                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+    }
+
+    /**
+     * Проверяет пару base CRL + delta CRL с настраиваемыми лимитами.
+     *
+     * @param baseCrlDer         DER-encoded base CRL
+     * @param deltaCrlDer        DER-encoded delta CRL
+     * @param certSerial         серийный номер проверяемого сертификата (raw DER INTEGER)
+     * @param caKey              открытый ключ CA
+     * @param certIssuerDn       DER-encoded issuer DN сертификата
+     * @param maxCrlSize         максимальный размер CRL в байтах
+     * @param maxRevokedEntries  максимальное число отозванных записей
+     * @throws PkixException если любой CRL невалиден, несовместим или сертификат отозван
+     */
+    public static void verify(
+            byte[] baseCrlDer,
+            byte[] deltaCrlDer,
+            byte[] certSerial,
+            PublicKeyParameters caKey,
+            byte[] certIssuerDn,
+            int maxCrlSize,
+            int maxRevokedEntries)
+            throws PkixException {
         if (baseCrlDer == null || deltaCrlDer == null) {
             throw new PkixException("CRL must not be null");
         }
         if (certSerial == null) {
             throw new PkixException("certSerial must not be null");
         }
+        if (certIssuerDn == null) {
+            throw new PkixException("certIssuerDn must not be null");
+        }
 
-        LOG.log(Level.INFO, "Verifying base+delta CRL for certificate serial 0x{0}",
+        LOG.log(
+                Level.DEBUG,
+                "Verifying base+delta CRL for certificate serial 0x{0}",
                 new BigInteger(1, certSerial).toString(16));
 
         GostCrl base;
         GostCrl delta;
         try {
-            base = new GostCrl(baseCrlDer);
-            delta = new GostCrl(deltaCrlDer);
+            base = new GostCrl(baseCrlDer, maxCrlSize, maxRevokedEntries);
+            delta = new GostCrl(deltaCrlDer, maxCrlSize, maxRevokedEntries);
         } catch (RuntimeException e) {
-            throw new PkixException(PkixException.Reason.PARSE_ERROR,
-                    "Failed to parse CRL DER", e);
+            throw new PkixException(PkixException.Reason.PARSE_ERROR, "Failed to parse CRL DER", e);
         }
 
         // Верификация: base без delta-допуска, delta с допуском
         base.verify(caKey, false);
         delta.verify(caKey, true);
+
+        // Сверка issuer DN base CRL с issuer DN сертификата (RFC 5280 §6.3.3(c))
+        byte[] baseIssuerDn = base.getIssuerDnBytes();
+        if (!GostDerParser.arrayRangeEquals(
+                baseIssuerDn, 0, baseIssuerDn.length, certIssuerDn, 0, certIssuerDn.length)) {
+            throw new PkixException("CRL: base issuer DN does not match certificate issuer DN");
+        }
 
         // delta.isDelta()
         if (!delta.isDelta()) {
@@ -195,43 +273,45 @@ public final class CrlVerifier {
             throw new PkixException("CRL: base CRL missing cRLNumber extension");
         }
         if (!deltaBaseNum.equals(baseNum)) {
-            throw new PkixException(
-                    "CRL: delta baseCrlNumber does not match base cRLNumber");
+            throw new PkixException("CRL: delta baseCrlNumber does not match base cRLNumber");
         }
 
         // delta.thisUpdate >= base.thisUpdate (с допуском)
-        if (delta.getThisUpdate().isBefore(
-                base.getThisUpdate().minusMillis(GostOids.CLOCK_SKEW_MS))) {
-            throw new PkixException(
-                    "CRL: delta thisUpdate is before base thisUpdate");
+        if (delta.getThisUpdate()
+                .isBefore(base.getThisUpdate().minusMillis(GostOids.CLOCK_SKEW_MS))) {
+            throw new PkixException("CRL: delta thisUpdate is before base thisUpdate");
         }
 
         // Сверка issuer DN
         if (!GostDerParser.arrayRangeEquals(
-                base.getIssuerDnBytes(), 0, base.getIssuerDnBytes().length,
-                delta.getIssuerDnBytes(), 0, delta.getIssuerDnBytes().length)) {
-            throw new PkixException(
-                    "CRL: delta issuer DN does not match base issuer DN");
+                base.getIssuerDnBytes(),
+                0,
+                base.getIssuerDnBytes().length,
+                delta.getIssuerDnBytes(),
+                0,
+                delta.getIssuerDnBytes().length)) {
+            throw new PkixException("CRL: delta issuer DN does not match base issuer DN");
         }
 
         // Merge и проверка отзыва
         if (delta.isRevoked(certSerial)) {
             ReasonCode reason = delta.getReason(certSerial);
             if (reason == ReasonCode.REMOVE_FROM_CRL) {
-                LOG.log(Level.INFO,
-                        "Certificate removed from CRL via delta (REMOVE_FROM_CRL)");
+                LOG.log(Level.DEBUG, "Certificate removed from CRL via delta (REMOVE_FROM_CRL)");
                 return;
             }
-            throw new PkixException(PkixException.Reason.REVOKED,
-                    "Certificate is revoked per delta CRL");
+            throw new PkixException(
+                    PkixException.Reason.REVOKED, "Certificate is revoked per delta CRL");
         }
 
         if (base.isRevoked(certSerial)) {
-            throw new PkixException(PkixException.Reason.REVOKED,
-                    "Certificate is revoked per base CRL");
+            throw new PkixException(
+                    PkixException.Reason.REVOKED, "Certificate is revoked per base CRL");
         }
 
-        LOG.log(Level.INFO, "CRL verification passed for certificate serial 0x{0}",
+        LOG.log(
+                Level.DEBUG,
+                "CRL verification passed for certificate serial 0x{0}",
                 new BigInteger(1, certSerial).toString(16));
     }
 
@@ -244,6 +324,12 @@ public final class CrlVerifier {
      * чтобы определить момент инвалидации кэша.
      * <p>
      * Не создаёт объект {@link GostCrl} — использует облегчённый путь для производительности.
+     * <p>
+     * <b>Security:</b> результат получен из <b>неверифицированных</b> байт. Использовать
+     * только для метаданных кэша (TTL/инвалидация), никогда — для acceptance-решения.
+     * Решение об отзыве всегда проходит через полный
+     * {@link #verify(byte[], byte[], PublicKeyParameters)} с проверкой подписи, поэтому
+     * подделка nextUpdate влияет лишь на эффективность кэша, не на корректность проверки.
      *
      * @param crlDer DER-encoded CertificateList
      * @return nextUpdate Instant или null если поле отсутствует
@@ -300,6 +386,11 @@ public final class CrlVerifier {
      * <p>
      * cRLNumber (OID 2.5.29.20) находится в CRL-level extensions после revokedCertificates
      * переменной длины. Возвращает {@code null} если расширение отсутствует или CRL повреждён.
+     * <p>
+     * <b>Security:</b> результат получен из <b>неверифицированных</b> байт. Использовать
+     * только для метаданных кэша (rollback-baseline), никогда — для acceptance-решения.
+     * Подделка cRLNumber влияет лишь на rollback-трекинг кэша, не на корректность проверки
+     * отзыва, которая всегда идёт через полный {@link #verify(byte[], byte[], PublicKeyParameters)}.
      *
      * @param crlDer DER-encoded CertificateList
      * @return cRLNumber или null
@@ -363,9 +454,11 @@ public final class CrlVerifier {
                             oidTlv[1] - oidTlv[0],
                             GostDerParser.CRL_NUMBER_OID_BYTES)) {
                         int afterOid = oidTlv[1];
-                        if (afterOid < oce && (crlDer[afterOid] & 0xFF) == GostDerParser.TAG_OCTET_STRING) {
+                        if (afterOid < oce
+                                && (crlDer[afterOid] & 0xFF) == GostDerParser.TAG_OCTET_STRING) {
                             int[] octTlv = GostDerParser.readTlv(crlDer, afterOid);
-                            if (octTlv[0] < octTlv[1] && (crlDer[octTlv[0]] & 0xFF) == GostDerParser.TAG_INTEGER) {
+                            if (octTlv[0] < octTlv[1]
+                                    && (crlDer[octTlv[0]] & 0xFF) == GostDerParser.TAG_INTEGER) {
                                 int[] intTlv = GostDerParser.readTlv(crlDer, octTlv[0]);
                                 return new BigInteger(
                                         Arrays.copyOfRange(crlDer, intTlv[0], intTlv[1]));

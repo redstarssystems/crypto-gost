@@ -123,4 +123,29 @@ class TlsDerParserFuzzTest {
             FuzzTestUtils.rethrowIfBug(e);
         }
     }
+
+    /**
+     * Targeted: прямой вызов {@link GostDerParser#oidBytesToDottedString(byte[], int, int)}.
+     * Фикс 0.6.2: integer overflow при >9 continuation-байт, OID < 2 байт,
+     * >128 арок (MAX_OID_SUBIDENTIFIERS, MAX_OID_SUBIDENTIFIER_BYTES).
+     * <p>
+     * Фаззер подаёт произвольные OID-байты напрямую в парсер. Покрывает:
+     * <ul>
+     *   <li>len < 2 -> IllegalArgumentException ("OID too short")</li>
+     *   <li>subIdBytes > 9 -> IllegalArgumentException ("subidentifier exceeds MAX_OID_SUBIDENTIFIER_BYTES")</li>
+     *   <li>subIdCount > 128 -> IllegalArgumentException ("subidentifier count exceeds MAX_OID_SUBIDENTIFIERS")</li>
+     * </ul>
+     */
+    @FuzzTest
+    void fuzzOidBytesToDottedString(FuzzedDataProvider data) {
+        byte[] oidBytes = data.consumeRemainingAsBytes();
+        if (oidBytes.length == 0) return;
+        try {
+            GostDerParser.oidBytesToDottedString(oidBytes, 0, oidBytes.length);
+        } catch (IllegalArgumentException e) {
+            // Ожидаемо: OID слишком короткий, слишком много суб-идентификаторов
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
 }

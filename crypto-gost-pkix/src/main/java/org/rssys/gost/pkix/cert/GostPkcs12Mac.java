@@ -52,26 +52,33 @@ public final class GostPkcs12Mac {
         byte[] km =
                 Pbkdf2Streebog.generate(
                         password, macData.getSalt(), macData.getIterations(), DK_LEN);
+        byte[] hmacKey = null;
+        try {
+            hmacKey = new byte[HMAC_KEY_LEN];
+            System.arraycopy(km, km.length - HMAC_KEY_LEN, hmacKey, 0, HMAC_KEY_LEN);
+            // km больше не нужен — раннее затирание; finally страхует от исключения в arraycopy
+            Arrays.fill(km, (byte) 0);
 
-        byte[] hmacKey = new byte[HMAC_KEY_LEN];
-        System.arraycopy(km, km.length - HMAC_KEY_LEN, hmacKey, 0, HMAC_KEY_LEN);
-        Arrays.fill(km, (byte) 0);
+            Hmac hmac = new Hmac(digest);
+            hmac.init(hmacKey);
+            hmac.update(authSafeContent, 0, authSafeContent.length);
 
-        Hmac hmac = new Hmac(digest);
-        hmac.init(hmacKey);
-        hmac.update(authSafeContent, 0, authSafeContent.length);
+            byte[] computed = new byte[digest.getDigestSize()];
+            hmac.doFinal(computed, 0);
+            hmac.clear();
 
-        byte[] computed = new byte[digest.getDigestSize()];
-        hmac.doFinal(computed, 0);
-        hmac.clear();
-        Arrays.fill(hmacKey, (byte) 0);
-
-        if (!MessageDigest.isEqual(computed, macData.getDigestValue())) {
-            throw new IllegalArgumentException(
-                    "PFX MAC verification failed: "
-                            + "integrity check mismatch (wrong password or corrupted data)");
+            if (!MessageDigest.isEqual(computed, macData.getDigestValue())) {
+                throw new IllegalArgumentException(
+                        "PFX MAC verification failed: "
+                                + "integrity check mismatch (wrong password or corrupted data)");
+            }
+            LOG.log(Level.INFO, "PFX MAC verification passed");
+        } finally {
+            if (hmacKey != null) {
+                Arrays.fill(hmacKey, (byte) 0);
+            }
+            Arrays.fill(km, (byte) 0);
         }
-        LOG.log(Level.INFO, "PFX MAC verification passed");
     }
 
     // ========================================================================
@@ -105,12 +112,13 @@ public final class GostPkcs12Mac {
     public static byte[] compute(
             byte[] authSafeContent, byte[] password, int iterations, byte[] salt, int macHashLen) {
         byte[] km = Pbkdf2Streebog.generate(password, salt, iterations, DK_LEN);
-
-        byte[] hmacKey = new byte[HMAC_KEY_LEN];
-        System.arraycopy(km, km.length - HMAC_KEY_LEN, hmacKey, 0, HMAC_KEY_LEN);
-        Arrays.fill(km, (byte) 0);
-
+        byte[] hmacKey = null;
         try {
+            hmacKey = new byte[HMAC_KEY_LEN];
+            System.arraycopy(km, km.length - HMAC_KEY_LEN, hmacKey, 0, HMAC_KEY_LEN);
+            // km больше не нужен — раннее затирание; finally страхует от исключения в arraycopy
+            Arrays.fill(km, (byte) 0);
+
             Digest digest =
                     macHashLen == GostOids.STREEBOG_256_HASH_LEN
                             ? new Streebog256()
@@ -140,7 +148,10 @@ public final class GostPkcs12Mac {
                     DerCodec.encodeOctetString(salt),
                     DerCodec.encodeInteger(iterations));
         } finally {
-            Arrays.fill(hmacKey, (byte) 0);
+            if (hmacKey != null) {
+                Arrays.fill(hmacKey, (byte) 0);
+            }
+            Arrays.fill(km, (byte) 0);
         }
     }
 }

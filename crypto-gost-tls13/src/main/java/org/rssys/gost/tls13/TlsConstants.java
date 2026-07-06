@@ -105,6 +105,38 @@ public final class TlsConstants {
      *  Типичный ГОСТ-сертификат — 1–10 КБ, 256 КБ даёт 25x запас. */
     public static final int MAX_CERT_SIZE = 262_144;
 
+    /** Длина префикса поля certificate_list{@code <0..2^24-1>} (RFC 8446 §4.4.2). */
+    public static final int CERT_LIST_LENGTH_FIELD = 3;
+
+    /** Длина префикса поля cert_data{@code <0..2^24-1>} внутри CertificateEntry. */
+    public static final int CERT_ENTRY_LEN_FIELD = 3;
+
+    /** Длина префикса поля extensions{@code <0..2^16-1>} внутри CertificateEntry. */
+    public static final int CERT_ENTRY_EXT_LEN_FIELD = 2;
+
+    /** Максимум байт в extensions одной CertificateEntry: поле extLen 16-битное.
+     *  Не путать с MAX_OCSP_RESPONSE_SIZE — тот применяется при отдельном разборе
+     *  GostOcspResponse, а здесь верхнюю границу задаёт само 16-битное поле длины. */
+    public static final int MAX_CERT_ENTRY_EXTENSIONS_SIZE = 65_535;
+
+    /** Верхняя граница суммарного размера реассемблируемого handshake-сообщения.
+     *  <p>msgLen в заголовке — 24-битное поле (до 16 МБ), реассемблирование из многих
+     *  TLS-записей может накопить буфер такого размера -> per-connection resource exhaustion.
+     *  <p>Лимит вычисляется из компонентных констант так, чтобы совпадать по построению
+     *  с потолком приёма парсера Certificate (самое крупное легитимное сообщение), и
+     *  автоматически оставаться консистентным при изменении MAX_CERT_SIZE/MAX_CERT_CHAIN_LENGTH.
+     *  <p>Слагаемое {@code + 1} — пустой request_context: парсер Certificate жёстко ожидает
+     *  пустой контекст (TlsMessageParser пропускает ровно 1 байт длины). Численно ≈3.2 МБ. */
+    public static final int MAX_HANDSHAKE_MESSAGE_SIZE =
+            HANDSHAKE_HEADER_SIZE
+                    + 1
+                    + CERT_LIST_LENGTH_FIELD
+                    + MAX_CERT_CHAIN_LENGTH
+                            * (CERT_ENTRY_LEN_FIELD
+                                    + MAX_CERT_SIZE
+                                    + CERT_ENTRY_EXT_LEN_FIELD
+                                    + MAX_CERT_ENTRY_EXTENSIONS_SIZE);
+
     /** Максимум delegated OCSP-responder сертификатов в BasicOCSPResponse certs [0]
      *  (RFC 6960 §4.2.2.1). Практически всегда 0–1, 10 — щедрый запас. */
     public static final int MAX_DELEGATED_CERTS = 10;
@@ -198,6 +230,10 @@ public final class TlsConstants {
     // контекстные строки CertificateVerify (RFC 8446 раздел 4.4.3)
     public static final String SERVER_CERTIFICATE_VERIFY_CTX = "TLS 1.3, server CertificateVerify";
     public static final String CLIENT_CERTIFICATE_VERIFY_CTX = "TLS 1.3, client CertificateVerify";
+
+    // Допуск для проверки ticket_age при PSK-возобновлении (RFC 8446 §4.2.11.2)
+    // ±60 секунд: компенсирует clock skew и сетевую задержку, блокирует gross replay
+    public static final long PSK_AGE_TOLERANCE_MS = 60_000L;
 
     // HelloRetryRequest random (RFC 8446 §4.1.3)
     public static final byte[] HRR_RANDOM =

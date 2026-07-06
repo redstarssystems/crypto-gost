@@ -356,6 +356,28 @@ public final class DerCodec {
                 "Unsupported DER length encoding: 0x" + Integer.toHexString(first));
     }
 
+    /**
+     * Декодирует длину и требует определённую (definite) форму.
+     * <p>
+     * Отклоняет indefinite-length (0x80): по X.690 §8.1.3.6 она допустима только для
+     * constructed-типов, а в DER (§10.1) запрещена вовсе. Используется примитивными
+     * декодерами, чтобы malformed-BER не приводил к молчаливому мис-парсингу значения.
+     *
+     * @param data     исходный массив
+     * @param offset   смещение байта длины
+     * @param typeName имя типа для диагностики
+     * @return {@code [длина, число байт кодировки длины]}
+     * @throws IllegalArgumentException при indefinite-length
+     */
+    private static int[] decodeDefiniteLength(byte[] data, int offset, String typeName) {
+        int[] lenInfo = decodeLength(data, offset);
+        if (lenInfo[0] == INDEFINITE_LENGTH) {
+            throw new IllegalArgumentException(
+                    typeName + " at offset " + (offset - 1) + ": INDEFINITE_LENGTH not supported");
+        }
+        return lenInfo;
+    }
+
     // ========================================================================
     // Парсинг (возвращают копии содержимого)
     // ========================================================================
@@ -445,7 +467,7 @@ public final class DerCodec {
     /** Разбирает BIT STRING и возвращает содержимое без ведущего байта. */
     public static byte[] parseBitString(byte[] data, int offset) {
         checkTag(data, offset, TAG_BIT_STRING, "BIT STRING");
-        int[] lenInfo = decodeLength(data, offset + 1);
+        int[] lenInfo = decodeDefiniteLength(data, offset + 1, "BIT STRING");
         int contentOff = offset + 1 + lenInfo[1];
         if (lenInfo[0] < 1
                 || lenInfo[0] > MAX_BIT_STRING_LENGTH
@@ -465,7 +487,7 @@ public final class DerCodec {
     /** Разбирает OCTET STRING и возвращает содержимое. */
     public static byte[] parseOctetString(byte[] data, int offset) {
         checkTag(data, offset, TAG_OCTET_STRING, "OCTET STRING");
-        int[] lenInfo = decodeLength(data, offset + 1);
+        int[] lenInfo = decodeDefiniteLength(data, offset + 1, "OCTET STRING");
         int contentOff = offset + 1 + lenInfo[1];
         if (contentOff + lenInfo[0] > data.length) {
             throw new IllegalArgumentException(
@@ -483,7 +505,7 @@ public final class DerCodec {
     /** Разбирает OID и возвращает строку вида {@code "1.2.643.7.1.1.1.1"}. */
     public static String parseOid(byte[] data, int offset) {
         checkTag(data, offset, TAG_OID, "OID");
-        int[] lenInfo = decodeLength(data, offset + 1);
+        int[] lenInfo = decodeDefiniteLength(data, offset + 1, "OID");
         int contentOff = offset + 1 + lenInfo[1];
         int contentEnd = contentOff + lenInfo[0];
 
@@ -521,7 +543,7 @@ public final class DerCodec {
     /** Разбирает INTEGER и возвращает BigInteger. */
     public static BigInteger parseInteger(byte[] data, int offset) {
         checkTag(data, offset, TAG_INTEGER, "INTEGER");
-        int[] lenInfo = decodeLength(data, offset + 1);
+        int[] lenInfo = decodeDefiniteLength(data, offset + 1, "INTEGER");
         int contentOff = offset + 1 + lenInfo[1];
         if (lenInfo[0] > MAX_INTEGER_LENGTH || contentOff + lenInfo[0] > data.length) {
             throw new IllegalArgumentException(
@@ -539,7 +561,7 @@ public final class DerCodec {
     /** Разбирает BOOLEAN (tag 0x01). DER: 0x00 = FALSE, иначе TRUE. */
     public static boolean parseBoolean(byte[] data, int offset) {
         checkTag(data, offset, TAG_BOOLEAN, "BOOLEAN");
-        int[] lenInfo = decodeLength(data, offset + 1);
+        int[] lenInfo = decodeDefiniteLength(data, offset + 1, "BOOLEAN");
         int contentOff = offset + 1 + lenInfo[1];
         if (contentOff >= data.length) {
             throw new IllegalArgumentException(
@@ -557,11 +579,7 @@ public final class DerCodec {
     /** Разбирает GeneralizedTime (tag 0x18) и возвращает строку YYYYMMDDHHmmssZ. */
     public static String parseGeneralizedTime(byte[] data, int offset) {
         checkTag(data, offset, TAG_GENERALIZED_TIME, "GeneralizedTime");
-        int[] lenInfo = decodeLength(data, offset + 1);
-        if (lenInfo[0] < 0) {
-            throw new IllegalArgumentException(
-                    "GeneralizedTime at offset " + offset + ": INDEFINITE_LENGTH not supported");
-        }
+        int[] lenInfo = decodeDefiniteLength(data, offset + 1, "GeneralizedTime");
         int contentOff = offset + 1 + lenInfo[1];
         if (contentOff + lenInfo[0] > data.length) {
             throw new IllegalArgumentException(
@@ -581,11 +599,7 @@ public final class DerCodec {
     /** Разбирает UTF8String (tag 0x0C) и возвращает строку. */
     public static String parseUTF8String(byte[] data, int offset) {
         checkTag(data, offset, TAG_UTF8_STRING, "UTF8String");
-        int[] lenInfo = decodeLength(data, offset + 1);
-        if (lenInfo[0] < 0) {
-            throw new IllegalArgumentException(
-                    "UTF8String at offset " + offset + ": INDEFINITE_LENGTH not supported");
-        }
+        int[] lenInfo = decodeDefiniteLength(data, offset + 1, "UTF8String");
         int contentOff = offset + 1 + lenInfo[1];
         if (contentOff + lenInfo[0] > data.length) {
             throw new IllegalArgumentException(

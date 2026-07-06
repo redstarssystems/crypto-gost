@@ -144,13 +144,14 @@ import java.security.GeneralSecurityException;
 byte[] password = "секретный пароль".getBytes(StandardCharsets.UTF_8);
 byte[] salt     = new byte[16];
 CryptoRandom.INSTANCE.nextBytes(salt); // <1>
-SymmetricKey key = KeyGenerator.deriveKey(password, salt); // <2>
+SymmetricKey key = null;
 try {
+    key = KeyGenerator.deriveKey(password, salt); // <2>
     // использование ключа ...
 } catch (GeneralSecurityException e) {
     throw new RuntimeException("Key derivation failed", e);
 } finally {
-    key.destroy();
+    if (key != null) key.destroy();
     java.util.Arrays.fill(password, (byte) 0); // <3>
 }
 ----
@@ -528,7 +529,8 @@ try (InputStream  raw = Files.newInputStream(encrypted);
 перестановка и дублирование чанков обнаруживаются автоматически.
 Максимальный размер чанка — 1 МБ.
 <2> `opening` проверяет CMAC каждого чанка до возврата данных вызывающему.
-<3> Каждый поток выводит два независимых ключа
++
+Каждый поток выводит два независимых ключа
 (`cmacKey` для CMAC и `ctrKey` для CTR) через KDF_TREE_GOSTR3411_2012_256
 из мастер-ключа и случайного streamNonce.
 
@@ -931,7 +933,7 @@ byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
 // HMAC-Streebog-256
 byte[] mac256 = Digest.hmac256(data, key);
 
-// HMAC-Streebog-256
+// HMAC-Streebog-512
 byte[] mac512 = Digest.hmac512(data, key);
 
 // Проверка целостности — constant-time сравнение (защита от timing-атак)

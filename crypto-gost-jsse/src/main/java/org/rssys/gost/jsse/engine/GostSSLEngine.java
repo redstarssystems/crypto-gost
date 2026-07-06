@@ -53,9 +53,6 @@ public final class GostSSLEngine extends SSLEngine {
 
     private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSSLEngine");
 
-    /** Однократное предупреждение об отсутствии проверки hostname на весь JVM-процесс. */
-    private static final AtomicBoolean hostnameVerificationWarned = new AtomicBoolean(false);
-
     // ========================================================================
     // Состояние
     // ========================================================================
@@ -80,6 +77,14 @@ public final class GostSSLEngine extends SSLEngine {
     private static final int MAX_HANDSHAKE_BUFFER =
             TlsConstants.MAX_CERT_SIZE * TlsConstants.MAX_CERT_CHAIN_LENGTH + 65536;
 
+    // Rate-limit входящих KeyUpdate (RFC 8446 §4.6.3 нормы не задаёт; hardening против
+    // флуда от аутентифицированного пира). Окно по времени, а не lifetime-cap: легитимный
+    // auto-rekey (tryAutoKeyUpdate) на долгом соединении естественно порождает много KU,
+    // поэтому абсолютный кап дал бы ложные срабатывания. Нормальный темп — единицы за всё
+    // соединение; предел с большим запасом отсекает только флуд.
+    private static final int MAX_PEER_KEY_UPDATES_PER_WINDOW = 10;
+    private static final long KEY_UPDATE_RATE_WINDOW_NANOS = 1_000_000_000L;
+
     private final GostX509KeyManager keyManager;
     private final GostX509TrustManager trustManager;
     private boolean clientMode = true;
@@ -101,8 +106,12 @@ public final class GostSSLEngine extends SSLEngine {
     private volatile boolean closeSent;
     private volatile boolean closeReceived;
     // Готовый зашифрованный close_notify — отдельно от outgoingQueue,
-    // чтобы wrap() не перешифровал его второй раз
-    private byte[] pendingCloseRecord;
+    // чтобы wrap() не перешифровал его второй раз.
+    // volatile: пишется/читается под outboundLock (closeOutbound/wrap/pollOutboundRecord),
+    // но обнуляется под inboundLock через destroyHandshakeEngine() (closeInbound, handleAlert).
+    // Разные локи не дают happens-before между направлениями — нужна volatile-видимость,
+    // симметрично уже-volatile closeSent/closeReceived.
+    private volatile byte[] pendingCloseRecord;
 
     // два отдельных lock для inbound/outbound — SSLEngine допускает параллельные
     // wrap (outbound) и unwrap (inbound). Один lock заблокировал бы оба направления.
@@ -135,6 +144,11 @@ public final class GostSSLEngine extends SSLEngine {
     private boolean wantClientAuth;
     private boolean enableSessionCreation = true;
     private String endpointIdentificationAlgorithm;
+
+    // true только для движка из createForClientNoHostnameCheck — осознанный opt-out через
+    // публичный API. Влияет ТОЛЬКО на частоту WARNING (намерение уже залогировано при создании),
+    // но не на решение о проверке hostname (оно определяется endpointIdentificationAlgorithm).
+    private boolean explicitNoHostnameCheck;
 
     // max_fragment_length (RFC 6066 §4): 0 = default (16384)
     private int maxFragmentLength;
@@ -258,6 +272,40 @@ public final class GostSSLEngine extends SSLEngine {
     }
 
     /**
+     * Создаёт клиентский GostSSLEngine для пути SSLContext.createSSLEngine(host, port).
+     * <p>
+     * Включает hostname verification (endpointIdentificationAlgorithm = "HTTPS") при
+     * непустом host — так engine-путь даёт те же гарантии, что socket-путь
+     * (устранение confused-deputy). serverSessionContext сохраняется, т.к. engine
+     * может быть переключён в серверный режим через setUseClientMode(false)
+     * (сценарий Tomcat/Spring Boot: createSSLEngine() без явного режима).
+     * <p>
+     * При пустом host endpoint identification не включается: без ожидаемого имени
+     * проверять нечего (peerHost неизменяем после конструктора).
+     */
+    static GostSSLEngine createForContextClient(
+            GostX509KeyManager keyManager,
+            GostX509TrustManager trustManager,
+            String host,
+            int port,
+            GostSSLSessionContext clientSessionContext,
+            GostSSLSessionContext serverSessionContext) {
+        GostSSLEngine engine =
+                new GostSSLEngine(
+                        keyManager,
+                        trustManager,
+                        host,
+                        port,
+                        true,
+                        clientSessionContext,
+                        serverSessionContext);
+        if (host != null && !host.isEmpty()) {
+            engine.endpointIdentificationAlgorithm = "HTTPS";
+        }
+        return engine;
+    }
+
+    /**
      * Создаёт клиентский GostSSLEngine БЕЗ проверки hostname.
      * Только для тестов и изолированных сетей — MITM-уязвимость.
      */
@@ -270,8 +318,11 @@ public final class GostSSLEngine extends SSLEngine {
         LOG.log(
                 Level.WARNING,
                 "Client SSLEngine created WITHOUT hostname verification. "
-                + "Use createForClient() for production.");
-        return new GostSSLEngine(keyManager, trustManager, host, port, true, sessionContext, null);
+                        + "Use createForClient() for production.");
+        GostSSLEngine engine =
+                new GostSSLEngine(keyManager, trustManager, host, port, true, sessionContext, null);
+        engine.explicitNoHostnameCheck = true;
+        return engine;
     }
 
     /**
@@ -351,10 +402,8 @@ public final class GostSSLEngine extends SSLEngine {
                                 org.rssys.gost.jsse.bridge.CertificateBridge.toGost(localCertChain);
                     }
                     java.security.PrivateKey pk = keyManager.getPrivateKey(alias);
-                    if (pk instanceof org.rssys.gost.jsse.bridge.KeyBridge.GostPrivateKeyAdapter) {
-                        privateKey =
-                                ((org.rssys.gost.jsse.bridge.KeyBridge.GostPrivateKeyAdapter) pk)
-                                        .getDelegate();
+                    if (pk instanceof org.rssys.gost.jca.key.GostECPrivateKey gostKey) {
+                        privateKey = gostKey.toPrivateKeyParameters();
                     }
                 }
             }
@@ -440,10 +489,8 @@ public final class GostSSLEngine extends SSLEngine {
                                 org.rssys.gost.jsse.bridge.CertificateBridge.toGost(localCertChain);
                     }
                     java.security.PrivateKey pk = keyManager.getPrivateKey(alias);
-                    if (pk instanceof org.rssys.gost.jsse.bridge.KeyBridge.GostPrivateKeyAdapter) {
-                        privateKey =
-                                ((org.rssys.gost.jsse.bridge.KeyBridge.GostPrivateKeyAdapter) pk)
-                                        .getDelegate();
+                    if (pk instanceof org.rssys.gost.jca.key.GostECPrivateKey gostKey) {
+                        privateKey = gostKey.toPrivateKeyParameters();
                     }
                 }
             }
@@ -516,6 +563,11 @@ public final class GostSSLEngine extends SSLEngine {
 
     private int peerKeyUpdateCount;
 
+    // Состояние скользящего окна rate-limit KeyUpdate. Читается/пишется под inboundLock
+    // (processHandshakeFrames вызывается только из unwrap), отдельная синхронизация не нужна.
+    private long keyUpdateWindowStartNanos;
+    private int keyUpdatesInWindow;
+
     int getPeerKeyUpdateCountForTest() {
         return peerKeyUpdateCount;
     }
@@ -560,14 +612,31 @@ public final class GostSSLEngine extends SSLEngine {
                 clientMode ? "CLIENT" : "SERVER",
                 peerHost,
                 peerPort);
-        if (clientMode && endpointIdentificationAlgorithm == null
-                && !hostnameVerificationWarned.getAndSet(true)) {
+        if (clientMode && !isHostnameVerificationActive() && !explicitNoHostnameCheck) {
+            // WARNING на каждом клиентском соединении без проверки hostname: случайная очистка
+            // safe-default через setSSLParameters должна быть видна per-connection.
+            // Осознанный opt-out (createForClientNoHostnameCheck) исключён — намерение уже
+            // залогировано разово при создании, повтор сигнала не добавляет.
             LOG.log(
                     Level.WARNING,
-                    "Client TLS handshake without hostname verification. "
-                    + "Set SSLParameters.setEndpointIdentificationAlgorithm(\"HTTPS\") "
-                    + "or use GostSSLEngine.createForClientNoHostnameCheck(...) for intentional opt-out.");
+                    "Client TLS handshake without hostname verification (host={0}). "
+                            + "Set SSLParameters.setEndpointIdentificationAlgorithm(\"HTTPS\") "
+                            + "or use GostSSLEngine.createForClientNoHostnameCheck(...) for intentional opt-out.",
+                    peerHost);
         }
+    }
+
+    /**
+     * @return true, если при валидации серверного сертификата будет выполнена
+     *     проверка hostname. Зеркалит {@link GostX509TrustManager#extractHostnameForEndpointId}:
+     *     алгоритм HTTPS/LDAPS (case-insensitive) и непустой peerHost.
+     */
+    private boolean isHostnameVerificationActive() {
+        return endpointIdentificationAlgorithm != null
+                && ("HTTPS".equalsIgnoreCase(endpointIdentificationAlgorithm)
+                        || "LDAPS".equalsIgnoreCase(endpointIdentificationAlgorithm))
+                && peerHost != null
+                && !peerHost.isEmpty();
     }
 
     // ========================================================================
@@ -1032,6 +1101,15 @@ public final class GostSSLEngine extends SSLEngine {
         int payloadLen = ((src.get(srcPos + 3) & 0xFF) << 8) | (src.get(srcPos + 4) & 0xFF);
         int totalLen = TlsConstants.RECORD_HEADER_SIZE + payloadLen;
 
+        // TLSPlaintext.length ≤ 2^14 (RFC 8446 §5.1). Проверка до аллокации и до ожидания
+        // остатка: оверсайз-запись — нарушение протокола, реагируем немедленно, а не копим
+        // до 65 КБ. Зеркалит раннюю проверку в TlsRecord.unprotect() для шифрованного пути.
+        if (payloadLen > TlsConstants.MAX_PLAINTEXT_LENGTH) {
+            throw new TlsException(
+                    TlsConstants.ALERT_RECORD_OVERFLOW,
+                    "Plaintext record too large: " + payloadLen);
+        }
+
         if (src.remaining() < totalLen) {
             return 0; // BUFFER_UNDERFLOW
         }
@@ -1176,6 +1254,7 @@ public final class GostSSLEngine extends SSLEngine {
                             handshakeEngine.receivePostHandshake(frame);
                     if (result.type
                             == TlsHandshakeEngine.PostHandshakeResult.Type.KEY_UPDATE_HANDLED) {
+                        enforceKeyUpdateRateLimit();
                         peerKeyUpdateCount++;
                         LOG.log(Level.DEBUG, "KeyUpdate received");
                         // Читатель-ключи обновляются немедленно — пир сменил свои write-ключи
@@ -1371,6 +1450,24 @@ public final class GostSSLEngine extends SSLEngine {
         }
     }
 
+    /**
+     * Ограничивает частоту входящих KeyUpdate скользящим окном.
+     * Предусловие: вызывается под inboundLock. При превышении — fatal alert и закрытие,
+     * т.к. флуд KeyUpdate — злоупотребление, а не расширяемость протокола (fail-closed).
+     */
+    private void enforceKeyUpdateRateLimit() throws TlsException {
+        long now = System.nanoTime();
+        if (now - keyUpdateWindowStartNanos > KEY_UPDATE_RATE_WINDOW_NANOS) {
+            keyUpdateWindowStartNanos = now;
+            keyUpdatesInWindow = 0;
+        }
+        if (++keyUpdatesInWindow > MAX_PEER_KEY_UPDATES_PER_WINDOW) {
+            throw new TlsException(
+                    TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                    "Peer KeyUpdate rate limit exceeded: " + keyUpdatesInWindow + " within window");
+        }
+    }
+
     /** Авто-KeyUpdate при приближении к SNMAX (RFC 8446 §4.6.3). */
     private void tryAutoKeyUpdate() throws SSLException {
         if (writerRecord != null
@@ -1540,7 +1637,7 @@ public final class GostSSLEngine extends SSLEngine {
         handshakeDone = true;
 
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "Handshake completed: suite={0}, alpn={1}",
                 ciphersuite.getIanaName(),
                 selectedAlpnProtocol != null ? selectedAlpnProtocol : "none");
@@ -1615,6 +1712,14 @@ public final class GostSSLEngine extends SSLEngine {
         }
         currentPskTicketIdentity = null;
         pendingCloseRecord = null;
+    }
+
+    /**
+     * Только для тестов: факт зануления ссылок на record-ключи после
+     * destroyHandshakeEngine(). Возвращает лишь boolean, ключевой материал не раскрывает.
+     */
+    boolean recordsDestroyedForTest() {
+        return readerRecord == null && writerRecord == null && !pendingWriteKeysExist;
     }
 
     // ========================================================================
@@ -1986,9 +2091,10 @@ public final class GostSSLEngine extends SSLEngine {
         if (protocols != null) setEnabledProtocols(protocols);
         if (params.getNeedClientAuth()) setNeedClientAuth(true);
         if (params.getWantClientAuth()) setWantClientAuth(true);
-        if (params.getEndpointIdentificationAlgorithm() != null) {
-            this.endpointIdentificationAlgorithm = params.getEndpointIdentificationAlgorithm();
-        }
+        // Контракт SSLParameters: endpoint id применяется всегда, включая null
+        // (null = endpoint identification отключён). Иначе явный opt-out по спецификации
+        // не сработал бы и safe-default стал бы ловушкой.
+        this.endpointIdentificationAlgorithm = params.getEndpointIdentificationAlgorithm();
         String[] appProtocols = params.getApplicationProtocols();
         if (appProtocols != null && appProtocols.length > 0) {
             this.applicationProtocols = appProtocols.clone();
@@ -2058,11 +2164,6 @@ public final class GostSSLEngine extends SSLEngine {
         System.Logger prev = LOG;
         LOG = testLogger;
         return prev;
-    }
-
-    /** Тестовый хелпер: сброс флага однократного предупреждения hostname-verification. */
-    static void resetHostnameVerificationWarning() {
-        hostnameVerificationWarned.set(false);
     }
 
     static byte[] buildPlaintextRecord(byte contentType, byte[] body) {

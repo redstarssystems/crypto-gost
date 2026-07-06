@@ -37,6 +37,16 @@ import org.rssys.gost.util.CryptoRandom;
  *         .build();
  * }</pre>
  * <p>
+ * Для настройки лимитов CRL/OCSP передавайте полностью сконфигурированный
+ * {@code GostX509TrustManager} (8-параметрический конструктор) или используйте
+ * {@code GostTrustManagerParameters} через {@code TrustManagerFactory.init(...)}:
+ * <pre>{@code
+ * GostX509TrustManager tm = new GostX509TrustManager(
+ *         caKeys, ocspPolicy, ocspFetcher, crlPolicy, crlFetcher,
+ *         maxCrlSize, maxRevokedEntries, maxOcspAgeMs);
+ * GostSslContext ctx = GostSslContextBuilder.forClient().trustManager(tm).build();
+ * }</pre>
+ * <p>
  * Пример использования (сервер):
  * <pre>{@code
  * GostX509KeyManager km = new GostX509KeyManager();

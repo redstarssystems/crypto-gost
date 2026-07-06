@@ -25,6 +25,13 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class GostExtensionParser {
 
+    private static final int MAX_EXTENSIONS_PER_CERT = 64;
+
+    // MAX_EXTENSIONS_PER_CERT ограничивает число расширений, но не число записей
+    // внутри одного SAN — сертификат в пределах cert-cap может нести десятки тысяч
+    // dNSName/iPAddress. Отдельный count-барьер на записи SAN.
+    private static final int MAX_SAN_ENTRIES = 512;
+
     private GostExtensionParser() {}
 
     /**
@@ -53,6 +60,9 @@ public final class GostExtensionParser {
         /** Сырые DER-байты OID политик — для oid_filters matching (RFC 8446 §4.2.5). */
         public final byte[][] cpOids;
 
+        /** Name Constraints (RFC 5280 §4.2.1.10) — null если расширение отсутствует. */
+        public final NameConstraintsData nameConstraints;
+
         public final int keyUsageBits;
         public final byte[][] ekuOids;
         public final Set<String> presentExtensionOids;
@@ -79,7 +89,8 @@ public final class GostExtensionParser {
                 int keyUsageBits,
                 byte[][] ekuOids,
                 Set<String> presentExtensionOids,
-                byte[][] cpOids) {
+                byte[][] cpOids,
+                NameConstraintsData nameConstraints) {
             this.sanDnsNames = sanDnsNames;
             this.sanIpAddresses = sanIpAddresses;
             this.keyUsageValid = keyUsageValid;
@@ -102,6 +113,7 @@ public final class GostExtensionParser {
             this.ekuOids = ekuOids;
             this.cpOids = cpOids;
             this.presentExtensionOids = presentExtensionOids;
+            this.nameConstraints = nameConstraints;
         }
 
         /** Канонический пустой результат — гарантирует {@code ==} сравнение. */
@@ -112,8 +124,12 @@ public final class GostExtensionParser {
                         true,
                         true,
                         true,
-                        true,
-                        true,
+                        // ekuOcspSigning / ekuTimeStamping = false: «нет extensions»
+                        // логически = «EKU absent», а OCSP-делегат (RFC 6960 §4.2.2.2)
+                        // и TSA (RFC 3161 §2.3) требуют обязательного EKU. Permissive
+                        // здесь ошибочно принимал cert без extensions как responder/TSA.
+                        false,
+                        false,
                         false,
                         -1,
                         true,
@@ -128,11 +144,14 @@ public final class GostExtensionParser {
                         0,
                         null,
                         Collections.emptySet(),
+                        null,
                         null);
 
         /** @return пустой результат — расширения не найдены или не распарсены.
-         *         По RFC 5280 отсутствие расширений не является ошибкой: ключ
-         *         считается валидным для всех целей (permissive default).
+         *         По RFC 5280 §4.2.1.12 отсутствие EKU не ограничивает общие цели
+         *         (permissive default для ekuValid/ekuClientAuth). Исключение —
+         *         OCSP-делегат и TSA: там EKU обязателен (RFC 6960 §4.2.2.2,
+         *         RFC 3161 §2.3), поэтому ekuOcspSigning/ekuTimeStamping = false.
          *         Возвращает канонический синглтон — можно сравнивать через {@code ==}. */
         public static ExtensionsResult empty() {
             return EMPTY;
@@ -206,8 +225,16 @@ public final class GostExtensionParser {
         int keyUsageBitsLocal = 0;
         ArrayList<byte[]> ekuOidList = new ArrayList<>();
         ArrayList<byte[]> cpOidList = new ArrayList<>();
+        // Name Constraints (RFC 5280 §4.2.1.10)
+        NameConstraintsData ncLocal = null;
 
+        int extCount = 0;
         while (pos < end) {
+            if (extCount >= MAX_EXTENSIONS_PER_CERT) {
+                throw new IllegalArgumentException(
+                        "Too many X.509 extensions in certificate: " + extCount);
+            }
+            extCount++;
             if ((der[pos] & 0xFF) != TAG_SEQUENCE) {
                 pos = readTlv(der, pos)[1];
                 continue;
@@ -276,9 +303,10 @@ public final class GostExtensionParser {
                             hasEku(der, octTlv[0], octTlv[1], GostDerParser.SERVER_AUTH_OID_BYTES);
                     ekuClientAuth =
                             hasEku(der, octTlv[0], octTlv[1], GostDerParser.CLIENT_AUTH_OID_BYTES);
-                    // EKU id-kp-OCSPSigning (1.3.6.1.5.5.7.3.9)
-                    if (hasEku(der, octTlv[0], octTlv[1], GostDerParser.OCSP_SIGNING_OID_BYTES)
-                            || hasEku(der, octTlv[0], octTlv[1], GostDerParser.ANY_EKU_OID_BYTES)) {
+                    // EKU id-kp-OCSPSigning (1.3.6.1.5.5.7.3.9).
+                    // anyExtendedKeyUsage НЕ принимаем: RFC 6960 §4.2.2.2 требует
+                    // делегирование именно через id-kp-OCSPSigning, anyEKU недостаточен.
+                    if (hasEku(der, octTlv[0], octTlv[1], GostDerParser.OCSP_SIGNING_OID_BYTES)) {
                         ekuOcspSigning = true;
                     }
                     // EKU id-kp-timeStamping (1.3.6.1.5.5.7.3.8)
@@ -307,10 +335,23 @@ public final class GostExtensionParser {
                         // pathLen INTEGER (optional)
                         if (bcInnerPos < bcInnerEnd && (der[bcInnerPos] & 0xFF) == TAG_INTEGER) {
                             int[] intTlv = readTlv(der, bcInnerPos);
-                            // DER INTEGER: unpack value
+                            int intLen = intTlv[1] - intTlv[0];
+                            if (intLen > 4 || intLen == 0) {
+                                throw new IllegalArgumentException(
+                                        "pathLen INTEGER: invalid length " + intLen);
+                            }
                             int val = 0;
                             for (int i = intTlv[0]; i < intTlv[1]; i++) {
                                 val = (val << 8) | (der[i] & 0xFF);
+                            }
+                            // Guard длины (intLen<=4) не ловит знаковое переполнение:
+                            // 4-байтовый INTEGER с MSB=1 (напр. 80 00 00 00) даёт val<0,
+                            // и в ChainValidator проверка `pl >= 0` молча пропускает
+                            // pathLen-ограничение. pathLenConstraint по RFC 5280 §4.2.1.9 —
+                            // неотрицательный INTEGER, отрицательное значение невалидно.
+                            if (val < 0) {
+                                throw new IllegalArgumentException(
+                                        "pathLen INTEGER: negative value");
                             }
                             pathLen = val;
                         }
@@ -364,6 +405,9 @@ public final class GostExtensionParser {
                     int[] octTlv = readTlv(der, afterOid);
                     parseCertPolicyOids(der, octTlv[0], octTlv[1], certPolicyList, cpOidList);
                 }
+            } else if (matchesOid(der, oidStart, oidLen, NC_OID_BYTES)) {
+                // NameConstraints (RFC 5280 §4.2.1.10)
+                ncLocal = parseNameConstraints(der, afterOid, extContentEnd, critical);
             } else if (critical) {
                 // Неизвестное critical extension: reject согласно RFC 5280 §4.2
                 hasUnknownCritical = true;
@@ -387,7 +431,12 @@ public final class GostExtensionParser {
                 kuValid,
                 ekuValid,
                 ekuClientAuthValid,
-                !ekuPresent || ekuOcspSigning,
+                // OCSP-делегат и TSA требуют обязательного EKU (restrictive):
+                // RFC 6960 §4.2.2.2 и RFC 3161 §2.3. В отличие от ekuValid/
+                // ekuClientAuth (permissive default RFC 5280 §4.2.1.12 для общего
+                // TLS-EKU), здесь отсутствие EKU НЕ даёт назначение — иначе cert
+                // без EKU ошибочно принимается как responder/TSA.
+                ekuPresent && ekuOcspSigning,
                 ekuPresent && ekuTimeStamping,
                 isCA,
                 pathLen,
@@ -403,7 +452,8 @@ public final class GostExtensionParser {
                 keyUsageBitsLocal,
                 ekuOidsResult,
                 presentOids,
-                cpOidsResult);
+                cpOidsResult,
+                ncLocal);
     }
 
     // ====================================================================
@@ -424,10 +474,19 @@ public final class GostExtensionParser {
         int[] gnSeqTlv = readTlv(der, gnOuter);
         int gnPos = gnSeqTlv[0];
         int gnEnd = gnSeqTlv[1];
+        int sanCount = 0;
         while (gnPos < gnEnd) {
+            if (sanCount >= MAX_SAN_ENTRIES) {
+                throw new IllegalArgumentException("SAN entries exceed maximum " + MAX_SAN_ENTRIES);
+            }
+            sanCount++;
             int gnTag = der[gnPos] & 0xFF;
             if (gnTag == TAG_DNS_NAME) {
                 int[] dnsTlv = readTlv(der, gnPos);
+                // dNSName — IA5String (RFC 5280 §4.2.1.6). US_ASCII декодирует lossy:
+                // байты >127 заменяются на U+FFFD. Обхода hostname-проверки нет
+                // (сравнение идёт по итоговой строке); это лишь data-quality аспект
+                // для логирования/отображения.
                 String name =
                         new String(
                                 der, dnsTlv[0], dnsTlv[1] - dnsTlv[0], StandardCharsets.US_ASCII);
@@ -533,7 +592,10 @@ public final class GostExtensionParser {
             int locPos = methodOidTlv[1];
             if (locPos < adEnd) {
                 int locTag = der[locPos] & 0xFF;
-                if ((locTag & 0xDF) == 0x86) {
+                // uniformResourceIdentifier [6] IMPLICIT IA5String (RFC 5280 §4.2.1.6) —
+                // строго primitive 0x86. Точное сравнение (а не маска 0xDF, гасившая
+                // constructed-бит) отсекает non-standard constructed 0xA6.
+                if (locTag == TAG_URI) {
                     int[] uriTlv = readTlv(der, locPos);
                     String uri =
                             new String(
@@ -604,7 +666,10 @@ public final class GostExtensionParser {
                 }
                 while (gnPos < gnEnd) {
                     int gnTag = der[gnPos] & 0xFF;
-                    if ((gnTag & 0xDF) == 0x86) {
+                    // uniformResourceIdentifier [6] IMPLICIT IA5String (RFC 5280 §4.2.1.6) —
+                    // строго primitive 0x86. Точное сравнение отсекает non-standard
+                    // constructed 0xA6, который маска 0xDF ошибочно пропускала.
+                    if (gnTag == TAG_URI) {
                         int[] uriTlv = readTlv(der, gnPos);
                         String uri =
                                 new String(
@@ -659,5 +724,187 @@ public final class GostExtensionParser {
             }
             pos = piSeqTlv[1];
         }
+    }
+
+    // ====================================================================
+    // NameConstraints parser (RFC 5280 §4.2.1.10)
+    // ====================================================================
+
+    /**
+     * Парсит расширение NameConstraints из extnValue OCTET STRING.
+     *
+     * <p>Поддерживаемые типы GeneralName: dNSName [2] и iPAddress [7].
+     * Неподдерживаемые (rfc822Name, directoryName, URI, otherName) — флаг
+     * hasUnsupportedNameType. min != 0 или max присутствует — hasInvalidMinMax.
+     * non-critical — отдельный флаг (нарушение RFC 5280 §4.2.1.10).</p>
+     *
+     * <p>iPAddress в NameConstraints кодируется с маской: 8 байт (IPv4)
+     * или 32 байта (IPv6) — в отличие от SAN, где 4/16 байт без маски.</p>
+     *
+     * @param der           DER-поток сертификата
+     * @param extValuePos   позиция начала extnValue OCTET STRING
+     * @param extContentEnd конец SEQUENCE Extension
+     * @param critical      true если расширение помечено как critical
+     * @return распарсенные NameConstraints или EMPTY если OCTET STRING не найден
+     */
+    private static NameConstraintsData parseNameConstraints(
+            byte[] der, int extValuePos, int extContentEnd, boolean critical) {
+        if (extValuePos >= extContentEnd || (der[extValuePos] & 0xFF) != TAG_OCTET_STRING) {
+            return NameConstraintsData.EMPTY;
+        }
+        int[] octTlv = readTlv(der, extValuePos);
+        int ncStart = octTlv[0];
+        int ncEnd = octTlv[1];
+        if (ncStart >= ncEnd || (der[ncStart] & 0xFF) != TAG_SEQUENCE) {
+            return NameConstraintsData.EMPTY;
+        }
+        int[] ncSeqTlv = readTlv(der, ncStart);
+        int pos = ncSeqTlv[0];
+        int end = ncSeqTlv[1];
+
+        ArrayList<String> permDns = null;
+        ArrayList<byte[]> permIp = null;
+        ArrayList<String> exclDns = null;
+        ArrayList<byte[]> exclIp = null;
+        boolean hasUnsupported = false;
+        boolean hasInvalidMinMax = false;
+
+        while (pos < end) {
+            int tag = der[pos] & 0xFF;
+            if (tag == TAG_CTX_0 || tag == TAG_CTX_1) {
+                boolean isExcluded = (tag == TAG_CTX_1);
+                int[] subtreeTlv = readTlv(der, pos);
+
+                ArrayList<String> dnsOut = new ArrayList<>();
+                ArrayList<byte[]> ipOut = new ArrayList<>();
+                boolean[] flags =
+                        parseGeneralSubtrees(der, subtreeTlv[0], subtreeTlv[1], dnsOut, ipOut);
+
+                if (flags[0]) hasUnsupported = true;
+                if (flags[1]) hasInvalidMinMax = true;
+
+                if (isExcluded) {
+                    if (!dnsOut.isEmpty()) exclDns = addToList(exclDns, dnsOut);
+                    if (!ipOut.isEmpty()) exclIp = addToIpList(exclIp, ipOut);
+                } else {
+                    if (!dnsOut.isEmpty()) permDns = addToList(permDns, dnsOut);
+                    if (!ipOut.isEmpty()) permIp = addToIpList(permIp, ipOut);
+                }
+                pos = subtreeTlv[1];
+            } else {
+                pos = readTlv(der, pos)[1];
+            }
+        }
+
+        return new NameConstraintsData(
+                permDns == null ? null : permDns.toArray(new String[0]),
+                permIp == null ? null : permIp.toArray(new byte[0][]),
+                exclDns == null ? null : exclDns.toArray(new String[0]),
+                exclIp == null ? null : exclIp.toArray(new byte[0][]),
+                hasUnsupported,
+                hasInvalidMinMax,
+                !critical);
+    }
+
+    /**
+     * Парсит содержимое [0]/[1] GeneralSubtrees (SEQUENCE OF GeneralSubtree).
+     * Заполняет переданные списки dnsOut/ipOut и возвращает флаги ошибок.
+     *
+     * @return boolean[2]: [0]=hasUnsupported, [1]=hasInvalidMinMax
+     */
+    private static boolean[] parseGeneralSubtrees(
+            byte[] der, int start, int end, ArrayList<String> dnsOut, ArrayList<byte[]> ipOut) {
+        boolean hasUnsupported = false;
+        boolean hasInvalidMinMax = false;
+        int pos = start;
+
+        if (pos >= end || (der[pos] & 0xFF) != TAG_SEQUENCE) {
+            return new boolean[] {hasUnsupported, hasInvalidMinMax};
+        }
+        int[] seqTlv = readTlv(der, pos);
+        pos = seqTlv[0];
+        int seqEnd = seqTlv[1];
+
+        while (pos < seqEnd) {
+            if ((der[pos] & 0xFF) != TAG_SEQUENCE) {
+                pos = readTlv(der, pos)[1];
+                continue;
+            }
+            int[] subtreeSeqTlv = readTlv(der, pos);
+            int sPos = subtreeSeqTlv[0];
+            int sEnd = subtreeSeqTlv[1];
+
+            if (sPos >= sEnd) {
+                pos = subtreeSeqTlv[1];
+                continue;
+            }
+            int gnTag = der[sPos] & 0xFF;
+            int[] gnTlv = readTlv(der, sPos);
+
+            if (gnTag == TAG_DNS_NAME) {
+                String name =
+                        new String(
+                                der,
+                                gnTlv[0],
+                                gnTlv[1] - gnTlv[0],
+                                java.nio.charset.StandardCharsets.US_ASCII);
+                dnsOut.add(name.toLowerCase());
+            } else if (gnTag == TAG_IP_ADDRESS) {
+                int ipLen = gnTlv[1] - gnTlv[0];
+                if (ipLen != 8 && ipLen != 32) {
+                    throw new IllegalArgumentException(
+                            "Invalid iPAddress length in NameConstraints: "
+                                    + ipLen
+                                    + " (expected 8 or 32)");
+                }
+                ipOut.add(Arrays.copyOfRange(der, gnTlv[0], gnTlv[1]));
+            } else {
+                hasUnsupported = true;
+            }
+
+            int afterBase = gnTlv[1];
+            while (afterBase < sEnd) {
+                int ctxTag = der[afterBase] & 0xFF;
+                if (ctxTag == TAG_CTX_0) {
+                    int[] minTlv = readTlv(der, afterBase);
+                    if (minTlv[0] < minTlv[1] && (der[minTlv[0]] & 0xFF) == TAG_INTEGER) {
+                        int[] intTlv = readTlv(der, minTlv[0]);
+                        int minVal = 0;
+                        for (int i = intTlv[0]; i < intTlv[1]; i++) {
+                            minVal = (minVal << 8) | (der[i] & 0xFF);
+                        }
+                        if (minVal != 0) {
+                            hasInvalidMinMax = true;
+                        }
+                    }
+                    afterBase = minTlv[1];
+                } else if (ctxTag == TAG_CTX_1) {
+                    hasInvalidMinMax = true;
+                    afterBase = readTlv(der, afterBase)[1];
+                } else {
+                    break;
+                }
+            }
+
+            pos = subtreeSeqTlv[1];
+        }
+
+        return new boolean[] {hasUnsupported, hasInvalidMinMax};
+    }
+
+    private static ArrayList<String> addToList(ArrayList<String> target, ArrayList<String> src) {
+        if (target == null) {
+            target = new ArrayList<>();
+        }
+        target.addAll(src);
+        return target;
+    }
+
+    private static ArrayList<byte[]> addToIpList(ArrayList<byte[]> target, ArrayList<byte[]> src) {
+        if (target == null) {
+            target = new ArrayList<>();
+        }
+        target.addAll(src);
+        return target;
     }
 }

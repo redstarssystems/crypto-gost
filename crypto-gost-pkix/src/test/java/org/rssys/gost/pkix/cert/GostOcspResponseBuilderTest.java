@@ -270,7 +270,7 @@ class GostOcspResponseBuilderTest {
                         .build();
 
         // strict=true — nonce должен совпадать
-        OcspVerifier.verify(ocspDer, serialNumber, kp.getPublic(), caDn, null, nonce, true);
+        OcspVerifier.verify(ocspDer, serialNumber, kp.getPublic(), caDn, null, nonce);
 
         // Чужой nonce с strict=true -> ошибка (mismatch всегда бросается)
         byte[] wrongNonce = new byte[16];
@@ -279,13 +279,7 @@ class GostOcspResponseBuilderTest {
                 PkixException.class,
                 () ->
                         OcspVerifier.verify(
-                                ocspDer,
-                                serialNumber,
-                                kp.getPublic(),
-                                caDn,
-                                null,
-                                wrongNonce,
-                                true),
+                                ocspDer, serialNumber, kp.getPublic(), caDn, null, wrongNonce),
                 "Чужой nonce при strict=true должен вызывать ошибку");
     }
 
@@ -349,5 +343,102 @@ class GostOcspResponseBuilderTest {
         assertTrue(
                 producedAt.toEpochMilli() >= now.toEpochMilli() - 1000,
                 "producedAt должен быть >= now - 1с");
+    }
+
+    @Test
+    @DisplayName("GostOcspResponse(byte[]): массив > MAX_OCSP_RESPONSE_SIZE -> PkixException")
+    void testOcspResponseOversizedRejected() {
+        byte[] oversizedDer = new byte[262_145]; // на 1 больше MAX_OCSP_RESPONSE_SIZE = 262_144
+        assertThrows(PkixException.class, () -> new GostOcspResponse(oversizedDer));
+    }
+
+    // ========================================================================
+    // certStatus good: строгая проверка обеих форм тега (RFC 6960 §2.2)
+    // ========================================================================
+
+    @Test
+    @DisplayName("certStatus good как constructed [0] (A0) с непустым содержимым -> PkixException")
+    void testOcspConstructedGoodWithContentRejected() {
+        // A0 01 05: constructed good с одним байтом содержимого — non-canonical,
+        // isGood() трактует A0 как алиас 0x80, поэтому непустое содержимое обязано
+        // отклоняться наравне с primitive-формой (DER-malleability).
+        byte[] ocsp = buildOcspWithCertStatus(new byte[] {(byte) 0xA0, 0x01, 0x05});
+        assertThrows(
+                PkixException.class,
+                () -> new GostOcspResponse(ocsp),
+                "constructed good (A0) с непустым содержимым должен отклоняться как malformed");
+    }
+
+    @Test
+    @DisplayName("certStatus good как constructed [0] (A0) нулевой длины -> принимается (алиас)")
+    void testOcspConstructedGoodEmptyAccepted() throws Exception {
+        byte[] ocsp = buildOcspWithCertStatus(new byte[] {(byte) 0xA0, 0x00});
+        GostOcspResponse resp = new GostOcspResponse(ocsp);
+        assertEquals(1, resp.getResponses().size(), "SingleResponse должен распарситься");
+        assertTrue(resp.getResponses().get(0).isGood(), "A0 нулевой длины — статус good");
+    }
+
+    /**
+     * Собирает минимальный OCSPResponse с заданной сырой кодировкой certStatus.
+     * Подпись фиктивна: конструктор {@link GostOcspResponse} не верифицирует её,
+     * а проверка формы certStatus выполняется на этапе парсинга.
+     */
+    private static byte[] buildOcspWithCertStatus(byte[] certStatusBytes) {
+        byte[] time =
+                DerCodec.encodeTlv(
+                        TAG_GENERALIZED_TIME,
+                        "20250101000000Z".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+
+        byte[] hashAlg = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.DIGEST_256));
+        byte[] certId =
+                DerCodec.encodeSequence(
+                        hashAlg,
+                        DerCodec.encodeOctetString(new byte[32]),
+                        DerCodec.encodeOctetString(new byte[32]),
+                        DerCodec.encodeInteger(1));
+
+        byte[] singleResponse = DerCodec.encodeSequence(certId, certStatusBytes, time);
+        byte[] responses = DerCodec.encodeSequence(singleResponse);
+
+        byte[] responderId =
+                DerCodec.encodeContextConstructed(1, DerCodec.encodeSequence(new byte[0]));
+        byte[] tbsResponseData = DerCodec.encodeSequence(responderId, time, responses);
+
+        byte[] sigAlg = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_ALG_256));
+        byte[] sig = DerCodec.encodeBitString(new byte[64]);
+        byte[] basicOcsp = DerCodec.encodeSequence(tbsResponseData, sigAlg, sig);
+        byte[] basicOctet = DerCodec.encodeOctetString(basicOcsp);
+
+        byte[] responseBytesContent =
+                DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.OCSP_BASIC), basicOctet);
+        byte[] responseBytes = DerCodec.encodeContextConstructed(0, responseBytesContent);
+        byte[] status = new byte[] {0x0A, 0x01, 0x00};
+        return DerCodec.encodeSequence(status, responseBytes);
+    }
+
+    // ========================================================================
+    // responseStatus ENUMERATED: проверка длины (RFC 6960 — значения 0..6, 1 байт)
+    // ========================================================================
+
+    @Test
+    @DisplayName("GostOcspResponse: ENUMERATED status длиной 2 байта -> PkixException")
+    void testOcspResponseEnumeratedTooLong() {
+        byte[] statusLong = new byte[] {0x0A, 0x02, 0x00, 0x00}; // ENUMERATED len=2
+        byte[] responseBytes =
+                DerCodec.encodeContextConstructed(
+                        0,
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeOid(GostOids.OCSP_BASIC),
+                                DerCodec.encodeOctetString(new byte[10])));
+        byte[] oversizedEnumDer = DerCodec.encodeSequence(statusLong, responseBytes);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () -> new GostOcspResponse(oversizedEnumDer),
+                        "ENUMERATED > 1 байта должен отклоняться");
+        assertTrue(
+                ex.getMessage().contains("too long"),
+                "Сообщение должно упоминать 'too long', было: " + ex.getMessage());
     }
 }

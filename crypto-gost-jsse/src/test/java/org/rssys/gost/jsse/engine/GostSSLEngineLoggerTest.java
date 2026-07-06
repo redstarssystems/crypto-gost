@@ -62,6 +62,72 @@ class GostSSLEngineLoggerTest {
                 "Должен содержать 'Handshake started' в любом сообщении");
     }
 
+    // Фрагмент именно handshake-предупреждения (отличается от создания "created WITHOUT")
+    private static final String HANDSHAKE_NO_HOSTNAME =
+            "Client TLS handshake without hostname verification";
+
+    @Test
+    @DisplayName(
+            "Лог: осознанный opt-out (createForClientNoHostnameCheck) не даёт handshake-WARNING")
+    void testExplicitNoHostnameCheckSuppressesHandshakeWarning() throws Exception {
+        // намерение объявлено разово при создании — повтор на каждом соединении избыточен
+        GostSSLEngine clientEngine =
+                GostSSLEngine.createForClientNoHostnameCheck(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "example.com",
+                        443,
+                        null);
+
+        clientEngine.beginHandshake();
+
+        assertFalse(
+                testLogger.containsMessage(HANDSHAKE_NO_HOSTNAME),
+                "explicit opt-out не должен логировать handshake-WARNING о проверке hostname");
+    }
+
+    @Test
+    @DisplayName("Лог: снятый safe-default (setSSLParameters null) даёт handshake-WARNING")
+    void testClearedSafeDefaultWarnsPerHandshake() throws Exception {
+        // safe-default HTTPS, затем очистка через setSSLParameters(null) — тревожный сигнал
+        GostSSLEngine clientEngine =
+                GostSSLEngine.createForContextClient(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "example.com",
+                        443,
+                        null,
+                        null);
+        javax.net.ssl.SSLParameters p = clientEngine.getSSLParameters();
+        p.setEndpointIdentificationAlgorithm(null);
+        clientEngine.setSSLParameters(p);
+
+        clientEngine.beginHandshake();
+
+        assertTrue(
+                testLogger.containsMessage(HANDSHAKE_NO_HOSTNAME),
+                "снятый safe-default должен логировать handshake-WARNING per-connection");
+    }
+
+    @Test
+    @DisplayName("Лог: активная проверка hostname (safe-default) не даёт handshake-WARNING")
+    void testActiveVerificationNoWarning() throws Exception {
+        GostSSLEngine clientEngine =
+                GostSSLEngine.createForContextClient(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "example.com",
+                        443,
+                        null,
+                        null);
+
+        clientEngine.beginHandshake();
+
+        assertFalse(
+                testLogger.containsMessage(HANDSHAKE_NO_HOSTNAME),
+                "при активной проверке hostname handshake-WARNING не нужен");
+    }
+
     private static final class TestLogger implements System.Logger {
         private final List<LogEntry> entries = new ArrayList<>();
 

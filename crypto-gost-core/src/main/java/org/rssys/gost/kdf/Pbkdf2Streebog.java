@@ -55,8 +55,9 @@ public final class Pbkdf2Streebog {
 
     private static byte[] pbkdf2(Mac prf, byte[] salt, int c, int dkLen) {
         if (c < 1) throw new IllegalArgumentException("iteration count must be >= 1");
-        if (c > MAX_ITERATIONS) throw new IllegalArgumentException(
-                "iteration count exceeds maximum " + MAX_ITERATIONS + ", got " + c);
+        if (c > MAX_ITERATIONS)
+            throw new IllegalArgumentException(
+                    "iteration count exceeds maximum " + MAX_ITERATIONS + ", got " + c);
         if (dkLen < 1) throw new IllegalArgumentException("dkLen must be >= 1");
 
         int hLen = prf.getMacSize();

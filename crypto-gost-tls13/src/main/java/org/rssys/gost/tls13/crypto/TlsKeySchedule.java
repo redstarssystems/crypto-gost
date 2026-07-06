@@ -224,6 +224,11 @@ public final class TlsKeySchedule {
                 masterSecret, HkdfStreebog.PREFIXED_RES_MASTER, emptyHash, hashLen);
     }
 
+    // exporter_secret = Derive-Secret(master, "exp master", "") (RFC 8446 §7.5)
+    // не реализован — библиотека не имеет потребителей channel binding.
+    // Добавить PREFIXED_EXP_MASTER в HkdfStreebog и getExporterMasterSecret() здесь
+    // при появлении exportKeyingMaterial() на уровне SSLEngine.
+
     // ========================================================================
     // Жизненный цикл
     // ========================================================================

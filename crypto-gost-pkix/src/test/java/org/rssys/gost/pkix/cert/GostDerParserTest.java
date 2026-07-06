@@ -217,10 +217,12 @@ class GostDerParserTest {
     }
 
     @Test
-    @DisplayName("oidBytesToDottedString: пустой OID -> пустая строка")
+    @DisplayName("oidBytesToDottedString: пустой OID -> исключение")
     void testOidToEmpty() {
-        String result = GostDerParser.oidBytesToDottedString(new byte[0], 0, 0);
-        assertEquals("", result, "Пустой OID -> пустая строка");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(new byte[0], 0, 0),
+                "len=0 должно бросать исключение");
     }
 
     @Test
@@ -230,6 +232,35 @@ class GostDerParserTest {
                 GostDerParser.oidBytesToDottedString(UID_OID_BYTES, 0, UID_OID_BYTES.length);
         assertEquals(
                 "0.9.2342.19200300.100.1.1", result, "UID OID с multi-byte компонентом 19200300");
+    }
+
+    @Test
+    @DisplayName("oidBytesToDottedString: ровно 128 арок (лимит) — успешно")
+    void testOidArcsAtLimit() {
+        // Первый байт кодирует 2 арки (1.2), далее 126 однобайтовых арок => всего 128.
+        byte[] oid = new byte[127];
+        oid[0] = 0x2A;
+        for (int i = 1; i < oid.length; i++) {
+            oid[i] = 0x01;
+        }
+        assertDoesNotThrow(
+                () -> GostDerParser.oidBytesToDottedString(oid, 0, oid.length),
+                "OID ровно из 128 арок должен парситься без ошибок");
+    }
+
+    @Test
+    @DisplayName("oidBytesToDottedString: 129 арок (сверх лимита) -> исключение")
+    void testOidArcsExceedLimit() {
+        // Первый байт (2 арки) + 127 однобайтовых арок => 129 > MAX_OID_SUBIDENTIFIERS.
+        byte[] oid = new byte[128];
+        oid[0] = 0x2A;
+        for (int i = 1; i < oid.length; i++) {
+            oid[i] = 0x01;
+        }
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(oid, 0, oid.length),
+                "OID из 129 арок должен отклоняться (защита от раздувания)");
     }
 
     // ========================================================================

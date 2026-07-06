@@ -65,8 +65,7 @@ public record TspRequest(
 
     @Override
     public int hashCode() {
-        int result =
-                Objects.hash(messageImprintAlgOid, reqPolicy, nonce, certReq);
+        int result = Objects.hash(messageImprintAlgOid, reqPolicy, nonce, certReq);
         result = 31 * result + Arrays.hashCode(messageImprintHash);
         return result;
     }
@@ -92,7 +91,8 @@ public record TspRequest(
         // [0] version — пропускаем
         DerCodec.parseInteger(parts[idx++], 0);
 
-        // [1] messageImprint: SEQUENCE { hashAlgorithm AlgorithmIdentifier, hashedMessage OCTET STRING }
+        // [1] messageImprint: SEQUENCE { hashAlgorithm AlgorithmIdentifier, hashedMessage OCTET
+        // STRING }
         byte[][] miParts = DerCodec.parseSequenceContents(parts[idx++], 0);
         if (miParts.length < 2) {
             throw new PkixException(
@@ -102,8 +102,7 @@ public record TspRequest(
         byte[][] hashAlgParts = DerCodec.parseSequenceContents(miParts[0], 0);
         if (hashAlgParts.length < 1) {
             throw new PkixException(
-                    PkixException.Reason.PARSE_ERROR,
-                    "messageImprint hashAlgorithm has no OID");
+                    PkixException.Reason.PARSE_ERROR, "messageImprint hashAlgorithm has no OID");
         }
         String hashAlgOid = DerCodec.parseOid(hashAlgParts[0], 0);
         byte[] hashedMessage = DerCodec.parseOctetString(miParts[1], 0);

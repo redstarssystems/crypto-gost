@@ -11,9 +11,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import javax.net.ssl.SSLEngine;
 import javax.net.ssl.X509ExtendedKeyManager;
 import javax.security.auth.x500.X500Principal;
+import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.bridge.KeyBridge;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
@@ -120,7 +120,7 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
     public PrivateKey getPrivateKey(String alias) {
         for (KeyEntry e : entries) {
             if (e.alias.equals(alias)) {
-                return KeyBridge.toJca(e.key);
+                return e.key != null ? new GostECPrivateKey(e.key) : null;
             }
         }
         return null;

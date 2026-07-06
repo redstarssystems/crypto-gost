@@ -63,11 +63,7 @@ class TlsOcspVerifierTest {
         PkixException ex =
                 assertThrows(
                         PkixException.class,
-                        () ->
-                                        OcspVerifier.verify(
-                                                ocsp,
-                                                leaf.cert.getSerialNumber(),
-                                                root.cert));
+                        () -> OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), root.cert));
         assertTrue(
                 ex.getMessage().contains("future"),
                 "Ожидалось thisUpdate future, получено: " + ex.getMessage());
@@ -122,9 +118,7 @@ class TlsOcspVerifierTest {
                         PkixException.class,
                         () ->
                                 OcspVerifier.verify(
-                                        multiOcsp,
-                                        leaf.cert.getSerialNumber(),
-                                        root.cert));
+                                        multiOcsp, leaf.cert.getSerialNumber(), root.cert));
         assertEquals(
                 PkixException.Reason.REVOKED,
                 ex.reason(),
@@ -163,9 +157,7 @@ class TlsOcspVerifierTest {
                         PkixException.class,
                         () ->
                                 OcspVerifier.verify(
-                                        multiOcsp,
-                                        leaf.cert.getSerialNumber(),
-                                        root.cert));
+                                        multiOcsp, leaf.cert.getSerialNumber(), root.cert));
         assertTrue(
                 ex.getMessage().contains("signature verification failed"),
                 "Должен пройти certStatus (good), но упасть на подписи: " + ex.getMessage());
@@ -201,9 +193,7 @@ class TlsOcspVerifierTest {
                         PkixException.class,
                         () ->
                                 OcspVerifier.verify(
-                                        multiOcsp,
-                                        leaf.cert.getSerialNumber(),
-                                        root.cert));
+                                        multiOcsp, leaf.cert.getSerialNumber(), root.cert));
         assertTrue(
                 ex.getMessage().contains("not found"),
                 "Ожидалась ошибка 'not found', получено: " + ex.getMessage());

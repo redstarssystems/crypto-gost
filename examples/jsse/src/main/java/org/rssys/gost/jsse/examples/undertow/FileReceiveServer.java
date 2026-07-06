@@ -75,6 +75,11 @@ public final class FileReceiveServer {
     // Путь к файлу для раздачи по GET (опционально)
     private static Path filePath;
 
+    // Путь для сохранения тела POST на диск (опционально). По умолчанию null —
+    // тело считывается и отбрасывается, чтобы замер пропускной способности не искажался
+    // затратами на дисковый I/O. Задаётся флагом --upload-out для контроля целостности.
+    private static Path uploadOutPath;
+
     private FileReceiveServer() {}
 
     public static void main(String[] args) throws Exception {
@@ -107,6 +112,9 @@ public final class FileReceiveServer {
                     break;
                 case "--file":
                     filePath = Path.of(args[++i]);
+                    break;
+                case "--upload-out":
+                    uploadOutPath = Path.of(args[++i]);
                     break;
                 default:
                     System.err.println("Unknown flag: " + args[i]);
@@ -200,8 +208,21 @@ public final class FileReceiveServer {
         boolean aborted = false;
         byte[] buf = new byte[BUF_SIZE];
         int n;
-        try (InputStream in = exchange.getInputStream()) {
+        // При заданном --upload-out тело сохраняется на диск для последующей внешней
+        // проверки целостности (sha256sum); иначе поток только считается и отбрасывается
+        try (InputStream in = exchange.getInputStream();
+                OutputStream fileOut =
+                        uploadOutPath != null
+                                ? Files.newOutputStream(
+                                        uploadOutPath,
+                                        StandardOpenOption.CREATE,
+                                        StandardOpenOption.TRUNCATE_EXISTING,
+                                        StandardOpenOption.WRITE)
+                                : null) {
             while ((n = in.read(buf)) >= 0) {
+                if (fileOut != null) {
+                    fileOut.write(buf, 0, n);
+                }
                 total += n;
             }
         } catch (Exception e) {
@@ -390,6 +411,7 @@ public final class FileReceiveServer {
     private static void printUsage() {
         System.err.println(
                 "Usage: FileReceiveServer [--port N] [--cert p12] [--password pwd]"
-                        + " [--ca p12] [--ca-password pwd] [--log path] [--file path]");
+                        + " [--ca p12] [--ca-password pwd] [--log path] [--file path]"
+                        + " [--upload-out path]");
     }
 }

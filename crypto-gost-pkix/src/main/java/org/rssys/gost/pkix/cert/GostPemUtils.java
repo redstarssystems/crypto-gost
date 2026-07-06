@@ -25,9 +25,11 @@ import org.rssys.gost.util.DerCodec;
 public final class GostPemUtils {
 
     private static final java.util.regex.Pattern PEM_HEADER =
-            java.util.regex.Pattern.compile("-----[A-Z ]+-----");
+            java.util.regex.Pattern.compile("-----[A-Z0-9 ]+-----");
     private static final java.util.regex.Pattern WHITESPACE =
             java.util.regex.Pattern.compile("\\s");
+
+    private static final int MAX_PEM_SIZE = 10_485_760;
 
     private GostPemUtils() {}
 
@@ -39,8 +41,13 @@ public final class GostPemUtils {
      *
      * @param pem байты PEM-данных (сертификат, ключ или любой PEM-блок)
      * @return DER-байты
+     * @throws IllegalArgumentException если размер превышает {@link #MAX_PEM_SIZE}
      */
     public static byte[] pemToDer(byte[] pem) {
+        if (pem.length > MAX_PEM_SIZE) {
+            throw new IllegalArgumentException(
+                    "PEM data exceeds maximum size " + MAX_PEM_SIZE + ", got " + pem.length);
+        }
         String text = new String(pem, StandardCharsets.US_ASCII);
         String b64 = WHITESPACE.matcher(PEM_HEADER.matcher(text).replaceAll("")).replaceAll("");
         return Base64.getDecoder().decode(b64);
@@ -127,6 +134,10 @@ public final class GostPemUtils {
      * @throws IllegalArgumentException если ни один блок не распознан
      */
     public static List<byte[]> decodePemBlocks(byte[] pem) {
+        if (pem.length > MAX_PEM_SIZE) {
+            throw new IllegalArgumentException(
+                    "PEM data exceeds maximum size " + MAX_PEM_SIZE + ", got " + pem.length);
+        }
         String text = new String(pem, StandardCharsets.US_ASCII);
         String[] blocks = text.split("-----BEGIN CERTIFICATE-----");
         List<byte[]> result = new ArrayList<>();

@@ -15,6 +15,10 @@
     <artifactId>crypto-gost-pkix-examples</artifactId>
     <packaging>jar</packaging>
 
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
     <name>crypto-gost-pkix-examples</name>
     <description>Примеры использования модуля PKIX (X.509, CMS, CRL, OCSP, PKCS#12)</description>
 

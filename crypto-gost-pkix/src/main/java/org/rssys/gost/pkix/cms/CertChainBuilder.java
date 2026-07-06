@@ -64,6 +64,10 @@ public final class CertChainBuilder {
         List<GostCertificate> chain = new ArrayList<>();
         chain.add(leaf);
 
+        // Инвариант дедупликации: ByteBuffer.equals/hashCode зависят от [position, limit).
+        // ByteBuffer.wrap(fullArray) всегда даёт position=0, поэтому равные DN дают равные
+        // ключи. Нельзя вводить slice()/явный position() для этих ключей — иначе тихо
+        // сломается обнаружение петли по дублю subject DN.
         Set<ByteBuffer> visited = new HashSet<>();
         visited.add(ByteBuffer.wrap(leaf.getSubjectDnBytes()));
 

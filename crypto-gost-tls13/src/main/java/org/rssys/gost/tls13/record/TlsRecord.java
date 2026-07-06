@@ -45,6 +45,7 @@ public final class TlsRecord {
     private final byte[] recordBuf =
             new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
     private long seqNum;
+    private boolean sequenceUsed; // true после первого protect/unprotect — запрещает откат seqNum
     private final int tagLen;
 
     // Параметры TLSTREE
@@ -151,6 +152,9 @@ public final class TlsRecord {
      * @param seqNum порядковый номер
      */
     public void setSequenceNumber(long seqNum) {
+        if (sequenceUsed && seqNum < this.seqNum) {
+            throw new IllegalStateException("Sequence number rollback would cause nonce reuse");
+        }
         this.seqNum = seqNum;
     }
 
@@ -219,6 +223,7 @@ public final class TlsRecord {
         // plaintext не затираем между вызовами — будет перезаписан при следующем unprotect.
         // Затирается в destroy() при завершении сессии.
         seqNum++;
+        sequenceUsed = true;
         return parsed;
     }
 
@@ -254,6 +259,7 @@ public final class TlsRecord {
         }
         System.arraycopy(plaintext, 0, dest, destOff, r.dataLen);
         seqNum++;
+        sequenceUsed = true;
         return new RecordInfo(r.contentType, r.dataLen);
     }
 
@@ -347,6 +353,7 @@ public final class TlsRecord {
         dst.put(tagBuf, 0, tagLen);
 
         seqNum++;
+        sequenceUsed = true;
         return totalSize;
     }
 
@@ -435,6 +442,7 @@ public final class TlsRecord {
 
         plaintext.put(this.plaintext, 0, plaintextLen);
         seqNum++;
+        sequenceUsed = true;
         return UnprotectResult.ok(dr.contentType);
     }
 
@@ -559,6 +567,12 @@ public final class TlsRecord {
             lastNonZero = (lastNonZero & ~mask) | (i & mask);
             found |= isNonZero;
         }
+        // Инвариант: сканирование справа налево (от ciphertextLen-1 к 0) гарантирует,
+        // что все байты с индексом > lastNonZero равны 0x00 — иначе они были бы
+        // обнаружены раньше (found=0) и сами стали бы lastNonZero. Отдельная
+        // проверка нулевого padding не нужна: RFC 8446 §5.4 определяет сам
+        // протокол поиска content type именно как скан от конца до первого
+        // ненулевого байта, без дополнительной верификации хвоста.
         if (lastNonZero < 0) {
             throw new AuthenticationException("Decrypted record has no content type");
         }

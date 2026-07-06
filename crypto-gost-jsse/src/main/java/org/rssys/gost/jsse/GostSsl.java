@@ -14,11 +14,15 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.*;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.crl.CrlFetcher;
+import org.rssys.gost.jsse.crl.CrlPolicy;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.jsse.ocsp.OcspFetcher;
 import org.rssys.gost.jsse.ocsp.OcspPolicy;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -372,6 +376,53 @@ public final class GostSsl {
             int sessionCacheSize,
             boolean trustAll,
             boolean serverMode) {
+        return buildContext(
+                certDer,
+                keyDer,
+                p12Data,
+                p12Password,
+                trustedCaDers,
+                ocspEnabled,
+                sessionCacheSize,
+                trustAll,
+                CrlPolicy.DISABLED,
+                null,
+                GostCrl.DEFAULT_MAX_CRL_SIZE,
+                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES,
+                null,
+                GostOids.MAX_OCSP_AGE_MS,
+                serverMode);
+    }
+
+    /**
+     * Полный сборщик {@link SSLContext} с конфигурацией проверки CRL/OCSP.
+     * <p>
+     * Дефолтные значения CRL/OCSP-параметров сохраняют поведение упрощённых
+     * перегрузок (CRL выключен, лимиты по умолчанию).
+     *
+     * @param crlPolicy         политика проверки CRL
+     * @param crlFetcher        fetcher для CRL по CDP URI (может быть null)
+     * @param maxCrlSize        максимальный размер CRL в байтах
+     * @param maxRevokedEntries максимальное число отозванных записей
+     * @param ocspFetcher       fetcher для client-side OCSP (может быть null)
+     * @param maxOcspAgeMs      максимальный возраст OCSP-ответа без nextUpdate в мс
+     */
+    static SSLContext buildContext(
+            byte[] certDer,
+            byte[] keyDer,
+            byte[] p12Data,
+            char[] p12Password,
+            byte[][] trustedCaDers,
+            boolean ocspEnabled,
+            int sessionCacheSize,
+            boolean trustAll,
+            CrlPolicy crlPolicy,
+            CrlFetcher crlFetcher,
+            int maxCrlSize,
+            int maxRevokedEntries,
+            OcspFetcher ocspFetcher,
+            long maxOcspAgeMs,
+            boolean serverMode) {
         try {
             if (Security.getProvider(GostJsseConstants.PROVIDER_NAME) == null) {
                 Security.addProvider(new RssysGostJsseProvider());
@@ -404,7 +455,16 @@ public final class GostSsl {
                 }
                 OcspPolicy policy =
                         ocspEnabled ? OcspPolicy.STAPLING_REQUIRED : OcspPolicy.IF_PRESENT;
-                tm = new GostX509TrustManager(caKeys, policy, null);
+                tm =
+                        new GostX509TrustManager(
+                                caKeys,
+                                policy,
+                                ocspFetcher,
+                                crlPolicy != null ? crlPolicy : CrlPolicy.DISABLED,
+                                crlFetcher,
+                                maxCrlSize,
+                                maxRevokedEntries,
+                                maxOcspAgeMs);
             } else {
                 throw new GostSslException("No CA certificate provided for trust verification");
             }

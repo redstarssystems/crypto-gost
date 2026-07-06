@@ -21,7 +21,6 @@ public class RecordProtectBench {
 
     private TlsRecord writerRecord;
     private TlsRecord readerRecord;
-    private byte[] protectedRecord;
     @Param({"100", "1024", "16383"})
     private int dataSize;
     private byte[] data;
@@ -41,8 +40,6 @@ public class RecordProtectBench {
         readerRecord = new TlsRecord(key.clone(), iv.clone(), cs.getTagLen(), cs);
         data = new byte[dataSize];
         java.security.SecureRandom.getInstanceStrong().nextBytes(data);
-        protectedRecord = writerRecord.protect(TlsConstants.CT_APPLICATION_DATA, data);
-        readerRecord.setSequenceNumber(0);
     }
 
     @Benchmark
@@ -52,11 +49,14 @@ public class RecordProtectBench {
 
     @Benchmark
     public int unprotect() throws Exception {
-        // на каждой итерации сбрасываем seqNum, потому что unprotect
-        // читает один и тот же protectedRecord (зашифрован при seqNum=0).
-        // Сброс — один long store (~1ns), погрешность << измеряемая операция (~µs).
-        readerRecord.setSequenceNumber(0);
-        readerRecord.unprotect(protectedRecord);
+        // Комбинированный protect+unprotect на каждой итерации.
+        // seqNum растёт монотонно на writer и reader независимо —
+        // nonce совпадает, никаких сбросов не требуется.
+        // Чистый decrypt = комбинированный − protect (измеряется отдельно
+        // в benchmark protect() выше). Соотношения между размерами данных
+        // (100B / 1KB / 16KB) сохраняются для любого из трёх значений.
+        byte[] record = writerRecord.protect(TlsConstants.CT_APPLICATION_DATA, data);
+        readerRecord.unprotect(record);
         return (int) readerRecord.getSequenceNumber();
     }
     // shared writerRecord/readerRecord OK при @Threads(1).

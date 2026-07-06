@@ -3,6 +3,7 @@ package org.rssys.gost.pkix.cert;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
@@ -41,6 +42,11 @@ class GostExtensionParserTest {
     /** [6] IA5String — uniformResourceIdentifier. */
     private static byte[] uriName(String uri) {
         return DerCodec.encodeTlv(0x86, uri.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    /** Non-standard constructed [6] URI (тег 0xA6) — DER требует primitive 0x86. */
+    private static byte[] uriNameConstructed(String uri) {
+        return DerCodec.encodeTlv(0xA6, uri.getBytes(StandardCharsets.US_ASCII));
     }
 
     /** Сборка одного Extension: SEQUENCE { OID [BOOLEAN] OCTET STRING { value } }. */
@@ -200,6 +206,40 @@ class GostExtensionParserTest {
         assertNull(r.sanIpAddresses, "iPAddress 3 байта — невалидная длина, игнорируется");
     }
 
+    @Test
+    @DisplayName("SAN: ровно 512 записей — принимается (граница)")
+    void testSanEntryLimitBoundary() {
+        byte[][] names = new byte[512][];
+        for (int i = 0; i < names.length; i++) {
+            names[i] = dnsName("h" + i + ".example.com");
+        }
+        byte[] sanValue = DerCodec.encodeSequence(names);
+        byte[] ext = extension(SAN_OID_BYTES, sanValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertEquals(512, r.sanDnsNames.length, "ровно 512 записей — в пределах лимита");
+    }
+
+    @Test
+    @DisplayName("SAN: превышение лимита (513 записей) — отклонено")
+    void testSanEntryLimitExceeded() {
+        byte[][] names = new byte[513][];
+        for (int i = 0; i < names.length; i++) {
+            names[i] = dnsName("h" + i + ".example.com");
+        }
+        byte[] sanValue = DerCodec.encodeSequence(names);
+        byte[] ext = extension(SAN_OID_BYTES, sanValue);
+        byte[] seq = extensionsSeq(ext);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "SAN с числом записей больше лимита должен отклоняться");
+    }
+
     // ---------------------------------------------------------------
     // KeyUsage
     // ---------------------------------------------------------------
@@ -280,7 +320,7 @@ class GostExtensionParserTest {
                 Arguments.of(SERVER_AUTH_OID_BYTES, true, false, false),
                 Arguments.of(CLIENT_AUTH_OID_BYTES, false, true, false),
                 Arguments.of(OCSP_SIGNING_OID_BYTES, false, false, true),
-                Arguments.of(ANY_EKU_OID_BYTES, false, false, true));
+                Arguments.of(ANY_EKU_OID_BYTES, false, false, false));
     }
 
     @Test
@@ -295,7 +335,9 @@ class GostExtensionParserTest {
 
         assertTrue(r.ekuValid, "EKU отсутствует -> ekuValid=true");
         assertTrue(r.ekuClientAuth, "EKU отсутствует -> ekuClientAuth=true");
-        assertTrue(r.ekuOcspSigning, "EKU отсутствует -> ekuOcspSigning=true");
+        assertFalse(
+                r.ekuOcspSigning,
+                "EKU отсутствует -> ekuOcspSigning=false (RFC 6960 §4.2.2.2, restrictive)");
     }
 
     // ---------------------------------------------------------------
@@ -343,6 +385,24 @@ class GostExtensionParserTest {
 
         assertFalse(r.isCA, "cA=FALSE (по умолчанию)");
         assertEquals(-1, r.pathLen, "pathLen не применим");
+    }
+
+    @Test
+    @DisplayName("BasicConstraints: pathLen 80 00 00 00 (знаковое переполнение) — отклонён")
+    void testBcPathLenSignOverflow() {
+        // 4-байтовый INTEGER с MSB=1 проходит guard длины (intLen<=4), но при
+        // накоплении даёт Integer.MIN_VALUE (<0), из-за чего в ChainValidator
+        // проверка `pl >= 0` молча пропустила бы pathLen-ограничение.
+        byte[] negPathLen =
+                DerCodec.encodeTlv(TAG_INTEGER, new byte[] {(byte) 0x80, 0x00, 0x00, 0x00});
+        byte[] bcValue = DerCodec.encodeSequence(boolDer(true), negPathLen);
+        byte[] ext = extension(BC_OID_BYTES, true, bcValue);
+        byte[] seq = extensionsSeq(ext);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "Отрицательный pathLen (sign-overflow) должен отклоняться при парсинге");
     }
 
     // ---------------------------------------------------------------
@@ -453,6 +513,24 @@ class GostExtensionParserTest {
         assertEquals(1, r.caIssuersUris.length);
     }
 
+    @Test
+    @DisplayName("AIA: constructed-тег URI (0xA6) игнорируется — принимается только primitive 0x86")
+    void testAiaConstructedUriIgnored() {
+        byte[] aiaValue =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeTlv(TAG_OID, AD_OCSP_OID_BYTES),
+                                uriNameConstructed("http://ocsp.example.com")));
+        byte[] ext = extension(AIA_OID_BYTES, aiaValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNull(r.aiaUris, "constructed URI (0xA6) не должен приниматься как AIA URI");
+        assertNull(r.ocspUris, "constructed URI (0xA6) не должен давать OCSP URI");
+    }
+
     // ---------------------------------------------------------------
     // CRLDistributionPoints
     // ---------------------------------------------------------------
@@ -479,6 +557,28 @@ class GostExtensionParserTest {
         assertNotNull(r.cdpUris, "cdpUris не null");
         assertEquals(1, r.cdpUris.length);
         assertEquals("http://crl.example.com/crl.crl", r.cdpUris[0]);
+    }
+
+    @Test
+    @DisplayName("CDP: constructed-тег URI (0xA6) игнорируется")
+    void testCdpConstructedUriIgnored() {
+        byte[] cdpValue =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeContextConstructed(
+                                        0,
+                                        DerCodec.encodeContextConstructed(
+                                                0,
+                                                DerCodec.encodeSequence(
+                                                        uriNameConstructed(
+                                                                "http://crl.example.com/crl.crl"))))));
+        byte[] ext = extension(CDP_OID_BYTES, cdpValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNull(r.cdpUris, "constructed URI (0xA6) не должен приниматься как CDP URI");
     }
 
     // ---------------------------------------------------------------
@@ -621,5 +721,245 @@ class GostExtensionParserTest {
                 GostExtensionParser.ExtensionsResult.empty(),
                 r,
                 "Не-SEQUENCE на входе — возврат пустого результата");
+    }
+
+    // ---------------------------------------------------------------
+    // NameConstraints (RFC 5280 §4.2.1.10) — парсинг
+    // ---------------------------------------------------------------
+
+    /** Сборка extnValue OCTET STRING с содержимым NameConstraints SEQUENCE. */
+    private static byte[] ncExtValue(byte[] ncSequenceDer) {
+        return DerCodec.encodeOctetString(ncSequenceDer);
+    }
+
+    /** Сборка NameConstraints SEQUENCE из permittedSubtrees и excludedSubtrees (оба optional). */
+    private static byte[] ncSequence(byte[] permitted, byte[] excluded) {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        try {
+            if (permitted != null) bos.write(permitted);
+            if (excluded != null) bos.write(excluded);
+        } catch (java.io.IOException impossible) {
+            throw new RuntimeException(impossible);
+        }
+        return DerCodec.encodeSequence(bos.toByteArray());
+    }
+
+    /** [0] EXPLICIT permittedSubtrees: A0 LL ... */
+    private static byte[] permittedSubtrees(byte[] generalSubtreesDer) {
+        return DerCodec.encodeContextConstructed(0, generalSubtreesDer);
+    }
+
+    /** [1] EXPLICIT excludedSubtrees: A1 LL ... */
+    private static byte[] excludedSubtrees(byte[] generalSubtreesDer) {
+        return DerCodec.encodeContextConstructed(1, generalSubtreesDer);
+    }
+
+    /** GeneralSubtrees: SEQUENCE OF GeneralSubtree. */
+    private static byte[] generalSubtrees(byte[]... generalSubtrees) {
+        return DerCodec.encodeSequence(generalSubtrees);
+    }
+
+    /** GeneralSubtree: SEQUENCE { base GeneralName [минимум/максимум] }. */
+    private static byte[] generalSubtree(byte[] baseGeneralName, Integer minimum, Integer maximum) {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        try {
+            bos.write(baseGeneralName);
+            if (minimum != null) {
+                bos.write(
+                        DerCodec.encodeContextConstructed(
+                                0, DerCodec.encodeInteger(BigInteger.valueOf(minimum))));
+            }
+            if (maximum != null) {
+                bos.write(
+                        DerCodec.encodeContextConstructed(
+                                1, DerCodec.encodeInteger(BigInteger.valueOf(maximum))));
+            }
+        } catch (java.io.IOException impossible) {
+            throw new RuntimeException(impossible);
+        }
+        return DerCodec.encodeSequence(bos.toByteArray());
+    }
+
+    /** GeneralSubtree без min/max. */
+    private static byte[] generalSubtree(byte[] baseGeneralName) {
+        return generalSubtree(baseGeneralName, null, null);
+    }
+
+    private static final byte[] NC_OID_BYTES_LOCAL = {0x55, 0x1D, 0x1E};
+
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName example.com")
+    void testParseNameConstraintsPermittedDns() {
+        byte[] dns = dnsName("example.com");
+        byte[] st = generalSubtree(dns);
+        byte[] gs = generalSubtrees(st);
+        byte[] ps = permittedSubtrees(gs);
+        byte[] nc = ncSequence(ps, null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints, "Ожидались NameConstraints");
+        assertFalse(r.nameConstraints.isEmpty());
+        assertFalse(r.nameConstraints.nonCritical);
+        assertNotNull(r.nameConstraints.permittedDnsNames);
+        assertEquals(1, r.nameConstraints.permittedDnsNames.length);
+        assertEquals("example.com", r.nameConstraints.permittedDnsNames[0]);
+        assertNull(r.nameConstraints.permittedIps);
+        assertNull(r.nameConstraints.excludedDnsNames);
+        assertFalse(r.nameConstraints.hasUnsupportedNameType);
+        assertFalse(r.nameConstraints.hasInvalidMinMax);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted iPAddress (8 байт IPv4)")
+    void testParseNameConstraintsPermittedIp() {
+        byte[] ipBytes = {
+            (byte) 0xC0, (byte) 0xA8, (byte) 0x01, (byte) 0xF0,
+            (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xF0
+        };
+        byte[] ip = ipAddress(ipBytes);
+        byte[] st = generalSubtree(ip);
+        byte[] gs = generalSubtrees(st);
+        byte[] ps = permittedSubtrees(gs);
+        byte[] nc = ncSequence(ps, null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints);
+        assertNotNull(r.nameConstraints.permittedIps);
+        assertEquals(1, r.nameConstraints.permittedIps.length);
+        assertArrayEquals(ipBytes, r.nameConstraints.permittedIps[0]);
+        assertFalse(r.nameConstraints.hasUnsupportedNameType);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName")
+    void testParseNameConstraintsExcluded() {
+        byte[] dns = dnsName("bad.example.com");
+        byte[] st = generalSubtree(dns);
+        byte[] gs = generalSubtrees(st);
+        byte[] es = excludedSubtrees(gs);
+        byte[] nc = ncSequence(null, es);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints);
+        assertNotNull(r.nameConstraints.excludedDnsNames);
+        assertEquals(1, r.nameConstraints.excludedDnsNames.length);
+        assertEquals("bad.example.com", r.nameConstraints.excludedDnsNames[0]);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: и permitted и excluded")
+    void testParseNameConstraintsBoth() {
+        byte[] dns1 = dnsName("example.com");
+        byte[] dns2 = dnsName("bad.example.com");
+        byte[] ps = permittedSubtrees(generalSubtrees(generalSubtree(dns1)));
+        byte[] es = excludedSubtrees(generalSubtrees(generalSubtree(dns2)));
+        byte[] nc = ncSequence(ps, es);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints.permittedDnsNames);
+        assertNotNull(r.nameConstraints.excludedDnsNames);
+        assertEquals("example.com", r.nameConstraints.permittedDnsNames[0]);
+        assertEquals("bad.example.com", r.nameConstraints.excludedDnsNames[0]);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: сертификат без NC — EMPTY")
+    void testParseNameConstraintsEmpty() {
+        // SAN с одним dNSName — extValue: SEQUENCE { [2] "host.example.com" }
+        byte[] sanExt =
+                extension(SAN_OID_BYTES, DerCodec.encodeSequence(dnsName("host.example.com")));
+        byte[] seq = extensionsSeq(sanExt);
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.sanDnsNames, "SAN должен быть распарсен");
+        assertNull(r.nameConstraints, "NC отсутствует — должно быть null");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: неподдерживаемый тип rfc822Name — hasUnsupportedNameType")
+    void testParseNameConstraintsUnsupportedType() {
+        // rfc822Name [1] (0x81)
+        byte[] rfc822 =
+                DerCodec.encodeTlv(0x81, "user@example.com".getBytes(StandardCharsets.US_ASCII));
+        byte[] st = generalSubtree(rfc822);
+        byte[] gs = generalSubtrees(st);
+        byte[] ps = permittedSubtrees(gs);
+        byte[] nc = ncSequence(ps, null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints);
+        assertTrue(
+                r.nameConstraints.hasUnsupportedNameType,
+                "rfc822Name должен давать hasUnsupportedNameType=true");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: non-critical — nonCritical=true")
+    void testParseNameConstraintsNonCritical() {
+        byte[] dns = dnsName("example.com");
+        byte[] st = generalSubtree(dns);
+        byte[] gs = generalSubtrees(st);
+        byte[] ps = permittedSubtrees(gs);
+        byte[] nc = ncSequence(ps, null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, false, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints);
+        assertTrue(r.nameConstraints.nonCritical, "Non-critical NC — nonCritical должно быть true");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: min != 0 — hasInvalidMinMax")
+    void testParseNameConstraintsMinNonZero() {
+        byte[] dns = dnsName("example.com");
+        byte[] st = generalSubtree(dns, 3, null);
+        byte[] gs = generalSubtrees(st);
+        byte[] ps = permittedSubtrees(gs);
+        byte[] nc = ncSequence(ps, null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints);
+        assertTrue(
+                r.nameConstraints.hasInvalidMinMax,
+                "minimum=3 — hasInvalidMinMax должно быть true");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: max присутствует — hasInvalidMinMax")
+    void testParseNameConstraintsMaxPresent() {
+        byte[] dns = dnsName("example.com");
+        byte[] st = generalSubtree(dns, null, 5);
+        byte[] gs = generalSubtrees(st);
+        byte[] ps = permittedSubtrees(gs);
+        byte[] nc = ncSequence(ps, null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints);
+        assertTrue(
+                r.nameConstraints.hasInvalidMinMax,
+                "maximum=5 — hasInvalidMinMax должно быть true");
     }
 }

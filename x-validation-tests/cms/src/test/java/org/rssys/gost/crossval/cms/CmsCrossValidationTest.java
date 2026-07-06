@@ -3,7 +3,6 @@ package org.rssys.gost.crossval.cms;
 import java.io.*;
 import java.math.BigInteger;
 import java.nio.file.*;
-import java.util.Arrays;
 
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -27,7 +26,6 @@ class CmsCrossValidationTest {
     private static final ECParameters PARAMS = ECParameters.tc26a256();
     private static Path tmp;
     private static PrivateKeyParameters privKey;
-    private static PublicKeyParameters pubKey;
     private static GostCertificate cert;
 
     @BeforeAll
@@ -36,8 +34,7 @@ class CmsCrossValidationTest {
         tmp = Files.createTempDirectory("cms-diag");
         var kp = KeyGenerator.generateKeyPair(PARAMS);
         privKey = kp.getPrivate();
-        pubKey = kp.getPublic();
-        cert = makeCert(kp.getPrivate(), pubKey);
+        cert = makeCert(kp.getPrivate(), kp.getPublic());
         Files.write(tmp.resolve("cert.der"), cert.getEncoded());
     }
 
@@ -232,40 +229,6 @@ class CmsCrossValidationTest {
     static String run(String... cmd) throws Exception {
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
         String o = new String(p.getInputStream().readAllBytes()); p.waitFor(); return o;
-    }
-
-    static String hex(byte[] b, int max) {
-        StringBuilder s = new StringBuilder(); int n = Math.min(b.length, max);
-        for (int i = 0; i < n; i++) s.append(String.format("%02X", b[i] & 0xFF));
-        if (b.length > max) s.append("...");
-        return s.toString();
-    }
-
-    static byte[][] parseAttrs(byte[] data) {
-        java.util.ArrayList<byte[]> l = new java.util.ArrayList<>();
-        int pos = 0;
-        while (pos < data.length) {
-            int[] cl = DerCodec.decodeLength(data, pos + 1);
-            int t = 1 + cl[1] + cl[0];
-            l.add(Arrays.copyOfRange(data, pos, pos + t));
-            pos += t;
-        }
-        return l.toArray(new byte[0][]);
-    }
-
-    static byte[][] parseSet(byte[] data) {
-        if ((data[0] & 0xFF) != DerCodec.TAG_SET) throw new IllegalArgumentException("Not a SET");
-        int[] sl = DerCodec.decodeLength(data, 1);
-        int start = 1 + sl[1], end = start + sl[0];
-        java.util.ArrayList<byte[]> l = new java.util.ArrayList<>();
-        int pos = start;
-        while (pos < end) {
-            int[] cl = DerCodec.decodeLength(data, pos + 1);
-            int t = 1 + cl[1] + cl[0];
-            l.add(Arrays.copyOfRange(data, pos, pos + t));
-            pos += t;
-        }
-        return l.toArray(new byte[0][]);
     }
 
     /**

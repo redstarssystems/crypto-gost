@@ -171,6 +171,26 @@ class GostSSLEngineStateGraphTest {
                 "unwrap при engine closed — SSLException");
     }
 
+    @Test
+    @DisplayName(
+            "DATA: closeOutbound (closeReceived==false) не зануляет record-ключи; closeInbound — зануляет (P2-3)")
+    void testCloseInboundWipesRecordKeys() throws Exception {
+        GostSSLEngine server = dataStateEngineServer();
+
+        // Штатная ветка «закрываем первыми»: closeOutbound() лишь ставит close_notify,
+        // destroyHandshakeEngine() не вызывается — ключи ещё в памяти.
+        server.closeOutbound();
+        assertFalse(
+                server.recordsDestroyedForTest(),
+                "record-ключи не должны быть занулены до closeInbound");
+
+        // closeInbound() -> destroyHandshakeEngine(): единая точка зачистки.
+        server.closeInbound();
+        assertTrue(
+                server.recordsDestroyedForTest(),
+                "record-ключи должны быть занулены после closeInbound");
+    }
+
     // ========================================================================
     // CLOSED state
     // ========================================================================

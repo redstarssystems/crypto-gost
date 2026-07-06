@@ -2,12 +2,10 @@ package org.rssys.gost.pkix.cert;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
-import org.rssys.gost.pkix.cert.GostPbes2;
-import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 
@@ -70,5 +68,53 @@ class GostPkcs12LoaderTest {
                 IllegalArgumentException.class,
                 () -> GostPkcs12Loader.decryptPrivateKey(plainDer, PASSWORD),
                 "Plain PrivateKeyInfo не является EncryptedPrivateKeyInfo");
+    }
+
+    // ========================================================================
+    // P2-5: оригинальный char[] password не затирается (clone+wipe clone)
+    // ========================================================================
+
+    @Test
+    @DisplayName("decryptPrivateKey: оригинальный char[] password сохраняется после вызова")
+    void testDecryptPrivateKeyPreservesPassword() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
+        byte[] passwordBytes = PkixCertTestHelper.toUtf8Bytes(PASSWORD);
+
+        byte[] encryptedDer =
+                GostPbes2.encryptKey(
+                        bundle.priv, passwordBytes, GostOids.KUZ_CTR_ACPKM_OMAC, TEST_ITER);
+
+        char[] pwd = PASSWORD.clone();
+        GostPkcs12Loader.decryptPrivateKey(encryptedDer, pwd, 50);
+
+        assertArrayEquals(
+                PASSWORD,
+                pwd,
+                "Оригинальный char[] пароль не должен затираться после decryptPrivateKey");
+        Arrays.fill(pwd, '\0');
+    }
+
+    @Test
+    @DisplayName("load: оригинальный char[] password сохраняется после вызова")
+    void testLoadPreservesPassword() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
+
+        char[] pwd = PASSWORD.clone();
+        byte[] pfx =
+                GostPkcs12Builder.create()
+                        .key(bundle.priv)
+                        .certificate(bundle.cert)
+                        .password(pwd)
+                        .iterations(100)
+                        .build();
+
+        char[] loadPwd = PASSWORD.clone();
+        GostPkcs12Loader.load(pfx, loadPwd, false, 50);
+
+        assertArrayEquals(
+                PASSWORD, loadPwd, "Оригинальный char[] пароль не должен затираться после load");
+        Arrays.fill(loadPwd, '\0');
     }
 }

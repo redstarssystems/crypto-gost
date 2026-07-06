@@ -445,7 +445,13 @@ public final class Kuznyechik implements BlockCipher {
     // Используются как в encryptBlockInlined/decryptBlockInlined, так и в generateSubKeys.
     // -----------------------------------------------------------------------
 
-    /** Верхние 8 байт результата LSX(xhi, xlo): S-замена через T_HI_S + L. */
+    /**
+     * Верхние 8 байт результата LSX(xhi, xlo): S-замена через T_HI_S + L.
+     *
+     * <p>Таблицы T_HI_S размещены на Java heap (static-инициализация); индексы
+     * lookup'ов зависят от раундовых ключей, что создаёт cache-timing побочный
+     * канал. Анализ рисков и ресурсов атакующего — см. doc/adr/adr-02.md.
+     */
     private static long lsxHi(long xhi, long xlo) {
         return T_HI_S[0][(int) (xhi >>> 56) & 0xFF]
                 ^ T_HI_S[1][(int) (xhi >>> 48) & 0xFF]
@@ -465,7 +471,13 @@ public final class Kuznyechik implements BlockCipher {
                 ^ T_HI_S[15][(int) xlo & 0xFF];
     }
 
-    /** Нижние 8 байт результата LSX(xhi, xlo): S-замена через T_LO_S + L. */
+    /**
+     * Нижние 8 байт результата LSX(xhi, xlo): S-замена через T_LO_S + L.
+     *
+     * <p>Таблицы T_LO_S размещены на Java heap (static-инициализация); индексы
+     * lookup'ов зависят от раундовых ключей, что создаёт cache-timing побочный
+     * канал. Анализ рисков и ресурсов атакующего — см. doc/adr/adr-02.md.
+     */
     private static long lsxLo(long xhi, long xlo) {
         return T_LO_S[0][(int) (xhi >>> 56) & 0xFF]
                 ^ T_LO_S[1][(int) (xhi >>> 48) & 0xFF]

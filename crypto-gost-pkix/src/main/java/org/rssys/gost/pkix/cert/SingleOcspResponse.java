@@ -22,6 +22,10 @@ public record SingleOcspResponse(
 
     /**
      * Статус good (RFC 6960 §2.2).
+     *
+     * <p>Значение получено из разбора DER и не подразумевает проверки подписи
+     * ответа; доверять ему можно только после успешного
+     * {@link GostOcspResponse#verify(org.rssys.gost.signature.PublicKeyParameters)}.</p>
      */
     public boolean isGood() {
         return certStatusTag == 0xA0 || certStatusTag == 0x80;
@@ -29,6 +33,10 @@ public record SingleOcspResponse(
 
     /**
      * Статус revoked.
+     *
+     * <p>Значение получено из разбора DER и не подразумевает проверки подписи
+     * ответа; доверять ему можно только после успешного
+     * {@link GostOcspResponse#verify(org.rssys.gost.signature.PublicKeyParameters)}.</p>
      */
     public boolean isRevoked() {
         return certStatusTag == 0xA1;
@@ -38,6 +46,10 @@ public record SingleOcspResponse(
      * Статус unknown.
      * Принимает оба варианта тега: {@code 0xA2} (constructed) и {@code 0x82} (primitive) —
      * аналогично {@link #isGood()} для симметрии с разными реализациями.
+     *
+     * <p>Значение получено из разбора DER и не подразумевает проверки подписи
+     * ответа; доверять ему можно только после успешного
+     * {@link GostOcspResponse#verify(org.rssys.gost.signature.PublicKeyParameters)}.</p>
      */
     public boolean isUnknown() {
         return certStatusTag == 0xA2 || certStatusTag == 0x82;

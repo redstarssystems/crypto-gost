@@ -31,6 +31,7 @@ public final class CmsSignedDataBuilder {
     private final List<SignerAttribute> extraAttrs = new ArrayList<>();
     private final List<SignerAttribute> unsignedAttrs = new ArrayList<>();
     private boolean cadesAttributes;
+    private boolean certsOnly;
 
     private CmsSignedDataBuilder() {}
 
@@ -109,11 +110,48 @@ public final class CmsSignedDataBuilder {
     }
 
     /**
+     * Включает режим certs-only (RFC 5652 §5.1): SignedData без подписантов,
+     * несущая только сертификаты (формат {@code .p7b} для обмена цепочками).
+     *
+     * <p>В этом режиме {@link #data(byte[])} и {@link #addSigner} не используются;
+     * требуется хотя бы один {@link #addCertificate}. Результат зеркален тому,
+     * что читает {@link GostPkcs7#extractCertificates(byte[])}.
+     */
+    public CmsSignedDataBuilder certsOnly() {
+        this.certsOnly = true;
+        return this;
+    }
+
+    /**
      * Собирает SignedData в DER.
      *
      * @return DER-байты ContentInfo(id-signedData)
      */
     public byte[] build() {
+        // certs-only режим (RFC 5652 §5.1): проверяем и возвращаемся ДО guard'ов на
+        // data/signers ниже — в этом режиме data не задаётся, а signers пуст, иначе
+        // старые guard'ы бросили бы исключение раньше и ветка стала бы мёртвой.
+        if (certsOnly) {
+            if (certificates.isEmpty()) {
+                throw new IllegalStateException("no certificates for certs-only mode");
+            }
+            if (!signers.isEmpty()) {
+                throw new IllegalStateException("certs-only mode does not accept signers");
+            }
+            byte[] eContentTypeOidDer = DerCodec.encodeOid(eContentTypeOid);
+            // encapContentInfo без content: SEQUENCE { eContentType }
+            byte[] encapContentInfo = DerCodec.encodeSequence(eContentTypeOidDer);
+            byte[] certsField = buildCertificates();
+            // пустые digestAlgorithms и signerInfos (оба SET OF нулевой длины)
+            byte[] signedData =
+                    buildSignedData(List.of(), encapContentInfo, certsField, List.of());
+            LOG.log(
+                    Level.INFO,
+                    "Building certs-only SignedData with {0} certificate(s)",
+                    certificates.size());
+            return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedData);
+        }
+
         if (data == null) throw new IllegalStateException("data not set");
         if (signers.isEmpty()) throw new IllegalStateException("no signers");
 

@@ -39,6 +39,8 @@ import org.rssys.gost.util.CryptoRandom;
  */
 public final class TlsSession implements AutoCloseable {
 
+    private static final System.Logger LOG = System.getLogger("org.rssys.gost.tls13.TlsSession");
+
     private final TlsTransport transport;
     private TlsCiphersuite
             ciphersuite; // Меняется на клиенте после ServerHello если сервер выбрал другой suite
@@ -129,7 +131,7 @@ public final class TlsSession implements AutoCloseable {
         if (config.getServerHostname() == null && !config.isHostnameVerificationDisabled()) {
             throw new IllegalArgumentException(
                     "Server hostname not set."
-                    + " Call withServerHostname() or withoutHostnameVerification()");
+                            + " Call withServerHostname() or withoutHostnameVerification()");
         }
         TlsSession session =
                 new TlsSession(
@@ -165,7 +167,8 @@ public final class TlsSession implements AutoCloseable {
             PrivateKeyParameters clientPrivateKey) {
         List<GostCertificate> chain =
                 clientCertificate != null ? Collections.singletonList(clientCertificate) : null;
-        return new TlsSession(transport, ciphersuite, chain, clientPrivateKey, null, null, false, null);
+        return new TlsSession(
+                transport, ciphersuite, chain, clientPrivateKey, null, null, false, null);
     }
 
     /**
@@ -926,7 +929,8 @@ public final class TlsSession implements AutoCloseable {
         byte[] rms = engine != null ? engine.getResumptionMasterSecret() : null;
         if (rms == null) return;
         byte[] psk = TlsPskHelper.derivePsk(rms, nst.ticketNonce, hashLen);
-        // RuntimeException от PskStore (например RedisException) не ломает handshake
+        // nst — локальный объект, не покидает метод; затирание его полей безопасно.
+        // psk — ключевой материал, затираем всегда (PskEntry получил клон)
         try {
             pskStore.onTicketReceived(
                     new PskEntry(
@@ -937,9 +941,16 @@ public final class TlsSession implements AutoCloseable {
                             psk,
                             System.currentTimeMillis()));
         } catch (RuntimeException e) {
-            // Silent catch by design: вызывающий код владеет PskStore, и если его реализация
-            // кидает RuntimeException — это не ошибка handshake. Resumption будет
-            // недоступен, что очевидно вызывающему коду. См. javadoc onTicketReceived().
+            // Контракт PskStore.onTicketReceived: стек логирует и продолжает handshake.
+            // Только метаданные исключения, без ключевого материала (no-debug).
+            LOG.log(
+                    System.Logger.Level.WARNING,
+                    "PskStore.onTicketReceived failed, resumption unavailable: "
+                            + e.getClass().getName());
+        } finally {
+            TlsUtils.wipeArray(psk);
+            TlsUtils.wipeArray(nst.ticket);
+            TlsUtils.wipeArray(nst.ticketNonce);
         }
     }
 
@@ -957,37 +968,52 @@ public final class TlsSession implements AutoCloseable {
         // Монотонный nonce: ticket_nonce = 8-байтовый big-endian индекс
         // (RFC 8446 §4.6.1: MUST be unique across all tickets on this connection)
         byte[] ticketNonce = new byte[8];
-        ticketNonce[7] = (byte) (nstIndex & 0xFF);
-        ticketNonce[6] = (byte) ((nstIndex >>> 8) & 0xFF);
-        ticketNonce[5] = (byte) ((nstIndex >>> 16) & 0xFF);
-        ticketNonce[4] = (byte) ((nstIndex >>> 24) & 0xFF);
-        int ageAddRaw = CryptoRandom.INSTANCE.nextInt();
-        long ticketAgeAdd = ageAddRaw & 0xFFFFFFFFL;
-        CryptoRandom.INSTANCE.nextBytes(ticket);
-        byte[] body =
-                TlsMessageBuilder.buildNewSessionTicket(
-                        TlsConstants.DEFAULT_SESSION_TIMEOUT, ticketAgeAdd, ticketNonce, ticket);
-        byte[] framed = new TlsHandshakeMessage(TlsConstants.HT_NEW_SESSION_TICKET, body).encode();
-        sendEncryptedRecord(TlsConstants.CT_HANDSHAKE, framed);
-        // Resumption Master Secret живёт в engine
-        byte[] rms = engine != null ? engine.getResumptionMasterSecret() : null;
-        if (pskStore != null && rms != null) {
-            byte[] psk = TlsPskHelper.derivePsk(rms, ticketNonce, hashLen);
-            // RuntimeException от PskStore не ломает handshake
-            try {
-                pskStore.onTicketReceived(
-                        new PskEntry(
-                                ticket,
-                                TlsConstants.DEFAULT_SESSION_TIMEOUT,
-                                ticketAgeAdd,
-                                ticketNonce,
-                                psk,
-                                System.currentTimeMillis()));
-            } catch (RuntimeException e) {
-                // Silent catch by design: вызывающий код владеет PskStore, и если его реализация
-                // кидает RuntimeException — это не ошибка handshake. Resumption будет
-                // недоступен, что очевидно вызывающему коду. См. javadoc onTicketReceived().
+        byte[] psk = null;
+        try {
+            ticketNonce[7] = (byte) (nstIndex & 0xFF);
+            ticketNonce[6] = (byte) ((nstIndex >>> 8) & 0xFF);
+            ticketNonce[5] = (byte) ((nstIndex >>> 16) & 0xFF);
+            ticketNonce[4] = (byte) ((nstIndex >>> 24) & 0xFF);
+            int ageAddRaw = CryptoRandom.INSTANCE.nextInt();
+            long ticketAgeAdd = ageAddRaw & 0xFFFFFFFFL;
+            CryptoRandom.INSTANCE.nextBytes(ticket);
+            byte[] body =
+                    TlsMessageBuilder.buildNewSessionTicket(
+                            TlsConstants.DEFAULT_SESSION_TIMEOUT,
+                            ticketAgeAdd,
+                            ticketNonce,
+                            ticket);
+            byte[] framed =
+                    new TlsHandshakeMessage(TlsConstants.HT_NEW_SESSION_TICKET, body).encode();
+            sendEncryptedRecord(TlsConstants.CT_HANDSHAKE, framed);
+            // Resumption Master Secret живёт в engine
+            byte[] rms = engine != null ? engine.getResumptionMasterSecret() : null;
+            if (pskStore != null && rms != null) {
+                psk = TlsPskHelper.derivePsk(rms, ticketNonce, hashLen);
+                try {
+                    pskStore.onTicketReceived(
+                            new PskEntry(
+                                    ticket,
+                                    TlsConstants.DEFAULT_SESSION_TIMEOUT,
+                                    ticketAgeAdd,
+                                    ticketNonce,
+                                    psk,
+                                    System.currentTimeMillis()));
+                } catch (RuntimeException e) {
+                    // Контракт PskStore.onTicketReceived: стек логирует и продолжает handshake.
+                    // Только метаданные исключения, без ключевого материала (no-debug).
+                    LOG.log(
+                            System.Logger.Level.WARNING,
+                            "PskStore.onTicketReceived failed, resumption unavailable: "
+                                    + e.getClass().getName());
+                }
             }
+        } finally {
+            // psk — ключевой материал; ticket/ticketNonce уже склонированы PskEntry
+            // и больше не нужны -> затираем единой дисциплиной
+            TlsUtils.wipeArray(ticket);
+            TlsUtils.wipeArray(ticketNonce);
+            if (psk != null) TlsUtils.wipeArray(psk);
         }
     }
 
@@ -1000,7 +1026,7 @@ public final class TlsSession implements AutoCloseable {
      *
      * @return полный handshake-фрейм (type + length + body) или null если недостаточно данных
      */
-    private byte[] assembleHandshakeMessage() {
+    private byte[] assembleHandshakeMessage() throws TlsException {
         byte[] buf = handshakeBuffer.getBuf();
         int size = handshakeBuffer.size();
         if (size < TlsConstants.HANDSHAKE_HEADER_SIZE) {
@@ -1008,6 +1034,13 @@ public final class TlsSession implements AutoCloseable {
         }
         int msgLen = ((buf[1] & 0xFF) << 16) | ((buf[2] & 0xFF) << 8) | (buf[3] & 0xFF);
         int totalLen = TlsConstants.HANDSHAKE_HEADER_SIZE + msgLen;
+        // Верхняя граница до аллокации: msgLen — 24-битное поле (до 16 МБ),
+        // без лимита реассемблирование из многих записей -> resource exhaustion (fail-closed)
+        if (totalLen > TlsConstants.MAX_HANDSHAKE_MESSAGE_SIZE) {
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR,
+                    "Handshake message too large: " + totalLen + " bytes");
+        }
         if (size < totalLen) {
             return null;
         }
@@ -1346,6 +1379,13 @@ public final class TlsSession implements AutoCloseable {
             int size = handshakeBuffer.size();
             int msgLen = ((buf[1] & 0xFF) << 16) | ((buf[2] & 0xFF) << 8) | (buf[3] & 0xFF);
             int totalLen = TlsConstants.HANDSHAKE_HEADER_SIZE + msgLen;
+            // Лимит проверяем ДО цикла дочитывания записей, чтобы не наращивать буфер
+            // под заведомо превышающее сообщение (fail-closed)
+            if (totalLen > TlsConstants.MAX_HANDSHAKE_MESSAGE_SIZE) {
+                throw new TlsException(
+                        TlsConstants.ALERT_DECODE_ERROR,
+                        "Handshake message too large: " + totalLen + " bytes");
+            }
             while (size < totalLen) {
                 readNextHandshakeRecord();
                 buf = handshakeBuffer.getBuf();

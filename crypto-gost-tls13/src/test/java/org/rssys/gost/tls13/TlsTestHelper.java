@@ -444,9 +444,16 @@ public class TlsTestHelper {
             }
         }
         return GostCrlBuilder.assembleCrl(
-                entries, caPriv, issuerDnDer,
+                entries,
+                caPriv,
+                issuerDnDer,
                 ZonedDateTime.now(ZoneOffset.UTC).format(GEN_TIME),
-                nextUpdateGeneralizedTime, true, null, null, null, withIdpExtension);
+                nextUpdateGeneralizedTime,
+                true,
+                null,
+                null,
+                null,
+                withIdpExtension);
     }
 
     /**
@@ -471,8 +478,7 @@ public class TlsTestHelper {
             }
         }
         GostCrlBuilder builder =
-                GostCrlBuilder.create(caPriv, issuerDnDer)
-                        .withCrlNumber(crlNumber);
+                GostCrlBuilder.create(caPriv, issuerDnDer).withCrlNumber(crlNumber);
         if (nextUpdateGeneralizedTime != null) {
             builder = builder.nextUpdate(nextUpdateGeneralizedTime);
         }
@@ -579,6 +585,65 @@ public class TlsTestHelper {
             builder.nextUpdate(nextUpdateGeneralizedTime);
         }
         return builder.build();
+    }
+
+    /**
+     * OCSP-ответ с эхо-возвратом nonce из запроса (RFC 8954). Нужен для моков,
+     * имитирующих реальный responder: при наличии nonce в запросе ответ обязан его
+     * эхировать, иначе fail-closed верификатор (после плана 185) отклонит ответ.
+     *
+     * @param nonce nonce из запроса (или null — не добавлять расширение)
+     */
+    public static byte[] buildOcspResponseWithNonce(
+            byte[] serialNumber,
+            PrivateKeyParameters caPriv,
+            PublicKeyParameters caPub,
+            byte[] caSubjectDer,
+            byte[] nonce)
+            throws Exception {
+        GostOcspResponseBuilder builder =
+                GostOcspResponseBuilder.create(serialNumber)
+                        .signer(caPriv, caPub)
+                        .issuerDn(caSubjectDer);
+        if (nonce != null) {
+            builder.nonce(nonce);
+        }
+        return builder.build();
+    }
+
+    /**
+     * Извлекает nonce (RFC 8954) из DER OCSP-запроса — для моков responder'а,
+     * которым нужно эхировать nonce в ответ.
+     *
+     * <p>Навигация: OCSPRequest -> tbsRequest -> requestExtensions [2] ->
+     * SEQUENCE OF Extension -> Extension{OID id-pkix-ocsp-nonce, OCTET STRING}.
+     *
+     * @param requestDer DER OCSP-запроса
+     * @return байты nonce или {@code null}, если расширение отсутствует/запрос неразбираем
+     */
+    public static byte[] extractOcspRequestNonce(byte[] requestDer) {
+        try {
+            byte[][] outer = DerCodec.parseSequenceContents(requestDer, 0);
+            byte[][] tbsParts = DerCodec.parseSequenceContents(outer[0], 0);
+            byte[] nonceOid = DerCodec.encodeOid(GostOids.OCSP_NONCE);
+            for (byte[] part : tbsParts) {
+                if ((part[0] & 0xFF) != 0xA2) {
+                    continue; // не requestExtensions [2]
+                }
+                int contentStart = 1 + DerCodec.decodeLength(part, 1)[1];
+                byte[][] extensions = DerCodec.parseSequenceContents(part, contentStart);
+                for (byte[] ext : extensions) {
+                    byte[][] extParts = DerCodec.parseSequenceContents(ext, 0);
+                    if (extParts.length >= 2 && Arrays.equals(extParts[0], nonceOid)) {
+                        // extnValue — OCTET STRING, чьё содержимое и есть сырой nonce
+                        return DerCodec.parseOctetString(extParts[extParts.length - 1], 0);
+                    }
+                }
+            }
+            return null;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     public static byte[] buildOcspResponseWithDelegatedCerts(
@@ -702,8 +767,7 @@ public class TlsTestHelper {
      * TBS переподписывается переданным ключом — подпись валидна.
      */
     public static byte[] buildMultiResponseOcsp(
-            byte[] baseOcsp, byte[] sr1, byte[] sr2,
-            PrivateKeyParameters signKey) {
+            byte[] baseOcsp, byte[] sr1, byte[] sr2, PrivateKeyParameters signKey) {
         byte[][] outer = DerCodec.parseSequenceContents(baseOcsp, 0);
         byte[] rb = outer[1];
         int[] rbLen = DerCodec.decodeLength(rb, 1);

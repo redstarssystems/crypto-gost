@@ -2,7 +2,6 @@ package org.rssys.gost.pkix.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
-import org.rssys.gost.pkix.cert.GostPkcs12Parser;
 
 /**
  * Fuzz-тесты для {@link GostPkcs12Parser} и {@link GostPkcs12Loader}.

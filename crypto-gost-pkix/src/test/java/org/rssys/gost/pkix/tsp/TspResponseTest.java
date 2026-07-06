@@ -36,7 +36,7 @@ class TspResponseTest {
     @BeforeAll
     static void setUp() throws Exception {
         tsaKey = KeyGenerator.generateKeyPair(PARAMS);
-        tsaCert = CmsTestUtils.createSelfSignedCert(tsaKey.getPrivate(), tsaKey.getPublic());
+        tsaCert = CmsTestUtils.createTsaCert(tsaKey.getPrivate(), tsaKey.getPublic());
         testHash256 = new byte[32];
         CryptoRandom.INSTANCE.nextBytes(testHash256);
     }
@@ -248,13 +248,31 @@ class TspResponseTest {
     // ========================================================================
 
     @Test
-    @DisplayName("verify проходит если сертификат TSA без EKU (EMPTY — permissive default)")
-    void verifyPassesWhenTsaCertNoEku() throws Exception {
-        // tsaCert без EKU — EMPTY ExtensionsResult даёт ekuTimeStamping = true (permissive)
-        byte[] tspResp = buildTspResponse(testHash256);
+    @DisplayName("verify отклоняет сертификат TSA без EKU (RFC 3161 §2.3 — EKU обязателен)")
+    void verifyRejectsWhenTsaCertNoEku() throws Exception {
+        // Сертификат без extensions -> EMPTY ExtensionsResult даёт ekuTimeStamping = false,
+        // TSA обязан нести id-kp-timeStamping -> fail-closed.
+        KeyPair noEkuKp = KeyGenerator.generateKeyPair(PARAMS);
+        GostCertificate noEkuCert =
+                CmsTestUtils.createSelfSignedCert(noEkuKp.getPrivate(), noEkuKp.getPublic());
+
+        byte[] tstInfo = buildTstInfo(testHash256);
+        byte[] timeStampToken =
+                CmsSignedDataBuilder.create()
+                        .data(tstInfo)
+                        .contentType(GostOids.TST_INFO)
+                        .addSigner(noEkuKp.getPrivate(), noEkuCert)
+                        .build();
+        byte[] pkiStatus =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeInteger(BigInteger.valueOf(GostOids.PKI_STATUS_GRANTED)));
+        byte[] tspResp = DerCodec.encodeSequence(pkiStatus, timeStampToken);
+
         TspResponse response = TspResponse.fromDer(tspResp);
-        response.verify(testHash256, GostOids.DIGEST_256, null, tsaCert);
-        assertTrue(response.isSignatureVerified());
+        assertThrows(
+                PkixException.class,
+                () -> response.verify(testHash256, GostOids.DIGEST_256, null, noEkuCert),
+                "TSA без EKU должен быть отклонён (fail-closed)");
     }
 
     @Test

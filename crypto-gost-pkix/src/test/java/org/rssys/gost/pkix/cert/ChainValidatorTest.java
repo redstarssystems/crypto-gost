@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -233,7 +234,7 @@ class ChainValidatorTest {
     // ========================================================================
 
     @Test
-    @DisplayName("root не подписан ни одним trusted CA → ROOT_NOT_SIGNED")
+    @DisplayName("root не подписан ни одним trusted CA — ROOT_NOT_SIGNED")
     void testRootNotSigned() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
@@ -246,11 +247,516 @@ class ChainValidatorTest {
     }
 
     // ========================================================================
+    // Name Constraints (RFC 5280 §4.2.1.10) — enforcement
+    // ========================================================================
+
+    /**
+     * CA: NC permitted=example.com, leaf SAN=host.example.com — OK.
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName — поддомен матчит")
+    void testNameConstraintsPermittedDnsMatch() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC permitted=example.com, leaf SAN=example.com — точное совпадение.
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName — точное совпадение")
+    void testNameConstraintsPermittedDnsExact() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC permitted=example.com, leaf SAN=evil.com — не матчит.
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName — SAN вне namespace")
+    void testNameConstraintsPermittedDnsMismatch() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "evil.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC permitted=example.com, leaf SAN=notexample.com — нет точки-границы.
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName — label-aware, частичное не матчит")
+    void testNameConstraintsPermittedDnsNoPartial() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "notexample.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC excluded=bad.example.com, leaf SAN=bad.example.com — reject.
+     */
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName — reject")
+    void testNameConstraintsExcludedDns() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedDns("bad.example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "bad.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC excluded=example.com, leaf SAN=sub.example.com — excluded subtree включает поддомены.
+     */
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName — поддомен тоже excluded")
+    void testNameConstraintsExcludedSubdomain() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "sub.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC non-critical — reject по RFC 5280 §4.2.1.10 MUST.
+     */
+    @Test
+    @DisplayName("NameConstraints: non-critical — reject")
+    void testNameConstraintsNonCritical() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedDns("example.com", false));
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC с rfc822Name (unsupported type), leaf только с dNSName.
+     * Неподдерживаемый тип ограничения игнорируется — цепочка проходит.
+     */
+    @Test
+    @DisplayName("NameConstraints: unsupported тип игнорируется")
+    void testNameConstraintsUnsupportedType() throws Exception {
+        CertBundle root = createRootCa();
+        byte[] rfc822 =
+                DerCodec.encodeTlv(0x81, "user@example.com".getBytes(StandardCharsets.US_ASCII));
+        byte[] nc =
+                buildNameConstraintsExtension(
+                        permittedSubtrees(generalSubtreesNc(generalSubtreeNc(rfc822, null, null))),
+                        null,
+                        true);
+        CertBundle ca = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC с rfc822Name И dNSName permitted, leaf только с dNSName.
+     * Реальный сценарий: государственный УЦ, выпускающий email- и TLS-сертификаты
+     * одним промежуточным CA. rfc822Name-ограничения игнорируются,
+     * dNSName-ограничения продолжают enforced.
+     */
+    @Test
+    @DisplayName("NameConstraints: rfc822Name + dNSName, leaf только dNSName — OK")
+    void testNameConstraintsRfc822NameAndDnsName() throws Exception {
+        CertBundle root = createRootCa();
+        byte[] rfc822Subtree =
+                generalSubtreeNc(
+                        DerCodec.encodeTlv(0x81, "user@example.com".getBytes(StandardCharsets.US_ASCII)),
+                        null,
+                        null);
+        byte[] dnsSubtree =
+                generalSubtreeNc(
+                        DerCodec.encodeTlv(0x82, "example.com".getBytes(StandardCharsets.US_ASCII)),
+                        null,
+                        null);
+        byte[] gs = generalSubtreesNc(rfc822Subtree, dnsSubtree);
+        byte[] ps = DerCodec.encodeContextConstructed(0, gs);
+        byte[] nc = buildNameConstraintsExtension(ps, null, true);
+        CertBundle ca = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * Self-issued CA не проверяется накопленными ограничениями (RFC 5280 §6.1.4(k)).
+     * intermediate (pathLen=0, NC permitted=example.com) — под ним self-issued CA.
+     * Self-issued не проверяется, leaf проверяется — leaf должен матчить.
+     */
+    @Test
+    @DisplayName("NameConstraints: self-issued CA не проверяется ограничениями")
+    void testNameConstraintsSelfIssuedNotChecked() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle caSelf = createSelfIssuedIntermediateCa(intermediate);
+        CertBundle leaf = createLeafWithSan(caSelf, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, caSelf.cert, intermediate.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * Два уровня: subCA NC=example.com, leaf удовлетворяет обоим — OK.
+     */
+    @Test
+    @DisplayName("NameConstraints: два уровня, leaf матчит оба — OK")
+    void testNameConstraintsMultipleLevels() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle subCa =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(subCa, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, subCa.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * Root с NC permitted=example.com, leaf host.example.com — OK.
+     */
+    @Test
+    @DisplayName("NameConstraints: trust anchor с NC — ограничения применяются")
+    void testNameConstraintsOnTrustAnchor() throws Exception {
+        CertBundle root = createRootCaWithNameConstraints(buildNcPermittedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(root, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * Root с NC permitted=example.com, leaf evil.com — reject.
+     */
+    @Test
+    @DisplayName("NameConstraints: trust anchor с NC — SAN вне namespace → reject")
+    void testNameConstraintsOnTrustAnchorFail() throws Exception {
+        CertBundle root = createRootCaWithNameConstraints(buildNcPermittedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(root, "evil.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * Цепочка без NameConstraints — регрессия.
+     */
+    @Test
+    @DisplayName("NameConstraints: цепочка без NC — OK (регрессия)")
+    void testNameConstraintsNoConstraints() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC permitted=192.168.1.0/28, leaf SAN ip=192.168.1.5 — валидно.
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted iPAddress — адрес в префиксе")
+    void testNameConstraintsPermittedIp() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root,
+                        buildNcPermittedIp(
+                                new byte[] {
+                                    (byte) 0xC0,
+                                    (byte) 0xA8,
+                                    0x01,
+                                    0x00,
+                                    (byte) 0xFF,
+                                    (byte) 0xFF,
+                                    (byte) 0xFF,
+                                    (byte) 0xF0
+                                }));
+        CertBundle leaf = createLeafWithSan(ca, null, "192.168.1.5");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    /**
+     * CA: NC permitted=example.com, leaf без DNS SAN — vacuously satisfied (RFC 5280).
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted DNS, leaf без DNS SAN — vacuously satisfied")
+    void testNameConstraintsPermittedDnsNoSan() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        // Leaf без SAN dNSName — vacuous-true
+        CertBundle leaf = createLeafWithSan(ca, null, null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    // ========================================================================
+    // Name Constraints helpers
+    // ========================================================================
+
+    private static final byte[] NC_OID_BYTES = {0x55, 0x1D, 0x1E};
+
+    /** Сборка одного Extension: SEQUENCE { OID [BOOLEAN] OCTET STRING { value } }. */
+    private static byte[] buildNcExtension(byte[] oidBytes, boolean critical, byte[] extValue) {
+        byte[] oidDer = DerCodec.encodeTlv(0x06, oidBytes);
+        byte[] extInner;
+        if (critical) {
+            extInner =
+                    DerCodec.encodeSequence(
+                            oidDer,
+                            new byte[] {0x01, 0x01, (byte) 0xFF},
+                            DerCodec.encodeOctetString(extValue));
+        } else {
+            extInner = DerCodec.encodeSequence(oidDer, DerCodec.encodeOctetString(extValue));
+        }
+        return extInner;
+    }
+
+    /** Сборка NameConstraints SEQUENCE. */
+    private static byte[] buildNameConstraintsExtension(
+            byte[] permitted, byte[] excluded, boolean critical) {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        try {
+            if (permitted != null) bos.write(permitted);
+            if (excluded != null) bos.write(excluded);
+        } catch (java.io.IOException impossible) {
+            throw new RuntimeException(impossible);
+        }
+        byte[] ncSeq = DerCodec.encodeSequence(bos.toByteArray());
+        return buildNcExtension(NC_OID_BYTES, critical, ncSeq);
+    }
+
+    /** Сборка NameConstraints: только permitted dNSName. */
+    private static byte[] buildNcPermittedDns(String dnsName) {
+        return buildNcPermittedDns(dnsName, true);
+    }
+
+    /** Сборка NameConstraints: только permitted dNSName с указанным critical. */
+    private static byte[] buildNcPermittedDns(String dnsName, boolean critical) {
+        byte[] dns = DerCodec.encodeTlv(0x82, dnsName.getBytes(StandardCharsets.US_ASCII));
+        byte[] st = generalSubtreeNc(dns, null, null);
+        byte[] gs = generalSubtreesNc(st);
+        byte[] ps = DerCodec.encodeContextConstructed(0, gs);
+        return buildNameConstraintsExtension(ps, null, critical);
+    }
+
+    /** Сборка NameConstraints: только excluded dNSName. */
+    private static byte[] buildNcExcludedDns(String dnsName) {
+        byte[] dns = DerCodec.encodeTlv(0x82, dnsName.getBytes(StandardCharsets.US_ASCII));
+        byte[] st = generalSubtreeNc(dns, null, null);
+        byte[] gs = generalSubtreesNc(st);
+        byte[] es = DerCodec.encodeContextConstructed(1, gs);
+        return buildNameConstraintsExtension(null, es, true);
+    }
+
+    /** Сборка NameConstraints: только permitted iPAddress. */
+    private static byte[] buildNcPermittedIp(byte[] ipConstraint) {
+        byte[] ip = DerCodec.encodeTlv(0x87, ipConstraint);
+        byte[] st = generalSubtreeNc(ip, null, null);
+        byte[] gs = generalSubtreesNc(st);
+        byte[] ps = DerCodec.encodeContextConstructed(0, gs);
+        return buildNameConstraintsExtension(ps, null, true);
+    }
+
+    /** GeneralSubtree SEQUENCE. */
+    private static byte[] generalSubtreeNc(byte[] base, Integer min, Integer max) {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        try {
+            bos.write(base);
+            if (min != null) {
+                bos.write(
+                        DerCodec.encodeContextConstructed(
+                                0, DerCodec.encodeInteger(BigInteger.valueOf(min))));
+            }
+            if (max != null) {
+                bos.write(
+                        DerCodec.encodeContextConstructed(
+                                1, DerCodec.encodeInteger(BigInteger.valueOf(max))));
+            }
+        } catch (java.io.IOException impossible) {
+            throw new RuntimeException(impossible);
+        }
+        return DerCodec.encodeSequence(bos.toByteArray());
+    }
+
+    /** GeneralSubtrees SEQUENCE. */
+    private static byte[] generalSubtreesNc(byte[]... subtrees) {
+        return DerCodec.encodeSequence(subtrees);
+    }
+
+    /** [0] permittedSubtrees. */
+    private static byte[] permittedSubtrees(byte[] generalSubtreesDer) {
+        return DerCodec.encodeContextConstructed(0, generalSubtreesDer);
+    }
+
+    // ========================================================================
+    // Вспомогательные методы
+    // ========================================================================
     // Вспомогательные методы
     // ========================================================================
 
     private static CertBundle createRootCa() throws Exception {
         return createRootCa(null);
+    }
+
+    /**
+     * Создаёт intermediate CA с расширением NameConstraints.
+     */
+    private static CertBundle createIntermediateCaWithNameConstraints(
+            CertBundle issuer, byte[] ncExtension) throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=NC Intermediate CA");
+        byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(bc, ku, ski, aki, ncExtension);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                subjectDn);
+    }
+
+    /**
+     * Создаёт root CA с расширением NameConstraints.
+     */
+    private static CertBundle createRootCaWithNameConstraints(byte[] ncExtension) throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] dn = GostDnParser.encodeDn("CN=Root CA NC");
+        byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] additional = concatExtensions(bc, ku, ski, ncExtension);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, dn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(dn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), PARAMS),
+                dn);
+    }
+
+    /**
+     * Создаёт leaf-сертификат с указанным SAN dNSName и/или iPAddress.
+     */
+    private static CertBundle createLeafWithSan(CertBundle issuer, String dnsName, String ipAddress)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Leaf NC");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        GostCertificateBuilder builder =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE);
+        if (dnsName != null) {
+            builder.sanDns(dnsName);
+        }
+        if (ipAddress != null) {
+            builder.sanIp(ipAddress);
+        }
+        byte[] tbs = builder.buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                subjectDn);
     }
 
     private static CertBundle createRootCa(Integer pathLen) throws Exception {

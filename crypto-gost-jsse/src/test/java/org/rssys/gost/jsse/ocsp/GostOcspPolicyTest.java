@@ -119,17 +119,14 @@ class GostOcspPolicyTest {
                         null,
                         aiaExt);
 
-        byte[] ocspResp =
-                TlsTestHelper.buildOcspResponse(
-                        leaf.cert.getSerialNumber(), root.priv,
-                        root.cert.getPublicKey(), root.subjectDn);
-
         java.util.concurrent.atomic.AtomicReference<byte[]> recordedBody =
                 new java.util.concurrent.atomic.AtomicReference<>();
         mockServer.createContext(
                 "/ocsp",
                 ex -> {
-                    recordedBody.set(ex.getRequestBody().readAllBytes());
+                    byte[] req = ex.getRequestBody().readAllBytes();
+                    recordedBody.set(req);
+                    byte[] ocspResp = buildOcspResponseEchoingNonce(req, leaf, root);
                     ex.sendResponseHeaders(200, ocspResp.length);
                     ex.getResponseBody().write(ocspResp);
                     ex.getResponseBody().close();
@@ -176,18 +173,14 @@ class GostOcspPolicyTest {
                         null,
                         aiaExt);
 
-        byte[] ocspResp =
-                TlsTestHelper.buildOcspResponse(
-                        leaf.cert.getSerialNumber(), root.priv,
-                        root.cert.getPublicKey(), root.subjectDn);
-
         AtomicInteger counter = new AtomicInteger(0);
         byte[] leafDer = leaf.cert.getEncoded();
         mockServer.createContext(
                 "/ocsp",
                 ex -> {
                     counter.incrementAndGet();
-                    ex.getRequestBody().readAllBytes();
+                    byte[] req = ex.getRequestBody().readAllBytes();
+                    byte[] ocspResp = buildOcspResponseEchoingNonce(req, leaf, root);
                     ex.sendResponseHeaders(200, ocspResp.length);
                     ex.getResponseBody().write(ocspResp);
                     ex.getResponseBody().close();
@@ -239,18 +232,14 @@ class GostOcspPolicyTest {
                         null,
                         aiaExt);
 
-        byte[] ocspResp =
-                TlsTestHelper.buildOcspResponse(
-                        leaf.cert.getSerialNumber(), root.priv,
-                        root.cert.getPublicKey(), root.subjectDn);
-
         AtomicInteger counter = new AtomicInteger(0);
         byte[] leafDer = leaf.cert.getEncoded();
         mockServer.createContext(
                 "/ocsp",
                 ex -> {
                     counter.incrementAndGet();
-                    ex.getRequestBody().readAllBytes();
+                    byte[] req = ex.getRequestBody().readAllBytes();
+                    byte[] ocspResp = buildOcspResponseEchoingNonce(req, leaf, root);
                     ex.sendResponseHeaders(200, ocspResp.length);
                     ex.getResponseBody().write(ocspResp);
                     ex.getResponseBody().close();
@@ -389,17 +378,13 @@ class GostOcspPolicyTest {
                         null,
                         aiaExt);
 
-        byte[] leafOcsp =
-                TlsTestHelper.buildOcspResponse(
-                        leaf.cert.getSerialNumber(), intermediate.priv,
-                        intermediate.cert.getPublicKey(), intermediate.subjectDn);
-
         mockServer.createContext(
                 "/ocsp",
                 ex -> {
-                    ex.getRequestBody().readAllBytes();
-                    ex.sendResponseHeaders(200, leafOcsp.length);
-                    ex.getResponseBody().write(leafOcsp);
+                    byte[] req = ex.getRequestBody().readAllBytes();
+                    byte[] ocspResp = buildOcspResponseEchoingNonce(req, leaf, intermediate);
+                    ex.sendResponseHeaders(200, ocspResp.length);
+                    ex.getResponseBody().write(ocspResp);
                     ex.getResponseBody().close();
                 });
         mockServer.start();
@@ -421,6 +406,30 @@ class GostOcspPolicyTest {
     // ========================================================================
     // Хелперы
     // ========================================================================
+
+    /**
+     * Строит OCSP-ответ, эхируя nonce из полученного запроса (RFC 8954). Имитирует
+     * реальный responder: без эха nonce fail-closed верификатор (план 185) отклонит ответ.
+     *
+     * @param requestDer сырой DER OCSP-запроса из мок-сервера
+     * @param target     сертификат, чей статус подтверждаем (источник serialNumber)
+     * @param signer     bundle подписанта ответа (ключ + issuer DN)
+     */
+    private static byte[] buildOcspResponseEchoingNonce(
+            byte[] requestDer, TlsTestHelper.CertBundle target, TlsTestHelper.CertBundle signer)
+            throws java.io.IOException {
+        byte[] nonce = TlsTestHelper.extractOcspRequestNonce(requestDer);
+        try {
+            return TlsTestHelper.buildOcspResponseWithNonce(
+                    target.cert.getSerialNumber(),
+                    signer.priv,
+                    signer.cert.getPublicKey(),
+                    signer.subjectDn,
+                    nonce);
+        } catch (Exception e) {
+            throw new java.io.IOException("Failed to build OCSP response", e);
+        }
+    }
 
     private static TlsTestHelper.CertBundle createLeaf() throws Exception {
         return TlsTestHelper.createCertSignedBy(

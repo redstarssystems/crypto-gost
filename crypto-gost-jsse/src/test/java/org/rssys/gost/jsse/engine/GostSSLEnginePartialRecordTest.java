@@ -175,6 +175,55 @@ class GostSSLEnginePartialRecordTest {
                         + ex.getMessage());
     }
 
+    // ========================================================================
+    // Размер plaintext-записи: TLSPlaintext.length ≤ 2^14 (RFC 8446 §5.1)
+    // ========================================================================
+
+    @Test
+    @DisplayName("Plaintext-запись payloadLen > 2^14 -> SSLException(record_overflow)")
+    void testPlaintextRecordOverflow() throws Exception {
+        GostSSLEngine server = createServerEngine();
+        // Только заголовок: проверка размера срабатывает до ожидания полного тела,
+        // поэтому досылать 16 КБ не нужно — оверсайз отвергается сразу.
+        byte[] oversized = plaintextHeader(TlsConstants.MAX_PLAINTEXT_LENGTH + 1);
+        ByteBuffer dst = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
+
+        SSLException ex =
+                assertThrows(
+                        SSLException.class,
+                        () -> server.unwrap(ByteBuffer.wrap(oversized), dst),
+                        "Оверсайз plaintext-запись должна отвергаться");
+        assertTrue(
+                ex.getMessage().toLowerCase().contains("too large")
+                        || ex.getMessage().toLowerCase().contains("overflow"),
+                "Сообщение должно указывать на превышение размера: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("Plaintext-запись payloadLen == 2^14 -> без overflow (граница включительна)")
+    void testPlaintextRecordAtLimit() throws Exception {
+        GostSSLEngine server = createServerEngine();
+        // Ровно предел: overflow не должен срабатывать; тело не досылаем -> BUFFER_UNDERFLOW.
+        byte[] atLimit = plaintextHeader(TlsConstants.MAX_PLAINTEXT_LENGTH);
+        ByteBuffer dst = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
+
+        SSLEngineResult r = server.unwrap(ByteBuffer.wrap(atLimit), dst);
+        assertEquals(
+                SSLEngineResult.Status.BUFFER_UNDERFLOW,
+                r.getStatus(),
+                "Запись ровно в предел не должна давать overflow");
+    }
+
+    private static byte[] plaintextHeader(int payloadLen) {
+        return new byte[] {
+            TlsConstants.CT_HANDSHAKE,
+            0x03,
+            0x03,
+            (byte) ((payloadLen >> 8) & 0xFF),
+            (byte) (payloadLen & 0xFF)
+        };
+    }
+
     private static GostSSLEngine createClientEngine() {
         return new GostSSLEngine(
                 new GostX509KeyManager(),

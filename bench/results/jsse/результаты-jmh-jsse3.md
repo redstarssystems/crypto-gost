@@ -35,7 +35,7 @@
 </tr>
 <tr>
 <td style="text-align: left;"><p>Общее время прогона</p></td>
-<td style="text-align: left;"><p>~40 минут</p></td>
+<td style="text-align: left;"><p>≈40 минут</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Состояние системы</p></td>

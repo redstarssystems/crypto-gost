@@ -10,22 +10,30 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-
-import org.rssys.gost.jsse.SsrfGuard;
+import org.rssys.gost.pkix.util.SsrfGuard;
 
 /**
  * Реализация {@link CrlFetcher} на JDK HttpClient с SSRF-защитой.
  * <p>
  * vthread-friendly с JDK 21: HttpClient блокирует vthread, не carrier thread.
  * SSRF-защита: только http:// и https:// схемы, блокировка private/reserved IP
- * после DNS-разрешения.
+ * после DNS-разрешения (проверяются все резолвнутые адреса, fail-closed).
+ * <p>
+ * <b>Остаточный риск (простыми словами):</b> адрес проверяется до запроса, но
+ * само соединение делает {@code HttpClient}, который заново обращается к DNS —
+ * между этими моментами атакующий с контролем DNS может подменить публичный
+ * адрес на внутренний (DNS-rebinding TOCTOU). Штатными средствами HttpClient не
+ * закрывается. Риск ограничен: украсть данные нельзя (ответ CRL проверяется по
+ * подписи), возможно лишь probing внутренней сети. Полное закрытие требует
+ * ручного HTTP (raw socket + SNI), которое мы пока не планируем делать.
+ * Подробнее — {@link org.rssys.gost.pkix.util.SsrfGuard}.
  */
 public final class JdkHttpCrlFetcher implements CrlFetcher {
 
     private static final Logger LOG = System.getLogger("org.rssys.gost.jsse.crl.JdkHttpCrlFetcher");
 
-    private static final int DEFAULT_TIMEOUT_MS = 5000;
-    private static final int DEFAULT_MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5 MB
+    private static final int DEFAULT_TIMEOUT_MS = 30_000;
+    private static final int DEFAULT_MAX_RESPONSE_SIZE = 67_108_864; // 64 МБ
 
     private final HttpClient client;
     private final Duration timeout;
@@ -121,5 +129,4 @@ public final class JdkHttpCrlFetcher implements CrlFetcher {
             throw new IOException("CRL fetch interrupted", e);
         }
     }
-
 }

@@ -6,7 +6,6 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.time.DateTimeException;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import org.rssys.gost.api.Digest;
@@ -253,9 +252,12 @@ public final class GostCertificateBuilder {
         int valueLen = (s.bitLength() + 7) / 8;
         if (valueLen > GostOids.MAX_SERIAL_OCTETS) {
             throw new IllegalArgumentException(
-                    "Serial number exceeds " + GostOids.MAX_SERIAL_OCTETS
-                    + " octets (RFC 5280 §4.1.2.2), value length: " + valueLen
-                    + ", serial: " + s);
+                    "Serial number exceeds "
+                            + GostOids.MAX_SERIAL_OCTETS
+                            + " octets (RFC 5280 §4.1.2.2), value length: "
+                            + valueLen
+                            + ", serial: "
+                            + s);
         }
         this.serial = s;
         return this;
@@ -463,9 +465,7 @@ public final class GostCertificateBuilder {
         byte[] extValue = DerCodec.encodeOctetString(DerCodec.encodeBitString(kuFlags));
         if (critical) {
             return DerCodec.encodeSequence(
-                    DerCodec.encodeOid(GostOids.EXT_KU),
-                    DerCodec.encodeBoolean(true),
-                    extValue);
+                    DerCodec.encodeOid(GostOids.EXT_KU), DerCodec.encodeBoolean(true), extValue);
         }
         return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_KU), extValue);
     }
@@ -556,9 +556,7 @@ public final class GostCertificateBuilder {
         if (isCA) {
             // RFC 5280 §4.2.1.9: MUST critical для CA-сертификатов
             return DerCodec.encodeSequence(
-                    DerCodec.encodeOid(GostOids.EXT_BC),
-                    DerCodec.encodeBoolean(true),
-                    extValue);
+                    DerCodec.encodeOid(GostOids.EXT_BC), DerCodec.encodeBoolean(true), extValue);
         }
         return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_BC), extValue);
     }

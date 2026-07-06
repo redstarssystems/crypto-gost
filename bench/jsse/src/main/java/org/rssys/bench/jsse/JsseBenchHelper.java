@@ -6,7 +6,7 @@ import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.bridge.KeyBridge;
+import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jsse.GostJsseConstants;
 
 import javax.net.ssl.SSLContext;
@@ -57,7 +57,7 @@ class JsseBenchHelper {
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
         X509Certificate jcaCert = CertificateBridge.toJca(serverCert.cert);
-        PrivateKey jcaPriv = KeyBridge.toJca(serverCert.priv);
+        PrivateKey jcaPriv = new GostECPrivateKey(serverCert.priv);
 
         org.rssys.gost.jsse.manager.GostX509KeyManager km = new org.rssys.gost.jsse.manager.GostX509KeyManager();
         km.addKeyEntry("default", new X509Certificate[]{jcaCert}, serverCert.priv);

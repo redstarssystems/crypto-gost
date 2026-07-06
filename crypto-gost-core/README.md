@@ -149,13 +149,14 @@
     byte[] password = "секретный пароль".getBytes(StandardCharsets.UTF_8);
     byte[] salt     = new byte[16];
     CryptoRandom.INSTANCE.nextBytes(salt); // 
-    SymmetricKey key = KeyGenerator.deriveKey(password, salt); // 
+    SymmetricKey key = null;
     try {
+        key = KeyGenerator.deriveKey(password, salt); // 
         // использование ключа ...
     } catch (GeneralSecurityException e) {
         throw new RuntimeException("Key derivation failed", e);
     } finally {
-        key.destroy();
+        if (key != null) key.destroy();
         java.util.Arrays.fill(password, (byte) 0); // 
     }
 
@@ -563,7 +564,7 @@ AuthenticatedStream представляет высокоуровневый ин
 
 - `opening` проверяет CMAC каждого чанка до возврата данных вызывающему.
 
-- Каждый поток выводит два независимых ключа (`cmacKey` для CMAC и
+  Каждый поток выводит два независимых ключа (`cmacKey` для CMAC и
   `ctrKey` для CTR) через KDF\_TREE\_GOSTR3411\_2012\_256 из
   мастер-ключа и случайного streamNonce.
 
@@ -982,7 +983,7 @@ HMAC — код аутентификации сообщений на основ�
     // HMAC-Streebog-256
     byte[] mac256 = Digest.hmac256(data, key);
 
-    // HMAC-Streebog-256
+    // HMAC-Streebog-512
     byte[] mac512 = Digest.hmac512(data, key);
 
     // Проверка целостности — constant-time сравнение (защита от timing-атак)

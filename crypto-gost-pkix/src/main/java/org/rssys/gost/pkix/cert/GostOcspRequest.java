@@ -20,6 +20,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class GostOcspRequest {
 
+    private static final int MAX_OCSP_REQUEST_SIZE = 65_536;
+
     private final List<CertId> certIds;
     private final byte[] nonce;
     private final boolean signed;
@@ -36,6 +38,13 @@ public final class GostOcspRequest {
     public GostOcspRequest(byte[] der) throws PkixException {
         if (der == null || der.length == 0) {
             throw new PkixException("OCSP request must not be null or empty");
+        }
+        if (der.length > MAX_OCSP_REQUEST_SIZE) {
+            throw new PkixException(
+                    "OCSP request DER exceeds maximum size "
+                            + MAX_OCSP_REQUEST_SIZE
+                            + ", got "
+                            + der.length);
         }
 
         try {

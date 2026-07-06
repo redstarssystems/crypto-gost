@@ -102,7 +102,8 @@ fuzz-all:
 
 clean:
 	find $(ROOT) -type d -name target -exec rm -rf {} + 2>/dev/null
-	rm -f $(ROOT)/dependency-reduced-pom.xml $(ROOT)/*.log $(ROOT)/*.orig
+	find $(ROOT) -name 'dependency-reduced-pom.xml' -delete 2>/dev/null
+	rm -f $(ROOT)/*.log $(ROOT)/*.orig
 	$(MAKE) -s -C bench clean
 	$(MAKE) -s -C examples clean
 	$(MAKE) -s -C x-validation-tests clean
@@ -111,7 +112,9 @@ clean:
 	       $(ROOT)/crypto-gost-jsse/.cifuzz-corpus \
 	       $(ROOT)/crypto-gost-tls13/.cifuzz-corpus \
 	       $(ROOT)/crypto-gost-pkix/.cifuzz-corpus
-	find $(ROOT) -path '*/fuzz*/crash-*' -delete 2>/dev/null
+	find $(ROOT) -name 'crash-*' -delete 2>/dev/null
+	find $(ROOT)/bench/results -name '*.log' -delete 2>/dev/null
+	find $(ROOT) -name '.flattened-pom.xml' -delete 2>/dev/null
 	@echo "All modules cleaned."
 
 doc:

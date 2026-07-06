@@ -142,7 +142,7 @@ localhost</p></td>
 
 ## Через make (рекомендуется)
 
-    # Однопоточный throughput (5 прогонов × ~20 с ≈ 100 с)
+    # Однопоточный throughput (5 прогонов × ≈20 с ≈ 100 с)
     make test-stress-tlssession
 
     # Одиночный быстрый замер (переопределяет test из Makefile)
@@ -185,7 +185,7 @@ localhost</p></td>
 
 ## Через Maven напрямую
 
-    # Однопоточный throughput (5 прогонов × ~20 с ≈ 100 с)
+    # Однопоточный throughput (5 прогонов × ≈20 с ≈ 100 с)
     mvn test -pl crypto-gost-tls13 -am \
       -Dtest="org.rssys.gost.tls13.stress.TlsSessionStreamTest" \
       -Dsurefire.excludedGroups= \

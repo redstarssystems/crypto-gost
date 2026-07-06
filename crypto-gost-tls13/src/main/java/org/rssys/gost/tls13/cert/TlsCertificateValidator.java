@@ -53,6 +53,32 @@ public final class TlsCertificateValidator {
             boolean requireOcspStapling,
             List<PublicKeyParameters> caPublicKeys)
             throws TlsException {
+        checkServerCertificateChain(
+                chain,
+                serverHostname,
+                requireOcspStapling,
+                caPublicKeys,
+                org.rssys.gost.pkix.GostOids.MAX_OCSP_AGE_MS);
+    }
+
+    /**
+     * Перегрузка {@link #checkServerCertificateChain(List, String, boolean, List)} с
+     * настраиваемой политикой свежести OCSP (RFC 6960 §2.4).
+     *
+     * @param chain              цепочка leaf-first (leaf = chain[0])
+     * @param serverHostname     ожидаемое DNS-имя сервера (null = не проверять)
+     * @param requireOcspStapling true — OCSP-ответ обязателен
+     * @param caPublicKeys       список доверенных ключей CA (null или пустой = не проверять цепочку)
+     * @param maxOcspAgeMs       максимальный возраст OCSP-ответа без {@code nextUpdate} в мс
+     * @throws TlsException при ошибке валидации
+     */
+    public static void checkServerCertificateChain(
+            List<GostCertificate> chain,
+            String serverHostname,
+            boolean requireOcspStapling,
+            List<PublicKeyParameters> caPublicKeys,
+            long maxOcspAgeMs)
+            throws TlsException {
         // Defense-in-depth: engine перехватывает пустой chain раньше (receiveCertificate),
         // но IndexOutOfBounds здесь недопустим — RFC 8446 §4.4.2 требует непустой список от
         // сервера.
@@ -100,13 +126,15 @@ public final class TlsCertificateValidator {
         if (leaf.hasOcspResponse()) {
             GostCertificate issuer = chain.size() > 1 ? chain.get(1) : null;
             if (issuer != null) {
-                TlsCertUtils.verifyOcspResponse(leaf, issuer);
+                TlsCertUtils.verifyOcspResponse(leaf, issuer, maxOcspAgeMs);
             } else if (requireOcspStapling) {
-                throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE,
+                throw new TlsException(
+                        TlsConstants.ALERT_BAD_CERTIFICATE,
                         "OCSP stapling required but no issuer certificate available"
                                 + " for verification");
             } else {
-                LOG.log(Level.WARNING,
+                LOG.log(
+                        Level.WARNING,
                         "OCSP response present but no issuer certificate available"
                                 + " — skipping verification");
             }
@@ -119,7 +147,7 @@ public final class TlsCertificateValidator {
         for (int i = 1; i < chain.size() - 1; i++) {
             GostCertificate ic = chain.get(i);
             if (ic.hasOcspResponse()) {
-                TlsCertUtils.verifyOcspResponse(ic, chain.get(i + 1));
+                TlsCertUtils.verifyOcspResponse(ic, chain.get(i + 1), maxOcspAgeMs);
             }
         }
 
@@ -140,6 +168,22 @@ public final class TlsCertificateValidator {
      */
     public static void checkClientCertificateChain(
             List<GostCertificate> chain, List<PublicKeyParameters> caPublicKeys)
+            throws TlsException {
+        checkClientCertificateChain(
+                chain, caPublicKeys, org.rssys.gost.pkix.GostOids.MAX_OCSP_AGE_MS);
+    }
+
+    /**
+     * Перегрузка {@link #checkClientCertificateChain(List, List)} с настраиваемой
+     * политикой свежести OCSP (RFC 6960 §2.4).
+     *
+     * @param chain        цепочка leaf-first (leaf = chain[0])
+     * @param caPublicKeys список доверенных ключей CA (null или пустой = не проверять цепочку)
+     * @param maxOcspAgeMs максимальный возраст OCSP-ответа без {@code nextUpdate} в мс
+     * @throws TlsException при ошибке валидации
+     */
+    public static void checkClientCertificateChain(
+            List<GostCertificate> chain, List<PublicKeyParameters> caPublicKeys, long maxOcspAgeMs)
             throws TlsException {
         // Defense-in-depth: engine перехватывает пустой chain раньше (receiveClientCertificate),
         // но если сюда дойдёт пустой список — IndexOutOfBounds недопустим.
@@ -172,6 +216,22 @@ public final class TlsCertificateValidator {
             throw new TlsException(
                     TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Client certificate: ExtendedKeyUsage missing clientAuth");
+        }
+
+        // Верификация stapled-OCSP клиента, симметрично серверному пути.
+        // Без сети: проверяется только уже присланный в CertificateEntry ответ.
+        // Если ответ есть — он обязан быть корректным (fail-closed); отсутствие ответа
+        // не является ошибкой (активный fetch клиентского OCSP вне скоупа tls13-слоя).
+        if (leaf.hasOcspResponse()) {
+            GostCertificate issuer = chain.size() > 1 ? chain.get(1) : null;
+            if (issuer != null) {
+                TlsCertUtils.verifyOcspResponse(leaf, issuer, maxOcspAgeMs);
+            } else {
+                LOG.log(
+                        Level.WARNING,
+                        "Client OCSP response present but no issuer certificate available"
+                                + " — skipping verification");
+            }
         }
 
         if (caPublicKeys != null && !caPublicKeys.isEmpty()) {

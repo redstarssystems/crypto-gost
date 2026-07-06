@@ -60,8 +60,7 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
                 ECParameters curve = GostCurves.byName(spec.getCurveName());
                 ECPoint q = ECPoint.affine(spec.getX(), spec.getY(), curve);
                 if (!q.isValidPublicKey()) {
-                    throw new IllegalArgumentException(
-                            "public key point is not on the curve");
+                    throw new IllegalArgumentException("public key point is not on the curve");
                 }
                 return new GostECPublicKey(new PublicKeyParameters(q, curve));
             } catch (IllegalArgumentException e) {

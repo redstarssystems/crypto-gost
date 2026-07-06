@@ -5,7 +5,12 @@ import java.lang.System.Logger.Level;
 import java.util.List;
 import java.util.stream.Collectors;
 import javax.net.ssl.SSLContext;
+import org.rssys.gost.jsse.crl.CrlFetcher;
+import org.rssys.gost.jsse.crl.CrlPolicy;
+import org.rssys.gost.jsse.ocsp.OcspFetcher;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 
 /**
@@ -16,8 +21,7 @@ import org.rssys.gost.pkix.cert.GostPkcs12Loader;
  */
 public class GostSslBuilder {
 
-    private static final Logger LOG =
-            System.getLogger("org.rssys.gost.jsse.GostSslBuilder");
+    private static final Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSslBuilder");
 
     private byte[] certDer;
     private byte[] keyDer;
@@ -27,6 +31,12 @@ public class GostSslBuilder {
     private boolean ocspEnabled;
     private int sessionCacheSize = -1;
     private boolean trustAll;
+    private CrlPolicy crlPolicy = CrlPolicy.DISABLED;
+    private CrlFetcher crlFetcher;
+    private int maxCrlSize = GostCrl.DEFAULT_MAX_CRL_SIZE;
+    private int maxRevokedEntries = GostCrl.DEFAULT_MAX_REVOKED_ENTRIES;
+    private OcspFetcher ocspFetcher;
+    private long maxOcspAgeMs = GostOids.MAX_OCSP_AGE_MS;
 
     GostSslBuilder() {}
 
@@ -134,6 +144,70 @@ public class GostSslBuilder {
     }
 
     /**
+     * Устанавливает fetcher для client-side OCSP-запросов (при отсутствии stapling).
+     *
+     * @param fetcher реализация {@link OcspFetcher} (может быть null — отключает fetch)
+     */
+    public GostSslBuilder ocspFetcher(OcspFetcher fetcher) {
+        this.ocspFetcher = fetcher;
+        return this;
+    }
+
+    /**
+     * Устанавливает максимальный возраст OCSP-ответа без {@code nextUpdate}
+     * (RFC 6960 §2.4 — локальная политика свежести relying party).
+     *
+     * @param maxOcspAgeMs возраст в миллисекундах
+     */
+    public GostSslBuilder maxOcspAgeMs(long maxOcspAgeMs) {
+        this.maxOcspAgeMs = maxOcspAgeMs;
+        return this;
+    }
+
+    /**
+     * Устанавливает политику проверки CRL. По умолчанию {@link CrlPolicy#DISABLED}.
+     *
+     * @param policy политика CRL
+     */
+    public GostSslBuilder crlPolicy(CrlPolicy policy) {
+        this.crlPolicy = policy != null ? policy : CrlPolicy.DISABLED;
+        return this;
+    }
+
+    /**
+     * Устанавливает fetcher для скачивания CRL по CDP URI.
+     *
+     * @param fetcher реализация {@link CrlFetcher} (может быть null)
+     */
+    public GostSslBuilder crlFetcher(CrlFetcher fetcher) {
+        this.crlFetcher = fetcher;
+        return this;
+    }
+
+    /**
+     * Устанавливает максимальный размер CRL в байтах (защита от DoS).
+     * <p>
+     * Если используется {@link org.rssys.gost.jsse.crl.JdkHttpCrlFetcher},
+     * его {@code maxResponseSize} должен быть &ge; переданного значения.
+     *
+     * @param maxCrlSize размер в байтах
+     */
+    public GostSslBuilder maxCrlSize(int maxCrlSize) {
+        this.maxCrlSize = maxCrlSize;
+        return this;
+    }
+
+    /**
+     * Устанавливает максимальное число отозванных записей в CRL (защита от DoS).
+     *
+     * @param maxRevokedEntries число записей
+     */
+    public GostSslBuilder maxRevokedEntries(int maxRevokedEntries) {
+        this.maxRevokedEntries = maxRevokedEntries;
+        return this;
+    }
+
+    /**
      * Устанавливает размер кэша сессий. 0 = без ограничения.
      */
     public GostSslBuilder sessionCacheSize(int size) {
@@ -145,9 +219,10 @@ public class GostSslBuilder {
      * Включает режим trust-all (только для разработки).
      */
     public GostSslBuilder trustAll() {
-        LOG.log(Level.WARNING,
+        LOG.log(
+                Level.WARNING,
                 "trustAll() enabled — server certificate validation DISABLED. "
-                + "For production use .trustedCaDer(byte[]) instead.");
+                        + "For production use .trustedCaDer(byte[]) instead.");
         this.trustAll = true;
         return this;
     }
@@ -165,6 +240,12 @@ public class GostSslBuilder {
                 ocspEnabled,
                 sessionCacheSize,
                 trustAll,
+                crlPolicy,
+                crlFetcher,
+                maxCrlSize,
+                maxRevokedEntries,
+                ocspFetcher,
+                maxOcspAgeMs,
                 true);
     }
 
@@ -181,6 +262,12 @@ public class GostSslBuilder {
                 ocspEnabled,
                 sessionCacheSize,
                 trustAll,
+                crlPolicy,
+                crlFetcher,
+                maxCrlSize,
+                maxRevokedEntries,
+                ocspFetcher,
+                maxOcspAgeMs,
                 false);
     }
 }

@@ -204,6 +204,67 @@ class GostSSLSocketTcpTest {
         if (serverError.get() != null) throw new RuntimeException(serverError.get());
     }
 
+    @Test
+    @DisplayName("close() без close_notify пира закрывает inbound (зачистка ключей, P2-3)")
+    void testCloseWipesKeysBeforePeerCloseNotify() throws Exception {
+        GostX509KeyManager skm = createServerKeyManager();
+        GostSSLServerSocket srv =
+                new GostSSLServerSocket(0, skm, createTrustManager(null), createSessionContext());
+        serverSocket = srv;
+
+        // Сервер держит соединение открытым до сигнала — так client.close()
+        // гарантированно происходит ДО получения close_notify от пира.
+        CountDownLatch clientClosed = new CountDownLatch(1);
+        AtomicReference<Throwable> serverError = new AtomicReference<>();
+        CountDownLatch serverDone = new CountDownLatch(1);
+
+        serverThread =
+                new Thread(
+                        () -> {
+                            try {
+                                GostSSLSocket ssl = (GostSSLSocket) srv.accept();
+                                ssl.startHandshake();
+                                InputStream in = ssl.getInputStream();
+                                byte[] buf = new byte[1024];
+                                int n = in.read(buf);
+                                assertEquals("hello", new String(buf, 0, n));
+                                clientClosed.await(5, TimeUnit.SECONDS);
+                                ssl.close();
+                            } catch (Exception e) {
+                                serverError.set(e);
+                            } finally {
+                                serverDone.countDown();
+                            }
+                        },
+                        "server-p2-3");
+        serverThread.start();
+
+        GostX509KeyManager ckm = new GostX509KeyManager();
+        GostSSLSocket client =
+                new GostSSLSocket(
+                        "localhost",
+                        srv.getLocalPort(),
+                        ckm,
+                        createTrustManager(null),
+                        createSessionContext());
+        client.setSoTimeout(10000);
+        client.startHandshake();
+        OutputStream cout = client.getOutputStream();
+        cout.write("hello".getBytes());
+        cout.flush();
+
+        client.close();
+
+        // closeInbound() отработал в close() -> destroyHandshakeEngine() зачистил ключи.
+        assertTrue(
+                client.engine().isInboundDone(),
+                "inbound должен быть закрыт после close() даже без close_notify пира");
+
+        clientClosed.countDown();
+        assertTrue(serverDone.await(5, TimeUnit.SECONDS));
+        if (serverError.get() != null) throw new RuntimeException(serverError.get());
+    }
+
     // ========================================================================
     // 2. mTLS loopback
     // ========================================================================

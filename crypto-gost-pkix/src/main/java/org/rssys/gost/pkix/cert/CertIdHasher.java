@@ -70,30 +70,42 @@ public final class CertIdHasher {
 
     static byte[] extractSubject(byte[] der) {
         int pos = findTbsOffset(der);
-        if ((der[pos] & 0xFF) == 0xA0) pos = GostDerParser.readTlv(der, pos)[1];
-        pos = GostDerParser.readTlv(der, pos)[1]; // serial
-        pos = GostDerParser.readTlv(der, pos)[1]; // signature
+        if ((der[pos] & 0xFF) == 0xA0) pos = GostDerParser.readTlv(der, pos)[1]; // version [0]
+        checkTag(der, pos, GostDerParser.TAG_INTEGER, "serialNumber");
+        pos = GostDerParser.readTlv(der, pos)[1];
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "signature");
+        pos = GostDerParser.readTlv(der, pos)[1];
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "issuer");
         int[] issuerTlv = GostDerParser.readTlv(der, pos);
         pos = issuerTlv[1];
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "validity");
         int[] validityTlv = GostDerParser.readTlv(der, pos);
         pos = validityTlv[1];
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "subject");
         int[] subjectTlv = GostDerParser.readTlv(der, pos);
         return Arrays.copyOfRange(der, pos, subjectTlv[1]);
     }
 
     static byte[] extractBitStringValue(byte[] der) {
         int pos = findTbsOffset(der);
-        if ((der[pos] & 0xFF) == 0xA0) pos = GostDerParser.readTlv(der, pos)[1];
-        pos = GostDerParser.readTlv(der, pos)[1]; // serial
-        pos = GostDerParser.readTlv(der, pos)[1]; // signature
-        pos = GostDerParser.readTlv(der, pos)[1]; // issuer
-        pos = GostDerParser.readTlv(der, pos)[1]; // validity
-        pos = GostDerParser.readTlv(der, pos)[1]; // subject
+        if ((der[pos] & 0xFF) == 0xA0) pos = GostDerParser.readTlv(der, pos)[1]; // version [0]
+        checkTag(der, pos, GostDerParser.TAG_INTEGER, "serialNumber");
+        pos = GostDerParser.readTlv(der, pos)[1];
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "signature");
+        pos = GostDerParser.readTlv(der, pos)[1];
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "issuer");
+        pos = GostDerParser.readTlv(der, pos)[1];
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "validity");
+        pos = GostDerParser.readTlv(der, pos)[1];
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "subject");
+        pos = GostDerParser.readTlv(der, pos)[1];
         // SPKI SEQUENCE -> skip AlgorithmIdentifier -> BIT STRING value
+        checkTag(der, pos, GostDerParser.TAG_SEQUENCE, "subjectPublicKeyInfo");
         int[] spkiTlv = GostDerParser.readTlv(der, pos);
         int spkiPos = spkiTlv[0];
-        int[] algTlv = GostDerParser.readTlv(der, spkiPos);
+        int[] algTlv = GostDerParser.readTlv(der, spkiPos); // AlgorithmIdentifier
         spkiPos = algTlv[1];
+        checkTag(der, spkiPos, GostDerParser.TAG_BIT_STRING, "subjectPublicKey");
         int[] bsTlv = GostDerParser.readTlv(der, spkiPos);
         return Arrays.copyOfRange(der, bsTlv[0], bsTlv[1]);
     }
@@ -102,5 +114,26 @@ public final class CertIdHasher {
         int[] certSeq = GostDerParser.readTlv(der, 0);
         int[] tbsTlv = GostDerParser.readTlv(der, certSeq[0]);
         return tbsTlv[0];
+    }
+
+    private static void checkTag(byte[] der, int pos, int expectedTag, String fieldName) {
+        if (pos >= der.length) {
+            throw new IllegalArgumentException(
+                    "TBSCertificate: unexpected end of DER, expected "
+                            + fieldName
+                            + " at offset "
+                            + pos);
+        }
+        if ((der[pos] & 0xFF) != expectedTag) {
+            throw new IllegalArgumentException(
+                    "TBSCertificate: expected tag 0x"
+                            + Integer.toHexString(expectedTag)
+                            + " for "
+                            + fieldName
+                            + " at offset "
+                            + pos
+                            + ", got 0x"
+                            + Integer.toHexString(der[pos] & 0xFF));
+        }
     }
 }

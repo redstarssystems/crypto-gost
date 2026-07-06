@@ -2,18 +2,26 @@ package org.rssys.gost.jsse.crl;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.math.BigInteger;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import org.rssys.gost.pkix.cert.CrlVerifier;
 
 /**
- * Кэш CRL-ответов с инвалидацией по nextUpdate (RFC 5280 §5.1.2.4).
+ * Кэш CRL-ответов с инвалидацией по nextUpdate (RFC 5280 §5.1.2.4)
+ * и защитой от CRL rollback через монотонность cRLNumber (RFC 5280 §5.2.3).
  * <p>
- * Ключ — URI CRLDistributionPoints (строка). Хранит сырой DER CRL.
- * Срок жизни: nextUpdate + 1 час grace. Если nextUpdate отсутствует — TTL 1 час.
+ * Ключ — URI CRLDistributionPoints (строка). Хранит сырой DER CRL и cRLNumber
+ * для монотонной проверки при следующем fetch. Срок жизни: nextUpdate + 1 час grace.
+ * Если nextUpdate отсутствует — TTL 1 час.
  * <p>
- * Инвалидация inline при get() — без ScheduledExecutorService.
+ * Инвалидация inline при lookup() — без ScheduledExecutorService.
+ * <p>
+ * Потокобезопасность: ConcurrentHashMap для всех операций.
+ * {@link CrlCacheEntry#lastKnownCrlNumber()} возвращается даже для expired записей —
+ * монотонное знание о последнем известном номере CRL не теряет актуальности после
+ * истечения срока.
  */
 public final class CrlCache {
 
@@ -31,24 +39,38 @@ public final class CrlCache {
     private final ConcurrentHashMap<String, CachedCrl> cache = new ConcurrentHashMap<>();
 
     /**
-     * Возвращает закэшированный CRL или null.
+     * Запись кэша: сырой DER CRL (null если expired или отсутствует)
+     * и последний известный cRLNumber для монотонной проверки.
      */
-    public byte[] get(String crlUri) {
+    public record CrlCacheEntry(byte[] crlDer, BigInteger lastKnownCrlNumber) {}
+
+    /**
+     * Атомарно возвращает закэшированный CRL и его cRLNumber.
+     * <p>
+     * Если запись expired — удаляет её и возвращает {@code crlDer = null},
+     * но {@code lastKnownCrlNumber} из expired-записи сохраняется
+     * для защиты от CRL rollback при последующем fetch.
+     *
+     * @param crlUri URI CRLDistributionPoints
+     * @return запись кэша или {@code (null, null)} если ключ отсутствует
+     */
+    public CrlCacheEntry lookup(String crlUri) {
         Objects.requireNonNull(crlUri);
         CachedCrl entry = cache.get(crlUri);
         if (entry == null) {
-            return null;
+            return new CrlCacheEntry(null, null);
         }
         if (entry.isExpired()) {
             cache.remove(crlUri);
             LOG.log(Level.DEBUG, "CRL cache expired for {0}", crlUri);
-            return null;
+            return new CrlCacheEntry(null, entry.crlNumber);
         }
-        return entry.crlDer;
+        return new CrlCacheEntry(entry.crlDer, entry.crlNumber);
     }
 
     /**
-     * Помещает CRL в кэш. Парсит nextUpdate для определения expiresAt.
+     * Помещает CRL в кэш. Парсит nextUpdate для определения expiresAt
+     * и cRLNumber для монотонной проверки.
      */
     public void put(String crlUri, byte[] crlDer) {
         Objects.requireNonNull(crlUri);
@@ -64,15 +86,38 @@ public final class CrlCache {
         } catch (Exception e) {
             expiresAt = System.currentTimeMillis() + DEFAULT_TTL_MS;
         }
-        cache.put(crlUri, new CachedCrl(crlDer, expiresAt));
+        BigInteger crlNumber = CrlVerifier.extractCrlNumber(crlDer);
+        cache.put(crlUri, new CachedCrl(crlDer, crlNumber, expiresAt));
         if (cache.size() > MAX_ENTRIES) {
-            cache.keySet().stream().findAny().ifPresent(cache::remove);
+            String evictedKey = cache.keySet().stream().findAny().orElse(null);
+            if (evictedKey != null) {
+                CachedCrl evicted = cache.remove(evictedKey);
+                if (evicted != null && evicted.crlNumber != null) {
+                    LOG.log(
+                            Level.WARNING,
+                            "CRL cache evicted entry with cRLNumber={0} for {1}"
+                                    + " — rollback protection reset for this CDP",
+                            evicted.crlNumber,
+                            evictedKey);
+                }
+            }
         }
         LOG.log(
                 Level.DEBUG,
-                "CRL cached for {0}, expires at {1}",
+                "CRL cached for {0}, expires at {1}, cRLNumber={2}",
                 crlUri,
-                Instant.ofEpochMilli(expiresAt));
+                Instant.ofEpochMilli(expiresAt),
+                crlNumber);
+    }
+
+    /**
+     * Для тестов: помещает CRL с явным expiresAt и cRLNumber,
+     * минуя парсинг nextUpdate/cRLNumber.
+     */
+    void putForTest(String crlUri, byte[] crlDer, BigInteger crlNumber, long expiresAt) {
+        Objects.requireNonNull(crlUri);
+        Objects.requireNonNull(crlDer);
+        cache.put(crlUri, new CachedCrl(crlDer, crlNumber, expiresAt));
     }
 
     /**
@@ -88,10 +133,12 @@ public final class CrlCache {
 
     private static final class CachedCrl {
         final byte[] crlDer;
+        final BigInteger crlNumber;
         final long expiresAt;
 
-        CachedCrl(byte[] crlDer, long expiresAt) {
+        CachedCrl(byte[] crlDer, BigInteger crlNumber, long expiresAt) {
             this.crlDer = crlDer;
+            this.crlNumber = crlNumber;
             this.expiresAt = expiresAt;
         }
 

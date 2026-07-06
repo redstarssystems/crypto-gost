@@ -1,6 +1,7 @@
 package org.rssys.gost.tls13.crypto;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
@@ -76,7 +77,12 @@ public final class HkdfStreebog {
             throw new IllegalArgumentException("hashLen must be 32 or 64");
         }
         if (salt == null || salt.length == 0) {
-            salt = (hashLen == TlsConstants.STREEBOG_512_HASH_LEN) ? ZERO_SALT_512 : ZERO_SALT_256;
+            salt =
+                    Arrays.copyOf(
+                            (hashLen == TlsConstants.STREEBOG_512_HASH_LEN)
+                                    ? ZERO_SALT_512
+                                    : ZERO_SALT_256,
+                            hashLen);
         }
         Hmac hmac = newHmac(hashLen);
         hmac.init(salt);

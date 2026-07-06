@@ -8,6 +8,7 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.util.DerCodec;
 
 /**
  * Модульные тесты {@link CertIdHasher}: issuerNameHash и issuerKeyHash.
@@ -203,5 +204,67 @@ class CertIdHasherTest {
                 hashFromCert,
                 "hashIssuerPublicKey(GostCertificate, 64) должен совпадать с hashIssuerPublicKey(byte[], 64)");
         assertEquals(64, hashFromCert.length);
+    }
+
+    // ---------------------------------------------------------------
+    // extractSubject / extractBitStringValue: проверки тегов (P2-4)
+    // ---------------------------------------------------------------
+
+    @Test
+    @DisplayName(
+            "extractSubject: неверный тег serialNumber (OCTET STRING вместо INTEGER) -> IllegalArgumentException")
+    void testExtractSubjectWrongSerialTag() {
+        GostCertificate cert = createSelfSignedCert();
+        byte[] der = cert.getEncoded();
+        // Меняем тег INTEGER (0x02) в serialNumber на OCTET STRING (0x04) внутри TBS
+        byte[] mangled = corruptTagAfterTbsVersion(der, 0x02, 0x04);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> CertIdHasher.hashIssuerName(mangled),
+                "Неверный тег serialNumber должен бросать IllegalArgumentException");
+    }
+
+    @Test
+    @DisplayName("extractSubject: TBS только с version[0], без serialNumber — checkTag bound-check")
+    void testExtractSubjectTruncatedAfterVersion() {
+        // TBS = SEQUENCE { [0] EXPLICIT INTEGER 2 } — только version, самосогласованные длины
+        // Certificate = SEQUENCE { TBS } — без sigAlg/sigValue, чтобы pos==der.length
+        byte[] version = DerCodec.encodeContextConstructed(0, DerCodec.encodeInteger(2));
+        byte[] tbs = DerCodec.encodeSequence(version);
+        byte[] crafted = DerCodec.encodeSequence(tbs);
+
+        IllegalArgumentException ex =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> CertIdHasher.hashIssuerName(crafted),
+                        "TBS без serialNumber должен бросать IllegalArgumentException");
+
+        assertNotNull(ex.getCause(), "Причина исключения должна быть не null");
+        assertTrue(
+                ex.getCause().getMessage().contains("unexpected end of DER"),
+                "Сообщение причины должно упоминать 'unexpected end of DER', было: "
+                        + (ex.getCause() != null ? ex.getCause().getMessage() : "null"));
+    }
+
+    /**
+     * Находит в TBS сертификата первое вхождение байта с тегом {@code oldTag}
+     * после опционального version[0] и заменяет на {@code newTag}.
+     * Меняет ровно одно вхождение — тег serialNumber.
+     */
+    private static byte[] corruptTagAfterTbsVersion(byte[] der, int oldTag, int newTag) {
+        byte[] result = der.clone();
+        int[] certSeq = GostDerParser.readTlv(result, 0); // Certificate SEQUENCE
+        int[] tbsTlv = GostDerParser.readTlv(result, certSeq[0]); // TBSCertificate SEQUENCE
+        int pos = tbsTlv[0]; // начало содержимого TBS
+        // Пропускаем version [0] EXPLICIT если есть
+        if ((result[pos] & 0xFF) == 0xA0) {
+            pos = GostDerParser.readTlv(result, pos)[1];
+        }
+        // pos указывает на serialNumber — должен быть INTEGER (oldTag)
+        if ((result[pos] & 0xFF) == oldTag) {
+            result[pos] = (byte) newTag;
+        }
+        return result;
     }
 }

@@ -116,6 +116,40 @@ class GostSSLEngineUnwrapFuzzTest {
     }
 
     // ========================================================================
+    // P2: Targeted — oversize plaintext TLS-запись
+    // Фикс 0.6.2: MAX_PLAINTEXT_LENGTH (0x4000) guard в handlePlaintextRecord
+    // ========================================================================
+
+    /**
+     * Crafted TLSPlaintext запись с oversize длиной (0xFFFF > MAX_PLAINTEXT_LENGTH).
+     * Формат: [type(1)] [version(2)] [length(2)] [payload...]
+     * type=0x17 (application_data), version=0x0303, length=0xFFFF.
+     * Ожидаем: ALERT_RECORD_OVERFLOW -> SSLException.
+     */
+    @FuzzTest
+    void fuzzUnwrapOversizePlaintext(FuzzedDataProvider data) {
+        GostSSLEngine engine = createServerEngine();
+        byte[] payload = data.consumeRemainingAsBytes();
+        int headerSize = 5;
+        int totalLen = headerSize + Math.min(payload.length, TlsConstants.MAX_PLAINTEXT_LENGTH);
+        if (totalLen < headerSize) return;
+        byte[] input = new byte[totalLen];
+        input[0] = 0x17;
+        input[1] = 0x03;
+        input[2] = 0x03;
+        int declaredLen = data.consumeInt(TlsConstants.MAX_PLAINTEXT_LENGTH + 1, 65535);
+        input[3] = (byte) (declaredLen >> 8);
+        input[4] = (byte) declaredLen;
+        System.arraycopy(payload, 0, input, headerSize, totalLen - headerSize);
+        ByteBuffer src = ByteBuffer.wrap(input);
+        ByteBuffer dst = ByteBuffer.allocate(PLAINTEXT_BUF);
+        try {
+            engine.unwrap(src, dst);
+        } catch (SSLException | IllegalArgumentException e) {
+        }
+    }
+
+    // ========================================================================
     // Утилиты
     // ========================================================================
 

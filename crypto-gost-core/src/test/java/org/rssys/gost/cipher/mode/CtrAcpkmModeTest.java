@@ -2,6 +2,7 @@ package org.rssys.gost.cipher.mode;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -9,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
+import org.rssys.gost.mac.Cmac;
 import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
 
@@ -204,6 +207,70 @@ class CtrAcpkmModeTest {
         assertThrows(
                 AuthenticationException.class,
                 () -> CtrAcpkmMode.decryptWithMac(wrongKey, ukm, ct));
+    }
+
+    // ========================================================================
+    // Разделение ключей K(1)/K(2) — независимый оракул тега (RFC 9337 §5.1.1)
+    // ========================================================================
+
+    @Test
+    @DisplayName("С OMAC: тег вычисляется под MAC-ключом K(2), а не под ключом шифрования K(1)")
+    void testOmacTagUsesMacKey() {
+        // Независимый пересчёт тега через проверенные KDF_TREE + Cmac.
+        // Если CMAC использует расписание ключа шифрования (баг shared-instance),
+        // ожидаемый тег под macKey не совпадёт с реальным.
+        for (int len : new int[] {0, 16, 31, 1024}) {
+            byte[] data = randomBytes(len);
+            byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, data);
+
+            byte[] cipherText = Arrays.copyOf(ct, ct.length - TAG_LEN);
+            byte[] tag = Arrays.copyOfRange(ct, ct.length - TAG_LEN, ct.length);
+
+            byte[] expected = independentOmacTag(key.getKey(), ukm, cipherText);
+            assertArrayEquals(expected, tag, "тег под MAC-ключом K(2) не совпал (len=" + len + ")");
+        }
+    }
+
+    @Test
+    @DisplayName("С OMAC: ключи разделены — тег под ключом шифрования K(1) НЕ совпадает с реальным")
+    void testOmacKeysAreSeparated() {
+        byte[] data = randomBytes(64);
+        byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, data);
+        byte[] cipherText = Arrays.copyOf(ct, ct.length - TAG_LEN);
+        byte[] tag = Arrays.copyOfRange(ct, ct.length - TAG_LEN, ct.length);
+
+        // Пересчёт под K(1) (encKey) — должен отличаться от настоящего тега под K(2)
+        byte[] derived = deriveKeys(key.getKey(), ukm);
+        byte[] encKey = Arrays.copyOfRange(derived, 0, KEY_LEN);
+        byte[] tagUnderEncKey = cmacTag(encKey, cipherText);
+
+        assertFalse(
+                Arrays.equals(tagUnderEncKey, tag),
+                "тег не должен совпадать с CMAC под ключом шифрования — ключи обязаны быть разделены");
+    }
+
+    /** Независимо вычисляет OMAC-тег: восстанавливает K(2) и считает CMAC над шифртекстом. */
+    private static byte[] independentOmacTag(byte[] dk, byte[] u, byte[] cipherText) {
+        byte[] derived = deriveKeys(dk, u);
+        byte[] macKey = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
+        return cmacTag(macKey, cipherText);
+    }
+
+    /** KDF_TREE(DK, "kdf tree", ukm[8..16], 2, 32) -> K(1)||K(2) (RFC 9337 §5.1.1). */
+    private static byte[] deriveKeys(byte[] dk, byte[] u) {
+        byte[] label = "kdf tree".getBytes(StandardCharsets.US_ASCII);
+        byte[] seed = Arrays.copyOfRange(u, 8, 16);
+        return KdfTreeGostR3411_2012_256.generate(dk, label, seed, 2, KEY_LEN);
+    }
+
+    /** CMAC над данными с отдельным экземпляром Kuznyechik под заданным ключом. */
+    private static byte[] cmacTag(byte[] macKey, byte[] data) {
+        Cmac cmac = new Cmac(new Kuznyechik());
+        cmac.init(new SymmetricKey(macKey));
+        cmac.update(data, 0, data.length);
+        byte[] out = new byte[TAG_LEN];
+        cmac.doFinal(out, 0);
+        return out;
     }
 
     // ========================================================================

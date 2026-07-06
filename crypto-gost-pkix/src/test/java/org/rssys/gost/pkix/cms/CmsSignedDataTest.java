@@ -480,8 +480,7 @@ class CmsSignedDataTest {
         // sid: CmsIssuerAndSerialNumber
         byte[] sid =
                 CmsIssuerAndSerialNumber.encode(
-                        selfSignedCert.getIssuerDnBytes(),
-                        selfSignedCert.getSerialNumberBigInt());
+                        selfSignedCert.getIssuerDnBytes(), selfSignedCert.getSerialNumberBigInt());
 
         // Алгоритмы
         byte[] digestAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.DIGEST_256));
@@ -505,16 +504,101 @@ class CmsSignedDataTest {
         // SignedData
         byte[] version = DerCodec.encodeInteger(CmsConstants.SIGNED_DATA_V1);
         byte[] digestAlgs = DerCodec.encodeSetOf(new byte[][] {digestAlgId});
-        byte[] certsField =
-                DerCodec.encodeContextConstructed(
-                        0,
-                        DerCodec.encodeSequence(certDer));
+        byte[] certsField = DerCodec.encodeContextConstructed(0, DerCodec.encodeSequence(certDer));
         byte[] signerInfos = DerCodec.encodeSetOf(new byte[][] {signerInfo});
 
         byte[] signedDataContent =
-                DerCodec.encodeSequence(
-                        version, digestAlgs, encapContent, certsField, signerInfos);
+                DerCodec.encodeSequence(version, digestAlgs, encapContent, certsField, signerInfos);
 
+        return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedDataContent);
+    }
+
+    // ========================================================================
+    // DoS-лимиты: встроенные сертификаты и signerInfos
+    // ========================================================================
+
+    @Test
+    @DisplayName("SignedData: встроенных сертификатов больше лимита → PkixException")
+    void embeddedCertsLimitExceeded() {
+        byte[] signedData = buildSignedDataWithCertCount(CmsConstants.MAX_EMBEDDED_CERTS + 1);
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                        "Число встроенных сертификатов больше лимита должно отклоняться");
+        assertTrue(
+                ex.getMessage().contains("embedded certificates exceed maximum"),
+                "должно сработать именно ограничение по количеству: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("SignedData: signerInfos больше лимита → PkixException")
+    void signerInfosLimitExceeded() {
+        byte[] signedData = buildSignedDataWithSignerCount(CmsConstants.MAX_SIGNER_INFOS + 1);
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                        "Число signerInfos больше лимита должно отклоняться");
+        assertTrue(
+                ex.getMessage().contains("signerInfos exceed maximum"),
+                "должно сработать именно ограничение по количеству: " + ex.getMessage());
+    }
+
+    /**
+     * SignedData с {@code n} встроенными сертификатами (дубликаты) и пустыми
+     * signerInfos. Count-барьер на сертификаты срабатывает при парсинге до verify.
+     */
+    private static byte[] buildSignedDataWithCertCount(int n) {
+        byte[] data = "test".getBytes();
+        byte[] version = DerCodec.encodeInteger(CmsConstants.SIGNED_DATA_V1);
+        byte[] digestAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.DIGEST_256));
+        byte[] digestAlgs = DerCodec.encodeSetOf(new byte[][] {digestAlgId});
+        byte[] encapContent =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.PKCS7_DATA),
+                        DerCodec.encodeContextConstructed(0, DerCodec.encodeOctetString(data)));
+
+        byte[] certDer = selfSignedCert.getEncoded();
+        byte[][] certs = new byte[n][];
+        for (int i = 0; i < n; i++) {
+            certs[i] = certDer;
+        }
+        byte[] certsField = DerCodec.encodeContextConstructed(0, DerCodec.concat(certs));
+        byte[] emptySignerInfos = DerCodec.encodeSetOf(new byte[0][]);
+
+        byte[] signedDataContent =
+                DerCodec.encodeSequence(
+                        version, digestAlgs, encapContent, certsField, emptySignerInfos);
+        return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedDataContent);
+    }
+
+    /**
+     * SignedData с одним сертификатом и {@code n} фиктивными signerInfos. Count-барьер
+     * на signerInfos срабатывает сразу после разбора SET OF, до цикла верификации.
+     */
+    private static byte[] buildSignedDataWithSignerCount(int n) {
+        byte[] data = "test".getBytes();
+        byte[] version = DerCodec.encodeInteger(CmsConstants.SIGNED_DATA_V1);
+        byte[] digestAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.DIGEST_256));
+        byte[] digestAlgs = DerCodec.encodeSetOf(new byte[][] {digestAlgId});
+        byte[] encapContent =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.PKCS7_DATA),
+                        DerCodec.encodeContextConstructed(0, DerCodec.encodeOctetString(data)));
+
+        byte[] certDer = selfSignedCert.getEncoded();
+        byte[] certsField = DerCodec.encodeContextConstructed(0, certDer);
+
+        // Фиктивные, но различимые по DER элементы SET OF — важно лишь их количество.
+        byte[][] signers = new byte[n][];
+        for (int i = 0; i < n; i++) {
+            signers[i] = DerCodec.encodeSequence(DerCodec.encodeInteger(i));
+        }
+        byte[] signerInfos = DerCodec.encodeSetOf(signers);
+
+        byte[] signedDataContent =
+                DerCodec.encodeSequence(version, digestAlgs, encapContent, certsField, signerInfos);
         return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedDataContent);
     }
 }

@@ -9,7 +9,6 @@ import java.util.List;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
 /**
@@ -46,8 +45,7 @@ public final class GostCrlBuilder {
     private String[] freshestCrlUris;
     private final List<RevokedEntry> revokedEntries = new ArrayList<>();
 
-    private GostCrlBuilder(
-            PrivateKeyParameters caPriv, byte[] issuerDnDer) {
+    private GostCrlBuilder(PrivateKeyParameters caPriv, byte[] issuerDnDer) {
         this.caPriv = caPriv;
         this.issuerDnDer = issuerDnDer;
         this.thisUpdate = GostSignatureHelper.nowGeneralizedTime();
@@ -59,14 +57,12 @@ public final class GostCrlBuilder {
      * @param caPriv      закрытый ключ CA для подписи CRL (ECParameters извлекаются из ключа)
      * @param issuerDnDer DER-кодированный issuer Name
      */
-    public static GostCrlBuilder create(
-            PrivateKeyParameters caPriv, byte[] issuerDnDer) {
+    public static GostCrlBuilder create(PrivateKeyParameters caPriv, byte[] issuerDnDer) {
         return new GostCrlBuilder(caPriv, issuerDnDer);
     }
 
     /** Удобная перегрузка: DN из строки "CN=..., O=..." */
-    public static GostCrlBuilder create(
-            PrivateKeyParameters caPriv, String issuerDn) {
+    public static GostCrlBuilder create(PrivateKeyParameters caPriv, String issuerDn) {
         return new GostCrlBuilder(caPriv, GostDnParser.encodeDn(issuerDn));
     }
 
@@ -266,22 +262,25 @@ public final class GostCrlBuilder {
             boolean hasCrlExt = false;
 
             if (crlNumber != null) {
-                crlExts.write(buildSingleExtension(
-                        GostOids.EXT_CRL_NUMBER, false,
-                        DerCodec.encodeInteger(crlNumber)));
+                crlExts.write(
+                        buildSingleExtension(
+                                GostOids.EXT_CRL_NUMBER, false, DerCodec.encodeInteger(crlNumber)));
                 hasCrlExt = true;
             }
 
             if (freshestCrlUris != null) {
-                crlExts.write(GostCertificateBuilder.buildDistributionPointExtension(
-                        GostOids.EXT_FRESHEST_CRL, freshestCrlUris));
+                crlExts.write(
+                        GostCertificateBuilder.buildDistributionPointExtension(
+                                GostOids.EXT_FRESHEST_CRL, freshestCrlUris));
                 hasCrlExt = true;
             }
 
             if (baseCrlNumber != null) {
-                crlExts.write(buildSingleExtension(
-                        GostOids.EXT_DELTA_CRL_INDICATOR, true,
-                        DerCodec.encodeInteger(baseCrlNumber)));
+                crlExts.write(
+                        buildSingleExtension(
+                                GostOids.EXT_DELTA_CRL_INDICATOR,
+                                true,
+                                DerCodec.encodeInteger(baseCrlNumber)));
                 hasCrlExt = true;
             }
 
@@ -321,9 +320,7 @@ public final class GostCrlBuilder {
         byte[] extValue = DerCodec.encodeOctetString(intValue);
         if (critical) {
             return DerCodec.encodeSequence(
-                    DerCodec.encodeOid(oid),
-                    DerCodec.encodeBoolean(true),
-                    extValue);
+                    DerCodec.encodeOid(oid), DerCodec.encodeBoolean(true), extValue);
         }
         return DerCodec.encodeSequence(DerCodec.encodeOid(oid), extValue);
     }
@@ -335,7 +332,8 @@ public final class GostCrlBuilder {
         try {
             if (entry.reason() != null) {
                 byte[] enumerated =
-                        DerCodec.encodeTlv(DerCodec.TAG_ENUMERATED,
+                        DerCodec.encodeTlv(
+                                DerCodec.TAG_ENUMERATED,
                                 new byte[] {(byte) entry.reason().value()});
                 byte[] extValue = DerCodec.encodeOctetString(enumerated);
                 byte[] ext =

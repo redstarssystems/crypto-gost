@@ -27,8 +27,6 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class TspResponse {
 
-
-
     private final int status;
     private final String statusString;
     private final byte[] timeStampTokenDer;
@@ -37,8 +35,11 @@ public final class TspResponse {
     private volatile boolean signatureVerified;
 
     private TspResponse(
-            int status, String statusString, byte[] timeStampTokenDer,
-            TstInfo tstInfo, int failInfo) {
+            int status,
+            String statusString,
+            byte[] timeStampTokenDer,
+            TstInfo tstInfo,
+            int failInfo) {
         this.status = status;
         this.statusString = statusString;
         this.timeStampTokenDer = timeStampTokenDer != null ? timeStampTokenDer.clone() : null;
@@ -399,21 +400,15 @@ public final class TspResponse {
         }
 
         // 4. Проверка nonce (если передан)
-        // Nonce в TSP передаётся открыто, его цель — replay-protection, не confidentiality.
-        // Диагностическая ценность (клиент видит что именно не совпало) важнее сокрытия.
         if (expectedNonce != null) {
             if (tstInfo.nonce() == null) {
                 throw new PkixException(
                         PkixException.Reason.OTHER,
-                        "TSP response missing nonce, but nonce was expected: " + expectedNonce);
+                        "TSP response missing nonce, but nonce was expected");
             }
-            if (!expectedNonce.equals(tstInfo.nonce())) {
-                throw new PkixException(
-                        PkixException.Reason.OTHER,
-                        "TSP nonce mismatch: expected "
-                                + expectedNonce
-                                + ", got "
-                                + tstInfo.nonce());
+            if (!MessageDigest.isEqual(
+                    expectedNonce.toByteArray(), tstInfo.nonce().toByteArray())) {
+                throw new PkixException(PkixException.Reason.OTHER, "TSP nonce mismatch");
             }
         }
 

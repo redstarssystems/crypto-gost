@@ -33,7 +33,8 @@ public final class TlsCertUtils {
                     GostOids.EXT_CP,
                     GostOids.EXT_AKI,
                     GostOids.EXT_EKU,
-                    GostOids.EXT_AIA);
+                    GostOids.EXT_AIA,
+                    GostOids.EXT_NAME_CONSTRAINTS);
 
     private static final int TBS_SPKI_SEQUENCE_INDEX = 5;
 
@@ -76,11 +77,28 @@ public final class TlsCertUtils {
      */
     public static void verifyOcspResponse(GostCertificate cert, GostCertificate issuer)
             throws TlsException {
+        verifyOcspResponse(cert, issuer, GostOids.MAX_OCSP_AGE_MS);
+    }
+
+    /**
+     * Верифицирует OCSP-ответ с настраиваемой политикой свежести (RFC 6960 §2.4).
+     * <p>
+     * Перегрузка для проброса локальной политики свежести relying party из
+     * вышестоящего слоя (JSSE TrustManager). Семантика {@code maxOcspAgeMs}
+     * идентична {@link OcspVerifier#verify(byte[], byte[], GostCertificate, byte[], long)}.
+     *
+     * @param cert         сертификат с прикреплённым OCSP-ответом
+     * @param issuer       сертификат издателя
+     * @param maxOcspAgeMs максимальный возраст ответа без {@code nextUpdate} в мс
+     * @throws TlsException при ошибке верификации OCSP
+     */
+    public static void verifyOcspResponse(
+            GostCertificate cert, GostCertificate issuer, long maxOcspAgeMs) throws TlsException {
         byte[] serialCopy = cert.getSerialNumber();
         byte[] ocspResp = cert.getOcspResponse();
         byte[] nonce = cert.getOcspNonce();
         try {
-            OcspVerifier.verify(ocspResp, serialCopy, issuer, nonce, false);
+            OcspVerifier.verify(ocspResp, serialCopy, issuer, nonce, maxOcspAgeMs);
         } catch (PkixException e) {
             throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE, e.getMessage());
         }

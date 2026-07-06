@@ -18,10 +18,10 @@ import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 /**
  * OCSP stapling — сервер прикладывает OCSP-ответ к сертификату.
  * <p>
- * Сервер загружает OCSP-ответ (через {@link GostOcspResponseBuilder})
+ * Сервер строит OCSP-ответ (через {@link GostOcspResponseBuilder})
  * и передаёт его в ServerConfig через withOcspStaplingResponse().
- * Клиент может запросить проверку через withRequireOcspStapling().
- * Демонстрирует TlsServerConfig.withOcspStaplingResponse().
+ * Клиент подключается в обычном режиме, проверка hostname выполняется
+ * стандартно. Демонстрирует TlsServerConfig.withOcspStaplingResponse().
  */
 public final class OcspStapling {
 

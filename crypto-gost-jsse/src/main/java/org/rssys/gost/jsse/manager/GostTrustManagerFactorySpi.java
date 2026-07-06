@@ -21,6 +21,7 @@ public final class GostTrustManagerFactorySpi extends TrustManagerFactorySpi {
 
     private PublicKeyParameters caPublicKey;
     private boolean requireOcspStapling;
+    private GostTrustManagerParameters params;
 
     @Override
     protected void engineInit(KeyStore ks) {
@@ -48,11 +49,29 @@ public final class GostTrustManagerFactorySpi extends TrustManagerFactorySpi {
 
     @Override
     protected void engineInit(ManagerFactoryParameters spec) {
-        throw new UnsupportedOperationException("Not implemented");
+        if (!(spec instanceof GostTrustManagerParameters)) {
+            throw new IllegalArgumentException(
+                    "Expected GostTrustManagerParameters, got "
+                            + (spec == null ? "null" : spec.getClass().getName()));
+        }
+        this.params = (GostTrustManagerParameters) spec;
     }
 
     @Override
     protected TrustManager[] engineGetTrustManagers() {
+        if (params != null) {
+            return new TrustManager[] {
+                new GostX509TrustManager(
+                        params.getCaPublicKeys(),
+                        params.getOcspPolicy(),
+                        params.getOcspFetcher(),
+                        params.getCrlPolicy(),
+                        params.getCrlFetcher(),
+                        params.getMaxCrlSize(),
+                        params.getMaxRevokedEntries(),
+                        params.getMaxOcspAgeMs())
+            };
+        }
         return new TrustManager[] {new GostX509TrustManager(caPublicKey, requireOcspStapling)};
     }
 }

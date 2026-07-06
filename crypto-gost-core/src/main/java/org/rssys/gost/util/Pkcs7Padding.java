@@ -52,6 +52,7 @@ public final class Pkcs7Padding {
         //
         // Внимание: длина возвращаемого массива всё равно раскрывает padLen — это
         // неустранимо на уровне API и не является утечкой сверх факта расшифрования.
+        // см. crypto-gost-core/doc/adr/adr-04.md
         int lastBlockStart = data.length - blockSize;
 
         // Проверка диапазона padLen в [1, blockSize] без ветвления: bad != 0 при нарушении.

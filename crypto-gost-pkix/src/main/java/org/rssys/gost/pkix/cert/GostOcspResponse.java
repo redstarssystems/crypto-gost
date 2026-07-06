@@ -25,7 +25,9 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class GostOcspResponse {
 
+    private static final int MAX_OCSP_RESPONSE_SIZE = 262_144;
     private static final int MAX_DELEGATED_CERTS = 5;
+    private static final int MAX_SINGLE_RESPONSES = 256;
 
     private final int responseStatus;
     private final Instant producedAt;
@@ -33,6 +35,7 @@ public final class GostOcspResponse {
     private final byte[] tbsRaw;
     private final byte[] sigValue;
     private final List<byte[]> delegatedCertificates;
+    private final byte[] nonce;
     private volatile boolean signatureVerified;
 
     /**
@@ -45,6 +48,13 @@ public final class GostOcspResponse {
         if (der == null || der.length == 0) {
             throw new PkixException("OCSP response must not be null or empty");
         }
+        if (der.length > MAX_OCSP_RESPONSE_SIZE) {
+            throw new PkixException(
+                    "OCSP response DER exceeds maximum size "
+                            + MAX_OCSP_RESPONSE_SIZE
+                            + ", got "
+                            + der.length);
+        }
 
         // OCSPResponse ::= SEQUENCE { responseStatus, responseBytes }
         int[] ocspSeq = parseSequence(der, 0);
@@ -56,6 +66,12 @@ public final class GostOcspResponse {
             throw new PkixException("OCSP: expected ENUMERATED status");
         }
         int[] statusTlv = readTlv(der, pos);
+        if (statusTlv[1] - statusTlv[0] > 1) {
+            throw new PkixException(
+                    "OCSP: ENUMERATED responseStatus too long ("
+                            + (statusTlv[1] - statusTlv[0])
+                            + " bytes), expected 1 byte per RFC 6960");
+        }
         int statusVal = 0;
         for (int i = statusTlv[0]; i < statusTlv[1]; i++) {
             statusVal = (statusVal << 8) | (der[i] & 0xFF);
@@ -69,6 +85,7 @@ public final class GostOcspResponse {
             this.tbsRaw = null;
             this.sigValue = null;
             this.delegatedCertificates = Collections.emptyList();
+            this.nonce = null;
             return;
         }
 
@@ -154,7 +171,12 @@ public final class GostOcspResponse {
         List<SingleOcspResponse> parsedResponses = new ArrayList<>();
         int certIdHashLen = GostOids.STREEBOG_256_HASH_LEN;
 
+        int responseCount = 0;
         while (rpPos < respEnd) {
+            if (responseCount >= MAX_SINGLE_RESPONSES) {
+                throw new PkixException(
+                        "Too many SingleResponse entries in OCSP response: " + responseCount);
+            }
             int[] srSeq = parseSequence(der, rpPos);
             int[] certIdSeq = parseSequence(der, srSeq[0]);
 
@@ -206,8 +228,12 @@ public final class GostOcspResponse {
                 throw new PkixException("OCSP: certStatus missing");
             }
             int certStatusTag = der[stPos] & 0xFF;
-            // RFC 6960 §2.2: good кодируется как [0] IMPLICIT NULL (длина строго 0)
-            if (certStatusTag == DerCodec.TAG_CTX_PRIMITIVE_0
+            // RFC 6960 §2.2: good кодируется как [0] IMPLICIT NULL (длина строго 0).
+            // Проверяем обе формы тега — primitive 0x80 и constructed 0xA0, которые
+            // isGood() трактует как алиас: constructed good с непустым содержимым —
+            // DER-malleability, отклоняем наравне с primitive.
+            if ((certStatusTag == DerCodec.TAG_CTX_PRIMITIVE_0
+                            || certStatusTag == DerCodec.TAG_CTX_CONSTRUCTED_0)
                     && (stPos + 1 >= srSeq[1] || der[stPos + 1] != 0x00)) {
                 throw new PkixException("OCSP: malformed good status");
             }
@@ -267,8 +293,40 @@ public final class GostOcspResponse {
                             issuerNameHash,
                             issuerKeyHash));
             rpPos = srSeq[1];
+            responseCount++;
         }
         this.responses = Collections.unmodifiableList(parsedResponses);
+
+        // responseExtensions [1] EXPLICIT Extensions OPTIONAL — извлекаем nonce
+        tbsPos = respSeq[1];
+        byte[] parsedNonce = null;
+        if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_1) {
+            int[] reExplTlv = readTlv(der, tbsPos);
+            int[] reSeq = parseSequence(der, reExplTlv[0]);
+            int rePos = reSeq[0];
+            int reEnd = reSeq[1];
+            while (rePos < reEnd) {
+                int[] extTlv = parseSequence(der, rePos);
+                int extContent = extTlv[0];
+                int extContentEnd = extTlv[1];
+                if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x06) {
+                    int[] extOidTlv = readTlv(der, extContent);
+                    if (matchesOid(
+                            der, extOidTlv[0], extOidTlv[1] - extOidTlv[0], OCSP_NONCE_OID_BYTES)) {
+                        extContent = extOidTlv[1];
+                        if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x01) {
+                            extContent = readTlv(der, extContent)[1];
+                        }
+                        if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x04) {
+                            int[] nonceOctTlv = readTlv(der, extContent);
+                            parsedNonce = Arrays.copyOfRange(der, nonceOctTlv[0], nonceOctTlv[1]);
+                        }
+                    }
+                }
+                rePos = extTlv[1];
+            }
+        }
+        this.nonce = parsedNonce;
 
         // signatureAlgorithm — пропускаем
         if (bpPos >= basicEnd || (der[bpPos] & 0xFF) != TAG_SEQUENCE) {
@@ -348,7 +406,34 @@ public final class GostOcspResponse {
         return producedAt;
     }
 
-    /** @return список SingleResponse (неизменяемый) */
+    /**
+     * Возвращает nonce из responseExtensions OCSP-ответа.
+     *
+     * @return значение nonce или {@code null} если nonce отсутствует в ответе
+     */
+    public byte[] getNonce() {
+        return nonce != null ? nonce.clone() : null;
+    }
+
+    /**
+     * Возвращает список SingleResponse из распарсенного, возможно ещё не
+     * верифицированного, OCSP-ответа.
+     *
+     * <p><b>Контракт доверия:</b> статус в каждом {@link SingleOcspResponse}
+     * ({@link SingleOcspResponse#isGood()}/{@link SingleOcspResponse#isRevoked()}/
+     * {@link SingleOcspResponse#isUnknown()}) отражает лишь результат разбора DER и
+     * не является доверенным до успешного вызова {@link #verify(PublicKeyParameters)}.
+     * Перед принятием решения об отзыве вызывающий ОБЯЗАН сначала вызвать
+     * {@code verify()}.</p>
+     *
+     * <p>В отличие от {@link GostCrl#getRevokedCertificates()}, здесь намеренно нет
+     * guard'а на {@code signatureVerified}: parse/verify-разделение осознанное — метод
+     * используется для инспекции распарсенного ответа независимо от проверки подписи
+     * (interop и кросс-валидация с чужими реализациями, где GOST-подпись отсутствует
+     * структурно).</p>
+     *
+     * @return неизменяемый список SingleResponse (статус не доверенный до verify())
+     */
     public List<SingleOcspResponse> getResponses() {
         return responses;
     }

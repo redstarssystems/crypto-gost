@@ -5,12 +5,12 @@ import static org.rssys.gost.pkix.cert.GostDerParser.*;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.math.BigInteger;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.util.DerCodec;
 
 /**
  * Верификация OCSP-ответа (RFC 6960).
@@ -27,8 +27,6 @@ import org.rssys.gost.util.DerCodec;
 public final class OcspVerifier {
 
     private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cert.OcspVerifier");
-
-
 
     private OcspVerifier() {}
 
@@ -52,10 +50,10 @@ public final class OcspVerifier {
      * @param issuerCert   сертификат издателя
      * @throws PkixException если ответ невалиден
      */
-    public static void verify(
-            byte[] ocspResponse, byte[] serialNumber, GostCertificate issuerCert)
+    public static void verify(byte[] ocspResponse, byte[] serialNumber, GostCertificate issuerCert)
             throws PkixException {
-        verifyWithCert(ocspResponse, serialNumber, issuerCert, null, false);
+        verifyWithCert(
+                ocspResponse, serialNumber, issuerCert, issuerCert, null, GostOids.MAX_OCSP_AGE_MS);
     }
 
     /**
@@ -65,7 +63,36 @@ public final class OcspVerifier {
      * @param serialNumber  серийный номер проверяемого сертификата
      * @param issuerCert    сертификат издателя
      * @param expectedNonce ожидаемый nonce (из запроса) или null — не проверять
-     * @param strict        true — nonce обязателен в ответе
+     * @throws PkixException если ответ невалиден
+     */
+    public static void verify(
+            byte[] ocspResponse,
+            byte[] serialNumber,
+            GostCertificate issuerCert,
+            byte[] expectedNonce)
+            throws PkixException {
+        verifyWithCert(
+                ocspResponse,
+                serialNumber,
+                issuerCert,
+                issuerCert,
+                expectedNonce,
+                GostOids.MAX_OCSP_AGE_MS);
+    }
+
+    /**
+     * Верифицирует OCSP-ответ с проверкой nonce и настраиваемой политикой свежести.
+     *
+     * <p>Перегрузка для случаев, когда CA легитимно выпускает OCSP-ответы без
+     * {@code nextUpdate}, но с фактическим сроком годности, отличным от дефолтных
+     * {@value org.rssys.gost.pkix.GostOids#MAX_OCSP_AGE_MS} мс (RFC 6960 §2.4 —
+     * relying party применяет локальную политику свежести).</p>
+     *
+     * @param ocspResponse  DER-кодированный OCSP-ответ
+     * @param serialNumber  серийный номер проверяемого сертификата
+     * @param issuerCert    сертификат издателя
+     * @param expectedNonce ожидаемый nonce (из запроса) или null — не проверять
+     * @param maxOcspAgeMs  максимальный возраст ответа без {@code nextUpdate} в мс
      * @throws PkixException если ответ невалиден
      */
     public static void verify(
@@ -73,26 +100,100 @@ public final class OcspVerifier {
             byte[] serialNumber,
             GostCertificate issuerCert,
             byte[] expectedNonce,
-            boolean strict)
+            long maxOcspAgeMs)
             throws PkixException {
-        verifyWithCert(ocspResponse, serialNumber, issuerCert, expectedNonce, strict);
+        verifyWithCert(
+                ocspResponse, serialNumber, issuerCert, issuerCert, expectedNonce, maxOcspAgeMs);
+    }
+
+    /**
+     * Верифицирует OCSP-ответ с раздельными ролями RFC 6960: источник CertID-хэшей
+     * и authority подписи ответа задаются явно.
+     *
+     * <p>В штатной конфигурации обе роли исполняет один сертификат CA (см. перегрузки
+     * с одним {@code issuerCert}). Раздельные параметры нужны в редких легитимных
+     * сценариях — например, при плановой смене ключа CA (key rollover) с действующим
+     * кросс-сертификатом, когда ответ подписан новым ключом, а CertID листа считается
+     * от старого издателя.</p>
+     *
+     * <p><b>Важно:</b> authority обязан криптографически цепляться к истинному издателю
+     * листа. Совпадение одного лишь Subject DN двух CA (RFC 6960 §4.2.2.2) доверия не
+     * создаёт — при отсутствии кросс-сертификата верификация корректно завершится
+     * отказом (fail-closed).</p>
+     *
+     * @param ocspResponse      DER-кодированный OCSP-ответ
+     * @param serialNumber      серийный номер проверяемого сертификата
+     * @param certIdIssuer      истинный издатель листа — источник issuerNameHash/issuerKeyHash
+     * @param responderAuthority authority подписи ответа (прямой ключ или издатель делегата)
+     * @param expectedNonce     ожидаемый nonce (из запроса) или null — не проверять
+     * @throws PkixException если ответ невалиден
+     */
+    public static void verify(
+            byte[] ocspResponse,
+            byte[] serialNumber,
+            GostCertificate certIdIssuer,
+            GostCertificate responderAuthority,
+            byte[] expectedNonce)
+            throws PkixException {
+        verifyWithCert(
+                ocspResponse,
+                serialNumber,
+                certIdIssuer,
+                responderAuthority,
+                expectedNonce,
+                GostOids.MAX_OCSP_AGE_MS);
+    }
+
+    /**
+     * Верифицирует OCSP-ответ с раздельными ролями RFC 6960 и настраиваемой политикой
+     * свежести. Полная перегрузка — см. {@link #verify(byte[], byte[], GostCertificate,
+     * GostCertificate, byte[])} о смысле раздельных {@code certIdIssuer} и
+     * {@code responderAuthority}.
+     *
+     * @param ocspResponse       DER-кодированный OCSP-ответ
+     * @param serialNumber       серийный номер проверяемого сертификата
+     * @param certIdIssuer       истинный издатель листа — источник issuerNameHash/issuerKeyHash
+     * @param responderAuthority authority подписи ответа (прямой ключ или издатель делегата)
+     * @param expectedNonce      ожидаемый nonce (из запроса) или null — не проверять
+     * @param maxOcspAgeMs       максимальный возраст ответа без {@code nextUpdate} в мс
+     * @throws PkixException если ответ невалиден
+     */
+    public static void verify(
+            byte[] ocspResponse,
+            byte[] serialNumber,
+            GostCertificate certIdIssuer,
+            GostCertificate responderAuthority,
+            byte[] expectedNonce,
+            long maxOcspAgeMs)
+            throws PkixException {
+        verifyWithCert(
+                ocspResponse,
+                serialNumber,
+                certIdIssuer,
+                responderAuthority,
+                expectedNonce,
+                maxOcspAgeMs);
     }
 
     private static void verifyWithCert(
             byte[] ocspResponse,
             byte[] serialNumber,
-            GostCertificate issuerCert,
+            GostCertificate certIdIssuer,
+            GostCertificate responderAuthority,
             byte[] expectedNonce,
-            boolean strict)
+            long maxOcspAgeMs)
             throws PkixException {
         if (ocspResponse == null) {
             throw new PkixException("No OCSP response available");
         }
-        if (issuerCert == null) {
-            throw new PkixException("issuerCert must not be null");
+        if (certIdIssuer == null) {
+            throw new PkixException("certIdIssuer must not be null");
+        }
+        if (responderAuthority == null) {
+            throw new PkixException("responderAuthority must not be null");
         }
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "Verifying OCSP response for certificate serial 0x{0}",
                 new BigInteger(1, serialNumber).toString(16));
 
@@ -108,35 +209,37 @@ public final class OcspVerifier {
         // Ищем SingleResponse с совпадающим серийным номером
         SingleOcspResponse target = findSingleResponse(ocsp, serialNumber);
 
-        // Попытка прямого подписания ключом issuer'а (CA)
-        PublicKeyParameters caPub = issuerCert.getPublicKey();
+        // Подпись ответа принадлежит authority (RFC 6960 §4.2.2.2): либо напрямую
+        // его ключом, либо делегированным responder-сертификатом, выпущенным authority.
+        PublicKeyParameters authorityPub = responderAuthority.getPublicKey();
         boolean sigOk;
         try {
-            ocsp.verify(caPub);
+            ocsp.verify(authorityPub);
             sigOk = true;
         } catch (PkixException e) {
             sigOk = false;
         }
 
-        // Если подпись CA не подошла — пробуем делегированные responder-сертификаты
+        // Если прямая подпись authority не подошла — пробуем делегированные responder'ы
         if (!sigOk) {
-            sigOk = tryDelegatedVerification(ocsp, issuerCert);
+            sigOk = tryDelegatedVerification(ocsp, responderAuthority);
         }
 
         if (!sigOk) {
             throw new PkixException(
-                    PkixException.Reason.SIGNATURE_INVALID,
-                    "OCSP signature verification failed");
+                    PkixException.Reason.SIGNATURE_INVALID, "OCSP signature verification failed");
         }
 
         // Статус, свежесть, CertID
-        verifyStatusAndFreshness(target, ocspResponse, expectedNonce, strict);
+        verifyStatusAndFreshness(target, ocsp, expectedNonce, maxOcspAgeMs);
 
-        // CertID проверка — всегда, автоматически из issuerCert
-        verifyCertId(target, caPub, issuerCert);
+        // CertID (issuerNameHash/issuerKeyHash) считается от ИСТИННОГО издателя листа
+        // (certIdIssuer), а не от authority: это разные роли RFC 6960. При обычной
+        // конфигурации оба параметра — один и тот же сертификат CA.
+        verifyCertId(target, certIdIssuer.getPublicKey(), certIdIssuer);
 
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "OCSP verification passed for certificate serial 0x{0}",
                 new BigInteger(1, serialNumber).toString(16));
     }
@@ -145,6 +248,12 @@ public final class OcspVerifier {
      * Перебирает делегированные responder-сертификаты из поля certs.
      * Порядок pre-checks (дёшево→дорого) из RFC 6960 §4.2.2.2:
      * expiry → EKU → KeyUsage → подпись делегированного сертификата.
+     *
+     * <p>Проверка отзыва (CRL/OCSP) делегированного responder-сертификата
+     * не выполняется. Осознанное решение: RFC 6960 §4.2.2.2.1 определяет
+     * id-pkix-ocsp-nocheck — делегированные responder-сертификаты короткоживущие
+     * (24–48 часов), проверка их отзыва через OCSP создала бы циклическую
+     * зависимость.
      *
      * @return true если делегированный сертификат прошёл все проверки и подписал OCSP-ответ
      */
@@ -192,14 +301,14 @@ public final class OcspVerifier {
         // issuerNameHash = hash(subject DN issuer-а)
         byte[] issuerNameDer = issuerCert.getSubjectDnBytes();
         byte[] expectedNameHash = GostSignatureHelper.doHash(issuerNameDer, certIdHashLen);
-        if (!Arrays.equals(target.issuerNameHash(), expectedNameHash)) {
+        if (!MessageDigest.isEqual(target.issuerNameHash(), expectedNameHash)) {
             throw new PkixException("OCSP: issuerNameHash mismatch");
         }
 
         // issuerKeyHash = hash(публичного ключа issuer-а)
         byte[] expectedKeyHash =
                 CertIdHasher.hashIssuerPublicKey(issuerCert.getEncoded(), certIdHashLen);
-        if (!Arrays.equals(target.issuerKeyHash(), expectedKeyHash)) {
+        if (!MessageDigest.isEqual(target.issuerKeyHash(), expectedKeyHash)) {
             throw new PkixException("OCSP: issuerKeyHash mismatch");
         }
     }
@@ -207,12 +316,15 @@ public final class OcspVerifier {
     /**
      * Проверяет certStatus, свежесть (thisUpdate/nextUpdate) и nonce.
      * Общая часть для certificate-based и key-based путей верификации.
+     *
+     * @param maxOcspAgeMs максимальный возраст ответа без {@code nextUpdate}
+     *                     (локальная политика свежести, RFC 6960 §2.4)
      */
     static void verifyStatusAndFreshness(
             SingleOcspResponse target,
-            byte[] ocspResponse,
+            GostOcspResponse ocsp,
             byte[] expectedNonce,
-            boolean strict)
+            long maxOcspAgeMs)
             throws PkixException {
         // certStatus проверка
         if (target.isRevoked()) {
@@ -231,15 +343,19 @@ public final class OcspVerifier {
         if (target.nextUpdate() != null && Instant.now().isAfter(target.nextUpdate())) {
             throw new PkixException("OCSP: response expired (nextUpdate in the past)");
         }
+        if (target.nextUpdate() == null
+                && Instant.now().isAfter(target.thisUpdate().plusMillis(maxOcspAgeMs))) {
+            throw new PkixException("OCSP: response too old (no nextUpdate)");
+        }
 
         // Nonce проверка
         if (expectedNonce != null) {
-            verifyNonce(ocspResponse, expectedNonce, strict);
+            verifyNonce(ocsp, expectedNonce);
         }
     }
 
-    private static SingleOcspResponse findSingleResponse(
-            GostOcspResponse ocsp, byte[] serialNumber) throws PkixException {
+    private static SingleOcspResponse findSingleResponse(GostOcspResponse ocsp, byte[] serialNumber)
+            throws PkixException {
         for (SingleOcspResponse sr : ocsp.getResponses()) {
             if (Arrays.equals(sr.certSerialNumber(), serialNumber)) {
                 return sr;
@@ -276,7 +392,7 @@ public final class OcspVerifier {
             throw new PkixException("No OCSP response available");
         }
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "Verifying OCSP response for certificate serial 0x{0}",
                 new BigInteger(1, serialNumber).toString(16));
 
@@ -294,7 +410,7 @@ public final class OcspVerifier {
         // Проверка подписи — до certStatus (fail-closed, исключает подделку статуса)
         ocsp.verify(caKey);
 
-        verifyStatusAndFreshness(target, ocspResponse, null, false);
+        verifyStatusAndFreshness(target, ocsp, null, GostOids.MAX_OCSP_AGE_MS);
 
         // CertID defense-in-depth (опционально в низкоуровневом API)
         if (expectedIssuerDn != null && issuerCertDer != null) {
@@ -304,20 +420,19 @@ public final class OcspVerifier {
                             ? GostOids.STREEBOG_512_HASH_LEN
                             : GostOids.STREEBOG_256_HASH_LEN;
 
-            byte[] expectedNameHash =
-                    GostSignatureHelper.doHash(expectedIssuerDn, certIdHashLen);
-            if (!Arrays.equals(target.issuerNameHash(), expectedNameHash)) {
+            byte[] expectedNameHash = GostSignatureHelper.doHash(expectedIssuerDn, certIdHashLen);
+            if (!MessageDigest.isEqual(target.issuerNameHash(), expectedNameHash)) {
                 throw new PkixException("OCSP: issuerNameHash mismatch");
             }
 
             byte[] expectedKeyHash = CertIdHasher.hashIssuerPublicKey(issuerCertDer, certIdHashLen);
-            if (!Arrays.equals(target.issuerKeyHash(), expectedKeyHash)) {
+            if (!MessageDigest.isEqual(target.issuerKeyHash(), expectedKeyHash)) {
                 throw new PkixException("OCSP: issuerKeyHash mismatch");
             }
         }
 
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "OCSP verification passed for certificate serial 0x{0}",
                 new BigInteger(1, serialNumber).toString(16));
     }
@@ -331,138 +446,39 @@ public final class OcspVerifier {
             PublicKeyParameters caKey,
             byte[] expectedIssuerDn,
             byte[] issuerCertDer,
-            byte[] expectedNonce,
-            boolean strict)
+            byte[] expectedNonce)
             throws PkixException {
         verify(ocspResponse, serialNumber, caKey, expectedIssuerDn, issuerCertDer);
-        verifyNonce(ocspResponse, expectedNonce, strict);
+        if (expectedNonce != null) {
+            GostOcspResponse ocsp = new GostOcspResponse(ocspResponse);
+            verifyNonce(ocsp, expectedNonce);
+        }
     }
 
     // ========================================================================
-    // verifyNonce — независимый утилитный метод (не зависит от GostOcspResponse)
+    // verifyNonce
     // ========================================================================
 
     /**
-     * Пропускает version [0] и responderID в tbsResponseData.
+     * Проверяет OCSP nonce (RFC 8954) в распарсенном OCSP-ответе.
+     * Использует уже извлечённый nonce из {@link GostOcspResponse#getNonce()},
+     * без повторного парсинга DER.
+     *
+     * @param ocsp          распарсенный OCSP-ответ
+     * @param expectedNonce ожидаемое значение nonce (из запроса)
+     * @throws PkixException при несовпадении nonce
      */
-    private static int skipTbsResponseDataHeader(byte[] der, int pos, int end)
-            throws PkixException {
-        if (pos < end && (der[pos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
-            pos = GostDerParser.readTlv(der, pos)[1];
-        }
-        if (pos < end
-                && ((der[pos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0
-                        || (der[pos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_1)) {
-            return GostDerParser.readTlv(der, pos)[1];
-        }
-        throw new PkixException("OCSP: expected responderID");
-    }
-
-    /**
-     * Проверяет OCSP nonce (RFC 8954) в OCSP-ответе.
-     */
-    public static void verifyNonce(byte[] ocspResponse, byte[] expectedNonce, boolean strict)
-            throws PkixException {
+    static void verifyNonce(GostOcspResponse ocsp, byte[] expectedNonce) throws PkixException {
         if (expectedNonce == null) return;
 
-        byte[] der = ocspResponse;
-        int[] ocspSeq = GostDerParser.parseSequence(der, 0);
-        int pos = ocspSeq[0];
-        int end = ocspSeq[1];
-
-        if (pos >= end || (der[pos] & 0xFF) != 0x0A) return;
-        int[] statusTlv = GostDerParser.readTlv(der, pos);
-        pos = statusTlv[1];
-
-        if (pos >= end || (der[pos] & 0xFF) != DerCodec.TAG_CTX_CONSTRUCTED_0) return;
-        int[] respBytesTlv = GostDerParser.readTlv(der, pos);
-        pos = respBytesTlv[0];
-
-        int[] rbSeq = GostDerParser.parseSequence(der, pos);
-        int rbPos = rbSeq[0];
-        int rbEnd = rbSeq[1];
-        if (rbPos >= rbEnd) return;
-
-        if ((der[rbPos] & 0xFF) != 0x06) return;
-        int[] oidTlv = GostDerParser.readTlv(der, rbPos);
-        rbPos = oidTlv[1];
-
-        if (rbPos >= rbEnd || (der[rbPos] & 0xFF) != 0x04) return;
-        int[] octTlv = GostDerParser.readTlv(der, rbPos);
-
-        int[] basicSeq = GostDerParser.parseSequence(der, octTlv[0]);
-        int[] tbsSeq = GostDerParser.parseSequence(der, basicSeq[0]);
-
-        int tbsPos = tbsSeq[0];
-        int tbsEnd2 = tbsSeq[1];
-
-        try {
-            tbsPos = skipTbsResponseDataHeader(der, tbsPos, tbsEnd2);
-        } catch (PkixException e) {
-            return;
-        }
-        if (tbsPos >= tbsEnd2 || (der[tbsPos] & 0xFF) != 0x18) return;
-        tbsPos = GostDerParser.readTlv(der, tbsPos)[1];
-
-        if (tbsPos >= tbsEnd2 || (der[tbsPos] & 0xFF) != GostDerParser.TAG_SEQUENCE) return;
-        int[] respSeq = GostDerParser.readTlv(der, tbsPos);
-        tbsPos = respSeq[1];
-
-        if (tbsPos >= tbsEnd2 || (der[tbsPos] & 0xFF) != DerCodec.TAG_CTX_CONSTRUCTED_1) {
-            if (strict) {
-                throw new PkixException("OCSP: responseExtensions missing (strict nonce)");
-            }
-            return;
-        }
-        int[] extExplTlv = GostDerParser.readTlv(der, tbsPos);
-
-        int[] extSeq = GostDerParser.parseSequence(der, extExplTlv[0]);
-        int extPos = extSeq[0];
-        int extEnd = extSeq[1];
-
-        while (extPos < extEnd) {
-            int[] extTlv = GostDerParser.parseSequence(der, extPos);
-            int extContent = extTlv[0];
-            int extContentEnd = extTlv[1];
-
-            if (extContent >= extContentEnd || (der[extContent] & 0xFF) != 0x06) {
-                extPos = extTlv[1];
-                continue;
-            }
-            int[] extOidTlv = GostDerParser.readTlv(der, extContent);
-            boolean isNonce =
-                    GostDerParser.matchesOid(
-                            der,
-                            extOidTlv[0],
-                            extOidTlv[1] - extOidTlv[0],
-                            GostDerParser.OCSP_NONCE_OID_BYTES);
-            extContent = extOidTlv[1];
-
-            if (isNonce) {
-                if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x01) {
-                    int[] boolTlv = GostDerParser.readTlv(der, extContent);
-                    extContent = boolTlv[1];
-                }
-                if (extContent >= extContentEnd || (der[extContent] & 0xFF) != 0x04) {
-                    if (strict) {
-                        throw new PkixException("OCSP: nonce extension value is not OCTET STRING");
-                    }
-                    return;
-                }
-                int[] nonceOctTlv = GostDerParser.readTlv(der, extContent);
-                byte[] responseNonce =
-                        java.util.Arrays.copyOfRange(der, nonceOctTlv[0], nonceOctTlv[1]);
-
-                if (!java.util.Arrays.equals(responseNonce, expectedNonce)) {
-                    throw new PkixException("OCSP: nonce mismatch");
-                }
-                return;
-            }
-            extPos = extTlv[1];
+        byte[] responseNonce = ocsp.getNonce();
+        if (responseNonce == null) {
+            throw new PkixException(
+                    "OCSP: response missing nonce, but nonce was expected in request");
         }
 
-        if (strict) {
-            throw new PkixException("OCSP: nonce extension not found (strict nonce)");
+        if (!MessageDigest.isEqual(responseNonce, expectedNonce)) {
+            throw new PkixException("OCSP: nonce mismatch");
         }
     }
 }

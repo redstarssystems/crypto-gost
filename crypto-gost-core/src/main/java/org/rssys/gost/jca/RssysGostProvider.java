@@ -37,7 +37,9 @@ import org.rssys.gost.jca.spi.GostVkoKeyAgreementSpi;
  *
  * <b>Cipher — блочный шифр Кузнечик (ГОСТ Р 34.12-2015 / ГОСТ Р 34.13-2015):</b>
  * <ul>
- *   <li>{@code Kuznyechik/CTR/NoPadding}    — режим гаммирования, IV = 8 байт</li>
+ *   <li>{@code Kuznyechik/CTR/NoPadding}    — режим гаммирования, IV = 8 байт
+ *       (nonce); авто-nonce 64-бит безопасен до ~2^16 сообщений на ключ,
+ *       далее — birthday-риск коллизии (см. ADR-06)</li>
  *   <li>{@code Kuznyechik/CFB/NoPadding}    — режим ОС по шифртексту, IV = 16 байт</li>
  *   <li>{@code Kuznyechik/OFB/NoPadding}    — режим ОС по выходу, IV = 16 байт</li>
  *   <li>{@code Kuznyechik/CBC/PKCS5Padding}  — режим CBC с PKCS#7, IV = 16 байт</li>

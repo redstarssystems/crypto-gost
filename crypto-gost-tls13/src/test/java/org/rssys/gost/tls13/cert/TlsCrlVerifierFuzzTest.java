@@ -3,6 +3,7 @@ package org.rssys.gost.tls13.cert;
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.cert.CrlVerifier;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.ECParameters;
@@ -30,9 +31,12 @@ import org.rssys.gost.signature.PublicKeyParameters;
 class TlsCrlVerifierFuzzTest {
 
     private static final PublicKeyParameters CA_KEY;
+    private static final byte[] DUMMY_ISSUER_DN;
 
     static {
-        CA_KEY = KeyGenerator.generateKeyPair(ECParameters.tc26a256()).getPublic();
+        KeyPair kp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
+        CA_KEY = kp.getPublic();
+        DUMMY_ISSUER_DN = org.rssys.gost.pkix.cert.GostDnParser.encodeDn("CN=Fuzz CA");
     }
 
     /**
@@ -46,7 +50,7 @@ class TlsCrlVerifierFuzzTest {
         byte[] certSerial = data.consumeBytes(data.consumeInt(0, 32));
         if (crlDer.length == 0) return;
         try {
-            CrlVerifier.verify(crlDer, certSerial, CA_KEY);
+            CrlVerifier.verify(crlDer, certSerial, CA_KEY, DUMMY_ISSUER_DN);
         } catch (PkixException e) {
             // Ожидаемо: битый CRL не проходит верификацию
         }

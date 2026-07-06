@@ -1,6 +1,7 @@
 package org.rssys.gost.tls13.engine;
 
 import java.io.IOException;
+import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -262,6 +263,10 @@ public final class TlsHandshakeEngine {
     // но без него JSSE-путь уязвим к CPU-амплификации: каждый KU требует HKDF + MGM init)
     private int keyUpdateCount;
     private static final int MAX_KEY_UPDATES = 32;
+
+    private static final System.Logger LOG =
+            System.getLogger("org.rssys.gost.tls13.engine.TlsHandshakeEngine");
+
     private static final byte[] KU_NOT_REQUESTED = new byte[] {0};
     private static final byte[] KU_REQUESTED = new byte[] {1};
 
@@ -1016,6 +1021,10 @@ public final class TlsHandshakeEngine {
             return;
         }
 
+        // Downgrade-sentinel (RFC 8446 §4.1.3) не проверяется намеренно: клиент
+        // предлагает только TLS 1.3 (см. SV_CLIENT) и не имеет кода для завершения
+        // хендшейка TLS 1.2/1.1 — понижать версию некуда, атака неприменима.
+
         // Настоящий ServerHello — добавляем в транскрипт
         ctx.addToTranscript(frame);
 
@@ -1592,9 +1601,13 @@ public final class TlsHandshakeEngine {
         byte[] chBody = chMsg.getBody();
         // PSK
         pskAccepted = false;
-        byte[] pskIdentityRaw = TlsMessageParser.parseClientHelloPskIdentity(chBody);
+        long[] ageOut = new long[1];
+        byte[] pskIdentityRaw = TlsMessageParser.parseClientHelloPskIdentityAndAge(chBody, ageOut);
+        long obfuscatedTicketAge = ageOut[0];
         // Авто-поиск PSK в серверном сторе, если явный pskKey не задан
         boolean pskKeyFromStore = false;
+        long pskEntryIssueTime = 0;
+        long pskEntryTicketAgeAdd = 0;
         if (pskIdentityRaw != null && pskKey == null && serverPskStore != null) {
             // peek() — lookup без удаления из стора. Верификация binder ниже.
             // Если binder провалится, тикет останется в сторе для повторных попыток.
@@ -1607,6 +1620,8 @@ public final class TlsHandshakeEngine {
             if (entry != null && !entry.isExpired(System.currentTimeMillis())) {
                 pskKey = entry.getPsk();
                 pskKeyFromStore = true;
+                pskEntryIssueTime = entry.getIssueTime();
+                pskEntryTicketAgeAdd = entry.getTicketAgeAdd();
             }
         }
         if (pskIdentityRaw != null && pskKey != null) {
@@ -1641,14 +1656,36 @@ public final class TlsHandshakeEngine {
                 // Отложено: сценарий требует shared PskStore между соединениями +
                 // узкое окно гонки + HRR. InMemoryPskStore не шарится между JVM.
                 // реализовать при появлении production PskStore (Redis, etc.)
-                pskAccepted = true;
+                boolean ageOk = true;
+                if (pskKeyFromStore) {
+                    ageOk =
+                            validatePskTicketAge(
+                                    obfuscatedTicketAge, pskEntryIssueTime, pskEntryTicketAgeAdd);
+                    if (!ageOk) {
+                        LOG.log(
+                                Level.WARNING,
+                                "PSK ticket age mismatch, falling back to full handshake");
+                    }
+                }
+                pskAccepted = ageOk;
             } else {
                 if (TlsPskHelper.verifyBinder(chBody, pskKey, hashLen)) {
                     if (pskKeyFromStore) {
                         PskEntry consumed = serverPskStore.get(pskIdentityRaw);
                         if (consumed != null) {
+                            boolean ageOk =
+                                    validatePskTicketAge(
+                                            obfuscatedTicketAge,
+                                            pskEntryIssueTime,
+                                            pskEntryTicketAgeAdd);
                             consumed.destroy();
-                            pskAccepted = true;
+                            if (ageOk) {
+                                pskAccepted = true;
+                            } else {
+                                LOG.log(
+                                        Level.WARNING,
+                                        "PSK ticket age mismatch, falling back to full handshake");
+                            }
                         }
                     } else {
                         pskAccepted = true;
@@ -2296,5 +2333,27 @@ public final class TlsHandshakeEngine {
             System.arraycopy(raw, raw.length - len, result, 0, len);
         }
         return result;
+    }
+
+    /**
+     * Проверяет ticket_age при PSK-возобновлении (RFC 8446 §4.2.11.2).
+     * <p>
+     * Вычисляет ожидаемый возраст тикета (now - issueTime) mod 2^32,
+     * сравнивает с возрастом клиента (obfuscated_ticket_age - ticket_age_add) mod 2^32.
+     * Допуск {@link TlsConstants#PSK_AGE_TOLERANCE_MS} компенсирует clock skew
+     * и сетевую задержку.
+     *
+     * @param obfuscatedTicketAge возраст от клиента (uint32)
+     * @param issueTime           момент выписки тикета (мс)
+     * @param ticketAgeAdd        обфускация возраста (uint32)
+     * @return true если возраст в допуске, false — расхождение (не атака, отказ от PSK)
+     */
+    private static boolean validatePskTicketAge(
+            long obfuscatedTicketAge, long issueTime, long ticketAgeAdd) {
+        long expectedAge = (System.currentTimeMillis() - issueTime) & 0xFFFFFFFFL;
+        long clientAge = (obfuscatedTicketAge - ticketAgeAdd) & 0xFFFFFFFFL;
+        long diff = Math.abs(expectedAge - clientAge);
+        diff = Math.min(diff, (1L << 32) - diff);
+        return diff <= TlsConstants.PSK_AGE_TOLERANCE_MS;
     }
 }

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.cert.*;
@@ -205,14 +206,16 @@ class TlsSessionTest {
     void testCreateNullCiphersuite() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> TlsSession.createClientWithoutServerAuth(new InMemoryTlsTransport(), null, null, null));
+                () ->
+                        TlsSession.createClientWithoutServerAuth(
+                                new InMemoryTlsTransport(), null, null, null));
     }
 
     @Test
-    @DisplayName("factory: без hostname и без withoutHostnameVerification -> IllegalArgumentException")
+    @DisplayName(
+            "factory: без hostname и без withoutHostnameVerification -> IllegalArgumentException")
     void testCreateClientMissingHostnameThrows() throws Exception {
-        var caKey =
-                TlsTestHelper.createCertWithKey(ECParameters.tc26a256()).cert.getPublicKey();
+        var caKey = TlsTestHelper.createCertWithKey(ECParameters.tc26a256()).cert.getPublicKey();
         assertThrows(
                 IllegalArgumentException.class,
                 () ->
@@ -320,7 +323,8 @@ class TlsSessionTest {
 
         TlsSession server =
                 TlsSession.createServer(tp.getServerTransport(), cs, bundle.cert, bundle.priv);
-        TlsSession client = TlsSession.createClientWithoutServerAuth(tp.getClientTransport(), cs, null, null);
+        TlsSession client =
+                TlsSession.createClientWithoutServerAuth(tp.getClientTransport(), cs, null, null);
 
         Phaser phaser = new Phaser(3);
         ExecutorService exec = Executors.newFixedThreadPool(2);
@@ -405,7 +409,8 @@ class TlsSessionTest {
                 };
 
         TlsSession server = TlsSession.createServer(serverTransport, cs, bundle.cert, bundle.priv);
-        TlsSession client = TlsSession.createClientWithoutServerAuth(clientTransport, cs, null, null);
+        TlsSession client =
+                TlsSession.createClientWithoutServerAuth(clientTransport, cs, null, null);
 
         Phaser phaser = new Phaser(3);
         ExecutorService exec = Executors.newFixedThreadPool(2);
@@ -517,8 +522,8 @@ class TlsSessionTest {
         TlsSession client =
                 TlsSession.createClient(
                         new TlsClientConfig(
-                                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                                bundle.cert.getPublicKey())
+                                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                                        bundle.cert.getPublicKey())
                                 .withoutHostnameVerification(),
                         tp.getClientTransport());
 
@@ -565,8 +570,8 @@ class TlsSessionTest {
         TlsSession client =
                 TlsSession.createClient(
                         new TlsClientConfig(
-                                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                                wrongKp.getPublic())
+                                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                                        wrongKp.getPublic())
                                 .withoutHostnameVerification(),
                         tp.getClientTransport());
 
@@ -1117,8 +1122,8 @@ class TlsSessionTest {
         TlsSession client =
                 TlsSession.createClient(
                         new TlsClientConfig(
-                                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                                bundle.cert.getPublicKey())
+                                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                                        bundle.cert.getPublicKey())
                                 .withoutHostnameVerification(),
                         tp.getClientTransport());
 
@@ -1176,8 +1181,8 @@ class TlsSessionTest {
         TlsSession client =
                 TlsSession.createClient(
                         new TlsClientConfig(
-                                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                                bundle.cert.getPublicKey())
+                                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
+                                        bundle.cert.getPublicKey())
                                 .withoutHostnameVerification(),
                         tp.getClientTransport());
 
@@ -1528,6 +1533,108 @@ class TlsSessionTest {
         assertThrows(
                 TlsException.class,
                 () -> session.checkServerCertificateChain(Arrays.asList(leaf.cert, root.cert)));
+    }
+
+    // =======================================================================
+    // Проверка цепочки клиентского сертификата (checkClientCertificateChain, mTLS)
+    // =======================================================================
+
+    @Test
+    @DisplayName("checkClientCertificateChain: stapled OCSP good -> успех")
+    void testCheckClientCertificateChainOcspGood() throws Exception {
+        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"client.example.com"},
+                        new byte[] {(byte) 0x80},
+                        new String[] {GostOids.EXT_CLIENT_AUTH},
+                        false,
+                        null);
+        leaf.cert.setOcspResponse(
+                TlsTestHelper.buildOcspResponse(
+                        leaf.cert.getSerialNumber(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn));
+
+        TlsSession session =
+                TlsSession.createClient(
+                        new TlsClientConfig(getCsL(), root.cert.getPublicKey())
+                                .withServerHostname("client.example.com"),
+                        noopTransport());
+
+        session.checkClientCertificateChain(Arrays.asList(leaf.cert, root.cert));
+    }
+
+    @Test
+    @DisplayName("checkClientCertificateChain: stapled OCSP revoked -> ошибка")
+    void testCheckClientCertificateChainOcspRevoked() throws Exception {
+        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"client.example.com"},
+                        new byte[] {(byte) 0x80},
+                        new String[] {GostOids.EXT_CLIENT_AUTH},
+                        false,
+                        null);
+        // Отозванный stapled-ответ обязан привести к fail-closed, симметрично серверу
+        byte[] revoked =
+                GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
+                        .signer(root.priv, root.cert.getPublicKey())
+                        .issuerDn(root.subjectDn)
+                        .revoked("20240601120000Z")
+                        .build();
+        leaf.cert.setOcspResponse(revoked);
+
+        TlsSession session =
+                TlsSession.createClient(
+                        new TlsClientConfig(getCsL(), root.cert.getPublicKey())
+                                .withServerHostname("client.example.com"),
+                        noopTransport());
+
+        assertThrows(
+                TlsException.class,
+                () -> session.checkClientCertificateChain(Arrays.asList(leaf.cert, root.cert)),
+                "Отозванный клиентский сертификат должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("checkClientCertificateChain: без stapled OCSP -> успех (fetch вне скоупа)")
+    void testCheckClientCertificateChainNoOcsp() throws Exception {
+        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        TlsTestHelper.CertBundle leaf =
+                TlsTestHelper.createCertSignedBy(
+                        ECParameters.tc26a256(),
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"client.example.com"},
+                        new byte[] {(byte) 0x80},
+                        new String[] {GostOids.EXT_CLIENT_AUTH},
+                        false,
+                        null);
+
+        TlsSession session =
+                TlsSession.createClient(
+                        new TlsClientConfig(getCsL(), root.cert.getPublicKey())
+                                .withServerHostname("client.example.com"),
+                        noopTransport());
+
+        session.checkClientCertificateChain(Arrays.asList(leaf.cert, root.cert));
     }
 
     // =======================================================================
@@ -2729,8 +2836,10 @@ class TlsSessionTest {
         server.setPskStore(throwingStore);
 
         TlsSession client =
-                TlsSession.createClient(new TlsClientConfig(getCsL(), bundle.cert.getPublicKey())
-                                .withoutHostnameVerification(), pair.getClientTransport());
+                TlsSession.createClient(
+                        new TlsClientConfig(getCsL(), bundle.cert.getPublicKey())
+                                .withoutHostnameVerification(),
+                        pair.getClientTransport());
 
         ExecutorService exec = Executors.newSingleThreadExecutor();
         try {
@@ -2809,8 +2918,10 @@ class TlsSessionTest {
                         pair.getServerTransport());
 
         TlsSession client =
-                TlsSession.createClient(new TlsClientConfig(getCsL(), bundle.cert.getPublicKey())
-                                .withoutHostnameVerification(), pair.getClientTransport());
+                TlsSession.createClient(
+                        new TlsClientConfig(getCsL(), bundle.cert.getPublicKey())
+                                .withoutHostnameVerification(),
+                        pair.getClientTransport());
         // Клиентский store кидает при сохранении NST — это не должно ломать read()
         client.setPskStore(throwingStore);
 
@@ -3740,9 +3851,9 @@ class TlsSessionTest {
         TlsSession server2 =
                 TlsSession.createServer(
                         new TlsServerConfig(
-                                getCsL(),
-                                Collections.singletonList(serverLeaf.cert),
-                                serverLeaf.priv)
+                                        getCsL(),
+                                        Collections.singletonList(serverLeaf.cert),
+                                        serverLeaf.priv)
                                 .withSelectedNamedGroup(TlsConstants.GRP_GC256A),
                         tp2.getServerTransport());
         server2.setPskStore(serverStore);
@@ -3777,6 +3888,80 @@ class TlsSessionTest {
 
         server2.close();
         client2.close();
+        exec.shutdown();
+    }
+
+    @Test
+    @DisplayName(
+            "PSK ticket_age mismatch > допуска: soft-fallback на полный handshake, соединение не рвётся")
+    void testPskTicketAgeMismatchFallsBackToFullHandshake() throws Exception {
+        TlsTestHelper.CertBundle root = createRoot();
+        TlsTestHelper.CertBundle serverLeaf = createServerLeaf(root);
+        PskStore clientStore = new InMemoryPskStore(100);
+        PskStore serverStore = new InMemoryPskStore(100);
+
+        byte[] psk = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(psk);
+        byte[] ticket = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(ticket);
+        byte[] nonce = new byte[8];
+        CryptoRandom.INSTANCE.nextBytes(nonce);
+        long ticketAgeAdd = CryptoRandom.INSTANCE.nextInt() & 0xFFFFFFFFL;
+
+        // Клиент получает тикет с issueTime=сейчас (age ≈ 0)
+        // Сервер получает тот же тикет, но issueTime на 2 минуты в прошлом
+        long pastIssueTime = System.currentTimeMillis() - 120_000;
+        PskEntry serverEntry = new PskEntry(ticket, 86400, ticketAgeAdd, nonce, psk, pastIssueTime);
+        serverStore.onTicketReceived(serverEntry);
+        PskEntry clientEntry =
+                new PskEntry(ticket, 86400, ticketAgeAdd, nonce, psk, System.currentTimeMillis());
+        clientStore.onTicketReceived(clientEntry);
+
+        // Сервер ожидает age ≈ 120000ms, клиент шлёт age ≈ 0ms
+        // diff > PSK_AGE_TOLERANCE_MS (60s) → soft-fallback на полный handshake
+        var tp = InMemoryTlsTransport.newPair();
+        TlsSession server =
+                TlsSession.createServer(
+                        new TlsServerConfig(
+                                getCsL(),
+                                Collections.singletonList(serverLeaf.cert),
+                                serverLeaf.priv),
+                        tp.getServerTransport());
+        server.setPskStore(serverStore);
+        TlsSession client =
+                TlsSession.createClient(
+                        new TlsClientConfig(getCsL(), root.cert.getPublicKey())
+                                .withServerHostname("gost.example.com"),
+                        tp.getClientTransport());
+        client.setPskStore(clientStore);
+
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+        Phaser phaser = new Phaser(3);
+        Future<Void> sf =
+                exec.submit(
+                        () -> {
+                            phaser.arriveAndAwaitAdvance();
+                            server.handshakeAsServer();
+                            return null;
+                        });
+        Future<Void> cf =
+                exec.submit(
+                        () -> {
+                            phaser.arriveAndAwaitAdvance();
+                            client.handshakeAsClient();
+                            return null;
+                        });
+        phaser.arriveAndAwaitAdvance();
+        sf.get(15, TimeUnit.SECONDS);
+        cf.get(15, TimeUnit.SECONDS);
+
+        assertTrue(client.isHandshakeDone(), "Клиент должен завершить рукопожатие");
+        assertTrue(server.isHandshakeDone(), "Сервер должен завершить рукопожатие");
+        assertFalse(server.wasResumed(), "Сервер НЕ должен принять PSK при расхождении возраста");
+        // Тикет изъят при get(), но после полного handshake сервер кладёт новый NST в store
+
+        server.close();
+        client.close();
         exec.shutdown();
     }
 
@@ -4611,7 +4796,8 @@ class TlsSessionTest {
                 };
 
         TlsSession server = TlsSession.createServer(serverTransport, cs, bundle.cert, bundle.priv);
-        TlsSession client = TlsSession.createClientWithoutServerAuth(clientTransport, cs, null, null);
+        TlsSession client =
+                TlsSession.createClientWithoutServerAuth(clientTransport, cs, null, null);
         client.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512);
 
         Phaser phaser = new Phaser(3);
@@ -4706,7 +4892,8 @@ class TlsSessionTest {
                 };
 
         TlsSession server = TlsSession.createServer(serverTransport, cs, bundle.cert, bundle.priv);
-        TlsSession client = TlsSession.createClientWithoutServerAuth(clientTransport, cs, null, null);
+        TlsSession client =
+                TlsSession.createClientWithoutServerAuth(clientTransport, cs, null, null);
         client.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512);
 
         Phaser phaser = new Phaser(3);
@@ -4771,7 +4958,8 @@ class TlsSessionTest {
                 };
 
         TlsSession server = TlsSession.createServer(serverTransport, cs, bundle.cert, bundle.priv);
-        TlsSession client = TlsSession.createClientWithoutServerAuth(clientTransport, cs, null, null);
+        TlsSession client =
+                TlsSession.createClientWithoutServerAuth(clientTransport, cs, null, null);
         client.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512);
 
         Phaser phaser = new Phaser(3);

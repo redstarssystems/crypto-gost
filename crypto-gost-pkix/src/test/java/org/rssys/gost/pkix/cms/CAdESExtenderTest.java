@@ -42,7 +42,7 @@ class CAdESExtenderTest {
         signerKp = KeyGenerator.generateKeyPair(PARAMS);
         signerCert = CmsTestUtils.createSelfSignedCert(signerKp.getPrivate(), signerKp.getPublic());
         tsaKp = KeyGenerator.generateKeyPair(PARAMS);
-        tsaCert = CmsTestUtils.createSelfSignedCert(tsaKp.getPrivate(), tsaKp.getPublic());
+        tsaCert = CmsTestUtils.createTsaCert(tsaKp.getPrivate(), tsaKp.getPublic());
         signer2Kp = KeyGenerator.generateKeyPair(PARAMS);
         signer2Cert =
                 CmsTestUtils.createSelfSignedCert(signer2Kp.getPrivate(), signer2Kp.getPublic());

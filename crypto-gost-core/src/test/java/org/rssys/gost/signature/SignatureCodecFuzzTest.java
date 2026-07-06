@@ -1,17 +1,23 @@
 package org.rssys.gost.signature;
 
+import java.math.BigInteger;
+
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import org.rssys.gost.util.FuzzTestUtils;
 
 /**
- * Fuzz-тесты для {@link SignatureCodec#decode}.
+ * Fuzz-тесты для {@link SignatureCodec#decode} и {@link SignatureCodec#encode}.
  * <p>
  * ПОЧЕМУ напрямую, а не через {@code GostSignatureSpi.engineVerify}:
  * GostSignatureSpi использует {@code catch (Exception e)} в engineVerify,
  * который маскирует NPE/AIOOBE из SignatureCodec.decode (аналогично
  * GostKeyFactorySpi). Прямой фаззинг decode позволяет Jazzer детектировать
  * баги в разборе подписи.
+ * <p>
+ * ПОЧЕМУ добавлен encode: в 0.6.2 исправлен тихий truncation oversized
+ * компонент r/s ({@code length > rolen + 1}). Тест проверяет, что encode
+ * выбрасывает {@code IllegalArgumentException} при превышении.
  */
 class SignatureCodecFuzzTest {
 
@@ -47,6 +53,35 @@ class SignatureCodecFuzzTest {
             SignatureCodec.decode(input, PARAMS_512);
         } catch (IllegalArgumentException e) {
             // Ожидаемо: неверная длина подписи (должна быть 128 байт)
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * Кодирует пару (r, s) в подпись {@code s || r} big-endian.
+     * Проверяет фикс 0.6.2: oversized компоненты (> rolen + 1) -> IllegalArgumentException.
+     * <p>
+     * Фаззер подаёт произвольные байты, конвертированные в BigInteger.
+     * Это покрывает и валидные (< rolen), и oversized (> rolen + 1) случаи.
+     */
+    @FuzzTest
+    void fuzzEncode(FuzzedDataProvider data) {
+        byte[] rBytes = data.consumeBytes(data.consumeInt(1, 128));
+        byte[] sBytes = data.consumeBytes(data.consumeInt(1, 128));
+        BigInteger r = new BigInteger(1, rBytes);
+        BigInteger s = new BigInteger(1, sBytes);
+        try {
+            SignatureCodec.encode(r, s, PARAMS_256);
+        } catch (IllegalArgumentException e) {
+            // Ожидаемо: компонент превышает размер поля (rolen = 32 для 256-бит)
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        }
+        try {
+            SignatureCodec.encode(r, s, PARAMS_512);
+        } catch (IllegalArgumentException e) {
+            // Ожидаемо: компонент превышает размер поля (rolen = 64 для 512-бит)
         } catch (RuntimeException e) {
             FuzzTestUtils.rethrowIfBug(e);
         }

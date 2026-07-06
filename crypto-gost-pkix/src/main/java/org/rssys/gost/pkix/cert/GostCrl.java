@@ -42,7 +42,6 @@ public final class GostCrl {
 
     private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cert.GostCrl");
 
-
     private final byte[] crlData;
     private final int tbsStart;
     private final int tbsLen;
@@ -69,10 +68,33 @@ public final class GostCrl {
 
     // CRL-level extensions (заполняются при verify)
     private volatile BigInteger crlNumber;
+
+    /** Максимальный размер CRL в DER по умолчанию (64 МБ).
+     *  Покрывает полные CRL крупных национальных УЦ. */
+    public static final int DEFAULT_MAX_CRL_SIZE = 67_108_864;
+
+    /** Максимальное число отозванных записей CRL по умолчанию.
+     *  Минимальная запись ≈20–24 байт; при 64 МБ входа потолок ≈2.9M по байтам.
+     *  1M — разумный запас без избыточной CPU-стоимости per-entry разбора. */
+    public static final int DEFAULT_MAX_REVOKED_ENTRIES = 1_000_000;
+
+    // Значения, установленные через конструктор (настраиваемые лимиты)
+    private final int maxSize;
+    private final int maxRevokedEntries;
+
+    // Лимит длины INTEGER в CRL-расширениях (cRLNumber, BaseCRLNumber).
+    // RFC 5280 §5.2.3: cRLNumber SHOULD be small; на практике 2-3 байта.
+    // Без лимита new BigInteger может аллоцировать до ≈maxSize на одно вхождение.
+    private static final int MAX_CRL_EXT_INTEGER_OCTETS = 8;
+
     private volatile BigInteger baseCrlNumber;
 
     /**
      * Парсит DER-закодированный CertificateList (RFC 5280 §5.1).
+     *
+     * <p>Использует лимиты по умолчанию: {@value #DEFAULT_MAX_CRL_SIZE} байт размера,
+     * {@value #DEFAULT_MAX_REVOKED_ENTRIES} отозванных записей.
+     * Для настройки лимитов используйте {@link #GostCrl(byte[], int, int)}.
      *
      * <p>Парсит структуру, но не revoked-список. Revoked-список извлекается
      * только после успешной верификации подписи через {@link #verify(PublicKeyParameters)}.
@@ -81,8 +103,26 @@ public final class GostCrl {
      * @throws IllegalArgumentException если {@code derEncoded == null} или обнаружен невалидный синтаксис
      */
     public GostCrl(byte[] derEncoded) {
+        this(derEncoded, DEFAULT_MAX_CRL_SIZE, DEFAULT_MAX_REVOKED_ENTRIES);
+    }
+
+    /**
+     * Парсит DER-закодированный CertificateList с настраиваемыми лимитами.
+     *
+     * @param derEncoded         полный CRL в DER-кодировке, не null
+     * @param maxSize            максимальный размер CRL в байтах (защита от OOM)
+     * @param maxRevokedEntries  максимальное число отозванных записей (защита от CPU-амплификации)
+     * @throws IllegalArgumentException если {@code derEncoded == null} или превышен {@code maxSize}
+     */
+    public GostCrl(byte[] derEncoded, int maxSize, int maxRevokedEntries) {
         if (derEncoded == null) {
             throw new IllegalArgumentException("CRL DER must not be null");
+        }
+        this.maxSize = maxSize;
+        this.maxRevokedEntries = maxRevokedEntries;
+        if (derEncoded.length > maxSize) {
+            throw new IllegalArgumentException(
+                    "CRL DER exceeds maximum size " + maxSize + ", got " + derEncoded.length);
         }
         this.crlData = derEncoded.clone();
 
@@ -195,30 +235,55 @@ public final class GostCrl {
     }
 
     /**
-     * Создаёт CRL из DER-байтов.
+     * Создаёт CRL из DER-байтов с лимитами по умолчанию.
      *
      * @param der DER-encoded CertificateList
      * @return распарсенный CRL
      */
     public static GostCrl fromDer(byte[] der) {
-        return new GostCrl(der);
+        return fromDer(der, DEFAULT_MAX_CRL_SIZE, DEFAULT_MAX_REVOKED_ENTRIES);
     }
 
     /**
-     * Создаёт CRL из PEM или DER-байтов с автоопределением формата.
+     * Создаёт CRL из DER-байтов с настраиваемыми лимитами.
+     *
+     * @param der               DER-encoded CertificateList
+     * @param maxSize           максимальный размер CRL в байтах
+     * @param maxRevokedEntries максимальное число отозванных записей
+     * @return распарсенный CRL
+     */
+    public static GostCrl fromDer(byte[] der, int maxSize, int maxRevokedEntries) {
+        return new GostCrl(der, maxSize, maxRevokedEntries);
+    }
+
+    /**
+     * Создаёт CRL из PEM или DER-байтов с автоопределением формата и лимитами по умолчанию.
      *
      * @param data PEM или DER-байты CRL
      * @return распарсенный CRL
      */
     public static GostCrl fromPemOrDer(byte[] data) {
+        return fromPemOrDer(data, DEFAULT_MAX_CRL_SIZE, DEFAULT_MAX_REVOKED_ENTRIES);
+    }
+
+    /**
+     * Создаёт CRL из PEM или DER-байтов с автоопределением формата и настраиваемыми лимитами.
+     *
+     * @param data              PEM или DER-байты CRL
+     * @param maxSize           максимальный размер CRL в байтах
+     * @param maxRevokedEntries максимальное число отозванных записей
+     * @return распарсенный CRL
+     */
+    public static GostCrl fromPemOrDer(byte[] data, int maxSize, int maxRevokedEntries) {
         if (data == null || data.length == 0) {
             throw new IllegalArgumentException("CRL data must not be null or empty");
         }
         if ((data[0] & 0xFF) == 0x30) {
-            return new GostCrl(data);
+            return new GostCrl(data, maxSize, maxRevokedEntries);
         }
         if (GostPemUtils.isPem(data)) {
-            return new GostCrl(GostPemUtils.pemToDer(data));
+            byte[] der = GostPemUtils.pemToDer(data);
+            return new GostCrl(der, maxSize, maxRevokedEntries);
         }
         throw new IllegalArgumentException(
                 "Unrecognized CRL format: first byte 0x"
@@ -369,7 +434,14 @@ public final class GostCrl {
         int rvPos = revokedSeq[0];
         int rvEnd = revokedSeq[1];
 
+        int revokedCount = 0;
         while (rvPos < rvEnd) {
+            if (revokedCount >= maxRevokedEntries) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "CRL revoked entries exceed maximum " + maxRevokedEntries);
+            }
+            revokedCount++;
             int[] rcSeq = parseSequence(crlData, rvPos);
             int rcPos = rcSeq[0];
 
@@ -379,6 +451,30 @@ public final class GostCrl {
                         PkixException.Reason.PARSE_ERROR, "Failed to parse CRL revoked entries");
             }
             int[] serialTlv = readTlv(crlData, rcPos);
+            // RFC 5280 §4.1.2.2: serialNumber не более 20 октетов ПО ВЕЛИЧИНЕ. Отсекаем до
+            // копирования и new BigInteger(1, serial) — иначе одна запись с
+            // ≈10MB serial даёт неограниченную аллокацию (DoS).
+            //
+            // Меряем ВЕЛИЧИНУ, а не кодированную длину: положительная 20-октетная величина
+            // со старшим битом кодируется 21 байтом (ведущий 0x00 для знака), и это легитимно
+            // (симметрично GostCertificateBuilder, который сверяет bitLength). Иначе получаем
+            // false-reject валидного CRL. Non-minimal кодировки (лишние ведущие нули) здесь
+            // НЕ отвергаем: серийники сравниваются как new BigInteger(1, serial), т.е. величина
+            // нормализуется — malleability уже нейтрализована, а толерантность нужна для interop.
+            //
+            // Guard serialOctets > 0 обязателен: при zero-length INTEGER (02 00), где значение —
+            // последние байты буфера, чтение crlData[serialTlv[0]] иначе дало бы AIOOBE.
+            int serialMagnitudeOctets = serialTlv[1] - serialTlv[0];
+            if (serialMagnitudeOctets > 0 && crlData[serialTlv[0]] == 0x00) {
+                serialMagnitudeOctets--;
+            }
+            if (serialMagnitudeOctets > GostOids.MAX_SERIAL_OCTETS) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "CRL revoked entry serial exceeds "
+                                + GostOids.MAX_SERIAL_OCTETS
+                                + " octets");
+            }
             byte[] serial = Arrays.copyOfRange(crlData, serialTlv[0], serialTlv[1]);
             rcPos = serialTlv[1];
 
@@ -407,8 +503,8 @@ public final class GostCrl {
                     if (oc < oce && (crlData[oc] & 0xFF) == TAG_OID) {
                         int[] oidTlv = readTlv(crlData, oc);
                         oc = oidTlv[1];
-                        if (matchesOid(crlData, oidTlv[0], oidTlv[1] - oidTlv[0],
-                                CRL_REASON_OID_BYTES)) {
+                        if (matchesOid(
+                                crlData, oidTlv[0], oidTlv[1] - oidTlv[0], CRL_REASON_OID_BYTES)) {
                             if (oc < oce && (crlData[oc] & 0xFF) == TAG_OCTET_STRING) {
                                 int[] octTlv = readTlv(crlData, oc);
                                 if (octTlv[0] < octTlv[1]
@@ -418,7 +514,8 @@ public final class GostCrl {
                                         int code = crlData[enumTlv[0]] & 0xFF;
                                         reason = ReasonCode.fromValue(code);
                                         if (reason == null) {
-                                            LOG.log(Level.DEBUG,
+                                            LOG.log(
+                                                    Level.DEBUG,
                                                     "CRL: unknown reasonCode {0}, treating as absent",
                                                     code);
                                         }
@@ -431,8 +528,13 @@ public final class GostCrl {
                 }
             }
 
-            entries.add(new RevokedEntry(
-                    serial, revDate != null ? revDate : "19700101000000Z", reason, null, null));
+            entries.add(
+                    new RevokedEntry(
+                            serial,
+                            revDate != null ? revDate : "19700101000000Z",
+                            reason,
+                            null,
+                            null));
 
             rvPos = rcSeq[1];
         }
@@ -481,8 +583,7 @@ public final class GostCrl {
      */
     public boolean isRevoked(byte[] certSerial) {
         if (revokedMap == null) {
-            throw new IllegalStateException(
-                    "Call verify(PublicKeyParameters) before isRevoked()");
+            throw new IllegalStateException("Call verify(PublicKeyParameters) before isRevoked()");
         }
         return revokedMap.containsKey(new BigInteger(1, certSerial));
     }
@@ -515,8 +616,7 @@ public final class GostCrl {
      */
     public ReasonCode getReason(byte[] certSerial) {
         if (revokedMap == null) {
-            throw new IllegalStateException(
-                    "Call verify(PublicKeyParameters) before getReason()");
+            throw new IllegalStateException("Call verify(PublicKeyParameters) before getReason()");
         }
         RevokedEntry entry = revokedMap.get(new BigInteger(1, certSerial));
         return entry != null ? entry.reason() : null;
@@ -548,9 +648,9 @@ public final class GostCrl {
                 int[] oidTlv = readTlv(der, oc);
                 int afterOid = oidTlv[1];
 
-                if (matchesOid(
-                        der, oidTlv[0], oidTlv[1] - oidTlv[0], IDP_OID_BYTES)) {
-                    throw new PkixException(PkixException.Reason.IDP_NOT_SUPPORTED,
+                if (matchesOid(der, oidTlv[0], oidTlv[1] - oidTlv[0], IDP_OID_BYTES)) {
+                    throw new PkixException(
+                            PkixException.Reason.IDP_NOT_SUPPORTED,
                             "CRL: issuingDistributionPoint not supported");
                 }
 
@@ -558,13 +658,13 @@ public final class GostCrl {
                         der, oidTlv[0], oidTlv[1] - oidTlv[0], DELTA_CRL_INDICATOR_OID_BYTES)) {
                     this.baseCrlNumber = parseExtensionInteger(der, afterOid, oce);
                     if (!allowDelta) {
-                        throw new PkixException(PkixException.Reason.IDP_NOT_SUPPORTED,
+                        throw new PkixException(
+                                PkixException.Reason.IDP_NOT_SUPPORTED,
                                 "CRL: delta CRL not supported (deltaCRLIndicator present)");
                     }
                 }
 
-                if (matchesOid(
-                        der, oidTlv[0], oidTlv[1] - oidTlv[0], CRL_NUMBER_OID_BYTES)) {
+                if (matchesOid(der, oidTlv[0], oidTlv[1] - oidTlv[0], CRL_NUMBER_OID_BYTES)) {
                     this.crlNumber = parseExtensionInteger(der, afterOid, oce);
                 }
             }
@@ -577,7 +677,8 @@ public final class GostCrl {
      * Принимает позицию сразу после OID — пропускает опциональный BOOLEAN
      * (нужен для critical-расширений, например deltaCRLIndicator).
      */
-    private static BigInteger parseExtensionInteger(byte[] der, int pos, int end) {
+    private static BigInteger parseExtensionInteger(byte[] der, int pos, int end)
+            throws PkixException {
         if (pos < end && (der[pos] & 0xFF) == TAG_BOOLEAN) {
             pos = readTlv(der, pos)[1];
         }
@@ -585,6 +686,16 @@ public final class GostCrl {
             int[] octTlv = readTlv(der, pos);
             if (octTlv[0] < octTlv[1] && (der[octTlv[0]] & 0xFF) == TAG_INTEGER) {
                 int[] intTlv = readTlv(der, octTlv[0]);
+                // Аномально большой cRLNumber/BaseCRLNumber (malformed per RFC 5280
+                // §5.2.3) — fail-closed, чтобы не аллоцировать огромный BigInteger
+                // и не продолжать с деградированным состоянием anti-rollback.
+                if (intTlv[1] - intTlv[0] > MAX_CRL_EXT_INTEGER_OCTETS) {
+                    throw new PkixException(
+                            PkixException.Reason.PARSE_ERROR,
+                            "CRL extension INTEGER exceeds "
+                                    + MAX_CRL_EXT_INTEGER_OCTETS
+                                    + " octets");
+                }
                 return new BigInteger(Arrays.copyOfRange(der, intTlv[0], intTlv[1]));
             }
         }

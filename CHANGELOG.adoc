@@ -1,5 +1,719 @@
 = История изменений
 
+== [0.6.2] - 06-07-2026
+
+Продолжаем гигиену безопасности после масштабного рефакторинга в 0.6.0. Этот релиз целиком посвящен устранению оставшихся проблем безопасности. Релиз вносит небольшой *breaking change*.
+
+=== Модуль crypto-gost-core
+
+==== Исправлено
+
+* *CTR-ACPKM-OMAC: CMAC вычислялся под ключом шифрования вместо MAC-ключа
+(`CtrAcpkmMode`/`Cmac`).* `CtrAcpkmMode` и внутренний `Cbc` в `Cmac` делили
+один мутируемый `Kuznyechik`-инстанс; `cipher.init(encKey)` перезаписывал
+раундовые ключи после `mac.init(macKey)`, и все блочные операции CMAC
+(`update`/`doFinal`) фактически шли под ключом шифрования K(1), а не под
+MAC-ключом K(2) — разделение ключей KDF_TREE (RFC 9337 §5.1.1) для CMAC
+не работало. Практической подделки тега без знания DK нет (оба ключа —
+производные секреты), но нарушен архитектурный инвариант Encrypt-then-MAC
+и ломается интероп PKCS12/PBES2-OMAC с эталонными реализациями.
++
+Исправление: `Cmac` теперь получает собственный экземпляр `Kuznyechik`,
+не общий с CTR. Добавлен независимый тест (пересчёт тега через проверенные
+`KdfTreeGostR3411_2012_256` + отдельный `Cmac`) — существующие
+roundtrip-тесты дефект не ловили, так как шифрование и проверка
+использовали один и тот же некорректный путь.
+
+* *Ключевой материал не затирался после `CtrAcpkmMode.encryptWithMac()`/
+`decryptWithMac()`.* Оба статических метода создают `CtrAcpkmMode` (и,
+внутри, два экземпляра `Kuznyechik` — для CTR и для CMAC), но не вызывали
+`mode.destroy()` после использования — раскрытые раундовые ключи
+(`skHi`/`skLo`) оставались в куче до сборки мусора. Оба метода обёрнуты
+в `try/finally { mode.destroy(); }`.
+
+ *Ключевой материал не затирался в `CtrAcpkmMode.decryptOnly()`/`encryptOnly()`.*
+Раскрытые раундовые ключи Kuznyechik оставались в куче до GC. Обёрнуто
+в `try/finally { mode.destroy(); }` — по аналогии с уже исправленной
+OMAC-парой (`encryptWithMac`/`decryptWithMac`).
+
+* *`inputBuffer` не затирался перед сбросом в JCA `CipherSpi`
+(`GostMgmCipherSpi`, `GostCtrAcpkmCipherSpi`, `GostCipherSpi`).*
+Буфер мог содержать накопленный plaintext/ciphertext; `Arrays.fill`
+добавлен перед каждым `inputBuffer = new byte[0]` (7 мест).
+
+* *`DerCodec`: indefinite-length (0x80) молча принимался для примитивных
+типов, вопреки X.690 §8.1.3.6.* Приводило к реальному молчаливому
+мис-парсингу в `parseOid` (усечённый OID без исключения) и
+`parseBoolean` (чтение произвольного байта вместо валидации длины) —
+security-значимо, так как затрагивает разбор algorithm/extension OID и
+флагов вроде `critical`/`cA`. Добавлен общий `decodeDefiniteLength()`,
+применён во всех примитивных парсерах, unified с уже существовавшими
+inline-проверками в `GeneralizedTime`/`UTF8String`.
+
+* *`SignatureCodec.encode()` тихо усекал компоненты подписи `r`/`s`
+при превышении ожидаемой длины поля.* Заменено на явный
+`IllegalArgumentException` (fail-closed) при `length > rolen + 1` —
+защита публичного API от невалидированного внешнего ввода; на текущих
+внутренних вызывающих путях (`r`/`s` уже приведены `mod n`) поведение
+не меняется.
+
+* *`Hmac.init(byte[])` алиасил массив вызывающего без defensive copy,
+в отличие от `init(CipherParameters)` (через `SymmetricKey.getKey()`).*
+Асимметрия контракта публичного API. Эксплуатируемого вектора не
+обнаружено (ссылка на массив не удерживается после `init()`), но
+устранена для симметрии с `init(CipherParameters)` и ясности контракта:
+`initWithKeyBytes` теперь всегда работает с собственной копией ключа
+(`Arrays.copyOf` для короткого пути), безусловно затирает её после
+использования. Мёртвая переменная `hashedCopy` удалена.
+
+=== Модуль crypto-gost-pkix
+
+==== Добавлено
+
+* *`GostPkcs7.extractCertificates(byte[])` / `(byte[], int)`* — публичный API
+разбора PKCS#7/CMS SignedData (`.p7b`) и извлечения вложенных X.509-сертификатов.
+Автоопределение DER/PEM. Распространённый формат обмена сертификатами в РФ-PKI,
+для которого `CmsSignedDataVerifier` неприменим (тот проверяет подписантов и требует
+их наличия). Разбор поля `certificates` вынесен в общий с `CmsSignedDataVerifier`
+метод `parseEmbeddedCertificates`. Лимиты
+`CmsConstants.MAX_P7B_CERTS` = 256 и `MAX_P7B_SIZE` = 10 МиБ защищают от DoS.
+
+* *`GostPkcs7.buildCertsOnly(GostCertificate...)` и режим
+`CmsSignedDataBuilder.certsOnly()`* — формирование certs-only PKCS#7/CMS SignedData
+(`.p7b`) без подписантов: контейнер только с сертификатами. Зеркальная операция к
+`extractCertificates`. Структура — `SignedData { version=1, digestAlgorithms={},
+encapContentInfo=id-data без content, certificates[0], signerInfos={} }`; поле
+`certificates` есть `SET OF` и кодируется DER-отсортированным (X.690 §11.6). Потолок
+`MAX_P7B_CERTS`. Кросс-валидация записи подтверждена OpenSSL
+(`pkcs7 -print_certs`) и BouncyCastle (`CMSSignedData.getCertificates`).
+
+* *`OcspVerifier`: перегрузки с раздельными ролями RFC 6960* —
+`verify(..., GostCertificate certIdIssuer, GostCertificate responderAuthority, ...)`.
+`certIdIssuer` — источник CertID-хэшей истинного издателя листа; `responderAuthority`
+— authority подписи ответа (прямой ключ или издатель делегированного responder'а).
+Аддитивны: существующие перегрузки с одним параметром делегируют с
+`responderAuthority = issuerCert`, поведение не изменилось. Нужны для редких
+легитимных сценариев (плановая смена ключа CA с действующим кросс-сертификатом).
+
+==== Изменено
+
+* *`GostCrl`: жёстко зашитые `MAX_CRL_SIZE`/`MAX_REVOKED_ENTRIES` заменены на
+настраиваемые лимиты.* Прежние приватные константы 10 МБ/100 000
+не пропускали полный CRL национального УЦ (40 МБ). Добавлены
+`public static final DEFAULT_MAX_CRL_SIZE` = 64 МБ и
+`DEFAULT_MAX_REVOKED_ENTRIES` = 1 000 000, плюс перегрузки
+`GostCrl(byte[], int, int)`, `fromDer(byte[], int, int)`,
+`fromPemOrDer(byte[], int, int)` для явного указания лимитов. Прежние
+однопараметрические конструктор/фабрики делегируют в новые с новыми дефолтами
+— сигнатуры не менялись, изменились только значения по умолчанию.
+
+* *`CrlVerifier.verify()`: добавлены перегрузки с явными `maxCrlSize`/
+`maxRevokedEntries`* — для прямого и base/delta CRL. Существующие
+4/5/6-параметрические сигнатуры делегируют в новые с
+ `GostCrl.DEFAULT_MAX_CRL_SIZE`/`DEFAULT_MAX_REVOKED_ENTRIES`.
+
+* *`GostExtensionParser.MAX_SAN_ENTRIES` 100 -> 512.* Предыдущий лимит
+ 100 записей не пропускал UCC-сертификаты (Cloudflare/Azure) с 200+ SAN.
+
+* *`OcspVerifier`: порог свежести `MAX_OCSP_AGE_MS` (для ответов без
+`nextUpdate`) стал конфигурируемым.* В этом же цикле была введена константа
+24 ч (см. «Исправлено»), но без способа переопределения — легитимный CA,
+выпускающий ответы без `nextUpdate` с фактическим сроком годности >24 ч,
+приводил к отклонению без обхода. По образцу `CrlVerifier` добавлена
+публичная перегрузка `verify(byte[], byte[], GostCertificate,
+byte[] expectedNonce, long maxOcspAgeMs)`; существующие перегрузки делегируют
+в неё с дефолтом `GostOids.MAX_OCSP_AGE_MS` (24 ч не изменились). Значение
+константы 24 ч сохранено как документированный дефолт.
+
+* *`GostOcspResponseBuilder.noNextUpdate()`* — opt-out, позволяющий строить
+OCSP-ответ без поля `nextUpdate` (RFC 6960 §2.4 — поле опционально). Нужен
+для эмуляции таких CA и тестирования локальной политики свежести
+(`maxOcspAgeMs`); ранее билдер всегда проставлял `nextUpdate` (дефолт
+now + 3 года).
+
+==== Исправлено
+
+* *`GostPemUtils.pemToDer` не срезал PEM-заголовки с цифрами в метке.* Регекс
+`PEM_HEADER` был `-----[A-Z ]+-----` (класс символов без цифр), поэтому стандартные
+метки `PKCS7` и `X509 CRL` не вырезались, и дефис заголовка попадал в Base64-декодер
+(`Illegal base64 character 2d`). Класс расширен до `[A-Z0-9 ]+` — латентный дефект,
+затрагивавший и PEM-CRL, не только `.p7b`.
+
+* *OCSP `responseStatus` (ENUMERATED) не ограничивался по длине
+(`GostOcspResponse`).* RFC 6960 кодирует статус (0-6) одним байтом,
+но цикл побитового сдвига по `statusTlv` выполнялся без проверки —
+crafted-ответ с ENUMERATED до ~256КБ (в пределах
+`MAX_OCSP_RESPONSE_SIZE`) вызывал до 256K итераций на разбор одного
+ответа (CPU DoS). Добавлена проверка длины ≤ 1 байт до цикла,
+fail-closed через `PkixException`.
+
+* *`CertIdHasher.extractSubject`/`extractBitStringValue` разбирали
+TBSCertificate позиционно, без проверки тегов полей.* Порядок полей
+(`serialNumber`, `signature`, `issuer`, `validity`, `subject`,
+`subjectPublicKeyInfo`) предполагался фиксированным; malformed DER
+с чужим тегом на месте одного из полей приводил к чтению не тех байт.
+Несовпадение уже ловилось ниже по стеку через сравнение хэшей
+(`OcspVerifier.verifyCertId`, fail-closed), но без диагностики
+причины. Добавлен `checkTag()` — явная проверка `TAG_INTEGER`/
+`TAG_SEQUENCE`/`TAG_BIT_STRING` перед каждым переходом.
+
+* *`GostPkcs12Loader.load()`/`decryptPrivateKey()` не затирали
+исходный `char[] password`* — только производный `byte[]`, в отличие
+от `GostPkcs12Builder.build()`, который затирает оба. Симметрия
+восстановлена: пароль клонируется на входе, затирается клон;
+оригинальный `char[]` вызывающего не трогается (ответственность
+вызывающего), паттерн идентичен `GostPkcs12Builder`.
+
+* *`GostCrl`: серийный номер в revoked-записи ограничивался по
+*кодированной* длине, а не по величине* — DoS-барьер плюс ложное
+отклонение легитимного CRL. Проверка длины перед `new BigInteger(1, serial)`
+защищает от аллокации огромного `BigInteger` (потолок ограничен только
+`MAX_CRL_SIZE`), но сравнивала кодированную длину TLV с
+`GostOids.MAX_SERIAL_OCTETS`=20 (RFC 5280 §4.1.2.2). Положительный
+20-октетный серийник со старшим битом кодируется в DER 21 байтом (ведущий
+`0x00` для сохранения знака) и отвергался целиком, тогда как
+`GostCertificateBuilder` такой серийник разрешает (сверяет `bitLength`) —
+асимметрия. Теперь сверяется *величина* (ведущий знаковый `0x00` не
+учитывается), симметрично билдеру; добавлен guard от чтения за границей TLV
+при нулевой длине INTEGER (`ArrayIndexOutOfBoundsException` на crafted-входе).
+Non-minimal кодировки (лишние ведущие нули) намеренно не отвергаются:
+серийники сравниваются как `new BigInteger(1, serial)` — величина
+нормализуется, malleability нейтрализована, а толерантность нужна для interop.
+
+* *`GostCrl.parseExtensionInteger` (cRLNumber/BaseCRLNumber) не
+ограничивал длину INTEGER* — аналогичный DoS-вектор. Добавлен
+`MAX_CRL_EXT_INTEGER_OCTETS`=8, `PkixException` при превышении
+(fail-closed — не тихая деградация в `null`, консистентно с anti-rollback
+проверкой в `CrlVerifier`).
+
+* *`SsrfGuard.isPrivate()` не блокировал туннельные/транслирующие
+IPv6-диапазоны* (NAT64 `64:ff9b::/96`, Teredo `2001::/32`, 6to4
+`2002::/16`, IPv4-mapped `::ffff:0:0/96`) — ни один из встроенных
+`isSiteLocal/isLinkLocal/...` их не детектирует, что позволяло через
+DNS указать на туннельный адрес, инкапсулирующий приватный IPv4.
+Добавлен явный wholesale-block по префиксу.
+
+* *OCSP-делегатная EKU-проверка (`isOcspSigning()`) была permissive*
+(`!ekuPresent || ekuOcspSigning`), тогда как RFC 6960 §4.2.2.2 требует
+у делегированного responder обязательный `id-kp-OCSPSigning` —
+сертификат без EKU ошибочно проходил как валидный delegate. Приведено
+к `ekuPresent && ekuOcspSigning`, консистентно с уже строгой TSP-веткой.
+Дополнительно убран `anyExtendedKeyUsage` из числа достаточных EKU для
+delegation — RFC 6960 требует именно конкретный OID.
+
+* *`ExtensionsResult.EMPTY` (сертификат без блока extensions вовсе)
+давал `ekuOcspSigning=true` и `ekuTimeStamping=true` одновременно* —
+асимметрия с обычным путём (extensions есть, EKU нет → `timeStamping=false`).
+Сертификат без extensions ошибочно проходил и как OCSP-делегат, и как
+TSA. Оба флага в `EMPTY` приведены к `false`; permissive-дефолт для
+общего TLS EKU (`ekuValid`/`ekuClientAuth`, RFC 5280 §4.2.1.12) не
+тронут — разные RFC, разная семантика.
+
+* *DoS через неограниченное число `SingleResponse` в OCSP-ответе
+(`GostOcspResponse`).* Цикл разбора `responses` в `BasicOCSPResponse`
+не имел верхней границы: злоумышленник мог передать OCSP-ответ до
+2^24-1 байт (RFC 6066) с сотнями тысяч `SingleResponse`, каждый —
+минимум 3 аллокации `byte[]`. Добавлен лимит `MAX_SINGLE_RESPONSES`
+= 256 по образцу уже существующего `MAX_DELEGATED_CERTS`. При
+превышении — `PkixException`.
+
+* *DoS через неограниченное число X.509-расширений в одном
+сертификате (`GostExtensionParser`).* Цикл разбора `Extensions`
+не имел верхней границы; граница `end` — TLV-граница блока, а не
+лимит количества. Добавлен лимит `MAX_EXTENSIONS_PER_CERT` = 64;
+счётчик инкрементируется на каждой итерации цикла (включая
+non-SEQUENCE TLV), иначе лимит обходится "мусорными" вставками.
+При превышении — `IllegalArgumentException` (fail-closed,
+согласно контракту класса на unchecked-исключения при невалидном
+DER).
+
+* *Nonce больше не попадает в текст `PkixException` при верификации
+TSP-ответа (`TspResponse`).* Нарушало No-debug требование (nonce — в списке материала, запрещённого в сообщениях исключений).
+Сообщения об ошибке несовпадения/отсутствия nonce теперь не содержат
+значений nonce.
+
+* *Memory DoS через неограниченный TSP-ответ (`JdkHttpTspTransport`).*
+`BodyHandlers.ofByteArray()` буферировал весь HTTP-ответ TSA без
+ограничения размера. Переход на потоковое чтение
+(`BodyHandlers.ofInputStream()`) с лимитом `MAX_TSP_RESPONSE_SIZE`
+= 1 МБ; Content-Type проверяется до чтения тела. Fail-closed:
+`IOException` при превышении лимита (в отличие от soft-fail
+`JdkHttpOcspFetcher`, где OCSP — опциональная проверка).
+
+* *Ключевой материал не затирался при исключении в `GostPkcs12Mac`
+(`verify()`/`compute()`).* Промежуточный `km` (вывод PBKDF2) и
+`hmacKey` зануляются только в happy path; при исключении между
+`System.arraycopy` и HMAC-операциями оставались незатёртыми в куче.
+Оба метода обёрнуты в `try/finally` с гарантированным `Arrays.fill`.
+
+* *Тихий integer overflow в `GostDerParser.oidBytesToDottedString`
+при malformed OID.* Base-128 subidentifier без ограничения числа
+continuation-байт мог переполнить `long`, давая семантически
+бессмысленный arc без исключения. Добавлен лимит
+`MAX_OID_SUBIDENTIFIER_BYTES` = 9 (потолок для 63-битного `long`);
+превышение — `IllegalArgumentException`, fail-closed.
+
+* *Name Constraints (RFC 5280 §4.2.1.10) не проверялись при валидации цепочки
+(`ChainValidator`).* Было: расширение `nameConstraints` вообще не парсилось
+(`GostExtensionParser`) и не проверялось (`ChainValidator`) — subordinate CA
+мог выдать сертификат для произвольного домена вне разрешённого CA
+пространства имён, ограничение оказывалось декоративным.
+Стало: добавлен парсинг `permittedSubtrees`/`excludedSubtrees` для типов
+`dNSName` и `iPAddress` (`NameConstraintsData`, новый класс), root-to-leaf
+проход в `ChainValidator.validateChain()` (накопление ограничений от
+trust anchor вниз, включая NC самого root'а; self-issued CA исключены
+из проверки собственного имени per RFC 5280 §6.1.4(k), но их
+ограничения накапливаются). Label-aware suffix matching для dNSName
+(`host.example.com` матчит `example.com`, `notexample.com` — нет).
+Для типов имён вне dNSName/iPAddress (rfc822Name, directoryName, URI,
+otherName), non-critical расширения и нарушения `min=0/max=absent`
+(RFC 5280 §4.2.1.10) — fail-closed reject всей цепочки, а не тихий
+пропуск ограничения.
+
+* *NameConstraints: снят false-reject цепочки при наличии неподдерживаемого
+типа GeneralName в NameConstraints CA-сертификата.* Исходный fail-closed
+отвергал цепочку при любом нераспознанном типе — даже когда
+leaf-сертификат не содержал SAN этого типа (rfc822Name, directoryName,
+URI, otherName). Реальный кейс: CA, выпускающий и email-, и
+TLS-сертификаты одним промежуточным сертификатом (rfc822Name + dNSName
+в NameConstraints), ломал любую TLS-цепочку. Это противоречит
+RFC 5280 §4.2.1.10: ограничение должно применяться только если
+соответствующая форма имени присутствует в SAN проверяемого сертификата.
+Исправление: `hasUnsupportedNameType` больше не вызывает `PkixException` —
+ограничения неподдерживаемых типов игнорируются с `WARNING` в лог.
+Проверка dNSName и iPAddress продолжает работать в полном объёме.
+Безопасность решения обеспечена отсутствием в `GostCertificate`
+accessor'ов для этих форм имён из SAN — данные формы физически не
+могут повлиять ни на одно решение библиотеки.
+
+* *`GostCertificate`/`GostCrl` не ограничивали размер входного DER
+перед `clone()`.* Единственный реально безлимитный вектор — прямой
+разбор PKCS#12 (TLS уже ограничен `MAX_CERT_SIZE`=256 КБ на входе в
+`TlsMessageParser`, CRL-фетч по HTTP — 5 МБ в `JdkHttpCrlFetcher`).
+Добавлены собственные лимиты: `GostCertificate.MAX_CERT_SIZE` = 256 КБ,
+`GostCrl.MAX_CRL_SIZE` = 10 МБ — defence-in-depth на уровне самого
+парсера, а не только на границе вызывающего кода.
+
+* *`GostPkcs12Parser`: `iterationCount`/`iterations` PBKDF2 усекались
+через `BigInteger.intValue()` до проверки диапазона.* DER-значение вне
+`int` (например `0x1000003E8`) молча усекалось до младших 32 бит
+(`1000`) и проходило проверку `MAX_ITERATIONS`, хотя заявленное в DER
+значение на порядки больше. Проверка `MAX_ITERATIONS` перенесена на
+`BigInteger` до усечения — в `parseMacData` и `parsePbes2Params`.
+
+* *`OcspVerifier`: сравнение OCSP nonce и CertID-хэшей (`issuerNameHash`/
+`issuerKeyHash`) через `Arrays.equals()` — не constant-time.* Заменено
+на `MessageDigest.isEqual()` в 5 местах (nonce — anti-replay по RFC 8954;
+хэши issuer — defence-in-depth/консистентность, секретных данных с обеих
+сторон сравнения нет).
+
+* *`CrlVerifier`: issuer DN сертификата не проверялся против issuer DN
+CRL при вызове через 3-арг перегрузку (`certIssuerDn` по умолчанию
+`null`, проверка тихо пропускалась).* Позволяло принять CRL от другого
+CA при совпадении открытого ключа (shared CA key). 3-арг перегрузка
+удалена, `certIssuerDn` стал обязательным параметром во всех
+перегрузках, включая base+delta CRL (там был тот же пробел — issuer DN
+сверялся только между base и delta, но не с сертификатом; найдено и
+закрыто дополнительно к находке аудита). Production-путь
+(`GostX509TrustManager`) уже передавал `certIssuerDn` — изменений не
+требует.
+* *TSP nonce (`TspResponse`) сравнивался через `BigInteger.equals()` —
+не constant-time.* Заменено на `MessageDigest.isEqual()` по байтовому
+представлению — консистентно с уже исправленным OCSP nonce.
+
+* *OCSP-ответ без `nextUpdate` был валиден бессрочно (`OcspVerifier`).*
+Единственной защитой было «`thisUpdate` не в будущем» — старый, давно
+подписанный ответ проходил проверку свежести без ограничения по
+возрасту, открывая окно для replay. Добавлена константа
+`GostOids.MAX_OCSP_AGE_MS` (24 часа, локальная политика по RFC 6960
+§2.4) — для ответов без `nextUpdate` теперь проверяется возраст
+относительно `thisUpdate`.
+
+* *SSRF-защита (`getAiaUris()`/`getCdpUris()` в `GostCertificate`) была
+только предупреждением в Javadoc, без enforcement на уровне модуля.*
+`SsrfGuard` перенесён из `crypto-gost-jsse` в `crypto-gost-pkix`
+(`org.rssys.gost.pkix.util`) — устраняет обратную зависимость
+`pkix→jsse` и даёт единую реализацию классификации private/reserved
+адресов для fetcher'ов и любого прямого потребителя `pkix`-API.
+
+* *`GostDerParser.oidBytesToDottedString()` молча принимал OID короче
+2 байт* (пустая строка при `len=0`, усечённый результат при `len=1`
+без исключения). Теперь `len < 2` — fail-closed `IllegalArgumentException`.
+
+* *Переполнение `int` при разборе `pathLenConstraint` в BasicConstraints
+(`GostExtensionParser`).* DER INTEGER длиннее 4 байт молча переполнял
+накопитель; при переполнении в отрицательное значение проверка
+`pl >= 0` в `ChainValidator` пропускала ограничение pathLen целиком
+(defence-in-depth — CA и так может не указывать pathLen для того же
+эффекта). Добавлена валидация длины INTEGER (1-4 байта) до накопления,
+иначе `IllegalArgumentException`.
+
+* *`GostOcspRequest`/`GostOcspResponse` не ограничивали размер входного
+DER* (в отличие от `GostCertificate`/`GostCrl`, где лимит уже есть) —
+Memory DoS через oversized OCSP-запрос/ответ, в том числе stapled OCSP
+в TLS (минует HTTP-транспортный лимит `JdkHttpOcspFetcher`). Добавлены
+`MAX_OCSP_REQUEST_SIZE` = 64 КБ и `MAX_OCSP_RESPONSE_SIZE` = 256 КБ,
+проверка до парсинга, `PkixException` — консистентно с остальными
+проверками в этих конструкторах.
+
+* *OCSP nonce (RFC 8954) молча пропускался при malformed DER
+(`OcspVerifier.verifyNonce`).* Метод содержал собственный, независимый
+от `GostOcspResponse` низкоуровневый парсер с множеством безусловных
+`return` на структурных ошибках — при `strict=false` (production-путь,
+`TlsCertUtils`) любое расхождение между двумя парсерами тех же байт
+позволяло обойти nonce-проверку. Устранена сама причина: nonce теперь
+извлекается один раз в `GostOcspResponse` (`getNonce()`), `verifyNonce`
+использует уже распарсенное значение и безусловно отклоняет ответ при
+отсутствии/несовпадении nonce. Параметр `strict` и дублирующий парсер
+удалены.
+
+* *`JdkHttpTspTransport` не имел SSRF-защиты*, в отличие от
+`JdkHttpOcspFetcher`/`JdkHttpCrlFetcher`. Добавлена проверка схемы
+(только `http`/`https`) и `SsrfGuard.isPrivateAddress()` до отправки
+запроса.
+
+* *`ChainValidator` не имел собственного лимита глубины цепочки*
+(защита существовала только выше по стеку — `CertChainBuilder`, TLS
+message parsing). Добавлен `MAX_CERT_CHAIN_LENGTH = 10` как
+defence-in-depth для прямых вызовов `validateChain()`.
+
+* *`GostPkcs12Parser.parseSafeContents()` не ограничивал число `SafeBag`* —
+Memory DoS через PKCS#12 с большим числом bag'ов. Добавлен
+`MAX_SAFE_BAGS = 10 000`.
+
+* *`GostPemUtils` не ограничивал размер входного PEM* — Memory DoS через
+многогигабайтный PEM/Base64. Добавлен `MAX_PEM_SIZE = 10 МБ` в
+`pemToDer()`/`decodePemBlocks()`.
+
+* *PKCS#12 (`MacData`, `PBES2`) допускал соль PBKDF2 нулевой/малой
+длины*, снижая стойкость до детерминированного значения. Добавлен
+`MIN_PBKDF2_SALT_SIZE = 8` байт.
+
+* *`GostCrl` не ограничивал число revoked-записей* — при 10 МБ входа
+минимальная запись (~17 байт) даёт до ~600K объектов на парсинг.
+Добавлен `MAX_REVOKED_ENTRIES = 100 000` (defence-in-depth к уже
+существующему `MAX_CRL_SIZE`).
+
+* *`CmsSignedDataVerifier` не ограничивал число встроенных сертификатов
+и `SignerInfo`* — у CMS SignedData не было ни size-, ни count-лимита,
+в отличие от остальных парсеров; каждый `SignerInfo` — полноценная
+ГОСТ-верификация подписи (CPU-DoS). Добавлены `MAX_EMBEDDED_CERTS = 64`
+и `MAX_SIGNER_INFOS = 50` (`CmsConstants`), проверка до дорогих операций
+(`parseCert`/крипто-верификация).
+
+* *`GostExtensionParser`: pathLen INTEGER с MSB=1 (4 байта) переполнял
+`int` в отрицательное значение*, из-за чего `ChainValidator` (`pl >= 0`)
+молча пропускал pathLen-ограничение — остаточный дефект после более
+раннего фикса длины INTEGER. Добавлена проверка `val < 0`.
+
+* *SAN-расширение не ограничивало число записей* внутри одного extension
+(`MAX_EXTENSIONS_PER_CERT` этого не покрывал). Добавлен
+`MAX_SAN_ENTRIES = 512`.
+
+* *OCSP good-статус (`GostOcspResponse`) принимал non-canonical
+constructed-тег `0xA0` без проверки на пустое содержимое* — DER
+malleability. Проверка «NULL, длина 0» теперь применяется к обеим формам
+тега (`0x80` и `0xA0`), алиас `0xA0` сохранён только для пустого случая.
+
+* *`SsrfGuard` проверял только первый резолвнутый адрес* (`getByName`) —
+не закрывал multi-A-record сценарий (публичный и приватный адрес в одном
+DNS-ответе). Заменено на `getAllByName` с fail-closed проверкой всех
+адресов.
+
+* *`CmsSignedDataVerifier`: битый встроенный сертификат в
+`SignedData.certificates` молча пропускался* (`LOG.WARNING` + skip) —
+fail-open на парсинге недоверенного входа. Заменено на fail-closed:
+`PkixException(Reason.PARSE_ERROR)`.
+* *`GostDerParser.oidBytesToDottedString()` не ограничивал общее число
+арок OID* — только длину каждой отдельной арки (`MAX_OID_SUBIDENTIFIER_BYTES`).
+OID из тысяч однобайтовых арок легитимно парсился, раздувая `StringBuilder`
+пропорционально их числу. Добавлен `MAX_OID_SUBIDENTIFIERS = 128`.
+
+* *Маска тега `uniformResourceIdentifier` в AIA/CDP (`GostExtensionParser`)
+гасила constructed-бит* (`(tag & 0xDF) == 0x86`), пропуская наравне с
+корректным primitive `0x86` non-standard constructed `0xA6` (RFC 5280
+§4.2.1.6 требует строго primitive). Заменено на точное сравнение с новой
+константой `TAG_URI`. Обхода не было (URI далее проходят SSRF-проверку),
+но толерантность была избыточной и не соответствовала строгому DER-подходу
+остального кода.
+
+==== Документация
+
+* Уточнён контракт доверия `GostOcspResponse.getResponses()` и
+`SingleOcspResponse.isGood()`/`isRevoked()`/`isUnknown()`: статус
+отражает только результат разбора DER и не является доверенным до
+успешного `verify()`. Guard по образцу `GostCrl` не введён осознанно —
+это намеренное parse/verify-разделение, используемое в interop/
+кросс-валидационных сценариях (фиктивные подписи, ответы от чужих
+реализаций без GOST-подписи); guard сломал бы эти легитимные пути.
+* Задокументирован как осознанный трейд-офф побайтовый (не семантический)
+способ сравнения subjectDN для подсчёта self-issued в `ChainValidator`
+(`GostCertificate.subjectDnEquals()`) — риск в сторону false positive
+(избыточная строгость pathLen), не security bypass.
+
+* Задокументировано как осознанное решение (RFC 6960 §4.2.2.2.1,
+id-pkix-ocsp-nocheck): делегированный OCSP-responder-сертификат не
+проверяется на отзыв (`OcspVerifier.tryDelegatedVerification`).
+
+* Задокументирован остаточный DNS-rebinding TOCTOU для всех трёх
+HTTP-фетчеров (`SsrfGuard`, `JdkHttpTspTransport`) — полное закрытие
+требует ручной реализации HTTP (raw socket + SNI), не входит пока в необходимую функциональность; практический риск ограничен probing'ом внутренней сети (ответ
+всегда верифицируется подписью).
+
+* Уточнён Javadoc `CrlVerifier.extractNextUpdate`/`extractCrlNumber` —
+явно отмечено, что результат из неверифицированных байт годится только
+для метаданных кэша, не для acceptance-решения.
+* Уточнён javadoc `NameConstraintsData.isEmpty()`: явно объяснено, почему
+флаги ошибок (`hasUnsupportedNameType`/`hasInvalidMinMax`/`nonCritical`)
+намеренно входят в проверку — без этого `ChainValidator` пропустил бы
+fail-closed-блок при взведённом флаге и пустых списках (fail-open).
+* Задокументирован инвариант `ByteBuffer.wrap(fullArray)` (`position=0`)
+в `CertChainBuilder` — обязателен для корректной дедупликации по Subject
+DN в `HashSet`.
+* Уточнено, что `GostDerParser.arrayRangeEquals()` намеренно не
+constant-time (сравнивает только публичные данные — DN, OID алгоритма).
+* Пояснено lossy-декодирование `US_ASCII` для dNSName в SAN
+(`GostExtensionParser`) — байты вне ASCII заменяются на U+FFFD, обхода
+hostname-проверки нет.
+
+=== Модуль crypto-gost-tls13
+
+==== Изменено
+
+* Вызов `OcspVerifier.verify()` в `TlsCertUtils` обновлён под новую
+сигнатуру (без параметра `strict`, удалённого при устранении находки
+выше). Поведение не изменилось — ранее уже вызывался с фактическим
+`strict=false`.
+
+* *Проброс настраиваемой политики свежести OCSP (`maxOcspAgeMs`, RFC 6960
+§2.4) сквозь слой валидации.* `TlsCertUtils.verifyOcspResponse` и
+`TlsCertificateValidator.checkServerCertificateChain`/
+`checkClientCertificateChain` получили перегрузки с параметром
+`maxOcspAgeMs`, вызывающие соответствующую перегрузку `OcspVerifier.verify`.
+Прежние сигнатуры делегируют с дефолтом `GostOids.MAX_OCSP_AGE_MS` (24 ч) —
+`TlsSession` и бенчмарки не затронуты.
+
+==== Исправлено
+
+* *`checkClientCertificateChain` не обрабатывал stapled-OCSP клиентского
+сертификата вовсе (mTLS).* Симметричная серверная ветка
+(`checkServerCertificateChain`) верифицирует уже присланный
+OCSP-ответ при наличии issuer'а; клиентская — не делала этого нигде,
+отозванный клиентский сертификат со stapled-ответом проходил бы
+проверку молча. Добавлена та же ветка (`leaf.hasOcspResponse()` →
+`TlsCertUtils.verifyOcspResponse`), без сети — активный fetch
+клиентского OCSP вне скоупа (SSRF/латентность через AIA недоверенного
+сертификата), отзыв остаётся конфиг-зависимым с обеих сторон.
+
+* *Валидация `ticket_age` при PSK-возобновлении (RFC 8446 §4.2.11.2).*
+Сервер теперь проверяет `obfuscated_ticket_age` из ClientHello против
+`now - issueTime` тикета (допуск `PSK_AGE_TOLERANCE_MS` = ±60 с). При
+расхождении — fallback на полный handshake: clock skew не рвёт
+соединение, полный ECDHE-рукопожатие происходит прозрачно.
+
+* *`TlsRecord.setSequenceNumber()` больше не допускает откат порядкового
+номера.* Публичный метод (только для тестов/бенчмарков) позволял выставить
+`seqNum` назад на уже использованном ключе — при повторном `protect()`/
+`unprotect()` это привело бы к повтору nonce в MGM-AEAD. Теперь откат
+после первого использования ключа бросает `IllegalStateException`.
+
+* *`RecordProtectBench.unprotect` (bench/tls) переведён на комбинированный
+protect+unprotect замер.* Прежний приём — сброс `seqNum` вызовом
+`setSequenceNumber()` прямо в измеряемом методе — стал недопустим после
+введения guard'а против отката порядкового номера (см. выше). Чистый
+decrypt при необходимости вычисляется вычитанием отдельно измеряемого
+`protect()`. Историческая сопоставимость с прошлыми числами в
+`bench/results/tls/` — приблизительная, не построчная.
+
+* *`assembleHandshakeMessage()` не ограничивал суммарный размер
+реассемблируемого handshake-сообщения.* `msgLen` — 24-битное поле
+(до 16 МБ); реассемблирование из многих TLS-записей позволяло
+накопить буфер такого размера без верхней границы (per-connection
+resource exhaustion, требует аутентифицированного собеседника).
+Добавлен `TlsConstants.MAX_HANDSHAKE_MESSAGE_SIZE` (~3.2 МБ) —
+вычисляемая, а не хардкод-константа: по построению равна потолку
+приёма `Certificate` (самого крупного легитимного сообщения, с полной
+цепочкой `MAX_CERT_CHAIN_LENGTH` и per-entry OCSP-staple до 64 КБ),
+автоматически остаётся консистентной при изменении `MAX_CERT_SIZE`/
+`MAX_CERT_CHAIN_LENGTH`. Проверка — fail-closed, до накопления буфера.
+
+* *`PskStore.onTicketReceived()` — контракт интерфейса обещает
+логирование при `RuntimeException` от реализации, но код молча
+поглощал исключение.* Добавлено `LOG.WARNING` (только класс
+исключения, без ключевого материала) в обоих местах
+(`sendNewSessionTicket`/`handleNewSessionTicket`).
+
+* *`psk`, `ticket`, `ticketNonce` не затирались после передачи в
+`PskEntry`* (который клонирует их при конструировании — оригиналы
+избыточны). `psk` — ключевой материал, затирание обязательно;
+`ticket`/`ticketNonce` — гигиена единой дисциплины. `wipeArray` в
+`finally`, после последнего использования каждого массива.
+
+==== Примечания
+
+* *`exporter_secret` (RFC 8446 §7.5) не реализован.* Задокументировано
+в `TlsKeySchedule` — библиотека не предоставляет `exportKeyingMaterial()`,
+следовательно channel binding и подобные сценарии не поддерживаются.
+
+=== Модуль crypto-gost-jsse
+
+==== Добавлено
+
+* *`GostTrustManagerParameters` (`implements ManagerFactoryParameters`) +
+поддержка в `GostTrustManagerFactorySpi.engineInit(ManagerFactoryParameters)`.*
+Штатный JSSE-путь `TrustManagerFactory.getInstance("GostX509", …).init(params)`
+теперь прокидывает CA-ключи, политики и лимиты CRL/OCSP в
+`GostX509TrustManager` без «сырого» вызова конструктора. Прежде
+`engineInit(ManagerFactoryParameters)` бросал `UnsupportedOperationException`;
+путь `engineInit(KeyStore)` не изменился.
+
+* *`GostSslBuilder`: методы `crlPolicy`/`crlFetcher`/`maxCrlSize`/
+`maxRevokedEntries`/`ocspFetcher`/`maxOcspAgeMs`.* Ранее удобный билдер вообще
+не включал CRL-проверку (жёстко `DISABLED`) и не давал настроить лимиты —
+полная конфигурация была достижима только «сырым» конструктором
+`GostX509TrustManager`. `crlPolicy(null)` трактуется как `DISABLED`.
+`GostSsl.buildContext` получил перегрузку, строящую TrustManager полным
+конструктором; прежняя сигнатура делегирует в неё с безопасными дефолтами.
+
+==== Изменено
+
+* *`JdkHttpCrlFetcher.DEFAULT_MAX_RESPONSE_SIZE` 5 МБ -> 64 МБ* — синхронизация
+с новым дефолтом `GostCrl.DEFAULT_MAX_CRL_SIZE`; иначе fetcher
+отсекал бы данные раньше парсера.
+
+* *`JdkHttpCrlFetcher.DEFAULT_TIMEOUT_MS` 5 с -> 30 с* — согласование
+с размерным дефолтом `DEFAULT_MAX_RESPONSE_SIZE` = 64 МБ: 5 с не покрывали
+легитимный сценарий «крупный CRL по медленному каналу», таймаут срывался
+и на не-REQUIRE политике CRL-проверка тихо пропускалась (false-negative
+на отзыв). Значение ориентировано на реальный p99, а не на 64 МБ-потолок
+(он остаётся DoS-порогом). Конфигурируемость через конструктор
+`JdkHttpCrlFetcher(Duration, int)` уже была — изменён только дефолт
+no-arg конструктора; на внутренние пути jsse не влияет (там fetcher всегда
+передаётся явно), затрагивает только внешних потребителей.
+
+* *`JdkHttpOcspFetcher.DEFAULT_MAX_RESPONSE_SIZE` 64 КБ -> 256 КБ* —
+ значение приведено в соответствие с `GostOcspResponse.MAX_OCSP_RESPONSE_SIZE`
+ (256 КБ); иначе fetcher отсекал ответ раньше парсера.
+
+* *`GostX509TrustManager`: новый конструктор с параметрами `maxCrlSize`/
+`maxRevokedEntries`* — устраняет рассинхронизацию, при которой оператор мог
+поднять лимит `JdkHttpCrlFetcher`, но `checkCrl()` всё равно жёстко вызывал
+`CrlVerifier.verify()` с дефолтами. Существующий 5-параметрический
+конструктор делегирует в новый с `GostCrl.DEFAULT_MAX_CRL_SIZE`/
+`DEFAULT_MAX_REVOKED_ENTRIES` — обратная совместимость сохранена.
+
+* *`GostX509TrustManager`: конструктор с параметром `maxOcspAgeMs`
+(8-параметрический) и проброс порога свежести OCSP на mTLS-путь.*
+7-параметрический конструктор делегирует в новый с `GostOids.MAX_OCSP_AGE_MS`
+(24 ч). Проверка клиентского сертификата (`checkClientTrustedImpl`) раньше
+игнорировала настроенный порог свежести stapled-OCSP клиента (шла по дефолту
+24 ч) — асимметрия с серверным путём; теперь `maxOcspAgeMs` передаётся и туда.
+
+* *Удалён `KeyBridge` — дублировал GostECPrivateKey*. +
+`KeyBridge.GostPrivateKeyAdapter` и `GostECPrivateKey` независимо решали одну
+и ту же задачу: оборачивали `PrivateKeyParameters` в `java.security.PrivateKey`
+с поддержкой `Destroyable`. Метод `KeyBridge.fromJca()` не использовался. `GostX509KeyManager.getPrivateKey()` и `GostSSLEngine` переведены на
+`GostECPrivateKey`. Функциональность не изменилась.
+
+* `SsrfGuard` перенесён в `crypto-gost-pkix`; импорты в
+`JdkHttpOcspFetcher`/`JdkHttpCrlFetcher` обновлены. Поведение не
+изменилось.
+
+* *Предупреждение об отсутствии hostname verification — теперь per-connection,
+а не однократно на JVM (GostSSLEngine.beginHandshake())*. +
+Убран
+JVM-глобальный AtomicBoolean: однократность маскировала per-connection риск,
+включая случайное снятие safe-default через setSSLParameters. Осознанный
+opt-out через createForClientNoHostnameCheck() исключён из per-handshake
+WARNING (флаг explicitNoHostnameCheck) — намерение объявляется однократным
+WARNING при создании. Флаг влияет только на логирование, не на решение
+о проверке (оно определяется исключительно endpointIdentificationAlgorithm).
+
+==== Исправлено
+
+* *Plaintext-запись (до установления handshake-ключей) не проверялась
+на максимальный размер (`GostSSLEngine.handlePlaintextRecord`).*
+`payloadLen` до 65535 байт допускал аллокацию `new byte[totalLen]`
+без проверки против `MAX_PLAINTEXT_LENGTH` (RFC 8446 §5.1, TLSPlaintext
+≤ 2¹⁴) — доступно любому pre-auth TCP-клиенту. Проверка добавлена до
+аллокации, `ALERT_RECORD_OVERFLOW`, зеркалит существующую раннюю
+проверку в `TlsRecord.unprotect()`.
+
+* *Входящие KeyUpdate не ограничивались по частоте.* `peerKeyUpdateCount`
+инкрементировался, но нигде не сравнивался с порогом — аутентифицированный
+пир мог флудить KeyUpdate, вызывая пересоздание ключей/`TlsRecord` на
+каждое сообщение. RFC 8446 §4.6.3 такого требования не содержит (норму
+вводит только черновик rfc8446bis) — это hardening, не устранение
+нарушения протокола. Добавлен rate-limit по скользящему окну
+(`MAX_PEER_KEY_UPDATES_PER_WINDOW=10` за `KEY_UPDATE_RATE_WINDOW_NANOS`
+1 c) — не lifetime-cap, чтобы не ломать легитимный auto-rekey на
+долгоживущих соединениях.
+
+* *`pendingCloseRecord` не был `volatile` при cross-lock доступе.*
+  Поле писалось/читалось под `outboundLock` (`closeOutbound`/`wrap`/
+  `pollOutboundRecord`), но обнулялось под `inboundLock`
+  (`destroyHandshakeEngine()` из `closeInbound`/`handleAlert`) — разные
+  локи не дают happens-before между направлениями, возможен stale-read.
+  Поле приведено к `volatile`, симметрично уже-`volatile` `closeSent`/
+  `closeReceived`.
+
+* *`GostSSLSocket.close()` не зачищал ключевой материал engine при
+  закрытии до получения close_notify от пира (P2).* `close()` вызывал
+  только `engine.closeOutbound()`; в штатной ветке «закрываем первыми»
+  (`closeReceived==false`) `destroyHandshakeEngine()` не срабатывал —
+  `readerRecord`/`writerRecord`/`pendingWriteKey` оставались в куче до GC
+  при любом graceful-close, а не только при обрыве TCP. `close()` теперь
+  вызывает `engine.closeInbound()` после отправки close_notify, зачистка
+  гарантированно проходит через единую точку `destroyHandshakeEngine()`.
+
+* *CRL rollback через отсутствие проверки монотонности `cRLNumber`
+(`GostX509TrustManager.checkCrl()`).* Защита от rollback уже была
+реализована в `CrlVerifier.verify()` (5-арг перегрузка), но
+production-код вызывал 4-арг версию без `minCrlNumber` — проверка
+никогда не выполнялась. Атакующий, контролирующий CDP (MITM/DNS
+spoofing) или кэш, мог подсунуть старый, валидно подписанный CRL
+в пределах окна `thisUpdate`/`nextUpdate`, где отзыв сертификата
+ещё не отражён (RFC 5280 §5.2.3).
+
+* `CrlCache` переведён с `get()`/`put()` на атомарный `lookup()`,
+возвращающий `CrlCacheEntry(crlDer, lastKnownCrlNumber)`: последний
+известный `cRLNumber` сохраняется даже для истёкшей (expired) записи
+кэша — это монотонное знание используется как нижняя граница при
+следующей проверке. `GostX509TrustManager` теперь передаёт этот
+номер в `CrlVerifier.verify()`, fail-closed при обнаружении отката.
+* *Hostname verification отсутствовала по умолчанию на engine-пути
+SSLContext.createSSLEngine(host, port) — расхождение с socket-путём
+(confused deputy)*.
++
+GostSSLSocket всегда создаёт клиента через
+GostSSLEngine.createForClient(), выставляющий
+endpointIdentificationAlgorithm = "HTTPS", тогда как
+GostSSLContextSpi.engineCreateSSLEngine(host, port) шёл через
+package-private конструктор, оставляя поле null — проверка имени
+пропускалась (extractHostnameForEndpointId возвращает null для
+не-HTTPS/LDAPS, и TlsCertificateValidator.checkServerCertificateChain
+не сверяет hostname при null). Вектор: перенос кода с socket API на engine
+API (Netty/Undertow/Tomcat) молча терял защиту от MITM — атакующий с валидным
+сертификатом доверенного CA, но для другого домена, проходил проверку. +
+Исправление: новая фабрика GostSSLEngine.createForContextClient()
+выставляет HTTPS при непустом host (сохраняя serverSessionContext для
+delayed-mode серверов вроде Tomcat), engineCreateSSLEngine(host, port)
+переведён на неё. Engine-путь теперь даёт те же гарантии, что socket-путь.
+* *GostSSLEngine.setSSLParameters() игнорировал null в
+endpointIdentificationAlgorithm, вопреки контракту SSLParameters*. +
+null
+трактовался как «не менять», из-за чего явное отключение проверки по
+спецификации (setEndpointIdentificationAlgorithm(null)) не срабатывало —
+ловушка на фоне нового safe-default. Теперь endpoint id применяется
+безусловно: null (и "") отключают проверку по контракту JSSE; действует
+единообразно на socket и engine путях (GostSSLSocket делегирует напрямую).
+
+==== Документация
+
+* Javadoc `JdkHttpCrlFetcher`/`JdkHttpOcspFetcher` дополнен тем же
+предупреждением об остаточном DNS-rebinding TOCTOU (см. `crypto-gost-pkix`).
+
+
 == [0.6.1] - 02-07-2026
 
 Данный релиз целиком посвящен устранению проблем безопасности, выявленных в ходе аудита. Этот релиз содержит также небольшой *breaking change*, но он был необходим.

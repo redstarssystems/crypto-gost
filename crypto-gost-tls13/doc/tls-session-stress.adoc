@@ -114,7 +114,7 @@ sudo sysctl -w net.core.wmem_max=134217728
 
 [source,bash]
 ----
-# Однопоточный throughput (5 прогонов × ~20 с ≈ 100 с)
+# Однопоточный throughput (5 прогонов × ≈20 с ≈ 100 с)
 make test-stress-tlssession
 
 # Одиночный быстрый замер (переопределяет test из Makefile)
@@ -138,7 +138,7 @@ make test-stress-tlssession ARGS="-Dstress.warmup=2 -Dstress.measure=10 -Dstress
 
 [source,bash]
 ----
-# Однопоточный throughput (5 прогонов × ~20 с ≈ 100 с)
+# Однопоточный throughput (5 прогонов × ≈20 с ≈ 100 с)
 mvn test -pl crypto-gost-tls13 -am \
   -Dtest="org.rssys.gost.tls13.stress.TlsSessionStreamTest" \
   -Dsurefire.excludedGroups= \

@@ -752,4 +752,63 @@ class DerCodecTest {
                 () -> DerCodec.parseUTF8String(data, 0),
                 "INDEFINITE_LENGTH в parseUTF8String должен бросать исключение");
     }
+
+    // ========================================================================
+    // indefinite-length (0x80) для примитивов запрещён (X.690 §8.1.3.6, DER §10.1).
+    // Критично для parseOid/parseBoolean: ранее — молчаливый мис-парсинг вместо reject.
+    // ========================================================================
+
+    @Test
+    @DisplayName("parseOid: INDEFINITE_LENGTH -> reject, а не усечённый OID")
+    void parseOidThrowsOnIndefiniteLength() {
+        // Ранее: contentEnd = contentOff-1 -> цикл arc не выполнялся -> тихо возвращался
+        // усечённый OID. OID матчит algorithm/extension — мис-парсинг security-значим.
+        byte[] data = {0x06, (byte) 0x80, 0x2A, 0x03, 0x00, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.parseOid(data, 0),
+                "INDEFINITE_LENGTH в parseOid должен бросать исключение, а не усекать OID");
+    }
+
+    @Test
+    @DisplayName("parseBoolean: INDEFINITE_LENGTH -> reject, а не чтение постороннего байта")
+    void parseBooleanThrowsOnIndefiniteLength() {
+        // Ранее: читался data[contentOff] без проверки длины — байт следующей структуры
+        // интерпретировался как значение (critical/cA-флаги BasicConstraints).
+        byte[] data = {0x01, (byte) 0x80, (byte) 0xFF, 0x00, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.parseBoolean(data, 0),
+                "INDEFINITE_LENGTH в parseBoolean должен бросать исключение");
+    }
+
+    @Test
+    @DisplayName("parseInteger: INDEFINITE_LENGTH -> reject")
+    void parseIntegerThrowsOnIndefiniteLength() {
+        byte[] data = {0x02, (byte) 0x80, 0x01, 0x00, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.parseInteger(data, 0),
+                "INDEFINITE_LENGTH в parseInteger должен бросать исключение");
+    }
+
+    @Test
+    @DisplayName("parseOctetString: INDEFINITE_LENGTH -> reject")
+    void parseOctetStringThrowsOnIndefiniteLength() {
+        byte[] data = {0x04, (byte) 0x80, 0x01, 0x02, 0x00, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.parseOctetString(data, 0),
+                "INDEFINITE_LENGTH в parseOctetString должен бросать исключение");
+    }
+
+    @Test
+    @DisplayName("parseBitString: INDEFINITE_LENGTH -> reject")
+    void parseBitStringThrowsOnIndefiniteLength() {
+        byte[] data = {0x03, (byte) 0x80, 0x00, 0x01, 0x00, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.parseBitString(data, 0),
+                "INDEFINITE_LENGTH в parseBitString должен бросать исключение");
+    }
 }

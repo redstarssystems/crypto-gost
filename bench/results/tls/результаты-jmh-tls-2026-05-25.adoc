@@ -80,8 +80,8 @@ NOTE: PSK resumption — 2 из 3 fork'ов отработали штатно (�
 |===
 
 Разница с `FullHandshakeBench` (88.8K → 106.9K) показывает стоимость
-валидации сертификатов: **~18 000 ops/s или ~2 ms на handshake**.
-То есть ~16 % времени полного handshake уходит на cert validation.
+валидации сертификатов: **≈18 000 ops/s или ≈2 ms на handshake**.
+То есть ≈16 % времени полного handshake уходит на cert validation.
 
 === Компоненты handshake
 
@@ -146,7 +146,7 @@ NOTE: PSK resumption — 2 из 3 fork'ов отработали штатно (�
 |===
 
 Чистая валидация цепочки (подпись intermediate + проверка leaf) —
-~3,7 µs, что на порядок быстрее sign/verify (1,2-1,8 ms).
+≈3,7 µs, что на порядок быстрее sign/verify (1,2-1,8 ms).
 Валидация не является узким местом.
 
 Тот факт, что `chainWithHostname` не медленнее `chainOnly`, объясняется
@@ -187,9 +187,9 @@ NOTE: PSK resumption — 2 из 3 fork'ов отработали штатно (�
 | 1,76 ms
 
 | HKDF / derive keys
-| ~10 вызовов
-| ~10 µs
-| ~0,1 ms
+| ≈10 вызовов
+| ≈10 µs
+| ≈0,1 ms
 
 | Сумма асимметричной
 |
@@ -197,7 +197,7 @@ NOTE: PSK resumption — 2 из 3 fork'ов отработали штатно (�
 | *9,16 ms*
 |===
 
-Из 11,3 ms handshake ~9,16 ms (81 %) — асимметричная криптография.
+Из 11,3 ms handshake ≈9,16 ms (81 %) — асимметричная криптография.
 
 == Record layer
 
@@ -247,7 +247,7 @@ Throughput на 16 KB record: 50,8 MB/s (protect) / 49,5 MB/s (unprotect).
 
 == Streebog-256
 
-Streebog256Bench **не завершился** за отведённое время (~90 мин).
+Streebog256Bench **не завершился** за отведённое время (≈90 мин).
 JMH не смог завершить 3 fork'а для всех трёх размеров входа (32 B, 1 KB, 16 KB)
 в рамках общего прогона. Для получения данных по Streebog требуется
 отдельный запуск:
@@ -271,11 +271,11 @@ java -jar target/benchmarks.jar Streebog256Bench -wi 5 -i 5 -f 3
 
 | HKDF на порядки быстрее ECDHE
 | HMAC-Streebog — симметричные операции
-| ✅ Подтверждено: 7,5 µs vs 1100 µs (разница в ~150×).
+| ✅ Подтверждено: 7,5 µs vs 1100 µs (разница в ≈150×).
 
 | Cert validation быстрее sign/verify
 | Проверка цепочки — один verifyHash
-| ✅ Подтверждено: 3,7 µs vs 1,18 ms (разница в ~300×).
+| ✅ Подтверждено: 3,7 µs vs 1,18 ms (разница в ≈300×).
 
 | Score error <5 %
 | Признак стабильного прогона
@@ -295,8 +295,8 @@ java -jar target/benchmarks.jar Streebog256Bench -wi 5 -i 5 -f 3
 
 . **Валидация сертификатов не является узким местом.** `NoVerifyHandshakeBench`
   показал, что без cert-validation handshake выполняется за 9,4 ms
-  против 11,3 ms с валидацией (разница ~2 ms или 16 %). Чистая cert
-  validation (`CertValidationBench`) занимает ~3,7 µs — на порядки
+  против 11,3 ms с валидацией (разница ≈2 ms или 16 %). Чистая cert
+  validation (`CertValidationBench`) занимает ≈3,7 µs — на порядки
   меньше асимметричной криптографии.
 
 . **Асимметричная криптография — доминирующий фактор.** 81 % времени
@@ -316,22 +316,22 @@ java -jar target/benchmarks.jar Streebog256Bench -wi 5 -i 5 -f 3
 | Сценарий | Capacity на ядро | Пометка
 
 | Установка новых соединений с cert-validation
-| ~89/sec
+| ≈89/sec
 | `FullHandshakeBench.handshake`
 
 | Установка новых соединений без cert-validation
-| ~107/sec
+| ≈107/sec
 | `NoVerifyHandshakeBench.handshake` — если кэш OCSP горячий
 
 | Возобновление через PSK
-| ~162/sec
+| ≈162/sec
 | `PskResumptionBench.resume`
 
 | Пропускная способность установленной сессии (16 KB records)
-| ~50,8 MB/s
+| ≈50,8 MB/s
 | Однопоточный record protect
 
 | Валидация сертификата (2-цепочка)
-| ~270K/sec
+| ≈270K/sec
 | `CertValidationBench.chainOnly`
 |===

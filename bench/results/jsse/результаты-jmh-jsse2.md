@@ -40,7 +40,7 @@
 <tr>
 <td style="text-align: left;"><p>Предшествующие нагрузки</p></td>
 <td style="text-align: left;"><p>Стресс-тесты JsseStressTest +
-UndertowStressTest (5+5 мин), завершены за ~30 мин до JMH</p></td>
+UndertowStressTest (5+5 мин), завершены за ≈30 мин до JMH</p></td>
 </tr>
 </tbody>
 </table>
@@ -281,7 +281,7 @@ roundTrip ≈ 2 × wrap (соотношение 2.04) — симметрия AEA
     причина не в алгоритмической регрессии, а в частоте CPU или
     состоянии кэшей.
 
-4.  **Вероятная причина — нагрев CPU после стресс-тестов.** За ~30 мин
+4.  **Вероятная причина — нагрев CPU после стресс-тестов.** За ≈30 мин
     до JMH были запущены JsseStressTest + UndertowStressTest (10 мин
     полной нагрузки 16 ядер). Intel Core Ultra 9 285H (Arrow Lake) с
     воздушным охлаждением мог не успеть остыть до baseline-температуры,

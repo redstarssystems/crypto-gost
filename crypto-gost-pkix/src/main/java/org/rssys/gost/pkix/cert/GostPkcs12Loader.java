@@ -86,7 +86,8 @@ public final class GostPkcs12Loader {
             byte[] pfxData, char[] password, boolean allowJdkFallback, int minPbkdf2Iterations) {
         LOG.log(Level.INFO, "Loading PKCS12 container");
         PfxData pfx = GostPkcs12Parser.parsePfx(pfxData, minPbkdf2Iterations);
-        byte[] passwordBytes = toUtf8Bytes(password);
+        char[] pwd = password.clone();
+        byte[] passwordBytes = toUtf8Bytes(pwd);
 
         try {
             if (hasGostPbes2Key(pfx)) {
@@ -100,9 +101,10 @@ public final class GostPkcs12Loader {
                 throw new IllegalArgumentException(
                         "PKCS12: non-GOST PBES2 key found, JDK fallback disabled");
             }
-            return loadJdkFallback(pfxData, password);
+            return loadJdkFallback(pfxData, pwd);
         } finally {
             Arrays.fill(passwordBytes, (byte) 0);
+            Arrays.fill(pwd, '\0');
         }
     }
 
@@ -131,11 +133,13 @@ public final class GostPkcs12Loader {
             byte[] encryptedDer, char[] password, int minPbkdf2Iterations) {
         GostPkcs12Parser.EncryptedPrivateKeyInfo epki =
                 GostPkcs12Parser.parseEncryptedPrivateKeyInfo(encryptedDer);
-        byte[] passwordBytes = toUtf8Bytes(password);
+        char[] pwd = password.clone();
+        byte[] passwordBytes = toUtf8Bytes(pwd);
         try {
             return GostPbes2.decryptKey(epki, passwordBytes, minPbkdf2Iterations);
         } finally {
             Arrays.fill(passwordBytes, (byte) 0);
+            Arrays.fill(pwd, '\0');
         }
     }
 

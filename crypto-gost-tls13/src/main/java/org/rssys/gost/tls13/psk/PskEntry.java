@@ -1,5 +1,6 @@
 package org.rssys.gost.tls13.psk;
 
+import java.util.concurrent.locks.ReentrantLock;
 import org.rssys.gost.tls13.TlsUtils;
 
 /**
@@ -14,8 +15,9 @@ public final class PskEntry {
     private final long ticketLifetime;
     private final long ticketAgeAdd;
     private final byte[] ticketNonce;
-    private volatile byte[] psk;
+    private byte[] psk;
     private final long issueTime;
+    private final ReentrantLock pskLock = new ReentrantLock();
 
     /**
      * @param ticket          тикет (1..65535 байт, или null для проверки)
@@ -60,8 +62,19 @@ public final class PskEntry {
         return ticketNonce != null ? ticketNonce.clone() : null;
     }
 
+    /**
+     * Возвращает копию PSK.
+     * <p>
+     * Защищено {@link #pskLock} от конкурентного {@link #destroy()}:
+     * clone и wipeArray не могут пересечься на одном массиве.
+     */
     public byte[] getPsk() {
-        return psk != null ? psk.clone() : null;
+        pskLock.lock();
+        try {
+            return psk != null ? psk.clone() : null;
+        } finally {
+            pskLock.unlock();
+        }
     }
 
     public long getIssueTime() {
@@ -73,12 +86,25 @@ public final class PskEntry {
         return (now - issueTime) > ticketLifetime * 1000L;
     }
 
-    /** Затирает PSK при вытеснении записи. */
+    /**
+     * Затирает PSK при вытеснении записи.
+     * <p>
+     * Защищено {@link #pskLock}: если конкурентный {@link #getPsk()} держит
+     * лок, destroy ждёт завершения clone и только потом затирает массив —
+     * нулевой PSK не утекает в вызывающий код. Если destroy взял лок первым,
+     * getPsk видит psk == null и возвращает null — вызывающий код пропускает
+     * PSK и выполняет полный handshake.
+     */
     public void destroy() {
-        byte[] k = psk;
-        if (k != null) {
-            TlsUtils.wipeArray(k);
+        pskLock.lock();
+        try {
+            byte[] k = psk;
             psk = null;
+            if (k != null) {
+                TlsUtils.wipeArray(k);
+            }
+        } finally {
+            pskLock.unlock();
         }
     }
 }

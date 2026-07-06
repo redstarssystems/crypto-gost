@@ -1,3 +1,15 @@
+Смена методологии RecordProtectBench.unprotect (v0.6.2+)
+
+Начиная с версии 0.6.2, методология замера
+`RecordProtectBench.unprotect` изменена: вместо сброса seqNum и
+переиспользования одного зашифрованного фрейма (чистый decrypt)
+выполняется комбинированная операция `protect + unprotect` на каждой
+итерации. Абсолютные цифры `unprotect` из данного отчёта **несравнимы
+напрямую** с будущими замерами версии 0.6.2+. Чистый decrypt будущих
+замеров можно получить аналитически: чистый\_decrypt = 1 /
+(1/комбинированный − 1/protect). Подробнее в
+`bench/tls/методика-jmh-tls.adoc`.
+
 # Метаданные прогона
 
 <table>
@@ -109,10 +121,9 @@ Full handshake vs PSK resumption, ops/sec
 
 | Компонент | Сэкономлено | Пояснение |
 |-----------|------------|-----------| | sign + verify
-(CertificateVerify) |
-<sub>3.1\ ms\ |\ Нет\ сертификационных\ сообщений\ |\ |\ Certificate\ parsing\ +\ OCSP\ |</sub>
-2.1 ms | ASN.1 цепочки, AIA, OCSP-проверка | | ECDHE (psk\_dhe\_ke) | 0
-ms | Forward secrecy сохранена |
+(CertificateVerify) | ≈3.1 ms | Нет сертификационных сообщений | |
+Certificate parsing + OCSP | ≈2.1 ms | ASN.1 цепочки, AIA, OCSP-проверка
+| | ECDHE (psk\_dhe\_ke) | 0 ms | Forward secrecy сохранена |
 
 **Режим**: `psk_dhe_ke` (TlsMessageBuilder:81) — ECDHE выполняется для
 forward secrecy. **Детерминизм**: самый свежий ticket, никакого
@@ -252,9 +263,9 @@ server)</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>HKDF / derive keys</p></td>
-<td style="text-align: left;"><p>~10 вызовов</p></td>
-<td style="text-align: left;"><p>~10 µs</p></td>
-<td style="text-align: left;"><p>~0.1 ms</p></td>
+<td style="text-align: left;"><p>≈10 вызовов</p></td>
+<td style="text-align: left;"><p>≈10 µs</p></td>
+<td style="text-align: left;"><p>≈0.1 ms</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Сумма асимметричной</p></td>
@@ -271,20 +282,21 @@ server)</p></td>
 словами: почти всё время рукопожатия уходит на математику с открытыми
 ключами, а не на передачу данных.
 
-`ECDHE shared secret` отдельным бенчем не измерен — оценка
-<sub>1.15\ ms\ сделана\ из\ соображений\ «точечное\ умножение\ на\ той\ же\ кривой\ имеет\ ту\ же\ сложность,\ что\ keygen».\ Теперь\ shared\ secret\ замерен\ отдельно:\ 1.27\ ms\ (на\ 10\ %\ дольше\ keygen\ —\ точка\ ещё\ и\ сериализуется\ после\ умножения).\ Оценка\ «</sub>1.15
-ms по аналогии с keygen» была почти верной; уточнённая картина не меняет
-выводов.
+`ECDHE shared secret` отдельным бенчем не измерен — оценка ≈1.15 ms
+сделана из соображений «точечное умножение на той же кривой имеет ту же
+сложность, что keygen». Теперь shared secret замерен отдельно: 1.27 ms
+(на 10 % дольше keygen — точка ещё и сериализуется после умножения).
+Оценка «≈1.15 ms по аналогии с keygen» была почти верной; уточнённая
+картина не меняет выводов.
 
 ## Узкое место
 
 **Узкое место handshake — асимметричная криптография на ГОСТ-кривой
 `tc26a256`, реализованная на чистой Java**. ECDHE (keygen + shared)
-занимает
-<sub>40\ %\ handshake.\ Sign+verify\ (включая\ verify\ CA-подписи)\ —\ ещё</sub>
-42 %.
+занимает ≈40 % handshake. Sign+verify (включая verify CA-подписи) — ещё
+≈42 %.
 
-Оптимизация HKDF/key schedule даст незаметный выигрыш (вместе они ~1 %
+Оптимизация HKDF/key schedule даст незаметный выигрыш (вместе они ≈1 %
 handshake). Существенное ускорение возможно только через:
 
 - нативную реализацию point multiplication на эллиптической кривой (JNI
@@ -360,7 +372,7 @@ Streebog-256 throughput, MB/sec по размерам входа
 KB — за 256 итераций.
 
 **Сравнение с компонентами handshake**: Streebog на 32 B — 2.4 µs. Sign
-— 1.24 ms. То есть Streebog в **~500 раз** быстрее ГОСТ-подписи.
+— 1.24 ms. То есть Streebog в **≈500 раз** быстрее ГОСТ-подписи.
 Хеширование никогда не будет узким местом протокола.
 
 # Record layer
@@ -448,7 +460,7 @@ Protect throughput, MB/sec по размерам записи
 ## Интерпретация
 
 **Throughput на 16 KB record — 50.5 MB/s (protect) / 49.1 MB/s
-(unprotect).** Ускорение **~9×** относительно предыдущего прогона (5.6
+(unprotect).** Ускорение **≈9×** относительно предыдущего прогона (5.6
 MB/s). Причина — новая реализация арифметики Кузнечика и MGM,
 переписанная с учётом JMH-профиля: развёрнутые циклы, минимизация
 аллокаций, inline-умножение в поле GF(2^128).
@@ -458,7 +470,7 @@ MB/s). Причина — новая реализация арифметики �
 (было 14×). Отрыв сократился: новая арифметика приблизила
 AEAD-производительность к хеш-производительности.
 
-**Unprotect vs protect**: 49.1 vs 50.5 MB/s — unprotect на ~3 %
+**Unprotect vs protect**: 49.1 vs 50.5 MB/s — unprotect на ≈3 %
 медленнее. Это ожидаемо: unprotect добавляет верификацию MAC-тега
 (GHASH-подобное умножение) перед расшифровкой, тогда как protect считает
 MAC на уже зашифрованных данных.
@@ -517,7 +529,7 @@ MB/s.</p></td>
 <td style="text-align: left;"><p>PSK speedup &gt;0 (хоть какое-то
 ускорение)</p></td>
 <td style="text-align: left;"><p>Resumption убирает sign+verify,
-ожидание ~25 %</p></td>
+ожидание ≈25 %</p></td>
 <td style="text-align: left;"><p>✅ <strong>Подтверждено</strong>. PSK
 speedup 1.8× (154 vs 85 ops/s) после исправления
 <code>getForResumption()</code>.</p></td>
@@ -545,20 +557,20 @@ speedup 1.8× (154 vs 85 ops/s) после исправления
 <tr>
 <td style="text-align: left;"><p>Установка новых соединений
 (server-only)</p></td>
-<td style="text-align: left;"><p>~85/sec</p></td>
+<td style="text-align: left;"><p>≈85/sec</p></td>
 <td style="text-align: left;"><p>С базовой cert-validation (проверка
 подписи цепочки).</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Пропускная способность установленной
 сессии (max-size records)</p></td>
-<td style="text-align: left;"><p>~50.5 MB/s</p></td>
+<td style="text-align: left;"><p>≈50.5 MB/s</p></td>
 <td style="text-align: left;"><p>Один поток. Многопоточность не
 измерена.</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Streebog-256 (max-size)</p></td>
-<td style="text-align: left;"><p>~79 MB/s</p></td>
+<td style="text-align: left;"><p>≈79 MB/s</p></td>
 <td style="text-align: left;"><p>Однопоточный chunk-проход по большим
 данным.</p></td>
 </tr>
@@ -582,14 +594,14 @@ N. JVM lock contention, GC, scheduling — всё влияет на реальн
     разделе «PSK resumption: результаты после P1-фикса».
 
 2.  **ECDHE shared secret** — **замерен.** 1.27 ms (см. таблицу
-    компонентов выше). Оценка
-    «<sub>1.15\ ms\ по\ аналогии\ с\ keygen»\ была\ близка\ к\ истине\ —\ асимметричная\ криптография\ действительно\ занимает</sub>
-    84 % handshake.
+    компонентов выше). Оценка «≈1.15 ms по аналогии с keygen» была
+    близка к истине — асимметричная криптография действительно занимает
+    ≈84 % handshake.
 
 3.  **Сравнение с независимой реализацией Кузнечик-MGM.** 50.5 MB/s —
     это много или мало для чистой Java? Без сравнения с другой
     реализацией интерпретация невозможна. Исходные 5.6 MB/s были
-    улучшены до 50.5 MB/s (~9×) за счёт оптимизации арифметики —
+    улучшены до 50.5 MB/s (≈9×) за счёт оптимизации арифметики —
     развёрнутые циклы, inline-умножение в GF(2^128), минимизация
     аллокаций. Потенциал дальнейшего ускорения: JNI/JNR-прокси на
     аппаратный AES-NI + PCLMULQDQ (если целевая платформа поддерживает),

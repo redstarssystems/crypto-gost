@@ -54,7 +54,10 @@ class TlsCrlVerifierTest {
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verify(
-                                crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
+                                crl,
+                                leaf.cert.getSerialNumber(),
+                                root.cert.getPublicKey(),
+                                root.subjectDn));
     }
 
     @Test
@@ -75,7 +78,8 @@ class TlsCrlVerifierTest {
                                 CrlVerifier.verify(
                                         crl,
                                         leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        root.cert.getPublicKey(),
+                                        root.subjectDn));
         assertEquals(
                 PkixException.Reason.REVOKED,
                 ex.reason(),
@@ -100,7 +104,10 @@ class TlsCrlVerifierTest {
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verify(
-                                crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
+                                crl,
+                                leaf.cert.getSerialNumber(),
+                                root.cert.getPublicKey(),
+                                root.subjectDn));
     }
 
     @Test
@@ -123,7 +130,8 @@ class TlsCrlVerifierTest {
                                 CrlVerifier.verify(
                                         crl,
                                         leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        root.cert.getPublicKey(),
+                                        root.subjectDn));
         assertEquals(
                 PkixException.Reason.SIGNATURE_INVALID,
                 ex.reason(),
@@ -148,7 +156,8 @@ class TlsCrlVerifierTest {
                                 CrlVerifier.verify(
                                         crl,
                                         leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        root.cert.getPublicKey(),
+                                        root.subjectDn));
         assertEquals(
                 PkixException.Reason.EXPIRED,
                 ex.reason(),
@@ -173,7 +182,8 @@ class TlsCrlVerifierTest {
                                 CrlVerifier.verify(
                                         crl,
                                         leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        root.cert.getPublicKey(),
+                                        root.subjectDn));
         assertEquals(
                 PkixException.Reason.IDP_NOT_SUPPORTED,
                 ex.reason(),
@@ -188,7 +198,10 @@ class TlsCrlVerifierTest {
                         PkixException.class,
                         () ->
                                 CrlVerifier.verify(
-                                        null, new byte[] {0x01}, root.cert.getPublicKey()));
+                                        null,
+                                        new byte[] {0x01},
+                                        root.cert.getPublicKey(),
+                                        root.subjectDn));
         assertTrue(
                 ex.getMessage().contains("null"),
                 "Ожидается null в сообщении, получено: " + ex.getMessage());
@@ -251,7 +264,10 @@ class TlsCrlVerifierTest {
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verify(
-                                crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
+                                crl,
+                                leaf.cert.getSerialNumber(),
+                                root.cert.getPublicKey(),
+                                root.subjectDn));
     }
 
     @Test
@@ -268,7 +284,10 @@ class TlsCrlVerifierTest {
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verify(
-                                crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
+                                crl,
+                                leaf.cert.getSerialNumber(),
+                                root.cert.getPublicKey(),
+                                root.subjectDn));
     }
 
     @Test
@@ -318,7 +337,8 @@ class TlsCrlVerifierTest {
                                 CrlVerifier.verify(
                                         crl,
                                         leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey()));
+                                        root.cert.getPublicKey(),
+                                        root.subjectDn));
         assertEquals(
                 PkixException.Reason.THIS_UPDATE_FUTURE,
                 ex.reason(),
@@ -343,7 +363,10 @@ class TlsCrlVerifierTest {
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verify(
-                                crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
+                                crl,
+                                leaf.cert.getSerialNumber(),
+                                root.cert.getPublicKey(),
+                                root.subjectDn));
     }
 
     @Test
@@ -357,6 +380,9 @@ class TlsCrlVerifierTest {
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verify(
-                                crl, leaf.cert.getSerialNumber(), root.cert.getPublicKey()));
+                                crl,
+                                leaf.cert.getSerialNumber(),
+                                root.cert.getPublicKey(),
+                                root.subjectDn));
     }
 }

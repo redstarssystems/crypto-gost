@@ -63,8 +63,7 @@ public final class GostPbes2 {
         }
 
         Pbes2Params params =
-                GostPkcs12Parser.parsePbes2Params(
-                        epki.getEncryptionParams(), minPbkdf2Iterations);
+                GostPkcs12Parser.parsePbes2Params(epki.getEncryptionParams(), minPbkdf2Iterations);
         LOG.log(
                 Level.DEBUG,
                 "Decrypting private key via PBES2 (scheme={0})",
@@ -85,7 +84,8 @@ public final class GostPbes2 {
     public static byte[] deriveKey(byte[] password, Pbes2Params params) {
         Hmac hmac = createPrf(params.getPrfOid());
         hmac.init(password);
-        return Pbkdf2Streebog.generate(hmac, params.getSalt(), params.getIterationCount(), GostOids.KUZNYECHIK_KEY_LEN);
+        return Pbkdf2Streebog.generate(
+                hmac, params.getSalt(), params.getIterationCount(), GostOids.KUZNYECHIK_KEY_LEN);
     }
 
     /**
@@ -139,7 +139,8 @@ public final class GostPbes2 {
         CryptoRandom.INSTANCE.nextBytes(salt);
         byte[] ukm = new byte[GostOids.PBES2_UKM_LEN];
         CryptoRandom.INSTANCE.nextBytes(ukm);
-        byte[] dk = Pbkdf2Streebog.generate(password, salt, iterations, GostOids.KUZNYECHIK_KEY_LEN);
+        byte[] dk =
+                Pbkdf2Streebog.generate(password, salt, iterations, GostOids.KUZNYECHIK_KEY_LEN);
 
         SymmetricKey symKey = null;
         try {
