@@ -46,5 +46,28 @@ public final class CmsConstants {
     /** Максимальный размер входного PKCS#7/.p7b в байтах. Защита от DoS. */
     public static final int MAX_P7B_SIZE = 10_485_760;
 
+    // Один GostCrl может быть до DEFAULT_MAX_CRL_SIZE = 64MB; без лимита размера
+    // поля crls[1] злоумышленник может упаковать несколько таких — гигабайт.
+    // Для сертификатов амплификация скромнее (единицы КБ), поэтому раньше
+    // ограничивались только количеством. Лимит на размер проверяется ДО создания
+    // GostCrl-объектов (дёшево: byte[].length).
+    /** Максимальное число CRL в SignedData.crls. Защита от DoS. */
+    public static final int MAX_EMBEDDED_CRLS = 8;
+
+    /** Максимальный суммарный размер поля crls [1] в байтах. Защита от DoS. */
+    public static final int MAX_EMBEDDED_CRLS_TOTAL_SIZE = 33_554_432; // 32 MB
+
+    // Countersignature — легетимно 1, редко ≥ 2. Каждый требует полной цепочки
+    // (CertChainBuilder + ChainValidator) и ГОСТ-verify (CPU-expensive).
+    // Потолок отсекает crafted unsignedAttrs с множеством фиктивных countersignature.
+    /** Максимум countersignature-значений в unsignedAttrs одного подписанта. Защита от DoS. */
+    public static final int MAX_COUNTERSIGNATURES_PER_SIGNER = 8;
+
+    // Countersigner cert добавляется в existing certificates; при crafted-входе
+    // поле certificates может содержать тысячи сертификатов. Сканирование на
+    // дубликат — O(n) по числу существующих, парсинг — O(n). Потолок ограничивает.
+    /** Максимум сертификатов в поле certificates на входе embedCountersignature. Защита от DoS. */
+    public static final int MAX_CERTS_IN_EMBED_CS = 256;
+
     private CmsConstants() {}
 }

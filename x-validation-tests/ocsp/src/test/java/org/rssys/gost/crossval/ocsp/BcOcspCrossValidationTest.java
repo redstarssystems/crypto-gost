@@ -368,6 +368,94 @@ class BcOcspCrossValidationTest {
     }
 
     // ========================================================================
+    // BC <-> GOST: byKey ResponderID
+    // ========================================================================
+
+    @Test
+    @DisplayName("GOST byKey ответ -> BC BasicOCSPResp.readObject")
+    void gostByKeyRespToBc() throws Exception {
+        byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
+                .signer(caKp256.getPrivate(), caKp256.getPublic())
+                .issuerDn(caCert256.getSubjectDnBytes())
+                .caPublicKey(caKp256.getPublic())
+                .withResponderByKey()
+                .good()
+                .build();
+
+        OCSPResp ocspResp = new OCSPResp(ocspDer);
+        assertEquals(OCSPRespBuilder.SUCCESSFUL, ocspResp.getStatus());
+
+        BasicOCSPResp basic = (BasicOCSPResp) ocspResp.getResponseObject();
+        assertNotNull(basic);
+        assertEquals(1, basic.getResponses().length);
+        assertNull(basic.getResponses()[0].getCertStatus(), "good статус = null в BC");
+    }
+
+    @Test
+    @DisplayName("BC byKey ответ (Streebog) -> GOST парсинг")
+    void bcByKeyRespToGost() throws Exception {
+        byte[] streebogKeyHash = CertIdHasher.hashIssuerPublicKey(bcCaCert256AsGost);
+
+        byte[] ocspDer = BcOcspHelper.buildBcOcspResponseByKey(
+                bcCaCert256.getEncoded(), bcCaCert256.getEncoded(),
+                bcCaKp256, bcCaCert256, streebogKeyHash);
+
+        GostOcspResponse resp = GostOcspResponse.fromDer(ocspDer);
+        assertTrue(resp.isSuccessful());
+        assertEquals(1, resp.getResponses().size());
+        assertTrue(resp.getResponses().get(0).isGood());
+        assertEquals(GostOcspResponse.ResponderIdType.BY_KEY, resp.getResponderIdType());
+        assertArrayEquals(streebogKeyHash, resp.getResponderKeyHash(),
+                "keyHash из BC-ответа должен совпадать с ожидаемым Streebog-хэшем");
+    }
+
+    // ========================================================================
+    // BC -> GOST: Response c ГОСТ-совместимым CertID (verify() round-trip)
+    // ========================================================================
+
+    @Test
+    @DisplayName("BC-ответ с GOST CertID -> OcspVerifier.verify()")
+    void bcRespWithGostCertId_verifyByGost() throws Exception {
+        byte[] ocspDer = BcOcspHelper.buildBcOcspResponseWithGostCertId(
+                bcCaCert256.getEncoded(), bcCaCert256.getEncoded(),
+                bcCaKp256, bcCaCert256);
+
+        OcspVerifier.verify(
+                ocspDer, bcCaCert256AsGost.getSerialNumber(), bcCaCert256AsGost);
+    }
+
+    @Test
+    @DisplayName("BC-ответ byKey с GOST CertID -> OcspVerifier.verify()")
+    void bcByKeyRespWithGostCertId_verifyByGost() throws Exception {
+        byte[] streebogKeyHash = CertIdHasher.hashIssuerPublicKey(bcCaCert256AsGost);
+
+        byte[] ocspDer = BcOcspHelper.buildBcOcspResponseByKeyWithGostCertId(
+                bcCaCert256.getEncoded(), bcCaCert256.getEncoded(),
+                bcCaKp256, bcCaCert256, streebogKeyHash);
+
+        OcspVerifier.verify(
+                ocspDer, bcCaCert256AsGost.getSerialNumber(), bcCaCert256AsGost);
+    }
+
+    @Test
+    @DisplayName("BC-ответ делегированный с GOST CertID -> OcspVerifier.verify()")
+    void bcDelegatedWithGostCertId_verifyByGost() throws Exception {
+        KeyPair responderKp = BcOcspHelper.generateBcKeyPair(PARAMS_256);
+        X509Certificate responderCert = BcOcspHelper.buildBcResponderCert(
+                responderKp, "CN=BC OCSP Responder",
+                bcCaKp256, "CN=BC CA256", PARAMS_256);
+
+        byte[] ocspDer = BcOcspHelper.buildBcOcspResponseDelegatedWithGostCertId(
+                bcCaCert256.getEncoded(), bcCaCert256.getEncoded(),
+                responderKp, responderCert,
+                responderKp, responderCert);
+
+        OcspVerifier.verify(
+                ocspDer, bcCaCert256AsGost.getSerialNumber(),
+                bcCaCert256AsGost, bcCaCert256AsGost, null);
+    }
+
+    // ========================================================================
     // BC -> GOST: Request
     // ========================================================================
 

@@ -164,6 +164,9 @@ public final class CmsSignedAndEnvelopedData {
                 CmsEnvelopedDataDecryptor.decrypt(
                         envelopedDer, recipientKey, recipientCert, new Kexp15CmsKeyWrap());
         return new VerifiedSignedData(
-                decrypted, verifyResult.signerCertificate(), verifyResult.unsignedAttributes());
+                decrypted,
+                verifyResult.signerCertificate(),
+                verifyResult.unsignedAttributes(),
+                verifyResult.embeddedCrls());
     }
 }

@@ -103,4 +103,55 @@ public final class GeneralNameCodec {
         }
         return encodeGeneralNames(names.toArray(new byte[0][]));
     }
+
+    /**
+     * Кодирует GeneralName типа iPAddress для NameConstraints (RFC 5280 §4.2.1.10).
+     *
+     * <p>Отличается от {@link #encodeIpAddress(String)}: NameConstraints требует
+     * адрес+маску (8 байт для IPv4, 32 байта для IPv6), а не только адрес.</p>
+     *
+     * @param cidr CIDR-нотация: {@code "192.168.1.0/28"} или {@code "2001:db8::/32"}
+     * @return DER-encoded GeneralName (tag 0x87, 8 или 32 байта значения)
+     * @throws IllegalArgumentException если строка не в CIDR-формате или адрес некорректен
+     */
+    public static byte[] encodeIpConstraint(String cidr) {
+        int slash = cidr.indexOf('/');
+        if (slash < 0) {
+            throw new IllegalArgumentException("CIDR notation required: " + cidr);
+        }
+        String addrStr = cidr.substring(0, slash);
+        int prefixLen;
+        try {
+            prefixLen = Integer.parseInt(cidr.substring(slash + 1));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid prefix length in CIDR: " + cidr);
+        }
+        byte[] addr;
+        try {
+            addr = java.net.InetAddress.getByName(addrStr).getAddress();
+        } catch (java.net.UnknownHostException e) {
+            throw new IllegalArgumentException("Invalid IP address in CIDR: " + cidr);
+        }
+        int addrLen = addr.length;
+        if (addrLen != 4 && addrLen != 16) {
+            throw new IllegalArgumentException("Unsupported address family: " + cidr);
+        }
+        if (prefixLen < 0 || prefixLen > addrLen * 8) {
+            throw new IllegalArgumentException(
+                    "Prefix length out of range: " + prefixLen + " for address length " + addrLen);
+        }
+        byte[] mask = new byte[addrLen];
+        for (int i = 0; i < addrLen; i++) {
+            int bitsInByte = Math.max(0, Math.min(8, prefixLen - i * 8));
+            mask[i] = (byte) (0xFF00 >> bitsInByte);
+        }
+        byte[] netAddr = new byte[addrLen];
+        for (int i = 0; i < addrLen; i++) {
+            netAddr[i] = (byte) (addr[i] & mask[i]);
+        }
+        byte[] constraint = new byte[addrLen * 2];
+        System.arraycopy(netAddr, 0, constraint, 0, addrLen);
+        System.arraycopy(mask, 0, constraint, addrLen, addrLen);
+        return DerCodec.encodeTlv(TAG_IP_ADDRESS, constraint);
+    }
 }

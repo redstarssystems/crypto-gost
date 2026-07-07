@@ -1,10 +1,9 @@
 package org.rssys.gost.pkix.util;
 
-import java.net.URI;
-import java.net.URISyntaxException;
-
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 /**
  * Fuzz-тест для {@link SsrfGuard#isPrivateAddress(URI)}.

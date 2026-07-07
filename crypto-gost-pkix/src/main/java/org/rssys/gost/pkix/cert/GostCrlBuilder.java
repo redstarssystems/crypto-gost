@@ -6,9 +6,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
+import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
 /**
@@ -16,7 +19,7 @@ import org.rssys.gost.util.DerCodec;
  *
  * <p>Fluent API:
  * <pre>
- * byte[] crl = GostCrlBuilder.create(caPriv, issuerDnDer)
+ * byte[] crl = GostCrlBuilder.create(signerPriv, issuerDnDer)
  *     .thisUpdate("20250101000000Z")
  *     .nextUpdate("20260101000000Z")
  *     .withIdpExtension()
@@ -35,18 +38,21 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class GostCrlBuilder {
 
-    private final PrivateKeyParameters caPriv;
+    private final PrivateKeyParameters signerPriv;
     private final byte[] issuerDnDer;
     private String thisUpdate;
     private String nextUpdate;
     private boolean withIdpExtension;
+    private boolean idpOnlyContainsUserCerts;
+    private boolean idpOnlyContainsCACerts;
     private BigInteger crlNumber;
     private BigInteger baseCrlNumber;
     private String[] freshestCrlUris;
+    private byte[] akiBytes;
     private final List<RevokedEntry> revokedEntries = new ArrayList<>();
 
-    private GostCrlBuilder(PrivateKeyParameters caPriv, byte[] issuerDnDer) {
-        this.caPriv = caPriv;
+    private GostCrlBuilder(PrivateKeyParameters signerPriv, byte[] issuerDnDer) {
+        this.signerPriv = signerPriv;
         this.issuerDnDer = issuerDnDer;
         this.thisUpdate = GostSignatureHelper.nowGeneralizedTime();
     }
@@ -54,16 +60,16 @@ public final class GostCrlBuilder {
     /**
      * Создаёт построитель CRL с обязательными параметрами.
      *
-     * @param caPriv      закрытый ключ CA для подписи CRL (ECParameters извлекаются из ключа)
+     * @param signerPriv   ключ, которым будет подписан CRL (ECParameters извлекаются из ключа)
      * @param issuerDnDer DER-кодированный issuer Name
      */
-    public static GostCrlBuilder create(PrivateKeyParameters caPriv, byte[] issuerDnDer) {
-        return new GostCrlBuilder(caPriv, issuerDnDer);
+    public static GostCrlBuilder create(PrivateKeyParameters signerPriv, byte[] issuerDnDer) {
+        return new GostCrlBuilder(signerPriv, issuerDnDer);
     }
 
     /** Удобная перегрузка: DN из строки "CN=..., O=..." */
-    public static GostCrlBuilder create(PrivateKeyParameters caPriv, String issuerDn) {
-        return new GostCrlBuilder(caPriv, GostDnParser.encodeDn(issuerDn));
+    public static GostCrlBuilder create(PrivateKeyParameters signerPriv, String issuerDn) {
+        return new GostCrlBuilder(signerPriv, GostDnParser.encodeDn(issuerDn));
     }
 
     /** @param time thisUpdate в формате GeneralizedTime (YYYYMMDDHHMMSSZ) */
@@ -93,6 +99,21 @@ public final class GostCrlBuilder {
     /** Добавляет issuingDistributionPoint extension. */
     public GostCrlBuilder withIdpExtension() {
         this.withIdpExtension = true;
+        return this;
+    }
+
+    /**
+     * Добавляет issuingDistributionPoint extension с указанными флагами
+     * (RFC 5280 §5.2.5). indirectCRL всегда false — indirect CRL не в scope.
+     *
+     * @param onlyContainsUserCerts флаг onlyContainsUserCerts [1]
+     * @param onlyContainsCACerts   флаг onlyContainsCACerts [2]
+     */
+    public GostCrlBuilder withIdpExtension(
+            boolean onlyContainsUserCerts, boolean onlyContainsCACerts) {
+        this.withIdpExtension = true;
+        this.idpOnlyContainsUserCerts = onlyContainsUserCerts;
+        this.idpOnlyContainsCACerts = onlyContainsCACerts;
         return this;
     }
 
@@ -138,6 +159,24 @@ public final class GostCrlBuilder {
     public GostCrlBuilder withFreshestCrl(String... uris) {
         this.freshestCrlUris = (uris != null) ? uris.clone() : null;
         return this;
+    }
+
+    /**
+     * Добавляет AuthorityKeyIdentifier extension (RFC 5280 §5.2.1).
+     * keyIdentifier — обычно SKI сертификата подписанта CRL.
+     *
+     * @param signerSkiBytes байты keyIdentifier (32 байта для ГОСТ 256-битных кривых)
+     */
+    public GostCrlBuilder withAki(byte[] signerSkiBytes) {
+        this.akiBytes = (signerSkiBytes != null) ? signerSkiBytes.clone() : null;
+        return this;
+    }
+
+    /** Удобная перегрузка: вычисляет SKI из открытого ключа подписанта. */
+    public GostCrlBuilder withAki(PublicKeyParameters signerPub) {
+        byte[] pointBytes = GostDerCodec.subjectPublicKeyPointBytes(signerPub);
+        byte[] ski = Digest.digest256(pointBytes);
+        return withAki(ski);
     }
 
     /** Добавляет запись об отозванном сертификате. */
@@ -190,7 +229,7 @@ public final class GostCrlBuilder {
                 revokedEntries.isEmpty() ? null : revokedEntries.toArray(new RevokedEntry[0]);
         return assembleCrl(
                 entries,
-                caPriv,
+                signerPriv,
                 issuerDnDer,
                 thisUpdate,
                 nextUpdate,
@@ -198,7 +237,10 @@ public final class GostCrlBuilder {
                 crlNumber,
                 baseCrlNumber,
                 freshestCrlUris,
-                withIdpExtension);
+                withIdpExtension,
+                idpOnlyContainsUserCerts,
+                idpOnlyContainsCACerts,
+                akiBytes);
     }
 
     // ========================================================================
@@ -210,10 +252,12 @@ public final class GostCrlBuilder {
      * Не предназначен для обычного использования — применяйте {@link #build()}.
      * Публичен только для специальных тестовых сценариев (например, сборка CRL
      * с устаревшим форматом версии для проверки fallback-веток верификации).
+     *
+     * @param withIdpExtension если true — добавляет пустой IDP (все флаги false)
      */
     public static byte[] assembleCrl(
             RevokedEntry[] revokedEntries,
-            PrivateKeyParameters caPriv,
+            PrivateKeyParameters signerPriv,
             byte[] issuerDnDer,
             String thisUpdateGeneralizedTime,
             String nextUpdateGeneralizedTime,
@@ -221,7 +265,77 @@ public final class GostCrlBuilder {
             BigInteger crlNumber,
             BigInteger baseCrlNumber,
             String[] freshestCrlUris,
-            boolean withIdpExtension) {
+            boolean withIdpExtension,
+            byte[] akiBytes) {
+        return assembleCrl(
+                revokedEntries,
+                signerPriv,
+                issuerDnDer,
+                thisUpdateGeneralizedTime,
+                nextUpdateGeneralizedTime,
+                legacyVersion,
+                crlNumber,
+                baseCrlNumber,
+                freshestCrlUris,
+                withIdpExtension,
+                false,
+                false,
+                akiBytes);
+    }
+
+    /**
+     * Внутренний метод сборки CRL с IDP-флагами.
+     */
+    public static byte[] assembleCrl(
+            RevokedEntry[] revokedEntries,
+            PrivateKeyParameters signerPriv,
+            byte[] issuerDnDer,
+            String thisUpdateGeneralizedTime,
+            String nextUpdateGeneralizedTime,
+            boolean legacyVersion,
+            BigInteger crlNumber,
+            BigInteger baseCrlNumber,
+            String[] freshestCrlUris,
+            boolean withIdpExtension,
+            boolean idpOnlyContainsUserCerts,
+            boolean idpOnlyContainsCACerts,
+            byte[] akiBytes) {
+        return assembleCrl(
+                revokedEntries,
+                signerPriv,
+                issuerDnDer,
+                thisUpdateGeneralizedTime,
+                nextUpdateGeneralizedTime,
+                legacyVersion,
+                crlNumber,
+                baseCrlNumber,
+                freshestCrlUris,
+                withIdpExtension,
+                idpOnlyContainsUserCerts,
+                idpOnlyContainsCACerts,
+                false,
+                akiBytes);
+    }
+
+    /**
+     * Внутренний метод сборки CRL с полными IDP-флагами (включая indirectCRL).
+     * indirectCRL — только для тестов, на генерации indirect CRL builder не разрешает.
+     */
+    public static byte[] assembleCrl(
+            RevokedEntry[] revokedEntries,
+            PrivateKeyParameters signerPriv,
+            byte[] issuerDnDer,
+            String thisUpdateGeneralizedTime,
+            String nextUpdateGeneralizedTime,
+            boolean legacyVersion,
+            BigInteger crlNumber,
+            BigInteger baseCrlNumber,
+            String[] freshestCrlUris,
+            boolean withIdpExtension,
+            boolean idpOnlyContainsUserCerts,
+            boolean idpOnlyContainsCACerts,
+            boolean idpIndirectCrl,
+            byte[] akiBytes) {
         try {
             ByteArrayOutputStream tbsOut = new ByteArrayOutputStream();
             if (legacyVersion) {
@@ -229,7 +343,7 @@ public final class GostCrlBuilder {
             } else {
                 tbsOut.write(DerCodec.encodeTlv(0x02, new byte[] {0x01}));
             }
-            tbsOut.write(GostSignatureHelper.buildAlgId(caPriv.getParams()));
+            tbsOut.write(GostSignatureHelper.buildAlgId(signerPriv.getParams()));
             tbsOut.write(issuerDnDer);
             tbsOut.write(DerCodec.encodeTime(thisUpdateGeneralizedTime));
             if (nextUpdateGeneralizedTime != null) {
@@ -285,11 +399,17 @@ public final class GostCrlBuilder {
             }
 
             if (withIdpExtension) {
+                byte[] idpDer =
+                        buildIdpExtension(
+                                idpOnlyContainsUserCerts, idpOnlyContainsCACerts, idpIndirectCrl);
                 byte[] idpOid = DerCodec.encodeOid(GostOids.EXT_IDP);
-                byte[] idpExt =
-                        DerCodec.encodeSequence(
-                                idpOid, DerCodec.encodeTlv(0x04, new byte[] {0x30, 0x00}));
+                byte[] idpExt = DerCodec.encodeSequence(idpOid, DerCodec.encodeTlv(0x04, idpDer));
                 crlExts.write(idpExt);
+                hasCrlExt = true;
+            }
+
+            if (akiBytes != null) {
+                crlExts.write(GostCertificateBuilder.buildAkiExtension(akiBytes));
                 hasCrlExt = true;
             }
 
@@ -299,11 +419,39 @@ public final class GostCrlBuilder {
             }
 
             byte[] tbsCertList = DerCodec.encodeSequence(tbsOut.toByteArray());
-            int hlen = caPriv.getParams().hlen;
+            int hlen = signerPriv.getParams().hlen;
             byte[] hash = GostSignatureHelper.doHash(tbsCertList, hlen);
-            byte[] sig = Signature.signHash(hash, caPriv);
-            byte[] sigAlg = GostSignatureHelper.buildAlgId(caPriv.getParams());
+            byte[] sig = Signature.signHash(hash, signerPriv);
+            byte[] sigAlg = GostSignatureHelper.buildAlgId(signerPriv.getParams());
             return DerCodec.encodeSequence(tbsCertList, sigAlg, DerCodec.encodeBitString(sig));
+        } catch (java.io.IOException e) {
+            throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
+        }
+    }
+
+    /**
+     * Кодирует IssuingDistributionPoint SEQUENCE (RFC 5280 §5.2.5, Appendix A —
+     * DEFINITIONS IMPLICIT TAGS). Флаги кодируются как IMPLICIT BOOLEAN:
+     * тег 0x81/0x82/0x84, значение — байт 0xFF напрямую.
+     * indirectCRL всегда false при генерации через builder — indirect CRL вне scope.
+     * Неиспользуемые поля ([0] distributionPoint, [3] onlySomeReasons,
+     * [5] onlyContainsAttributeCerts) опускаются.
+     * Флаги BOOLEAN DEFAULT FALSE — кодируются только true.
+     */
+    public static byte[] buildIdpExtension(
+            boolean onlyContainsUserCerts, boolean onlyContainsCACerts, boolean indirectCRL) {
+        ByteArrayOutputStream idpOut = new ByteArrayOutputStream();
+        try {
+            if (onlyContainsUserCerts) {
+                idpOut.write(DerCodec.encodeTlv(0x81, new byte[] {(byte) 0xFF}));
+            }
+            if (onlyContainsCACerts) {
+                idpOut.write(DerCodec.encodeTlv(0x82, new byte[] {(byte) 0xFF}));
+            }
+            if (indirectCRL) {
+                idpOut.write(DerCodec.encodeTlv(0x84, new byte[] {(byte) 0xFF}));
+            }
+            return DerCodec.encodeSequence(idpOut.toByteArray());
         } catch (java.io.IOException e) {
             throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
         }

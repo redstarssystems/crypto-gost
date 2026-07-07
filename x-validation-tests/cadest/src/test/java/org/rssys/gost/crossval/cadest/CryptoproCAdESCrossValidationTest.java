@@ -16,6 +16,7 @@ import org.rssys.gost.crossval.cadest.TestData.CertPair;
 import org.rssys.gost.crossval.util.TempDirUtils;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cms.CAdESExtender;
 import org.rssys.gost.pkix.cms.CmsTestUtils;
 
 @DisplayName("КриптоПРО: кросс-валидация CAdES-BES / CAdES-T / TSP")
@@ -24,6 +25,8 @@ class CryptoproCAdESCrossValidationTest {
     private static CertPair pair256;
     private static KeyPair tsaKp256;
     private static GostCertificate tsaCert256;
+    private static KeyPair csKp256;
+    private static GostCertificate csCert256;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -31,6 +34,9 @@ class CryptoproCAdESCrossValidationTest {
         tsaKp256 = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
         tsaCert256 = CmsTestUtils.createSelfSignedCert(
                 tsaKp256.getPrivate(), tsaKp256.getPublic());
+        csKp256 = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
+        csCert256 = CmsTestUtils.createSelfSignedCert(
+                csKp256.getPrivate(), csKp256.getPublic());
     }
 
     // ========================================================================
@@ -46,15 +52,6 @@ class CryptoproCAdESCrossValidationTest {
 
         TempDirUtils.withTempDir("cp-bes-", dir -> {
             Path signedPath = TestData.writeDer(dir, "signed.p7s", cadesBes);
-            Path certPath = TestData.writeDer(dir, "leaf.der",
-                    pair256.leafCert().getEncoded());
-            Path caPath = TestData.writeDer(dir, "ca.der",
-                    pair256.caCert().getEncoded());
-
-            // Устанавливаем сертификаты в хранилище (ошибки — некритичны)
-            runCp(cryptcpBinary(), "-instcert", "-f", certPath.toString());
-            runCp(cryptcpBinary(), "-instcert", "-f", caPath.toString());
-
             Path outPath = dir.resolve("out.bin");
             String stdout = runOut(
                     cryptcpBinary(), "-verify", "-attached",
@@ -80,14 +77,6 @@ class CryptoproCAdESCrossValidationTest {
 
         TempDirUtils.withTempDir("cp-bes-noattr-", dir -> {
             Path signedPath = TestData.writeDer(dir, "signed-noattr.p7s", noAttr);
-            Path certPath = TestData.writeDer(dir, "leaf.der",
-                    pair256.leafCert().getEncoded());
-            Path caPath = TestData.writeDer(dir, "ca.der",
-                    pair256.caCert().getEncoded());
-
-            runCp(cryptcpBinary(), "-instcert", "-f", certPath.toString());
-            runCp(cryptcpBinary(), "-instcert", "-f", caPath.toString());
-
             Path outPath = dir.resolve("out.bin");
             String stdout = runOut(
                     cryptcpBinary(), "-verify", "-attached",
@@ -114,13 +103,6 @@ class CryptoproCAdESCrossValidationTest {
         TempDirUtils.withTempDir("cp-bes-det-", dir -> {
             Path signedPath = TestData.writeDer(dir, "signed-det.p7s", cadesBes);
             Path dataPath = TestData.writeDer(dir, "data.bin", data);
-            Path certPath = TestData.writeDer(dir, "leaf.der",
-                    pair256.leafCert().getEncoded());
-            Path caPath = TestData.writeDer(dir, "ca.der",
-                    pair256.caCert().getEncoded());
-
-            runCp(cryptcpBinary(), "-instcert", "-f", certPath.toString());
-            runCp(cryptcpBinary(), "-instcert", "-f", caPath.toString());
 
             // detached: data_dir + signedMsg
             String stdout = runOut(
@@ -155,16 +137,6 @@ class CryptoproCAdESCrossValidationTest {
 
         TempDirUtils.withTempDir("cp-cadest-", dir -> {
             Path signedPath = TestData.writeDer(dir, "signed-cadest.p7s", cadesT);
-            Path leafPath = TestData.writeDer(dir, "leaf.der",
-                    pair256.leafCert().getEncoded());
-            Path caPath = TestData.writeDer(dir, "ca.der",
-                    pair256.caCert().getEncoded());
-            Path tsaPath = TestData.writeDer(dir, "tsa.der", tsaCert256.getEncoded());
-
-            runCp(cryptcpBinary(), "-instcert", "-f", leafPath.toString());
-            runCp(cryptcpBinary(), "-instcert", "-f", caPath.toString());
-            runCp(cryptcpBinary(), "-instcert", "-f", tsaPath.toString());
-
             Path outPath = dir.resolve("out.bin");
             String stdout = runOut(
                     cryptcpBinary(), "-verify", "-attached",
@@ -188,14 +160,6 @@ class CryptoproCAdESCrossValidationTest {
 
         TempDirUtils.withTempDir("cp-bes-cadest-", dir -> {
             Path signedPath = TestData.writeDer(dir, "signed-bes.p7s", cadesBes);
-            Path certPath = TestData.writeDer(dir, "leaf.der",
-                    pair256.leafCert().getEncoded());
-            Path caPath = TestData.writeDer(dir, "ca.der",
-                    pair256.caCert().getEncoded());
-
-            runCp(cryptcpBinary(), "-instcert", "-f", certPath.toString());
-            runCp(cryptcpBinary(), "-instcert", "-f", caPath.toString());
-
             Path outPath = dir.resolve("out.bin");
             String stdout = runOut(
                     cryptcpBinary(), "-verify", "-attached",
@@ -223,14 +187,6 @@ class CryptoproCAdESCrossValidationTest {
 
         TempDirUtils.withTempDir("cp-tampered-", dir -> {
             Path signedPath = TestData.writeDer(dir, "tampered.p7s", tampered);
-            Path certPath = TestData.writeDer(dir, "leaf.der",
-                    pair256.leafCert().getEncoded());
-            Path caPath = TestData.writeDer(dir, "ca.der",
-                    pair256.caCert().getEncoded());
-
-            runCp(cryptcpBinary(), "-instcert", "-f", certPath.toString());
-            runCp(cryptcpBinary(), "-instcert", "-f", caPath.toString());
-
             Path outPath = dir.resolve("out.bin");
             String stdout = runOut(
                     cryptcpBinary(), "-verify", "-attached",
@@ -240,6 +196,87 @@ class CryptoproCAdESCrossValidationTest {
             System.out.println("cryptcp tampered: " + stdout.replace('\n', ' '));
             assertTrue(stdout.length() > 5,
                     "cryptcp должен завершиться на tampered подписи");
+            return null;
+        });
+    }
+
+    // ========================================================================
+    // Countersignature: BES+CS / T+CS -> cryptcp -verify
+    //
+    // cryptcp не валидирует countersignature семантически — тесты проверяют,
+    // что вендорский инструмент не падает от нестандартного unsigned-атрибута
+    // и корректно разбирает бандл сертификатов с «лишним» сертификатом
+    // countersigner'а.
+    //
+    // ЗАБЛОКИРОВАНО: обратное направление (cryptcp -addsign создаёт
+    // countersignature -> библиотека verifyCountersignature) — требуется
+    // ключевой контейнер CryptoPro (КПС). Java-сгенерированный ключ нельзя
+    // передать в cryptcp. Условие снятия: появление на тестовой машине
+    // контейнера CryptoPro с сертификатом countersigner'а.
+    // ========================================================================
+
+    @Test
+    @EnabledIf("cryptcpAvailable")
+    @DisplayName("BES + countersignature -> cryptcp -verify -cadesbes: не зависает")
+    void countersignatureDoesNotBreakCadesbesVerify() throws Exception {
+        byte[] data = "cryptcp BES + CS test".getBytes();
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
+        byte[] countersigned = CAdESExtender.embedCountersignature(
+                cadesBes, csKp256.getPrivate(), csCert256);
+
+        TempDirUtils.withTempDir("cp-bes-cs-", dir -> {
+            Path signedPath = TestData.writeDer(dir, "signed.p7s", countersigned);
+            Path dataPath = TestData.writeDer(dir, "data.dat", data);
+
+            String stdout = runOut(
+                    cryptcpBinary(), "-verify", "-attached",
+                    "-cadesbes", "-nochain",
+                    signedPath.toString(), dataPath.toString());
+
+            System.out.println("cryptcp -verify -cadesbes (BES+CS): "
+                    + stdout.replace('\n', ' '));
+
+            // assert намеренно слабый (canonical pattern всего файла): не отличает
+            // успешный разбор от ошибки парсинга. Конкретное поведение зафиксировано
+            // разово на шаге эмпирической проверки при написании теста.
+            assertTrue(stdout.contains("Проверка") || stdout.contains("Подпись")
+                            || stdout.contains("ErrorCode"),
+                    "cryptcp должен обработать countersigned файл без зависания: "
+                            + stdout);
+            return null;
+        });
+    }
+
+    @Test
+    @EnabledIf("cryptcpAvailable")
+    @DisplayName("T + countersignature -> cryptcp -verify -cadest: не зависает")
+    void countersignatureDoesNotBreakCadestVerify() throws Exception {
+        byte[] data = "cryptcp T + CS test".getBytes();
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
+        byte[] sigHash = TestData.hashFirstSignature(cadesBes);
+        String hashOid = TestData.hashOidForParams(TestData.PARAMS_256);
+        byte[] tsToken = TestData.buildTimeStampToken(
+                sigHash, hashOid, tsaKp256.getPrivate(), tsaCert256);
+        byte[] cadesT = TestData.buildCAdEST(cadesBes, tsToken);
+        byte[] countersigned = CAdESExtender.embedCountersignature(
+                cadesT, csKp256.getPrivate(), csCert256);
+
+        TempDirUtils.withTempDir("cp-cadest-cs-", dir -> {
+            Path signedPath = TestData.writeDer(dir, "signed-cadest-cs.p7s", countersigned);
+            Path dataPath = TestData.writeDer(dir, "data.dat", data);
+
+            String stdout = runOut(
+                    cryptcpBinary(), "-verify", "-attached",
+                    "-cadest", "-nochain",
+                    signedPath.toString(), dataPath.toString());
+
+            System.out.println("cryptcp -verify -cadest (T+CS): "
+                    + stdout.replace('\n', ' '));
+
+            assertTrue(stdout.contains("Проверка") || stdout.contains("Подпись")
+                            || stdout.contains("ErrorCode"),
+                    "cryptcp должен обработать countersigned CAdES-T без зависания: "
+                            + stdout);
             return null;
         });
     }

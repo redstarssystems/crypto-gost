@@ -21,6 +21,7 @@ public class PkixException extends Exception {
         MISSING_KEY_CERT_SIGN,
         PATH_LEN_EXCEEDED,
         ALG_MISMATCH,
+        POLICY_VIOLATION,
         UNKNOWN_CRITICAL_EXTENSION,
         SIGNATURE_INVALID,
         PARSE_ERROR,

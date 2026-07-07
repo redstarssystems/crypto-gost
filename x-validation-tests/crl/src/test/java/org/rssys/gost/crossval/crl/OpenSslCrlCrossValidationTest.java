@@ -7,11 +7,13 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.crossval.util.CrossValUtils;
 import org.rssys.gost.crossval.util.OpenSslChecker;
 import org.rssys.gost.crossval.util.TempDirUtils;
+import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.cert.*;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder.KeyUsage;
 import org.rssys.gost.signature.ECParameters;
@@ -319,36 +321,52 @@ class OpenSslCrlCrossValidationTest {
     }
 
     // ========================================================================
-    // Сценарий 7: Base CRL с freshestCRL + cRLNumber — openssl crl -text + -verify
+    // Сценарий 7: Base CRL с freshestCRL — openssl -text + read-path round-trip
     // ========================================================================
 
     @Test
     @EnabledIf("opensslAvailable")
-    @DisplayName("Сценарий 7: Base CRL с freshestCRL + cRLNumber — -text + -verify")
+    @DisplayName("Сценарий 7: Base CRL с freshestCRL — openssl -text + round-trip read-path")
     void testFreshestCrlTextAndVerify() throws Exception {
         TempDirUtils.withTempDir("crl-freshest-", dir -> {
             KeyPair caKp = genKey(PARAMS_256);
             GostCertificate ca = buildCa(PARAMS_256, caKp, "CN=Test CA,O=Test");
 
+            String deltaUri = "http://ca.example/delta.crl";
             byte[] crlDer = GostCrlBuilder.create(caKp.getPrivate(),
                             ca.getSubjectDnBytes())
-                    .thisUpdate("20260101000000Z")
-                    .nextUpdate("20260701000000Z")
+                    .thisUpdate("20260706120000Z")
+                    .nextUpdate("20270706120000Z")
                     .withCrlNumber(3)
-                    .withFreshestCrl("http://ca.example/delta.crl")
+                    .withFreshestCrl(deltaUri)
                     .build();
             Path crlPath = dir.resolve("crl.der");
             Files.write(crlPath, crlDer);
             Path caPath = dir.resolve("ca.der");
             Files.write(caPath, ca.getEncoded());
 
-            // L1: -text — парсинг расширения freshestCRL (структура = CDP)
+            // L1: -text — захват stdout для проверки read-path
             String[] cmdText = CrossValUtils.concat(
                     new String[]{opensslBinary(), "crl", "-inform", "DER",
                             "-in", crlPath.toString(), "-text", "-noout"},
                     OpenSslChecker.resolveEngineFlag());
-            int exitText = OpenSslChecker.run(cmdText);
-            assertEquals(0, exitText, "openssl crl -text с freshestCRL должен пройти");
+            String textOut = OpenSslChecker.runAndCapture(cmdText);
+
+            // Извлечь URI из вывода openssl: строка вида "URI:http://..."
+            String uriFromOpenssl = textOut.lines()
+                    .filter(l -> l.contains("URI:"))
+                    .map(l -> l.substring(l.indexOf("URI:") + 4).trim())
+                    .findFirst()
+                    .orElse(null);
+            assertEquals(deltaUri, uriFromOpenssl,
+                    "openssl crl -text должен содержать URI " + deltaUri);
+
+            // L2: read-path библиотеки — парсинг того же DER
+            GostCrl crl = new GostCrl(crlDer);
+            crl.verify(caKp.getPublic());
+            assertTrue(crl.isFreshestCrl(), "GostCrl.isFreshestCrl() должен быть true");
+            assertEquals(deltaUri, crl.getFreshestCrlUris()[0],
+                    "GostCrl.getFreshestCrlUris()[0] должен совпадать с исходным URI");
 
             // L3: -verify
             String[] cmdVerify = CrossValUtils.concat(
@@ -358,6 +376,127 @@ class OpenSslCrlCrossValidationTest {
                     OpenSslChecker.resolveEngineFlag());
             int exitVerify = OpenSslChecker.run(cmdVerify);
             assertEquals(0, exitVerify, "openssl crl -verify с freshestCRL должен дать verify OK");
+
+            return null;
+        });
+    }
+
+    // ========================================================================
+    // Сценарий 8: CRL с AKI — openssl -text + round-trip read-path
+    // ========================================================================
+
+    @Test
+    @EnabledIf("opensslAvailable")
+    @DisplayName("Сценарий 8: CRL с AKI — openssl -text + round-trip read-path")
+    void testAkiCrlTextAndVerify() throws Exception {
+        TempDirUtils.withTempDir("crl-aki-", dir -> {
+            KeyPair caKp = genKey(PARAMS_256);
+            GostCertificate ca = buildCa(PARAMS_256, caKp, "CN=Test CA,O=Test");
+
+            byte[] caPubPoint = GostDerCodec.subjectPublicKeyPointBytes(caKp.getPublic());
+            byte[] caSki = Digest.digest256(caPubPoint);
+
+            byte[] crlDer = GostCrlBuilder.create(caKp.getPrivate(),
+                            ca.getSubjectDnBytes())
+                    .thisUpdate("20260706120000Z")
+                    .nextUpdate("20270706120000Z")
+                    .withAki(caSki)
+                    .build();
+            Path crlPath = dir.resolve("crl.der");
+            Files.write(crlPath, crlDer);
+            Path caPath = dir.resolve("ca.der");
+            Files.write(caPath, ca.getEncoded());
+
+            // L1: -text — AKI должен быть виден в выводе
+            String[] cmdText = CrossValUtils.concat(
+                    new String[]{opensslBinary(), "crl", "-inform", "DER",
+                            "-in", crlPath.toString(), "-text", "-noout"},
+                    OpenSslChecker.resolveEngineFlag());
+            String textOut = OpenSslChecker.runAndCapture(cmdText);
+            assertTrue(
+                    textOut.contains("X509v3 Authority Key Identifier"),
+                    "openssl crl -text должен показывать AKI");
+
+            // L2: read-path библиотеки — round-trip
+            GostCrl crl = new GostCrl(crlDer);
+            crl.verify(caKp.getPublic());
+            assertNotNull(crl.getAuthorityKeyIdentifier(),
+                    "GostCrl.getAuthorityKeyIdentifier() должен быть не null");
+            assertEquals(caSki.length, crl.getAuthorityKeyIdentifier().length,
+                    "AKI байты должны быть той же длины, что и SKI");
+
+            // L3: -verify
+            String[] cmdVerify = CrossValUtils.concat(
+                    new String[]{opensslBinary(), "crl", "-inform", "DER",
+                            "-in", crlPath.toString(), "-verify",
+                            "-CAfile", caPath.toString(), "-noout"},
+                    OpenSslChecker.resolveEngineFlag());
+            int exitVerify = OpenSslChecker.run(cmdVerify);
+            assertEquals(0, exitVerify, "openssl crl -verify с AKI должен дать verify OK");
+
+            return null;
+        });
+    }
+
+    // ========================================================================
+    // Сценарий 9: Делегированный CRL с AKI — openssl -text + verifyDelegated
+    // ========================================================================
+
+    @Test
+    @EnabledIf("opensslAvailable")
+    @DisplayName("Сценарий 9: Делегированный CRL с AKI — openssl -text + verifyDelegated")
+    void testDelegatedCrlWithAkiTextAndVerify() throws Exception {
+        TempDirUtils.withTempDir("crl-deleg-aki-", dir -> {
+            KeyPair caKp = genKey(PARAMS_256);
+            GostCertificate ca = buildCa(PARAMS_256, caKp, "CN=Test CA,O=Test");
+            byte[] issuerDn = ca.getSubjectDnBytes();
+
+            byte[] caPubPoint = GostDerCodec.subjectPublicKeyPointBytes(caKp.getPublic());
+            byte[] caSki = Digest.digest256(caPubPoint);
+
+            // Делегированный CRL-подписант
+            KeyPair signerKp = genKey(PARAMS_256);
+            byte[] signerPubPoint = GostDerCodec.subjectPublicKeyPointBytes(signerKp.getPublic());
+            byte[] signerSki = Digest.digest256(signerPubPoint);
+
+            GostCertificate signer =
+                    GostCertificateBuilder.create(PARAMS_256, "CN=CRL Signer,O=Test")
+                            .publicKey(signerKp.getPublic())
+                            .issuerDn(issuerDn)
+                            .notBefore("20250101000000Z")
+                            .notAfter("20351231235959Z")
+                            .keyUsage(KeyUsage.CRL_SIGN)
+                            .assembleCert(caKp.getPrivate());
+
+            byte[] crlDer = GostCrlBuilder.create(signerKp.getPrivate(), issuerDn)
+                    .thisUpdate("20260706120000Z")
+                    .nextUpdate("20270706120000Z")
+                    .withCrlNumber(1)
+                    .withAki(signerSki)
+                    .build();
+            Path crlPath = dir.resolve("crl.der");
+            Files.write(crlPath, crlDer);
+
+            // L1: openssl -text — AKI виден, issuer = CA
+            String[] cmdText = CrossValUtils.concat(
+                    new String[]{opensslBinary(), "crl", "-inform", "DER",
+                            "-in", crlPath.toString(), "-text", "-noout"},
+                    OpenSslChecker.resolveEngineFlag());
+            String textOut = OpenSslChecker.runAndCapture(cmdText);
+            assertTrue(
+                    textOut.contains("X509v3 Authority Key Identifier"),
+                    "openssl crl -text должен показывать AKI для делегированного CRL");
+
+            // L2: verifyDelegated — библиотека должна верифицировать
+            assertDoesNotThrow(
+                    () -> CrlVerifier.verifyDelegated(
+                            crlDer,
+                            ca.getSerialNumber(),
+                            caKp.getPublic(),
+                            issuerDn,
+                            ca,
+                            java.util.List.of(signer.getEncoded())),
+                    "Делегированный CRL с AKI должен верифицироваться");
 
             return null;
         });

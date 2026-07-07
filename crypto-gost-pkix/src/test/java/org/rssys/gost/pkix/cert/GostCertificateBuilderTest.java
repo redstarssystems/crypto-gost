@@ -93,6 +93,53 @@ class GostCertificateBuilderTest {
     }
 
     @Test
+    @DisplayName("buildTbs с IAN: dNSName читается обратно")
+    void testBuildTbsWithIanDns() {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Test Cert IAN");
+        byte[] tbs =
+                GostCertificateBuilder.create(params, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .issuerDn(subjectDn)
+                        .ianDns("issuer.example.com")
+                        .buildTbs();
+        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), params);
+
+        String[] names = cert.getIssuerAltNameDnsNames();
+        assertNotNull(names, "IAN dNSName не null");
+        assertEquals(1, names.length);
+        assertEquals("issuer.example.com", names[0]);
+    }
+
+    @Test
+    @DisplayName("verifyHostname не использует IAN — только SAN")
+    void testVerifyHostnameDoesNotUseIan() {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=IAN Check");
+        byte[] tbs =
+                GostCertificateBuilder.create(params, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .issuerDn(subjectDn)
+                        .sanDns("subject.example.com")
+                        .ianDns("issuer.example.com")
+                        .buildTbs();
+        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), params);
+
+        assertTrue(
+                cert.verifyHostname("subject.example.com"),
+                "SAN dNSName должен проходить hostname-верификацию");
+        assertFalse(
+                cert.verifyHostname("issuer.example.com"),
+                "IAN dNSName не должен проходить hostname-верификацию");
+    }
+
+    @Test
     @DisplayName("buildTbs с KeyUsage и EKU")
     void testBuildTbsWithKuEku() throws Exception {
         ECParameters params = ECParameters.tc26a256();
@@ -686,5 +733,245 @@ class GostCertificateBuilderTest {
         assertTrue(
                 ex.getMessage().contains("exceeds maximum size"),
                 "должен быть reject по превышению размера: " + ex.getMessage());
+    }
+
+    // ========================================================================
+    // NameConstraints: round-trip тесты построителя
+    // ========================================================================
+
+    @Test
+    @DisplayName("NameConstraints: buildNameConstraintsExtension — permitted dNSName")
+    void testBuildNcPermittedDns() {
+        byte[] ext =
+                GostCertificateBuilder.buildNameConstraintsExtension(
+                        new String[] {"example.com"}, null, null, null);
+        GostExtensionParser.ExtensionsResult r = parseExt(ext);
+        assertEquals(1, r.nameConstraints.permittedDnsNames.length);
+        assertEquals("example.com", r.nameConstraints.permittedDnsNames[0]);
+        assertNull(r.nameConstraints.permittedIps);
+        assertNull(r.nameConstraints.excludedDnsNames);
+        assertNull(r.nameConstraints.excludedIps);
+        assertFalse(r.nameConstraints.nonCritical);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: buildNameConstraintsExtension — permitted iPAddress CIDR")
+    void testBuildNcPermittedIp() {
+        byte[] ext =
+                GostCertificateBuilder.buildNameConstraintsExtension(
+                        null, new String[] {"192.168.1.0/28"}, null, null);
+        GostExtensionParser.ExtensionsResult r = parseExt(ext);
+        assertNotNull(r.nameConstraints.permittedIps);
+        assertEquals(1, r.nameConstraints.permittedIps.length);
+        assertEquals(8, r.nameConstraints.permittedIps[0].length, "IPv4 constraint = 8 байт");
+        assertNull(r.nameConstraints.permittedDnsNames);
+        assertFalse(r.nameConstraints.nonCritical);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: buildNameConstraintsExtension — excluded dNSName")
+    void testBuildNcExcludedDns() {
+        byte[] ext =
+                GostCertificateBuilder.buildNameConstraintsExtension(
+                        null, null, new String[] {"evil.com"}, null);
+        GostExtensionParser.ExtensionsResult r = parseExt(ext);
+        assertEquals(1, r.nameConstraints.excludedDnsNames.length);
+        assertEquals("evil.com", r.nameConstraints.excludedDnsNames[0]);
+        assertNull(r.nameConstraints.permittedDnsNames);
+        assertNull(r.nameConstraints.permittedIps);
+        assertNull(r.nameConstraints.excludedIps);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: buildNameConstraintsExtension — permitted + excluded, DNS + IP")
+    void testBuildNcBoth() {
+        byte[] ext =
+                GostCertificateBuilder.buildNameConstraintsExtension(
+                        new String[] {"example.com"},
+                        new String[] {"192.168.1.0/28"},
+                        new String[] {"evil.com"},
+                        new String[] {"10.0.0.0/8"});
+        GostExtensionParser.ExtensionsResult r = parseExt(ext);
+        assertEquals(1, r.nameConstraints.permittedDnsNames.length);
+        assertEquals("example.com", r.nameConstraints.permittedDnsNames[0]);
+        assertEquals(1, r.nameConstraints.permittedIps.length);
+        assertEquals(8, r.nameConstraints.permittedIps[0].length);
+        assertEquals(1, r.nameConstraints.excludedDnsNames.length);
+        assertEquals("evil.com", r.nameConstraints.excludedDnsNames[0]);
+        assertEquals(1, r.nameConstraints.excludedIps.length);
+        assertEquals(8, r.nameConstraints.excludedIps[0].length);
+        assertFalse(r.nameConstraints.hasUnsupportedNameType);
+        assertFalse(r.nameConstraints.hasInvalidMinMax);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: расширение всегда critical")
+    void testBuildNcCriticalAlways() {
+        byte[] ext =
+                GostCertificateBuilder.buildNameConstraintsExtension(
+                        new String[] {"example.com"}, null, null, null);
+        GostExtensionParser.ExtensionsResult r = parseExt(ext);
+        assertFalse(r.nameConstraints.nonCritical, "Расширение должно быть critical");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: все списки null -> IllegalArgumentException")
+    void testBuildNcNullSafety() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostCertificateBuilder.buildNameConstraintsExtension(null, null, null, null));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: все списки пусты -> IllegalArgumentException")
+    void testBuildNcEmptyArrays() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostCertificateBuilder.buildNameConstraintsExtension(
+                                new String[0], new String[0], new String[0], new String[0]));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: полный round-trip через fluent API")
+    void testBuildNcRoundtripViaFluent() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=NC CA");
+        GostCertificate cert =
+                GostCertificateBuilder.create(params, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .issuerDn(subjectDn)
+                        .nameConstraints(
+                                new String[] {"example.com"},
+                                new String[] {"192.168.1.0/28"},
+                                new String[] {"evil.com"},
+                                null)
+                        .assembleCert(kp.getPrivate());
+
+        NameConstraintsData nc = cert.getNameConstraints();
+        assertNotNull(nc);
+        assertFalse(nc.isEmpty());
+        assertEquals(1, nc.permittedDnsNames.length);
+        assertEquals("example.com", nc.permittedDnsNames[0]);
+        assertEquals(1, nc.permittedIps.length);
+        assertEquals(1, nc.excludedDnsNames.length);
+        assertEquals("evil.com", nc.excludedDnsNames[0]);
+        assertNull(nc.excludedIps);
+        assertFalse(nc.nonCritical);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: некорректный CIDR -> IllegalArgumentException")
+    void testBuildNcInvalidCidr() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostCertificateBuilder.buildNameConstraintsExtension(
+                                null, new String[] {"not-a-cidr"}, null, null));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostCertificateBuilder.buildNameConstraintsExtension(
+                                null, new String[] {"192.168.1.0/999"}, null, null));
+    }
+
+    @Test
+    @DisplayName("AIA buildAiaExtension: только OCSP — round-trip через GostExtensionParser")
+    void testBuildAiaOcspRoundtrip() {
+        byte[] aiaExt = GostCertificateBuilder.buildAiaExtension("http://ocsp.example.com", null);
+        GostExtensionParser.ExtensionsResult r = parseExt(aiaExt);
+
+        assertNotNull(r.ocspUris, "OCSP URI должен быть");
+        assertEquals(1, r.ocspUris.length);
+        assertEquals("http://ocsp.example.com", r.ocspUris[0]);
+        assertNull(r.caIssuersUris, "caIssuers должен быть null");
+        assertNotNull(r.aiaUris);
+        assertEquals(1, r.aiaUris.length);
+    }
+
+    @Test
+    @DisplayName("AIA buildAiaExtension: только caIssuers — round-trip через GostExtensionParser")
+    void testBuildAiaCaIssuersRoundtrip() {
+        byte[] aiaExt =
+                GostCertificateBuilder.buildAiaExtension(null, "http://ca.example.com/cert.p7c");
+        GostExtensionParser.ExtensionsResult r = parseExt(aiaExt);
+
+        assertNotNull(r.caIssuersUris, "caIssuers URI должен быть");
+        assertEquals(1, r.caIssuersUris.length);
+        assertEquals("http://ca.example.com/cert.p7c", r.caIssuersUris[0]);
+        assertNull(r.ocspUris, "OCSP должен быть null");
+        assertNotNull(r.aiaUris);
+        assertEquals(1, r.aiaUris.length);
+    }
+
+    @Test
+    @DisplayName("AIA buildAiaExtension: OCSP + caIssuers в одном расширении — round-trip")
+    void testBuildAiaBothRoundtrip() {
+        byte[] aiaExt =
+                GostCertificateBuilder.buildAiaExtension(
+                        "http://ocsp.example.com", "http://ca.example.com/cert.p7c");
+        GostExtensionParser.ExtensionsResult r = parseExt(aiaExt);
+
+        assertNotNull(r.ocspUris);
+        assertEquals(1, r.ocspUris.length);
+        assertEquals("http://ocsp.example.com", r.ocspUris[0]);
+        assertNotNull(r.caIssuersUris);
+        assertEquals(1, r.caIssuersUris.length);
+        assertEquals("http://ca.example.com/cert.p7c", r.caIssuersUris[0]);
+        assertNotNull(r.aiaUris);
+        assertEquals(2, r.aiaUris.length);
+    }
+
+    @Test
+    @DisplayName("AIA buildAiaExtension: оба null -> IllegalArgumentException")
+    void testBuildAiaBothNullThrows() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostCertificateBuilder.buildAiaExtension(null, null));
+    }
+
+    /** Парсит одиночное Extension SEQUENCE через GostExtensionParser. */
+    private static GostExtensionParser.ExtensionsResult parseExt(byte[] extensionDer) {
+        byte[] seq = DerCodec.encodeSequence(extensionDer);
+        return GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+    }
+
+    @Test
+    @DisplayName("freshestCrl fluent + round-trip: build → parse → verify URI")
+    void testFreshestCrlFluentRoundtrip() {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=FreshestCRL Test");
+        byte[] tbs =
+                GostCertificateBuilder.create(params, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240601120000Z")
+                        .notAfter("21060101120000Z")
+                        .freshestCrl("http://ca.example/delta.crl")
+                        .buildTbs();
+        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), params);
+        String[] uris = cert.getFreshestCrlUris();
+        assertNotNull(uris, "freshestCrlUris не null после round-trip");
+        assertEquals(1, uris.length);
+        assertEquals("http://ca.example/delta.crl", uris[0]);
+    }
+
+    @Test
+    @DisplayName("freshestCrl: без вызова -> getFreshestCrlUris() == null")
+    void testFreshestCrlNotSet() {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=No FreshestCRL");
+        byte[] tbs =
+                GostCertificateBuilder.create(params, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240601120000Z")
+                        .notAfter("21060101120000Z")
+                        .buildTbs();
+        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), params);
+        assertNull(cert.getFreshestCrlUris(), "без freshestCrl() — null");
     }
 }

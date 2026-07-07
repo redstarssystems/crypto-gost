@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -15,10 +16,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
+import org.rssys.gost.pkix.cert.GostCrl;
+import org.rssys.gost.pkix.cert.GostCrlBuilder;
+import org.rssys.gost.pkix.cert.GostDnParser;
+import org.rssys.gost.pkix.cms.CmsContentInfo;
 import org.rssys.gost.pkix.cms.GostPkcs7;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.util.DerCodec;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -44,6 +51,7 @@ class GostP7bCertsOnlyCrossValidationTest {
     private static GostCertificate certAlpha;
     private static GostCertificate certBeta;
     private static GostCertificate certGamma;
+    private static GostCrl testCrl;
 
     @BeforeAll
     static void setUp() {
@@ -51,6 +59,14 @@ class GostP7bCertsOnlyCrossValidationTest {
         certAlpha = newCert("P7B Alpha", 2001);
         certBeta = newCert("P7B Beta", 2002);
         certGamma = newCert("P7B Gamma", 2003);
+
+        KeyPair crlKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] crlIssuerDn = GostDnParser.encodeDn("CN=CRL Issuer");
+        byte[] crlDer =
+                GostCrlBuilder.create(crlKp.getPrivate(), crlIssuerDn)
+                        .nextUpdate("270601120000Z")
+                        .build();
+        testCrl = GostCrl.fromDer(crlDer);
     }
 
     @Test
@@ -119,6 +135,47 @@ class GostP7bCertsOnlyCrossValidationTest {
                 certAlpha.getSerialNumberBigInt(),
                 matches.iterator().next().getSerialNumber(),
                 "серийник должен совпасть");
+    }
+
+    @Test
+    @EnabledIf("opensslAvailable")
+    @DisplayName("OpenSSL pkcs7 -print_certs читает certs-only .p7b с CRL (crls [1] не мешает разбору)")
+    void opensslReadsCertsOnlyWithCrl() throws Exception {
+        byte[] p7b = GostPkcs7.buildCertsOnly(List.of(testCrl), certAlpha, certBeta, certGamma);
+        Path dir = Files.createTempDirectory("p7b-openssl-crl");
+        Path p7bPath = dir.resolve("bundle_crl.p7b");
+        Files.write(p7bPath, p7b);
+
+        String out =
+                run(
+                        opensslBinary(),
+                        "pkcs7",
+                        "-inform",
+                        "DER",
+                        "-in",
+                        p7bPath.toString(),
+                        "-print_certs",
+                        "-noout");
+
+        assertTrue(out.contains("P7B Alpha"), "OpenSSL должен показать subject Alpha, вывод: " + out);
+        assertTrue(out.contains("P7B Beta"), "OpenSSL должен показать subject Beta, вывод: " + out);
+        assertTrue(out.contains("P7B Gamma"), "OpenSSL должен показать subject Gamma, вывод: " + out);
+    }
+
+    @Test
+    @DisplayName("GostPkcs7.extractCertificates не ломается при наличии crls [1]")
+    void extractCertificatesWithCrl() throws Exception {
+        byte[] p7b = GostPkcs7.buildCertsOnly(List.of(testCrl), certAlpha, certBeta);
+
+        List<GostCertificate> certs = GostPkcs7.extractCertificates(p7b);
+        Set<BigInteger> serials = new HashSet<>();
+        for (GostCertificate c : certs) {
+            serials.add(c.getSerialNumberBigInt());
+        }
+        assertEquals(
+                Set.of(certAlpha.getSerialNumberBigInt(), certBeta.getSerialNumberBigInt()),
+                serials,
+                "Сертификаты должны корректно извлечься при наличии crls [1]");
     }
 
     private static GostCertificate newCert(String cn, int serial) {

@@ -165,22 +165,24 @@ class GostSslSmokeTest {
     @Test
     @DisplayName("GostSsl.builder() — crlPolicy/maxCrlSize/maxRevokedEntries")
     void builderCrlParams() {
-        GostSslBuilder b = GostSsl.builder()
-                .certificate(certDer, keyDer)
-                .trustCa(caDer)
-                .crlPolicy(CrlPolicy.DISABLED)
-                .maxCrlSize(64 * 1024 * 1024)
-                .maxRevokedEntries(500_000);
+        GostSslBuilder b =
+                GostSsl.builder()
+                        .certificate(certDer, keyDer)
+                        .trustCa(caDer)
+                        .crlPolicy(CrlPolicy.DISABLED)
+                        .maxCrlSize(64 * 1024 * 1024)
+                        .maxRevokedEntries(500_000);
         assertNotNull(b.buildClientContext());
     }
 
     @Test
     @DisplayName("GostSsl.builder() — maxOcspAgeMs")
     void builderOcspAge() {
-        GostSslBuilder b = GostSsl.builder()
-                .certificate(certDer, keyDer)
-                .trustCa(caDer)
-                .maxOcspAgeMs(12 * 3600 * 1000L);
+        GostSslBuilder b =
+                GostSsl.builder()
+                        .certificate(certDer, keyDer)
+                        .trustCa(caDer)
+                        .maxOcspAgeMs(12 * 3600 * 1000L);
         assertNotNull(b.buildClientContext());
     }
 

@@ -49,7 +49,10 @@ public final class GostCertificate {
     private final Instant notAfter;
     private final String[] sanDnsNames;
     private final byte[][] sanIpAddresses;
+    private final String[] ianDnsNames;
+    private final byte[][] ianIpAddresses;
     private final boolean keyUsageValid;
+    private final boolean crlSignValid;
     private final boolean ekuValid;
     private final boolean ekuClientAuth;
     private final boolean ekuOcspSigning;
@@ -89,6 +92,8 @@ public final class GostCertificate {
     private final String[] caIssuersUris;
     // URI из CRLDistributionPoints (2.5.29.31) — точки распространения CRL
     private final String[] cdpUris;
+    // URI из FreshestCRL (2.5.29.46) — точки распространения delta CRL
+    private final String[] freshestCrlUris;
     // OID политик сертификата (2.5.29.32) — идентификаторы политик
     private final String[] certPolicyOids;
     // Маска KeyUsage (2.5.29.15): 16-bit raw битовая маска
@@ -238,7 +243,10 @@ public final class GostCertificate {
         GostExtensionParser.ExtensionsResult ext = parseExtensions(derEncoded, tbsTlv);
         this.sanDnsNames = ext.sanDnsNames;
         this.sanIpAddresses = ext.sanIpAddresses;
+        this.ianDnsNames = ext.ianDnsNames;
+        this.ianIpAddresses = ext.ianIpAddresses;
         this.keyUsageValid = ext.keyUsageValid;
+        this.crlSignValid = ext.crlSignValid;
         this.ekuValid = ext.ekuValid;
         this.ekuClientAuth = ext.ekuClientAuth;
         this.ekuOcspSigning = ext.ekuOcspSigning;
@@ -253,6 +261,7 @@ public final class GostCertificate {
         this.ocspUris = ext.ocspUris;
         this.caIssuersUris = ext.caIssuersUris;
         this.cdpUris = ext.cdpUris;
+        this.freshestCrlUris = ext.freshestCrlUris;
         this.certPolicyOids = ext.certPolicyOids;
         this.keyUsageBits = ext.keyUsageBits;
         this.ekuOids = ext.ekuOids;
@@ -344,6 +353,12 @@ public final class GostCertificate {
      * Поддерживаются только dNSName entries; CN из Subject не используется
      * (RFC 6125 §6.4.4, deprecated в современных TLS-стеках). Если SAN
      * отсутствует — проверка не проходит.
+     * <p>
+     * IssuerAltName (IAN) <b>не участвует</b> в проверке: IAN описывает
+     * identity издателя, а не субъекта (RFC 5280 §4.2.1.7). Подключение
+     * IAN к hostname-верификации — дыра: CA-сертификат может нести
+     * произвольные dNSName в IssuerAltName, и они не должны влиять
+     * на аутентификацию хоста.
      * <p>
      * Wildcard (*.example.com) матчит ровно одну метку слева.
      * Частичные wildcard (f*.example.com) запрещены.
@@ -493,10 +508,35 @@ public final class GostCertificate {
     }
 
     /**
+     * @return массив raw IP-адресов из IssuerAltName iPAddress entries или null.
+     *         Возвращает defensive copy — caller не может модифицировать внутреннее состояние.
+     *         <p>
+     *         Информационное расширение (RFC 5280 §4.2.1.7): identity издателя,
+     *         не субъекта. Не участвует в hostname-верификации (RFC 6125)
+     *         и в построении/валидации цепочек (RFC 5280 §6.1).
+     */
+    public byte[][] getIssuerAltNameIpAddresses() {
+        if (ianIpAddresses == null) return null;
+        byte[][] copy = new byte[ianIpAddresses.length][];
+        for (int i = 0; i < ianIpAddresses.length; i++) {
+            copy[i] = ianIpAddresses[i].clone();
+        }
+        return copy;
+    }
+
+    /**
      * @return true если KeyUsage не задан или содержит digitalSignature (RFC 8446 §4.4.2.2)
      */
     public boolean isKeyUsageValid() {
         return keyUsageValid;
+    }
+
+    /**
+     * @return true если KeyUsage не задан или содержит cRLSign (RFC 5280 §4.2.1.3).
+     *         Отсутствие KeyUsage = без ограничений — сертификат может подписывать CRL.
+     */
+    public boolean isCrlSigner() {
+        return crlSignValid;
     }
 
     /** @return true если EKU не задан или содержит serverAuth */
@@ -571,6 +611,18 @@ public final class GostCertificate {
      */
     public String[] getSanDnsNames() {
         return sanDnsNames == null ? null : sanDnsNames.clone();
+    }
+
+    /**
+     * @return массив dNSName из IssuerAltName или null.
+     *         Defensive copy — caller не может модифицировать внутреннее состояние.
+     *         <p>
+     *         Информационное расширение (RFC 5280 §4.2.1.7): identity издателя,
+     *         не субъекта. Не участвует в hostname-верификации (RFC 6125)
+     *         и в построении/валидации цепочек (RFC 5280 §6.1).
+     */
+    public String[] getIssuerAltNameDnsNames() {
+        return ianDnsNames == null ? null : ianDnsNames.clone();
     }
 
     /**
@@ -1022,17 +1074,47 @@ public final class GostCertificate {
      * <p><b>⚠ Безопасность (SSRF):</b> возвращаемые URI извлечены из недоверенного
      * сертификата. Атакующий, контролирующий выпуск сертификата, может вписать
      * любой URI: внутренние адреса (192.168.x.x, 127.0.0.1), file://, ldap://,
-     * gopher://, и т.д. Использование этих URI для HTTP-запросов БЕЗ строгой
-     * валидации — прямой SSRF-вектор.</p>
+     * gopher://, и т.д.</p>
      *
-     * <p>Перед фетчингом вызывающий код ОБЯЗАН: проверить схему (только https/http),
-     * проверить хост против списка разрешённых, заблокировать приватные
-     * IP-диапазоны после DNS-разрешения, ограничить таймаут и размер ответа.</p>
+     * <p>При использовании штатного CRL-фетчера библиотеки
+     * ({@code org.rssys.gost.jsse.crl.JdkHttpCrlFetcher}) защиты реализованы
+     * автоматически: проверка схемы (только http/https), блокировка приватных
+     * IP-адресов после DNS-разрешения (через {@link org.rssys.gost.pkix.util.SsrfGuard}),
+     * ограничение таймаута и размера ответа. Если разработчик реализует собственный
+     * фетчер — те же проверки обязательны. Allowlist доверенных хостов всегда
+     * остаётся на уровне приложения (зависит от PKI-политики).</p>
      *
      * @return URI из CRLDistributionPoints, или null если расширение отсутствует
      */
     public String[] getCdpUris() {
         return cdpUris == null ? null : cdpUris.clone();
+    }
+
+    /**
+     * FreshestCRL (RFC 5280 §5.2.6): URI для получения delta CRL.
+     * Структура DistributionPoint идентична CDP (RFC 5280 §4.2.1.13),
+     * отличается только OID (2.5.29.46).
+     *
+     * <p>Нужен caller'у для получения delta CRL с целью инкрементального
+     * обновления CRL-статуса сертификата.</p>
+     *
+     * <p><b>⚠ Безопасность (SSRF):</b> возвращаемые URI извлечены из недоверенного
+     * сертификата. Атакующий, контролирующий выпуск сертификата, может вписать
+     * любой URI: внутренние адреса (192.168.x.x, 127.0.0.1), file://, ldap://,
+     * gopher://, и т.д.</p>
+     *
+     * <p>В отличие от {@link #getCdpUris()}, {@code GostX509TrustManager} не
+     * передаёт FreshestCRL URI в CRL-фетчер автоматически — разработчику
+     * необходимо явно вызвать {@code getFreshestCrlUris()} и передать URI
+     * в {@code JdkHttpCrlFetcher.fetch()}, который принимает любой CRL-URI
+     * и уже реализует защиты: проверка схемы (http/https), блокировка приватных
+     * IP ({@link org.rssys.gost.pkix.util.SsrfGuard}), лимит таймаута и размера.
+     * Allowlist хостов остаётся на уровне приложения (зависит от PKI-политики).</p>
+     *
+     * @return URI из FreshestCRL, или null если расширение отсутствует
+     */
+    public String[] getFreshestCrlUris() {
+        return freshestCrlUris == null ? null : freshestCrlUris.clone();
     }
 
     /**

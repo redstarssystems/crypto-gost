@@ -8,6 +8,7 @@ import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -28,6 +29,7 @@ public final class CmsSignedDataBuilder {
     private String eContentTypeOid = GostOids.PKCS7_DATA;
     private final List<SignerEntry> signers = new ArrayList<>();
     private final List<GostCertificate> certificates = new ArrayList<>();
+    private final List<GostCrl> crls = new ArrayList<>();
     private final List<SignerAttribute> extraAttrs = new ArrayList<>();
     private final List<SignerAttribute> unsignedAttrs = new ArrayList<>();
     private boolean cadesAttributes;
@@ -88,6 +90,15 @@ public final class CmsSignedDataBuilder {
         return this;
     }
 
+    /**
+     * Добавляет CRL для встраивания в SignedData (RFC 5652 §5.1, поле crls [1] IMPLICIT).
+     * Используется выбор crl (CertificateList), other-ветка (OCSP-ответы и т.п.) не поддерживается.
+     */
+    public CmsSignedDataBuilder addCrl(GostCrl crl) {
+        crls.add(crl);
+        return this;
+    }
+
     /** Добавляет пользовательский signed-атрибут. */
     public CmsSignedDataBuilder addSignedAttribute(String attrOid, byte[] value) {
         extraAttrs.add(new SignerAttribute(attrOid, value));
@@ -142,13 +153,14 @@ public final class CmsSignedDataBuilder {
             // encapContentInfo без content: SEQUENCE { eContentType }
             byte[] encapContentInfo = DerCodec.encodeSequence(eContentTypeOidDer);
             byte[] certsField = buildCertificates();
-            // пустые digestAlgorithms и signerInfos (оба SET OF нулевой длины)
+            byte[] crlsField = buildCrls();
             byte[] signedData =
-                    buildSignedData(List.of(), encapContentInfo, certsField, List.of());
+                    buildSignedData(List.of(), encapContentInfo, certsField, crlsField, List.of());
             LOG.log(
                     Level.INFO,
-                    "Building certs-only SignedData with {0} certificate(s)",
-                    certificates.size());
+                    "Building certs-only SignedData with {0} certificate(s), {1} CRL(s)",
+                    certificates.size(),
+                    crls.size());
             return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedData);
         }
 
@@ -191,12 +203,14 @@ public final class CmsSignedDataBuilder {
         // 3. Собираем EncapsulatedContentInfo
         byte[] encapContentInfo = buildEncapsulatedContentInfo(eContentTypeOidDer);
 
-        // 4. Собираем сертификаты
+        // 4. Собираем сертификаты и CRL
         byte[] certsField = buildCertificates();
+        byte[] crlsField = buildCrls();
 
         // 5. Собираем SignedData
         byte[] signedData =
-                buildSignedData(digestAlgIds, encapContentInfo, certsField, signerInfoList);
+                buildSignedData(
+                        digestAlgIds, encapContentInfo, certsField, crlsField, signerInfoList);
 
         // 6. Оборачиваем в ContentInfo
         byte[] result = CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedData);
@@ -328,31 +342,48 @@ public final class CmsSignedDataBuilder {
         return DerCodec.encodeContextConstructed(0, DerCodec.concat(sorted));
     }
 
+    private byte[] buildCrls() {
+        if (crls.isEmpty()) {
+            return new byte[0];
+        }
+        byte[][] derCrls = new byte[crls.size()][];
+        for (int i = 0; i < crls.size(); i++) {
+            derCrls[i] = crls.get(i).getEncoded();
+        }
+        // [1] IMPLICIT SET OF CertificateList — тег 0xA1 заменяет SET (X.690 §8.14)
+        java.util.Arrays.sort(derCrls, DerCodec::compareDer);
+        return DerCodec.encodeContextConstructed(1, DerCodec.concat(derCrls));
+    }
+
     private byte[] buildSignedData(
             List<byte[]> digestAlgIds,
             byte[] encapContentInfo,
             byte[] certsField,
+            byte[] crlsField,
             List<byte[]> signerInfoList) {
-        // version: 3 если eContentType != id-data, иначе 1 (RFC 5652 §5.1)
         int versionNum =
                 GostOids.PKCS7_DATA.equals(eContentTypeOid)
                         ? CmsConstants.SIGNED_DATA_V1
                         : CmsConstants.SIGNED_DATA_V3;
         byte[] version = DerCodec.encodeInteger(versionNum);
 
-        // digestAlgorithms (SET OF)
         byte[] digestAlgs = DerCodec.encodeSetOf(digestAlgIds.toArray(new byte[0][]));
 
-        // signerInfos (SET OF)
         byte[] signerInfos = DerCodec.encodeSetOf(signerInfoList.toArray(new byte[0][]));
 
-        // SignedData SEQUENCE (RFC 5652 §5.1)
-        if (certsField.length == 0) {
-            return DerCodec.encodeSequence(version, digestAlgs, encapContentInfo, signerInfos);
-        } else {
-            return DerCodec.encodeSequence(
-                    version, digestAlgs, encapContentInfo, certsField, signerInfos);
+        List<byte[]> parts = new ArrayList<>();
+        parts.add(version);
+        parts.add(digestAlgs);
+        parts.add(encapContentInfo);
+        if (certsField.length > 0) {
+            parts.add(certsField);
         }
+        if (crlsField.length > 0) {
+            parts.add(crlsField);
+        }
+        parts.add(signerInfos);
+
+        return DerCodec.encodeSequence(parts.toArray(new byte[0][]));
     }
 
     // ========================================================================

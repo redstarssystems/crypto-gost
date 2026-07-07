@@ -322,7 +322,8 @@ class OcspVerifierDelegatedCertTest {
     // ========================================================================
 
     @Test
-    @DisplayName("Раздельные роли: ответ подписан authority, CertID — от истинного издателя — успех")
+    @DisplayName(
+            "Раздельные роли: ответ подписан authority, CertID — от истинного издателя — успех")
     void splitRoles_directAuthoritySigning_success() throws Exception {
         // authority — независимый CA, чьим ключом подписан ответ; CertID при этом
         // считается от истинного издателя листа (ca). Легитимный аналог rollover.
@@ -335,8 +336,7 @@ class OcspVerifierDelegatedCertTest {
                         .issuerDn(ca.subjectDn)
                         .build();
 
-        OcspVerifier.verify(
-                ocsp, leaf.cert.getSerialNumber(), ca.cert, authority.cert, null);
+        OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert, authority.cert, null);
     }
 
     @Test

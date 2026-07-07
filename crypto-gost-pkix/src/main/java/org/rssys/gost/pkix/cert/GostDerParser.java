@@ -50,10 +50,13 @@ public final class GostDerParser {
 
     // OID: SubjectAltName 2.5.29.17
     public static final byte[] SAN_OID_BYTES = {0x55, 0x1D, 0x11};
+    // OID: IssuerAltName 2.5.29.18
+    public static final byte[] IAN_OID_BYTES = {0x55, 0x1D, 0x12};
     // OID: KeyUsage 2.5.29.15
     public static final byte[] KU_OID_BYTES = {0x55, 0x1D, 0x0F};
     // Key Usage bit masks (RFC 5280 §4.2.1.3)
     public static final int KU_DIGITAL_SIGNATURE = 0x80;
+    public static final int KU_CRL_SIGN = 0x02;
     public static final int KU_KEY_CERT_SIGN = 0x04;
     // OID: ExtendedKeyUsage 2.5.29.37
     public static final byte[] EKU_OID_BYTES = {0x55, 0x1D, 0x25};
@@ -394,14 +397,12 @@ public final class GostDerParser {
         int contentEnd = contentStart + contentLen;
         if (contentLen < 0 || contentEnd < contentStart || contentEnd > der.length) {
             throw new IllegalArgumentException(
-                    "Truncated DER: time content length exceeds available data at offset " + offset);
+                    "Truncated DER: time content length exceeds available data at offset "
+                            + offset);
         }
         String s =
                 new String(
-                        der,
-                        contentStart,
-                        contentLen,
-                        java.nio.charset.StandardCharsets.US_ASCII);
+                        der, contentStart, contentLen, java.nio.charset.StandardCharsets.US_ASCII);
         if (!s.endsWith("Z")) {
             throw new IllegalArgumentException("Only UTC (Z) timezone supported: " + s);
         }

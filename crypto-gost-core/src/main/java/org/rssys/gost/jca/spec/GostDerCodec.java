@@ -63,6 +63,25 @@ public final class GostDerCodec {
     private GostDerCodec() {}
 
     /**
+     * Возвращает BIT STRING value SubjectPublicKeyInfo для хэширования
+     * (ResponderID.byKey в OCSP, RFC 6960 §4.1.1).
+     *
+     * <p>Формат: {@code [0x00] || OCTET STRING(x_LE || y_LE)} — включает
+     * unused-bits byte, совпадает с {@link CertIdHasher#extractBitStringValue}.</p>
+     *
+     * @param pub открытый ключ
+     * @return BIT STRING value SPKI (1 + TLV длины координат)
+     */
+    public static byte[] encodeSpkiKeyValue(PublicKeyParameters pub) {
+        byte[] pointBytes = subjectPublicKeyPointBytes(pub);
+        byte[] pointOctetStr = DerCodec.encodeOctetString(pointBytes);
+        byte[] bitValue = new byte[1 + pointOctetStr.length];
+        bitValue[0] = 0x00;
+        System.arraycopy(pointOctetStr, 0, bitValue, 1, pointOctetStr.length);
+        return bitValue;
+    }
+
+    /**
      * Извлекает байты точки открытого ключа в формате x_LE || y_LE
      * (little-endian координаты, RFC 4491 §2.3.2).
      *

@@ -318,6 +318,14 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
      * по политике {@code ocspPolicy}. Поддерживает CRL-проверку по политике
      * {@code crlPolicy}. CRL проверяется только если OCSP-ответ отсутствует
      * (приоритет OCSP -> CRL, RFC 5280).
+     * <p>
+     * Не использует {@code ChainValidator.validateChainWithRevocation} из pkix —
+     * для JSSE необходимы monotonicity CRL (minCrlNumber через {@code crlCache}),
+     * настраиваемые лимиты (maxCrlSize, maxRevokedEntries), OCSP-nonce-проверка,
+     * политики ({@code OcspPolicy}, {@code CrlPolicy}) и сетевой fetch —
+     * всё это теряется в упрощённом convenience-методе pull-модели.
+     * Для сценариев без этих требований см.
+     * {@link org.rssys.gost.pkix.cert.ChainValidator#validateChainWithRevocation}.
      */
     public void validateChainWithOcsp(
             List<GostCertificate> chain, String hostname, boolean requireOcsp)

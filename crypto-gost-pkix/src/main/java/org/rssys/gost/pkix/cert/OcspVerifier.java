@@ -212,23 +212,30 @@ public final class OcspVerifier {
         // Подпись ответа принадлежит authority (RFC 6960 §4.2.2.2): либо напрямую
         // его ключом, либо делегированным responder-сертификатом, выпущенным authority.
         PublicKeyParameters authorityPub = responderAuthority.getPublicKey();
+        GostCertificate signerCert; // сертификат, чьим ключом подписан ответ
         boolean sigOk;
         try {
             ocsp.verify(authorityPub);
             sigOk = true;
+            signerCert = responderAuthority;
         } catch (PkixException e) {
             sigOk = false;
+            signerCert = null;
         }
 
         // Если прямая подпись authority не подошла — пробуем делегированные responder'ы
         if (!sigOk) {
-            sigOk = tryDelegatedVerification(ocsp, responderAuthority);
+            signerCert = tryDelegatedVerification(ocsp, responderAuthority);
+            sigOk = signerCert != null;
         }
 
         if (!sigOk) {
             throw new PkixException(
                     PkixException.Reason.SIGNATURE_INVALID, "OCSP signature verification failed");
         }
+
+        // Проверка byKey responder ID: хэш ключа должен совпадать с ключом подписанта
+        verifyResponderId(ocsp, signerCert);
 
         // Статус, свежесть, CertID
         verifyStatusAndFreshness(target, ocsp, expectedNonce, maxOcspAgeMs);
@@ -255,13 +262,13 @@ public final class OcspVerifier {
      * (24–48 часов), проверка их отзыва через OCSP создала бы циклическую
      * зависимость.
      *
-     * @return true если делегированный сертификат прошёл все проверки и подписал OCSP-ответ
+     * @return совпавший делегированный сертификат или {@code null}
      */
-    private static boolean tryDelegatedVerification(
+    private static GostCertificate tryDelegatedVerification(
             GostOcspResponse ocsp, GostCertificate issuerCert) {
         List<byte[]> dcDers = ocsp.getDelegatedCertificates();
         if (dcDers.isEmpty()) {
-            return false;
+            return null;
         }
 
         for (byte[] dcDer : dcDers) {
@@ -277,12 +284,12 @@ public final class OcspVerifier {
             // Проверяем подпись OCSP-ответа ключом делегированного сертификата
             try {
                 ocsp.verify(dc.getPublicKey());
-                return true;
+                return dc;
             } catch (PkixException ignored) {
                 // Пробуем следующий delegated cert
             }
         }
-        return false;
+        return null;
     }
 
     /**
@@ -310,6 +317,25 @@ public final class OcspVerifier {
                 CertIdHasher.hashIssuerPublicKey(issuerCert.getEncoded(), certIdHashLen);
         if (!MessageDigest.isEqual(target.issuerKeyHash(), expectedKeyHash)) {
             throw new PkixException("OCSP: issuerKeyHash mismatch");
+        }
+    }
+
+    /**
+     * Проверяет byKey responder ID: хэш публичного ключа подписанта
+     * должен совпадать с {@link GostOcspResponse#getResponderKeyHash()}.
+     *
+     * <p>Хэш вычисляется через Streebog — ГОСТ-конвенция. Для byName
+     * проверка не требуется (DN подписанта проверяется через цепочку).</p>
+     */
+    private static void verifyResponderId(GostOcspResponse ocsp, GostCertificate signerCert)
+            throws PkixException {
+        if (ocsp.getResponderIdType() != GostOcspResponse.ResponderIdType.BY_KEY) {
+            return;
+        }
+        byte[] expectedKeyHash =
+                CertIdHasher.hashIssuerPublicKey(signerCert, ocsp.getResponderKeyHash().length);
+        if (!MessageDigest.isEqual(ocsp.getResponderKeyHash(), expectedKeyHash)) {
+            throw new PkixException("OCSP: responder key hash mismatch");
         }
     }
 

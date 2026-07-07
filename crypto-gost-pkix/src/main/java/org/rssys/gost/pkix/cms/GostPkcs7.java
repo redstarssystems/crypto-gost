@@ -1,9 +1,11 @@
 package org.rssys.gost.pkix.cms;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostPemUtils;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.util.DerCodec;
@@ -33,12 +35,31 @@ public final class GostPkcs7 {
      * {@code certificates [0]} и пустыми {@code signerInfos}; это распространённый
      * формат обмена цепочками сертификатов. Подписи не создаются.</p>
      *
+     * <p>Для встраивания CRL в контейнер используйте
+     * {@link #buildCertsOnly(List, GostCertificate...)}.</p>
+     *
      * @param certs сертификаты для вложения (минимум один)
      * @return DER-байты контейнера {@code .p7b}
      * @throws IllegalArgumentException если сертификаты не переданы либо их число
      *                                  превышает {@link CmsConstants#MAX_P7B_CERTS}
      */
     public static byte[] buildCertsOnly(GostCertificate... certs) {
+        return buildCertsOnly(Collections.emptyList(), certs);
+    }
+
+    /**
+     * Строит certs-only PKCS#7/.p7b с заданными сертификатами и опциональными CRL.
+     *
+     * <p>Поле {@code crls [1] IMPLICIT SET OF RevocationInfoChoice} (RFC 5652 §5.1)
+     * заполняется только если {@code crls} не null и не пуст.</p>
+     *
+     * @param crls  CRL для встраивания в поле crls [1] (может быть null или пустым)
+     * @param certs сертификаты для вложения (минимум один)
+     * @return DER-байты контейнера {@code .p7b}
+     * @throws IllegalArgumentException если сертификаты не переданы либо их число
+     *                                  превышает {@link CmsConstants#MAX_P7B_CERTS}
+     */
+    public static byte[] buildCertsOnly(List<GostCrl> crls, GostCertificate... certs) {
         if (certs == null || certs.length == 0) {
             throw new IllegalArgumentException("no certificates provided");
         }
@@ -49,6 +70,11 @@ public final class GostPkcs7 {
         CmsSignedDataBuilder builder = CmsSignedDataBuilder.create().certsOnly();
         for (GostCertificate cert : certs) {
             builder.addCertificate(cert);
+        }
+        if (crls != null) {
+            for (GostCrl crl : crls) {
+                builder.addCrl(crl);
+            }
         }
         return builder.build();
     }

@@ -8,13 +8,15 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
+import org.rssys.gost.pkix.cert.GostCrlBuilder;
+import org.rssys.gost.pkix.cert.GostDnParser;
 import org.rssys.gost.pkix.cert.GostPemUtils;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
 @DisplayName("GostPkcs7: извлечение сертификатов из PKCS#7/.p7b")
@@ -25,6 +27,7 @@ class GostPkcs7Test {
     private static GostCertificate cert1;
     private static GostCertificate cert2;
     private static GostCertificate cert3;
+    private static GostCrl testCrl;
 
     @BeforeAll
     static void setUp() {
@@ -32,6 +35,14 @@ class GostPkcs7Test {
         cert1 = newCert("Cert One", 1001);
         cert2 = newCert("Cert Two", 1002);
         cert3 = newCert("Cert Three", 1003);
+
+        KeyPair crlKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] crlIssuerDn = GostDnParser.encodeDn("CN=Test CRL Issuer");
+        byte[] crlDer =
+                GostCrlBuilder.create(crlKp.getPrivate(), crlIssuerDn)
+                        .nextUpdate("270601120000Z")
+                        .build();
+        testCrl = GostCrl.fromDer(crlDer);
     }
 
     @Test
@@ -101,7 +112,8 @@ class GostPkcs7Test {
     @Test
     @DisplayName("Неверный contentType (id-data вместо id-signedData) -> PkixException")
     void wrongContentType() {
-        byte[] notSignedData = CmsContentInfo.encode(GostOids.PKCS7_DATA, DerCodec.encodeInteger(1));
+        byte[] notSignedData =
+                CmsContentInfo.encode(GostOids.PKCS7_DATA, DerCodec.encodeInteger(1));
 
         assertThrows(
                 PkixException.class,
@@ -192,8 +204,7 @@ class GostPkcs7Test {
                 parts[2],
                 "encapContentInfo без content: SEQUENCE{id-data}");
 
-        assertTrue(
-                DerCodec.isContextTag(parts[3], 0), "четвёртое поле — certificates [0]");
+        assertTrue(DerCodec.isContextTag(parts[3], 0), "четвёртое поле — certificates [0]");
 
         // signerInfos — пустой SET OF
         assertArrayEquals(
@@ -231,6 +242,54 @@ class GostPkcs7Test {
                 "null-массив -> IllegalArgumentException");
     }
 
+    @Test
+    @DisplayName(
+            "buildCertsOnly с CRL: certs-only контейнер содержит crls [1] и extractCertificates не падает")
+    void buildCertsOnlyWithCrl() throws PkixException {
+        byte[] p7b = GostPkcs7.buildCertsOnly(List.of(testCrl), cert1, cert2);
+
+        GostPkcs7.extractCertificates(p7b);
+
+        CmsContentInfo ci = CmsContentInfo.decode(p7b);
+        byte[][] sdParts = DerCodec.parseSequenceContents(ci.content(), 0);
+
+        boolean foundCrls = false;
+        for (byte[] part : sdParts) {
+            if (DerCodec.isContextTag(part, 1)) {
+                foundCrls = true;
+                break;
+            }
+        }
+        assertTrue(foundCrls, "crls [1] должен присутствовать в certs-only с CRL");
+    }
+
+    @Test
+    @DisplayName("buildCertsOnly с null-CRL эквивалентно buildCertsOnly без CRL")
+    void buildCertsOnlyWithNullCrls() throws PkixException {
+        byte[] withNull = GostPkcs7.buildCertsOnly((List<GostCrl>) null, cert1, cert2);
+        byte[] without = GostPkcs7.buildCertsOnly(cert1, cert2);
+
+        java.util.Set<BigInteger> serialsNull = serialsOf(GostPkcs7.extractCertificates(withNull));
+        java.util.Set<BigInteger> serialsWithout =
+                serialsOf(GostPkcs7.extractCertificates(without));
+
+        assertEquals(serialsWithout, serialsNull);
+    }
+
+    @Test
+    @DisplayName("buildCertsOnly с пустым списком CRL эквивалентно без CRL")
+    void buildCertsOnlyWithEmptyCrls() throws PkixException {
+        byte[] withEmpty = GostPkcs7.buildCertsOnly(List.of(), cert1, cert2);
+        byte[] without = GostPkcs7.buildCertsOnly(cert1, cert2);
+
+        java.util.Set<BigInteger> serialsEmpty =
+                serialsOf(GostPkcs7.extractCertificates(withEmpty));
+        java.util.Set<BigInteger> serialsWithout =
+                serialsOf(GostPkcs7.extractCertificates(without));
+
+        assertEquals(serialsWithout, serialsEmpty);
+    }
+
     private static java.util.Set<BigInteger> serialsOf(List<GostCertificate> certs) {
         java.util.Set<BigInteger> serials = new java.util.HashSet<>();
         for (GostCertificate c : certs) {
@@ -263,8 +322,7 @@ class GostPkcs7Test {
     void invalidInputs() {
         assertThrows(PkixException.class, () -> GostPkcs7.extractCertificates(null));
         assertThrows(PkixException.class, () -> GostPkcs7.extractCertificates(new byte[0]));
-        assertThrows(
-                PkixException.class, () -> GostPkcs7.extractCertificates(buildP7b(cert1), 0));
+        assertThrows(PkixException.class, () -> GostPkcs7.extractCertificates(buildP7b(cert1), 0));
         assertThrows(
                 PkixException.class,
                 () -> GostPkcs7.extractCertificates(new byte[] {0x01, 0x02, 0x03, 0x04}),

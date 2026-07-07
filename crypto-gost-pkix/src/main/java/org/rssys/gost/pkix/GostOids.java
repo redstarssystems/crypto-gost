@@ -73,6 +73,9 @@ public final class GostOids {
     /** id-ce-subjectAltName */
     public static final String EXT_SAN = "2.5.29.17";
 
+    /** id-ce-issuerAltName */
+    public static final String EXT_IAN = "2.5.29.18";
+
     /** id-ce-basicConstraints */
     public static final String EXT_BC = "2.5.29.19";
 
@@ -143,6 +146,9 @@ public final class GostOids {
 
     /** 1.2.643.100.113.2 — id-class-kc2 (RFC 9215 §5.2) */
     public static final String POLICY_KC2 = "1.2.643.100.113.2";
+
+    /** anyPolicy (RFC 5280 §4.2.1.4) — 2.5.29.32.0; семантически подходит под любую политику */
+    public static final String ANY_POLICY = "2.5.29.32.0";
 
     // ========================================================================
     // Атрибуты Distinguished Name (RFC 4519)
@@ -220,6 +226,9 @@ public final class GostOids {
 
     /** id-ad-ocsp */
     public static final String OCSP_AD = "1.3.6.1.5.5.7.48.1";
+
+    /** id-ad-caIssuers */
+    public static final String CA_ISSUERS_AD = "1.3.6.1.5.5.7.48.2";
 
     /** id-pkix-ocsp-basic */
     public static final String OCSP_BASIC = "1.3.6.1.5.5.7.48.1.1";
@@ -370,6 +379,9 @@ public final class GostOids {
 
     /** id-signingTime — 1.2.840.113549.1.9.5 */
     public static final String ATTR_SIGNING_TIME = "1.2.840.113549.1.9.5";
+
+    /** id-countersignature — 1.2.840.113549.1.9.6 (RFC 5652 §11.4) */
+    public static final String ATTR_COUNTERSIGNATURE = "1.2.840.113549.1.9.6";
 
     // ========================================================================
     // PKCS#9 (RFC 2985) — Attribute types

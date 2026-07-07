@@ -53,6 +53,8 @@ public final class GostOcspResponseBuilder {
     private byte[][] delegatedCertsDer;
     private byte[] certStatusDer; // null = good по умолчанию
     private byte[] nonce;
+    private boolean useByKey;
+    private int responderKeyHashLen = GostOids.STREEBOG_256_HASH_LEN;
 
     private GostOcspResponseBuilder(byte[] serialNumber) {
         this.serialNumber = serialNumber;
@@ -201,6 +203,33 @@ public final class GostOcspResponseBuilder {
         return this;
     }
 
+    /**
+     * Использовать byKey responder ID — хэш Streebog-256 от публичного ключа
+     * подписанта (ГОСТ-конвенция). По умолчанию — byName (обратная совместимость).
+     *
+     * <p>RFC 5019bis рекомендует byKey для высоконагруженных сред — компактнее
+     * byName. Хэш вычисляется через Streebog, поэтому распознаётся только
+     * ГОСТ-клиентами; для универсальной совместимости используйте byName.</p>
+     */
+    public GostOcspResponseBuilder withResponderByKey() {
+        return withResponderByKey(GostOids.STREEBOG_256_HASH_LEN);
+    }
+
+    /**
+     * byKey responder ID с выбором длины хэша.
+     *
+     * @param hlen длина хэша: 32 (Streebog-256) или 64 (Streebog-512)
+     */
+    public GostOcspResponseBuilder withResponderByKey(int hlen) {
+        if (hlen != GostOids.STREEBOG_256_HASH_LEN && hlen != GostOids.STREEBOG_512_HASH_LEN) {
+            throw new IllegalArgumentException(
+                    "responderKeyHash length must be 32 or 64, got: " + hlen);
+        }
+        this.useByKey = true;
+        this.responderKeyHashLen = hlen;
+        return this;
+    }
+
     /** Собирает и подписывает OCSP-ответ. */
     public byte[] build() {
         if (signerPriv == null || signerPub == null) {
@@ -219,6 +248,7 @@ public final class GostOcspResponseBuilder {
 
         byte[] statusDer =
                 certStatusDer != null ? certStatusDer : DerCodec.encodeTlv(0x80, new byte[0]);
+        byte[] responderId = buildResponderId(caSubjectDer, delegatedCertsDer, signerPub);
         byte[] tbs =
                 buildTbsResponseData(
                         serialNumber,
@@ -229,7 +259,8 @@ public final class GostOcspResponseBuilder {
                         tu,
                         delegatedCertsDer,
                         statusDer,
-                        nonce);
+                        nonce,
+                        responderId);
         int hlen = signerPub.getParams().hlen;
         byte[] hash = GostSignatureHelper.doHash(tbs, hlen);
         byte[] sig = Signature.signHash(hash, signerPriv);
@@ -257,6 +288,24 @@ public final class GostOcspResponseBuilder {
         return DerCodec.encodeSequence(status, responseBytes);
     }
 
+    private byte[] buildResponderId(
+            byte[] caSubjectDer, byte[][] delegatedCertsDer, PublicKeyParameters signerPub) {
+        if (useByKey) {
+            byte[] keyValue = GostDerCodec.encodeSpkiKeyValue(signerPub);
+            byte[] keyHash = GostSignatureHelper.doHash(keyValue, responderKeyHashLen);
+            return DerCodec.encodeTlv(
+                    DerCodec.TAG_CTX_CONSTRUCTED_2, DerCodec.encodeOctetString(keyHash));
+        }
+        // byName — subject DN подписанта (RFC 6960 §4.2.1)
+        byte[] responderSubjectDer;
+        if (delegatedCertsDer != null && delegatedCertsDer.length > 0) {
+            responderSubjectDer = new GostCertificate(delegatedCertsDer[0]).getSubjectDnBytes();
+        } else {
+            responderSubjectDer = caSubjectDer;
+        }
+        return DerCodec.encodeTlv(DerCodec.TAG_CTX_CONSTRUCTED_1, responderSubjectDer);
+    }
+
     private static byte[] buildTbsResponseData(
             byte[] serialNumber,
             PublicKeyParameters caPub,
@@ -266,7 +315,8 @@ public final class GostOcspResponseBuilder {
             String thisUpdateGeneralizedTime,
             byte[][] delegatedCertsDer,
             byte[] certStatusDer,
-            byte[] nonce) {
+            byte[] nonce,
+            byte[] responderId) {
         int hlenCa = caPub.getParams().hlen;
         byte[] issuerNameHash = GostSignatureHelper.doHash(caSubjectDer, hlenCa);
         byte[] caSpkiDer = GostDerCodec.encodePublicKey(caPub);
@@ -309,15 +359,6 @@ public final class GostOcspResponseBuilder {
         }
         byte[] singleResponse = DerCodec.encodeSequence(srOut.toByteArray());
         byte[] version = DerCodec.encodeTlv(0xA0, new byte[] {0x02, 0x01, 0x00});
-        // byName [1] — subject DN подписанта (RFC 6960 §4.2.1)
-        byte[] responderSubjectDer;
-        if (delegatedCertsDer != null && delegatedCertsDer.length > 0) {
-            responderSubjectDer = new GostCertificate(delegatedCertsDer[0]).getSubjectDnBytes();
-        } else {
-            // Неделегированный режим: подписант = CA
-            responderSubjectDer = caSubjectDer;
-        }
-        byte[] responderId = DerCodec.encodeTlv(0xA1, responderSubjectDer);
         byte[] producedAt =
                 DerCodec.encodeTlv(
                         0x18, producedAtGeneralizedTime.getBytes(StandardCharsets.US_ASCII));

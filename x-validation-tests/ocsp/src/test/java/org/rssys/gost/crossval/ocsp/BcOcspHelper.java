@@ -21,11 +21,23 @@ import org.bouncycastle.operator.*;
 import org.bouncycastle.operator.jcajce.*;
 
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.CertIdHasher;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Stateless хелпер для OCSP-операций с BouncyCastle.
+ *
+ * <h3>Известное ограничение: issuerKeyHash</h3>
+ * {@code OcspVerifier.verify()} вычисляет issuerKeyHash как хэш полного
+ * value BIT STRING SubjectPublicKeyInfo (включая unused-bits байт — RFC 6960 §4.1.1).
+ * BC {@code CertificateID} использует {@code DERBitString.getBytes()}, который
+ * отбрасывает unused-bits байт. Из-за этого расхождения issuerKeyHash от BC
+ * и от библиотеки не совпадают, и {@code OcspVerifier.verify()} отклоняет
+ * BC-построенные OCSP-ответы с ошибкой {@code issuerKeyHash mismatch}.
+ * Методы с суффиксом {@code WithGostCertId} вычисляют хэши через
+ * {@link CertIdHasher} и обходят это ограничение — обеспечивают
+ * кросс-инструментальное покрытие {@code verify()}.
  */
 final class BcOcspHelper {
 
@@ -76,6 +88,44 @@ final class BcOcspHelper {
         return gc.getPublicKey();
     }
 
+    /**
+     * Создаёт BC X509Certificate, подписанный указанным издателем,
+     * с EKU id-kp-OCSPSigning и KeyUsage digitalSignature — для делегированного
+     * OCSP-responder.
+     */
+    static X509Certificate buildBcResponderCert(KeyPair subjectKp, String subjectDn,
+                                                 KeyPair issuerKp, String issuerDn,
+                                                 ECParameters params) throws Exception {
+        X500Name issuer = new X500Name(issuerDn);
+        X500Name subject = new X500Name(subjectDn);
+        BigInteger serial = BigInteger.valueOf(System.currentTimeMillis());
+        Date notBefore = new Date(System.currentTimeMillis() - 86400000L);
+        Date notAfter = new Date(System.currentTimeMillis() + 365L * 86400000L);
+        X509v3CertificateBuilder certBuilder = new JcaX509v3CertificateBuilder(
+                issuer, serial, notBefore, notAfter, subject, subjectKp.getPublic());
+
+        // KeyUsage: digitalSignature
+        certBuilder.addExtension(
+                org.bouncycastle.asn1.x509.Extension.keyUsage, true,
+                new org.bouncycastle.asn1.x509.KeyUsage(
+                        org.bouncycastle.asn1.x509.KeyUsage.digitalSignature));
+        // EKU: id-kp-OCSPSigning
+        certBuilder.addExtension(
+                org.bouncycastle.asn1.x509.Extension.extendedKeyUsage, false,
+                new org.bouncycastle.asn1.x509.ExtendedKeyUsage(
+                        new org.bouncycastle.asn1.x509.KeyPurposeId[]{
+                                org.bouncycastle.asn1.x509.KeyPurposeId.id_kp_OCSPSigning}));
+
+        String sigAlg = params.hlen == 32
+                ? "GOST3411-2012-256WITHECGOST3410-2012-256"
+                : "GOST3411-2012-512WITHECGOST3410-2012-512";
+        ContentSigner signer = new JcaContentSignerBuilder(sigAlg)
+                .setProvider(BouncyCastleProvider.PROVIDER_NAME).build(issuerKp.getPrivate());
+        X509CertificateHolder holder = certBuilder.build(signer);
+        return new JcaX509CertificateConverter().setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                .getCertificate(holder);
+    }
+
     // ========================================================================
     // OCSP: BC -> GOST (build with BC, parse with GOST)
     // ========================================================================
@@ -105,12 +155,162 @@ final class BcOcspHelper {
                 "good", null, true, responderKp, responderCert);
     }
 
+    /**
+     * Строит OCSP-ответ через BC с ResponderID byKey — хэш Streebog.
+     *
+     * @param streebogKeyHash предвычисленный Streebog-256/512 хэш SPKI подписанта
+     */
+    static byte[] buildBcOcspResponseByKey(byte[] leafCertDer, byte[] caCertDer,
+                                            KeyPair signerKp, X509Certificate signerCert,
+                                            byte[] streebogKeyHash) throws Exception {
+        return buildBcOcspResponse(leafCertDer, caCertDer, signerKp, signerCert,
+                "good", null, false, null, null, streebogKeyHash);
+    }
+
+    // ========================================================================
+    // OCSP: BC -> GOST c GOST-совместимым CertID (verify() round-trip)
+    // ========================================================================
+
+    /**
+     * Строит OCSP-ответ через BC с ГОСТ-совместимым CertID —
+     * issuerNameHash и issuerKeyHash вычислены через {@link CertIdHasher}
+     * (с unused-bits байтом BIT STRING), а не через BC {@code CertificateID}.
+     * Позволяет {@code OcspVerifier.verify()} успешно проверить ответ.
+     */
+    static byte[] buildBcOcspResponseWithGostCertId(
+            byte[] leafCertDer, byte[] caCertDer,
+            KeyPair signerKp, X509Certificate signerCert) throws Exception {
+        return buildBcOcspResponseWithGostCertId(
+                leafCertDer, caCertDer, signerKp, signerCert,
+                "good", null, false, null, null, null);
+    }
+
+    static byte[] buildBcOcspResponseByKeyWithGostCertId(
+            byte[] leafCertDer, byte[] caCertDer,
+            KeyPair signerKp, X509Certificate signerCert,
+            byte[] streebogKeyHash) throws Exception {
+        return buildBcOcspResponseWithGostCertId(
+                leafCertDer, caCertDer, signerKp, signerCert,
+                "good", null, false, null, null, streebogKeyHash);
+    }
+
+    static byte[] buildBcOcspResponseDelegatedWithGostCertId(
+            byte[] leafCertDer, byte[] caCertDer,
+            KeyPair signerKp, X509Certificate signerCert,
+            KeyPair responderKp, X509Certificate responderCert) throws Exception {
+        return buildBcOcspResponseWithGostCertId(
+                leafCertDer, caCertDer, signerKp, signerCert,
+                "good", null, true, responderKp, responderCert, null);
+    }
+
+    private static byte[] buildBcOcspResponseWithGostCertId(
+            byte[] leafCertDer, byte[] caCertDer,
+            KeyPair signerKp, X509Certificate signerCert,
+            String status, byte[] nonce,
+            boolean delegated,
+            KeyPair responderKp, X509Certificate responderCert,
+            byte[] streebogKeyHash) throws Exception {
+        GostCertificate leafGc = new GostCertificate(leafCertDer);
+        BigInteger serial = new BigInteger(1, leafGc.getSerialNumber());
+        GostCertificate caGc = new GostCertificate(caCertDer);
+
+        // ГОСТ-совместимые хэши CertID (с unused-bits байтом BIT STRING)
+        byte[] issuerNameHash = CertIdHasher.hashIssuerName(caGc);
+        byte[] issuerKeyHash = CertIdHasher.hashIssuerPublicKey(caGc);
+
+        // AlgorithmIdentifier из проверенного stbDigestCalc — совместим с GostOcspResponse парсером
+        AlgorithmIdentifier hashAlgId =
+                createStreebog256DigestCalculator().getAlgorithmIdentifier();
+
+        org.bouncycastle.asn1.ocsp.CertID certIdAsn1 =
+                new org.bouncycastle.asn1.ocsp.CertID(
+                        hashAlgId,
+                        new org.bouncycastle.asn1.DEROctetString(issuerNameHash),
+                        new org.bouncycastle.asn1.DEROctetString(issuerKeyHash),
+                        new org.bouncycastle.asn1.ASN1Integer(serial));
+        CertificateID certId = new CertificateID(certIdAsn1);
+
+        X509CertificateHolder signerHolder = new JcaX509CertificateHolder(signerCert);
+
+        RespID respId;
+        if (streebogKeyHash != null) {
+            org.bouncycastle.asn1.DEROctetString keyHash =
+                    new org.bouncycastle.asn1.DEROctetString(streebogKeyHash);
+            org.bouncycastle.asn1.DERTaggedObject byKey =
+                    new org.bouncycastle.asn1.DERTaggedObject(true, 2, keyHash);
+            respId = new RespID(
+                    org.bouncycastle.asn1.ocsp.ResponderID.getInstance(byKey));
+        } else {
+            respId = new RespID(signerHolder.getSubject());
+        }
+        BasicOCSPRespBuilder builder = new BasicOCSPRespBuilder(respId);
+
+        Extensions responseExts = null;
+        if (nonce != null) {
+            responseExts = new Extensions(new Extension(
+                    OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false, nonce));
+        }
+        if (responseExts != null) {
+            builder.setResponseExtensions(responseExts);
+        }
+
+        Date thisUpdate = new Date();
+        Date nextUpdate = new Date(System.currentTimeMillis() + 86400000L * 7);
+
+        CertificateStatus certStatus;
+        switch (status) {
+            case "revoked":
+                certStatus = new RevokedStatus(thisUpdate, 1);
+                break;
+            case "unknown":
+                certStatus = new UnknownStatus();
+                break;
+            default:
+                certStatus = CertificateStatus.GOOD;
+                break;
+        }
+
+        builder.addResponse(certId, certStatus, thisUpdate, nextUpdate);
+
+        String sigAlg = "GOST3411-2012-256WITHECGOST3410-2012-256";
+        ContentSigner cs = new JcaContentSignerBuilder(sigAlg)
+                .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                .build(signerKp.getPrivate());
+
+        X509CertificateHolder[] certChain;
+        if (delegated && responderCert != null) {
+            certChain = new X509CertificateHolder[]{
+                    new JcaX509CertificateHolder(responderCert)};
+        } else {
+            certChain = new X509CertificateHolder[]{signerHolder};
+        }
+
+        BasicOCSPResp basic = builder.build(cs, certChain, thisUpdate);
+
+        org.bouncycastle.cert.ocsp.OCSPRespBuilder respBuilder =
+                new org.bouncycastle.cert.ocsp.OCSPRespBuilder();
+        OCSPResp ocspResp = respBuilder.build(
+                org.bouncycastle.cert.ocsp.OCSPRespBuilder.SUCCESSFUL, basic);
+        return ocspResp.getEncoded();
+    }
+
     private static byte[] buildBcOcspResponse(byte[] leafCertDer, byte[] caCertDer,
                                                KeyPair signerKp, X509Certificate signerCert,
                                                String status, byte[] nonce,
                                                boolean delegated,
                                                KeyPair responderKp,
                                                X509Certificate responderCert) throws Exception {
+        return buildBcOcspResponse(leafCertDer, caCertDer, signerKp, signerCert,
+                status, nonce, delegated, responderKp, responderCert, null);
+    }
+
+    private static byte[] buildBcOcspResponse(byte[] leafCertDer, byte[] caCertDer,
+                                               KeyPair signerKp, X509Certificate signerCert,
+                                               String status, byte[] nonce,
+                                               boolean delegated,
+                                               KeyPair responderKp,
+                                               X509Certificate responderCert,
+                                               byte[] streebogKeyHash) throws Exception {
         GostCertificate leafGc = new GostCertificate(leafCertDer);
         BigInteger serial = new BigInteger(1, leafGc.getSerialNumber());
 
@@ -124,8 +324,17 @@ final class BcOcspHelper {
 
         X509CertificateHolder signerHolder = new JcaX509CertificateHolder(signerCert);
 
-        // RespID byName (тег 0xA1) — совместим с GostOcspResponse парсером
-        RespID respId = new RespID(signerHolder.getSubject());
+        RespID respId;
+        if (streebogKeyHash != null) {
+            org.bouncycastle.asn1.DEROctetString keyHash =
+                    new org.bouncycastle.asn1.DEROctetString(streebogKeyHash);
+            org.bouncycastle.asn1.DERTaggedObject byKey =
+                    new org.bouncycastle.asn1.DERTaggedObject(true, 2, keyHash);
+            respId = new RespID(
+                    org.bouncycastle.asn1.ocsp.ResponderID.getInstance(byKey));
+        } else {
+            respId = new RespID(signerHolder.getSubject());
+        }
         BasicOCSPRespBuilder builder = new BasicOCSPRespBuilder(respId);
 
         Extensions responseExts = null;

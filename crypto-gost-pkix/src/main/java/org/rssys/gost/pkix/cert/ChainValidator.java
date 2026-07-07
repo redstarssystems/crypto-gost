@@ -5,6 +5,7 @@ import java.lang.System.Logger.Level;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
@@ -12,10 +13,14 @@ import org.rssys.gost.signature.PublicKeyParameters;
  * <p>
  * Проверяет цепочку доверия: подписи, DN-совпадения, CA-флаги,
  * pathLen, NameConstraints, срок действия, algorithm consistency,
- * known critical extensions.
+ * known critical extensions, опционально — CertificatePolicies leaf-сертификата.
  * <p>
  * Не содержит TLS-специфики (алертов, CertificateVerify).
  * Все ошибки — {@link PkixException} (checked).
+ * <p>
+ * Не проверяет статус отзыва сертификатов (CRL/OCSP).
+ * Для полной проверки с отзывом используйте {@link #validateChainWithRevocation}
+ * или вызывайте {@link CrlVerifier} / {@link OcspVerifier} отдельно после этого метода.
  */
 public final class ChainValidator {
 
@@ -46,6 +51,40 @@ public final class ChainValidator {
 
     public static void validateChain(
             List<GostCertificate> chain, List<PublicKeyParameters> caPublicKeys)
+            throws PkixException {
+        validateChain(chain, caPublicKeys, (String[]) null);
+    }
+
+    /**
+     * Валидирует цепочку сертификатов с опциональной проверкой политик leaf-сертификата.
+     * <p>
+     * <b>Важно:</b> это <b>не</b> RFC 5280 §6.1 policy validation. Проверяется только
+     * leaf-сертификат (первый в цепочке). Промежуточные CA, PolicyMappings,
+     * PolicyConstraints, InhibitAnyPolicy не обрабатываются.
+     * <p>
+     * Если {@code requiredPolicyOids} пуст или {@code null} — проверка политик
+     * не выполняется, поведение идентично {@link #validateChain(List, List)}.
+     * <p>
+     * Сертификат считается удовлетворяющим требованиям политики, если:
+     * <ul>
+     *   <li>его CertificatePolicies содержат хотя бы один OID из
+     *       {@code requiredPolicyOids}, или</li>
+     *   <li>его CertificatePolicies содержат anyPolicy
+     *       ({@link GostOids#ANY_POLICY}, 2.5.29.32.0)</li>
+     * </ul>
+     * Если расширение CertificatePolicies отсутствует у leaf-сертификата —
+     * {@link PkixException.Reason#POLICY_VIOLATION}.
+     *
+     * @param chain              цепочка leaf-first
+     * @param caPublicKeys       список доверенных ключей CA (не пустой, не null)
+     * @param requiredPolicyOids требуемые OID политик в точечной нотации.
+     *                           {@code null} или пустой массив — проверка политик не выполняется
+     * @throws PkixException при ошибке валидации цепочки или несоответствии политик
+     */
+    public static void validateChain(
+            List<GostCertificate> chain,
+            List<PublicKeyParameters> caPublicKeys,
+            String... requiredPolicyOids)
             throws PkixException {
         int n = chain.size();
         if (n < 1) {
@@ -155,6 +194,40 @@ public final class ChainValidator {
                     PkixException.Reason.UNKNOWN_CRITICAL_EXTENSION,
                     "Certificate chain: unknown critical extension at root");
         }
+        // Проверка CertificatePolicies leaf-сертификата.
+        // Только leaf: full RFC 5280 §6.1 policy validation (valid_policy_tree,
+        // PolicyMappings, PolicyConstraints, InhibitAnyPolicy) не реализован.
+        if (requiredPolicyOids != null && requiredPolicyOids.length > 0) {
+            GostCertificate leaf = chain.get(0);
+            String[] certPolicies = leaf.getCertificatePolicies();
+            if (certPolicies == null || certPolicies.length == 0) {
+                throw new PkixException(
+                        PkixException.Reason.POLICY_VIOLATION,
+                        "Certificate chain: leaf certificate has no CertificatePolicies extension");
+            }
+            boolean matched = false;
+            for (String cp : certPolicies) {
+                if (GostOids.ANY_POLICY.equals(cp)) {
+                    matched = true;
+                    break;
+                }
+                for (String req : requiredPolicyOids) {
+                    if (req.equals(cp)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (matched) {
+                    break;
+                }
+            }
+            if (!matched) {
+                throw new PkixException(
+                        PkixException.Reason.POLICY_VIOLATION,
+                        "Certificate chain: leaf certificate policies do not match"
+                                + " required OIDs");
+            }
+        }
         // Name Constraints pass (RFC 5280 §6.1.4(g)-(l)).
         // Обход root-to-leaf: ограничения накапливаются от доверенного якоря вниз,
         // включая NameConstraints самого trust anchor.
@@ -162,6 +235,89 @@ public final class ChainValidator {
         LOG.log(
                 Level.DEBUG,
                 "Certificate chain validation passed (leaf serial=0x{0})",
+                chain.get(0).getSerialNumberBigInt().toString(16));
+    }
+
+    /**
+     * Валидирует цепочку сертификатов вместе с проверкой статуса отзыва (OCSP/CRL).
+     * <p>
+     * Сначала выполняет PKIX-валидацию цепочки (вызов {@link #validateChain(List, List)}),
+     * затем для каждого сертификата, кроме trust anchor, проверяет статус отзыва
+     * из предоставленных данных:
+     * <ol>
+     *   <li>Если предоставлен OCSP-ответ — проверка через
+     *       {@link OcspVerifier#verify(byte[], byte[], GostCertificate)}</li>
+     *   <li>Иначе если предоставлен CRL — проверка через
+     *       {@link CrlVerifier#verify(byte[], byte[], PublicKeyParameters, byte[])}</li>
+     *   <li>Иначе — сертификат пропускается (warn-лог, не ошибка)</li>
+     * </ol>
+     * <p>
+     * <b>null в {@code revocationData} означает пропуск проверки отзыва для этого
+     * сертификата — ответственность на вызывающем.</b>
+     * Если вызывающий передаёт null-записи для всех сертификатов,
+     * метод вырождается в обычный {@link #validateChain} без проверки отзыва.
+     * <p>
+     * Приоритет OCSP над CRL соответствует RFC 5280 и принятому в проекте паттерну
+     * (см. {@code GostX509TrustManager.checkCrl()}).
+     * <p>
+     * Не поддерживает delegated CRL signer, delegated OCSP responder, nonce-проверку,
+     * delta CRL — для этих случаев используйте {@link CrlVerifier} / {@link OcspVerifier}
+     * напрямую с полными сигнатурами.
+     *
+     * @param chain           цепочка leaf-first
+     * @param caPublicKeys    доверенные ключи CA
+     * @param revocationData  данные отзыва, параллельно chain; null-элемент означает «нет данных для этого индекса»
+     * @throws PkixException          при ошибке валидации цепочки или обнаружении отзыва
+     * @throws IllegalArgumentException если revocationData.size() != chain.size()
+     */
+    public static void validateChainWithRevocation(
+            List<GostCertificate> chain,
+            List<PublicKeyParameters> caPublicKeys,
+            List<CertRevocationData> revocationData)
+            throws PkixException {
+        validateChain(chain, caPublicKeys);
+
+        int n = chain.size();
+        if (revocationData == null) {
+            throw new IllegalArgumentException("revocationData must not be null");
+        }
+        if (revocationData.size() != n) {
+            throw new IllegalArgumentException(
+                    "revocationData size ("
+                            + revocationData.size()
+                            + ") must match chain size ("
+                            + n
+                            + ")");
+        }
+
+        for (int i = 0; i < n - 1; i++) {
+            CertRevocationData rd = revocationData.get(i);
+            if (rd == null) {
+                LOG.log(
+                        Level.WARNING,
+                        "No revocation data for cert chain[{0}], serial=0x{1}",
+                        i,
+                        chain.get(i).getSerialNumberBigInt().toString(16));
+                continue;
+            }
+
+            GostCertificate cert = chain.get(i);
+            GostCertificate issuer = chain.get(i + 1);
+
+            if (rd.ocspResponse() != null) {
+                OcspVerifier.verify(rd.ocspResponse(), cert.getSerialNumber(), issuer);
+            } else {
+                CrlVerifier.verify(
+                        rd.crlDer(),
+                        cert.getSerialNumber(),
+                        issuer.getPublicKey(),
+                        cert.getIssuerDnBytes());
+            }
+        }
+
+        LOG.log(
+                Level.DEBUG,
+                "Certificate chain validation with revocation passed (leaf serial=0x{0})",
                 chain.get(0).getSerialNumberBigInt().toString(16));
     }
 
@@ -236,9 +392,12 @@ public final class ChainValidator {
                         // iPAddress [7]. Если в будущем добавят getSanEmails() /
                         // getSanUris() / etc. — это место обязано быть
                         // пересмотрено на предмет enforcement.
-                        LOG.log(Level.WARNING,
+                        LOG.log(
+                                Level.WARNING,
                                 "Certificate chain: NameConstraints contains unsupported"
-                                        + " GeneralName type at cert[" + i + "];"
+                                        + " GeneralName type at cert["
+                                        + i
+                                        + "];"
                                         + " constraints of this type are ignored"
                                         + " (leaf SAN does not expose these name forms)");
                     }

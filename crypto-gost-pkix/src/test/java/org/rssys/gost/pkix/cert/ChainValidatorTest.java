@@ -6,10 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -407,7 +411,8 @@ class ChainValidatorTest {
         CertBundle root = createRootCa();
         byte[] rfc822Subtree =
                 generalSubtreeNc(
-                        DerCodec.encodeTlv(0x81, "user@example.com".getBytes(StandardCharsets.US_ASCII)),
+                        DerCodec.encodeTlv(
+                                0x81, "user@example.com".getBytes(StandardCharsets.US_ASCII)),
                         null,
                         null);
         byte[] dnsSubtree =
@@ -554,6 +559,310 @@ class ChainValidatorTest {
         List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
 
         assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    // ========================================================================
+    // CertificatePolicies — проверка политик leaf-сертификата
+    // ========================================================================
+
+    /**
+     * Leaf с POLICY_KC1, required = KC1 → успех.
+     */
+    @Test
+    @DisplayName("CertificatePolicies: leaf с требуемой политикой → валидно")
+    void testPolicyCheckLeafHasMatchingPolicy() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChain(chain, trustedKeys, GostOids.POLICY_KC1));
+    }
+
+    /**
+     * Leaf с anyPolicy, required = KC1 → успех (anyPolicy удовлетворяет любой политике).
+     */
+    @Test
+    @DisplayName("CertificatePolicies: leaf с anyPolicy, required=KC1 → валидно")
+    void testPolicyCheckLeafHasAnyPolicy() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeafWithPolicy(root, GostOids.ANY_POLICY);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChain(chain, trustedKeys, GostOids.POLICY_KC1));
+    }
+
+    /**
+     * Leaf с POLICY_KC2, required = KC1 → POLICY_VIOLATION.
+     */
+    @Test
+    @DisplayName("CertificatePolicies: leaf с KC2, required=KC1 → POLICY_VIOLATION")
+    void testPolicyCheckLeafPolicyMismatch() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC2);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                ChainValidator.validateChain(
+                                        chain, trustedKeys, GostOids.POLICY_KC1));
+        assertEquals(
+                PkixException.Reason.POLICY_VIOLATION,
+                ex.reason(),
+                "Ожидалась POLICY_VIOLATION при несовпадении политик");
+    }
+
+    /**
+     * Leaf без расширения CertificatePolicies, required = KC1 → POLICY_VIOLATION.
+     */
+    @Test
+    @DisplayName("CertificatePolicies: leaf без расширения, required=KC1 → POLICY_VIOLATION")
+    void testPolicyCheckLeafNoExtension() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                ChainValidator.validateChain(
+                                        chain, trustedKeys, GostOids.POLICY_KC1));
+        assertEquals(
+                PkixException.Reason.POLICY_VIOLATION,
+                ex.reason(),
+                "Ожидалась POLICY_VIOLATION при отсутствии расширения CertificatePolicies");
+    }
+
+    /**
+     * Несколько required OID, leaf содержит один из них → успех.
+     */
+    @Test
+    @DisplayName("CertificatePolicies: несколько required, один совпадает → валидно")
+    void testPolicyCheckMultipleRequiredOneMatches() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                chain, trustedKeys, GostOids.POLICY_KC1, GostOids.POLICY_KC2));
+    }
+
+    /**
+     * requiredPolicyOids = null → без проверки политик, обратная совместимость.
+     */
+    @Test
+    @DisplayName("CertificatePolicies: requiredPolicyOids=null → без проверки политик")
+    void testPolicyCheckNoRequiredPolicies() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys, (String[]) null));
+    }
+
+    // ========================================================================
+    // validateChainWithRevocation — проверка отзыва (CRL/OCSP)
+    // ========================================================================
+
+    @Test
+    @DisplayName("validateChainWithRevocation: CRL, leaf не отозван → успех")
+    void testRevocationCrlNotRevoked() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        byte[] crlDer =
+                GostCrlBuilder.create(root.priv, root.dn).nextUpdate("21000101000000Z").build();
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        List<CertRevocationData> rd =
+                Arrays.asList(
+                        new CertRevocationData(null, crlDer), null); // leaf, root (не проверяется)
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+    }
+
+    @Test
+    @DisplayName("validateChainWithRevocation: OCSP good → успех")
+    void testRevocationOcspGood() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        byte[] ocspGood =
+                GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
+                        .signer(root.priv, root.pub)
+                        .issuerDn(root.dn)
+                        .nextUpdate("21000101000000Z")
+                        .good()
+                        .build();
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(ocspGood, null), null);
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+    }
+
+    @Test
+    @DisplayName("validateChainWithRevocation: OCSP+CRL, OCSP приоритет → успех")
+    void testRevocationOcspOverCrl() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        byte[] ocspGood =
+                GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
+                        .signer(root.priv, root.pub)
+                        .issuerDn(root.dn)
+                        .nextUpdate("21000101000000Z")
+                        .good()
+                        .build();
+        byte[] crlDer =
+                GostCrlBuilder.create(root.priv, root.dn)
+                        .nextUpdate("21000101000000Z")
+                        .addRevoked(leaf.cert.getSerialNumber(), "20250101000000Z")
+                        .build();
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(ocspGood, crlDer), null);
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+    }
+
+    @Test
+    @DisplayName("validateChainWithRevocation: leaf отозван по CRL → PkixException")
+    void testRevocationCrlRevoked() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        byte[] crlDer =
+                GostCrlBuilder.create(root.priv, root.dn)
+                        .nextUpdate("21000101000000Z")
+                        .addRevoked(leaf.cert.getSerialNumber(), "20250101000000Z")
+                        .build();
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(null, crlDer), null);
+
+        assertThrows(
+                PkixException.class,
+                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+    }
+
+    @Test
+    @DisplayName("validateChainWithRevocation: leaf отозван по OCSP → PkixException")
+    void testRevocationOcspRevoked() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        byte[] ocspRevoked =
+                GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
+                        .signer(root.priv, root.pub)
+                        .issuerDn(root.dn)
+                        .nextUpdate("21000101000000Z")
+                        .revoked("20250101000000Z")
+                        .build();
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        List<CertRevocationData> rd =
+                Arrays.asList(new CertRevocationData(ocspRevoked, null), null);
+
+        assertThrows(
+                PkixException.class,
+                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+    }
+
+    @Test
+    @DisplayName("validateChainWithRevocation: цепочка невалидна → ошибка до проверки отзыва")
+    void testRevocationChainInvalidFirst() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        byte[] crlDer =
+                GostCrlBuilder.create(root.priv, root.dn).nextUpdate("21000101000000Z").build();
+
+        var wrongKp = KeyGenerator.generateKeyPair(PARAMS);
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(wrongKp.getPublic());
+        List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(null, crlDer), null);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+        assertEquals(
+                PkixException.Reason.ROOT_NOT_SIGNED,
+                ex.reason(),
+                "Ошибка валидации цепочки должна возникнуть до проверки отзыва");
+    }
+
+    @Test
+    @DisplayName("validateChainWithRevocation: null в revocationData → пропуск, успех")
+    void testRevocationNullEntry() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        List<CertRevocationData> rd = Arrays.asList(null, null);
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+    }
+
+    @Test
+    @DisplayName("validateChainWithRevocation: все null → вырождается в validateChain")
+    void testRevocationAllNull() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        List<CertRevocationData> rd =
+                new ArrayList<>(Collections.nCopies(chain.size(), (CertRevocationData) null));
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+    }
+
+    @Test
+    @DisplayName(
+            "validateChainWithRevocation: размер revocationData != chain.size() → IllegalArgumentException")
+    void testRevocationSizeMismatch() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        List<CertRevocationData> rd = List.of(); // пустой список при chain.size()=2
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
     }
 
     // ========================================================================
@@ -951,6 +1260,34 @@ class ChainValidatorTest {
             return i;
         }
         return -1;
+    }
+
+    private static CertBundle createLeafWithPolicy(CertBundle issuer, String... policyOids)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Leaf Policy");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] cp = GostCertificateBuilder.buildCertificatePoliciesExtension(policyOids);
+        byte[] additional = concatExtensions(ku, ski, aki, cp);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .sanDns("gost.example.com")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.valueOf(42))
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                subjectDn);
     }
 
     private static byte[] concatExtensions(byte[]... exts) {

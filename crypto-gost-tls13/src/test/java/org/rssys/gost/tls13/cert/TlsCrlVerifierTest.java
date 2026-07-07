@@ -6,6 +6,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.pkix.cert.CrlVerifier;
+import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.ECParameters;
@@ -165,7 +166,8 @@ class TlsCrlVerifierTest {
     }
 
     @Test
-    @DisplayName("CRL с issuingDistributionPoint -> TlsException")
+    @DisplayName(
+            "CRL с пустым IDP (indirectCRL=false) — принимается, reject только indirectCRL=true")
     void testIdpExtension() throws Exception {
         byte[] crl =
                 TlsTestHelper.buildCrl(
@@ -175,19 +177,11 @@ class TlsCrlVerifierTest {
                         root.subjectDn,
                         "20300101120000Z",
                         true);
-        PkixException ex =
-                assertThrows(
-                        PkixException.class,
-                        () ->
-                                CrlVerifier.verify(
-                                        crl,
-                                        leaf.cert.getSerialNumber(),
-                                        root.cert.getPublicKey(),
-                                        root.subjectDn));
-        assertEquals(
-                PkixException.Reason.IDP_NOT_SUPPORTED,
-                ex.reason(),
-                "Причина исключения должна быть IDP_NOT_SUPPORTED, получено: " + ex.getMessage());
+        // Пустой IDP (все флаги false, indirectCRL=false) больше не реджектится
+        GostCrl parsed = GostCrl.fromDer(crl);
+        parsed.verify(root.cert.getPublicKey());
+        assertTrue(parsed.isIdp(), "IDP расширение должно присутствовать");
+        assertFalse(parsed.isIndirectCrl(), "indirectCRL должен быть false");
     }
 
     @Test

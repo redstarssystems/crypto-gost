@@ -1,3 +1,299 @@
+# \[0.6.3\] - 08-07-2026
+
+Данный релиз заполняет пробелы в API и делает доработки необходимые для
+создания разработчиками собственного УЦ. То есть библиотека теперь даёт
+строительные блоки для реализации "CA-as-Code"/УЦ-как-код".
+
+## Модуль crypto-gost-core
+
+## Модуль crypto-gost-pkix
+
+### Добавлено
+
+- **Метод `addCrl(GostCrl)` в `CmsSignedDataBuilder` — встраивание CRL в
+  SignedData (поле `crls [1]`, RFC 5652 §5.1).**
+
+  Ранее билдер поддерживал только встраивание дополнительных
+  сертификатов (`addCertificate()`). Теперь поддерживается выбор `crl`
+  из `RevocationInfoChoice` (RFC 5652 §10.2.1); OCSP-ответы (`other`) не
+  поддерживаются. CRL сортируются в DER-порядке (X.690 §11.6),
+  аналогично сертификатам.
+
+- **Верификатор `CmsSignedDataVerifier` возвращает встроенные CRL в
+  результатах проверки.**
+
+  Поле `crls [1]` разбирается с DoS-защитой (лимиты `MAX_EMBEDDED_CRLS`
+  и `MAX_EMBEDDED_CRLS_TOTAL_SIZE` в `CmsConstants`).
+  `GostCrl.fromDer()` вызывается без `verify()` — revoked-список не
+  извлекается на этом этапе. CRL доступны через `embeddedCrls()` в
+  `VerifiedSignedData` и `MultiSignerVerifiedData`. В `CAdESExtender`
+  поле `crls [1]` сохраняется как opaque при перекодировании.
+
+- **Перегрузка
+  `GostPkcs7.buildCertsOnly(List<GostCrl>, GostCertificate...)` для
+  встраивания CRL в certs-only .p7b-контейнеры.**
+
+  Старый метод `buildCertsOnly(GostCertificate...)` — обёртка над новым
+  с пустым списком CRL. `extractCertificates()` корректно работает при
+  наличии `crls [1]` в контейнере (поле сертификатов на фиксированном
+  индексе, CRL не мешает разбору).
+
+- **Автоматическая проверка отзыва в `CmsSignedDataVerifier` —
+  `verifyAnyWithRevocationCheck` и `verifyAllWithRevocationCheck`.**
+
+  Методы проверяют статус отзыва каждого сертификата цепочки по embedded
+  CRL из SignedData и опционально по внешним CRL через `CrlVerifier`
+  (проверка подписи CRL, срока, issuer DN и статуса отзыва). Приоритет
+  поиска: embedded, затем внешние. Delta CRL и partial/indirect CRL
+  пропускаются при подборе. При отсутствии подходящего CRL проверка
+  пропускается (best-effort, warn). Если CRL есть, но невалиден или
+  сертификат отозван — `PkixException` (fail-closed). `trustedCerts`
+  обязан быть непустым. Базовые `verifyAny`/`verifyAll` сохраняют
+  обратную совместимость — без проверки отзыва.
+
+- **Поддержка `byKey` responder ID в OCSP —
+  `GostOcspResponseBuilder.withResponderByKey()`,
+  `GostOcspResponse.getResponderIdType()` и `getResponderKeyHash()`,
+  проверка byKey в `OcspVerifier`.**
+
+  Ранее билдер формировал только `byName [1]` (subject DN подписанта), а
+  парсер отклонял ответы с `byKey [2]` (хэш публичного ключа), выдавая
+  `PkixException`. Теперь поддерживается CHOICE ResponderID согласно RFC
+  6960 §4.1.1: по умолчанию byName (обратная совместимость), опционально
+  byKey через Streebog-256/512. RFC 5019bis рекомендует byKey для
+  высоконагруженных сред. Хэш Streebog — ГОСТ-конвенция, распознаётся
+  только ГОСТ-клиентами; для универсальной совместимости используйте
+  byName.
+
+  Константа `TAG_CTX_CONSTRUCTED_2 = 0xA2` добавлена в `DerCodec`
+  (core), метод `GostDerCodec.encodeSpkiKeyValue(PublicKeyParameters)` —
+  в core.
+
+- **Делегированный CRL-подписант — `CrlVerifier.verifyDelegated()`.**
+
+  Ранее CRL верифицировался только ключом CA. Теперь поддерживается
+  делегированный CRL-подписант (RFC 5280 §6.3.3): CRL подписывается
+  отдельным ключом с битом `cRLSign` в KeyUsage. `verifyDelegated()`
+  сначала пробует ключ CA (fast path), при неудаче перебирает
+  сертификаты подписантов, проверяя срок, `isCrlSigner()` и цепочку
+  подписи к CA (симметрично делегированному OCSP-responder в
+  `OcspVerifier`). Три перегрузки: с `minCrlNumber` (защита от CRL
+  rollback), с настраиваемыми лимитами размера и числа записей. cRLSign
+  у CA в прямом пути — defence-in-depth (LOG warning, не reject).
+
+- **`GostCertificate.isCrlSigner()` — проверка `cRLSign` KeyUsage.**
+
+  Метод возвращает `true`, если KeyUsage отсутствует (без ограничений)
+  или содержит бит `cRLSign` (0x02). Парсинг бита добавлен в
+  `GostExtensionParser` и `ExtensionsResult`. Используется в
+  `verifyDelegated()` для валидации сертификатов подписантов.
+
+- **Парсинг IssuingDistributionPoint в `GostCrl` — `isIdp()`,
+  `isIndirectCrl()`, `isOnlyContainsUserCerts()`,
+  `isOnlyContainsCACerts()`.**
+
+  Ранее любое присутствие IDP-расширения (2.5.29.28) вызывало
+  `PkixException(IDP_NOT_SUPPORTED)`. Теперь IDP парсится: извлекаются
+  флаги `onlyContainsUserCerts`, `onlyContainsCACerts`, `indirectCRL`.
+  Добавлены четыре публичных метода. Реджектится только
+  `indirectCRL=true` — indirect CRL не поддерживается.
+
+- **`GostCrlBuilder.withIdpExtension(boolean, boolean)` — IDP с
+  флагами.**
+
+  Перегруженный метод принимает `onlyContainsUserCerts` и
+  `onlyContainsCACerts`. Старый `withIdpExtension()` без аргументов
+  сохраняет поведение — пустой IDP (все флаги false). Добавлен
+  статический метод `buildIdpExtension()` для прямого кодирования IDP
+  SEQUENCE согласно RFC 5280 §5.2.5.
+
+- **Fluent-построитель NameConstraints в `GostCertificateBuilder`.**
+
+  Ранее NameConstraints можно было только читать из сертификатов (парсер
+  в `GostExtensionParser` и enforcement в `ChainValidator`), но не
+  создавать программно. Добавлены: instance-метод
+  `.nameConstraints(permittedDns, permittedIps, excludedDns, excludedIps)`
+  для fluent-цепочки, static-метод `buildNameConstraintsExtension(...)`
+  для самостоятельной DER-сборки и
+  `GeneralNameCodec.encodeIpConstraint(String cidr)` для кодирования
+  iPAddress в формате адрес+маска (8/32 байта). Расширение всегда
+  critical (RFC 5280 §4.2.1.10), min/max не поддерживаются
+  (`ChainValidator` режектит). IP-ограничения принимаются в CIDR-нотации
+  (`"192.168.1.0/28"`).
+
+- **Поддержка `caIssuers` в `GostCertificateBuilder` — fluent-сеттер и
+  статический построитель AIA-расширения.**
+
+  Ранее `GostCertificateBuilder` позволял указать только OCSP-URI в
+  AIA-расширении (`.ocspResponder(uri)` и
+  `buildAiaOcspExtension(String)`). Указать caIssuers URI для
+  автодостройки цепочки было нельзя — парсер и геттер
+  `GostCertificate.getCaIssuersUris()` существовали, но API записи
+  отсутствовало. Теперь добавлены: fluent-сеттер `.caIssuer(uri)`,
+  константа `CA_ISSUERS_AD` в `GostOids` и единый статический метод
+  `buildAiaExtension(ocspUri, caIssuersUri)`, поддерживающий все
+  комбинации — только OCSP, только caIssuers или оба в одном экземпляре
+  расширения (требование RFC 5280 §4.2). Старый метод
+  `buildAiaOcspExtension` удалён.
+
+- **Чтение FreshestCRL в `GostCrl` (`isFreshestCrl()` /
+  `getFreshestCrlUris()`) и публичный
+  `GostCertificateBuilder.buildFreshestCrlExtension()`.**
+
+  Ранее FreshestCRL (2.5.29.46, RFC 5280 §5.2.6) был write-only:
+  `GostCrlBuilder.withFreshestCrl()` кодировал расширение, но `GostCrl`
+  при парсинге молча пропускал его — ни геттеров, ни разбора. Теперь
+  добавлены `isFreshestCrl()` и `getFreshestCrlUris()`, структура
+  DistributionPoint парсится через `GostExtensionParser.parseCdpUris`
+  (идентична CDP). Публичный
+  `GostCertificateBuilder.buildFreshestCrlExtension()` позволяет
+  кодировать расширение отдельно, симметрично `buildCdpExtension()`.
+  Добавлены round-trip и фаззинг-тесты.
+
+- **FreshestCRL: fluent-сеттер `GostCertificateBuilder.freshestCrl()` и
+  read-path `GostCertificate.getFreshestCrlUris()` — симметрично
+  `crlDistributionPoints`/ `getCdpUris()`.**
+
+  Ранее FreshestCRL (2.5.29.46, RFC 5280 §5.2.6) на сертификатной
+  стороне был write-only: расширение можно было закодировать только
+  через generic `additionalExtensions(buildFreshestCrlExtension(...))`,
+  а при парсинге сертификата URI молча игнорировались (не было ни поля в
+  `ExtensionsResult`, ни геттера в `GostCertificate`). Теперь добавлены:
+  fluent-сеттер `.freshestCrl(uri1, uri2)`, автоматическая запись в
+  сертификат через `buildTbs()`, парсинг в `GostExtensionParser` через
+  существующий `parseCdpUris()` (структура DistributionPoint идентична
+  CDP), поле `freshestCrlUris` в `ExtensionsResult` и геттер
+  `getFreshestCrlUris()` в `GostCertificate` с SSRF-предупреждением (со
+  ссылкой на `SsrfGuard` и `JdkHttpCrlFetcher`). Добавлены unit-тест
+  парсинга и round-trip тест builder → parser.
+
+- **AuthorityKeyIdentifier в построителе и парсере CRL —
+  `GostCrlBuilder.withAki()` и `GostCrl.getAuthorityKeyIdentifier()`
+  (RFC 5280 §5.2.1).**
+
+  Ранее AKI-расширение в CRL отсутствовало в обе стороны:
+  `GostCrlBuilder` не умел его кодировать, `GostCrl` не умел парсить.
+  Теперь добавлены fluent-методы `withAki(byte[])` и
+  `withAki(PublicKeyParameters)` (переиспользуют
+  `GostCertificateBuilder.buildAkiExtension()`), геттер
+  `getAuthorityKeyIdentifier()` и парсинг `parseAkiExtension()` внутри
+  `GostCrl` (локальное дублирование паттерна `GostExtensionParser`,
+  нулевой риск регрессии для сертификатов). Параметр `caPriv` в
+  `GostCrlBuilder` переименован в `signerPriv` — построитель подписывает
+  CRL любым переданным ключом, без привязки к роли CA. Добавлены
+  round-trip, фаззинг и кросс-валидационные (openssl) тесты.
+
+- **Метод `ChainValidator.validateChainWithRevocation` — валидация
+  цепочки + проверка отзыва в одном вызове.**
+
+  Ранее разработчик должен самостоятельно вызывать
+  `ChainValidator.validateChain()`, затем `CrlVerifier` или
+  `OcspVerifier` отдельно. Теперь вызов
+  `validateChainWithRevocation(chain, trustedKeys, revocationData)`
+  делает PKIX-валидацию и проверку CRL/OCSP за один шаг. Данные отзыва
+  передаются через новый record `CertRevocationData`; приоритет OCSP над
+  CRL — по RFC 5280. Pull-модель (готовые данные, без сети) — для
+  fetch-модели с OCSP/CRL-фетчерами, настраиваемыми лимитами и
+  nonce-проверкой используйте
+  `GostX509TrustManager.validateChainWithOcsp()`.
+
+- **Поддержка IssuerAltName (2.5.29.18, RFC 5280 §4.2.1.7) — парсер,
+  строитель и геттеры.**
+
+  Ранее расширение IssuerAltName нигде не обрабатывалось: парсер
+  `GostExtensionParser` молча пропускал его (non-critical) или режектил
+  сертификат (critical), строитель `GostCertificateBuilder` и
+  `GostCertificate` не предоставляли доступа. Теперь добавлены:
+  константы `EXT_IAN` в `GostOids` и `IAN_OID_BYTES` в `GostDerParser`,
+  парсинг в `GostExtensionParser` (через переиспользование
+  `parseSanGeneralNames` — структура GeneralNames идентична SAN), поля
+  `ianDnsNames`/`ianIpAddresses` в `ExtensionsResult`, геттеры
+  `getIssuerAltNameDnsNames()`/`getIssuerAltNameIpAddresses()` в
+  `GostCertificate`, fluent-сеттеры `ianDns()`/`ianIp()` и статический
+  метод `buildIssuerAltNameExtension()` в `GostCertificateBuilder`.
+  IssuerAltName полностью изолирован от hostname-верификации
+  (проверяется только SAN по RFC 6125) и от построения/валидации цепочек
+  (только DN-матчинг по RFC 5280 §6.1).
+
+### Исправлено
+
+- **`verifyAll` пробрасывает оригинальный `Reason` ошибки вместо жёстко
+  зашитого `SIGNATURE_INVALID`.**
+
+- **Парсер `GostOcspResponse` исправлен: byKey-ответы (тег `0xA2`)
+  больше не отклоняются.**
+
+  Ошибка в проверке тега: принимался только `[0]` (ошибочно) и `[1]`
+  (byName), а `[2]` (byKey) отсутствовал. Теперь парсер корректно
+  разбирает оба варианта CHOICE ResponderID по RFC 6960.
+
+  Ранее при любой ошибке подписанта в strict-режиме `verifyAll` всегда
+  бросал `PkixException(Reason.SIGNATURE_INVALID, ...)`, теряя настоящую
+  причину (например, `EXPIRED`, `DN_MISMATCH`, `REVOKED`). Теперь
+  используется `e.reason()` — вызывающий код получает точную
+  диагностику.
+
+- **`ChainValidator` — опциональная проверка CertificatePolicies
+  leaf-сертификата.**
+
+  Добавлен перегруженный метод
+  `validateChain(chain, caPublicKeys, requiredPolicyOids)`. Проверяет,
+  что leaf-сертификат содержит хотя бы одну из требуемых политик или
+  `anyPolicy` (2.5.29.32.0). При отсутствии расширения
+  CertificatePolicies или несовпадении выбрасывается `POLICY_VIOLATION`.
+  PolicyMappings, PolicyConstraints, InhibitAnyPolicy не реализованы —
+  проверяется только конечный сертификат. Старая сигнатура
+  `validateChain(chain, caPublicKeys)` сохраняет поведение без проверки
+  политик.
+
+- **DoS: защита от crafted TLV с ложной длиной в
+  `parseEmbeddedCertificates()` и `parseEmbeddedCrls()`
+  `CmsSignedDataVerifier`.**
+
+  `DerCodec.decodeLength()` возвращает задекларированную длину, но не
+  проверяет, что она помещается в оставшийся буфер. `Arrays.copyOfRange`
+  с `to > src.length` тихо дополняет результат нулями — вход в десятки
+  байт мог аллоцировать ~2GB. Добавлена проверка `pos + total > end`
+  перед `copyOfRange` в обоих методах.
+
+- **Countersignature (RFC 5652 §11.4) — `CountersignatureBuilder`,
+  `CAdESExtender.embedCountersignature()`,
+  `CAdESExtender.verifyCountersignature()`,
+  `CAdESSignerResult.countersignatures()`.**
+
+  Ранее библиотека поддерживала только уровни CAdES-BES (базовая
+  подпись) и CAdES-T (с меткой времени). Теперь добавлена поддержка
+  countersignature (RFC 5652 §11.4): вложенный `SignerInfo`,
+  подписывающий содержимое октета `signatureValue` родительского
+  подписанта. `CountersignatureBuilder` строит countersignature с
+  правильным `message-digest` (без `content-type` — RFC 5652 §11.4).
+  `CAdESExtender.embedCountersignature()` встраивает countersignature в
+  `unsignedAttrs [1]` каждого подписанта, автоматически добавляет
+  сертификат countersigner’а в поле `certificates` SignedData.
+  `verifyCountersignature()` выполняет полный цикл верификации:
+  CMS-подпись + `signingCertificateV2` + метки времени (опционально) +
+  countersignature — с построением и валидацией цепочки countersigner’а
+  до `trustedCerts` (fail-closed). Метки времени опциональны:
+  countersignature может добавляться на CAdES-BES без TSP. Структура
+  проверена кросс-валидацией с OpenSSL (`asn1parse`, `dgst -verify`).
+  OID `id-countersignature` (1.2.840.113549.1.9.6) зарегистрирован в
+  `GostOids`.
+
+### Изменено
+
+- **IDP-расширение в CRL больше не отклоняется безусловно.**
+
+  Ранее `GostCrl.verify()` выбрасывал `IDP_NOT_SUPPORTED` при любом
+  присутствии IssuingDistributionPoint. Теперь IDP парсится: пустой IDP
+  (все флаги false) принимается, `indirectCRL=true` — реджект
+  (fail-closed). Генерация IDP через `GostCrlBuilder.withIdpExtension()`
+  и кодирование через `assembleCrl()` обновлены с хардкоденного пустого
+  SEQUENCE на динамическое построение по флагам (`buildIdpExtension()`).
+
+## Модуль crypto-gost-tls13
+
+## Модуль crypto-gost-jsse
+
 # \[0.6.2\] - 06-07-2026
 
 Продолжаем гигиену безопасности после масштабного рефакторинга в 0.6.0.

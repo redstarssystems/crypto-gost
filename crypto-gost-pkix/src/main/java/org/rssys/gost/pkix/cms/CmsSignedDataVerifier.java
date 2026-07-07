@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cms;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.math.BigInteger;
 import java.security.cert.CertificateException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -10,7 +11,9 @@ import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.ChainValidator;
+import org.rssys.gost.pkix.cert.CrlVerifier;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
@@ -27,7 +30,11 @@ import org.rssys.gost.util.DerCodec;
  *       Используется {@link CAdESExtender} для multi-signer CAdES-T.</li>
  * </ul>
  *
- * <p>При ошибке оба метода бросают {@link PkixException} (fail-closed).
+ * <p>Для каждого режима есть вариант с автоматической проверкой отзыва
+ * ({@code WithRevocationCheck}): проверяет embedded CRL из SignedData
+ * и опционально внешние CRL через {@link CrlVerifier}.
+ *
+ * <p>При ошибке все методы бросают {@link PkixException} (fail-closed).
  */
 public final class CmsSignedDataVerifier {
 
@@ -48,6 +55,9 @@ public final class CmsSignedDataVerifier {
      *
      * <p>Для сценариев, где важны все подписанты, используйте {@link #verifyAll}.
      *
+     * <p>Проверка отзыва сертификатов не выполняется — используйте
+     * {@link #verifyAnyWithRevocationCheck} для автоматической проверки по CRL.
+     *
      * @param signedDataDer DER-байты ContentInfo(id-signedData)
      * @param trustedCerts  список доверенных сертификатов
      * @return результат с данными и сертификатом первого валидного подписанта
@@ -55,7 +65,7 @@ public final class CmsSignedDataVerifier {
      */
     public static VerifiedSignedData verifyAny(
             byte[] signedDataDer, GostCertificate... trustedCerts) throws PkixException {
-        return verifyInternal(signedDataDer, trustedCerts, false);
+        return verifyInternal(signedDataDer, trustedCerts, false, false, null);
     }
 
     /**
@@ -66,6 +76,9 @@ public final class CmsSignedDataVerifier {
      * и игнорирует остальных, этот метод требует успешной верификации каждого
      * подписанта. Используется {@link CAdESExtender} для multi-signer CAdES-T.
      *
+     * <p>Проверка отзыва сертификатов не выполняется — используйте
+     * {@link #verifyAllWithRevocationCheck} для автоматической проверки по CRL.
+     *
      * @param signedDataDer DER-байты ContentInfo(id-signedData)
      * @param trustedCerts  список доверенных сертификатов
      * @return все успешно верифицированные подписанты
@@ -73,7 +86,85 @@ public final class CmsSignedDataVerifier {
      */
     public static MultiSignerVerifiedData verifyAll(
             byte[] signedDataDer, GostCertificate... trustedCerts) throws PkixException {
-        return verifyInternal(signedDataDer, trustedCerts, true);
+        return verifyInternal(signedDataDer, trustedCerts, true, false, null);
+    }
+
+    /**
+     * Верифицирует SignedData с автоматической проверкой отзыва по embedded CRL.
+     * OR-семантика: возвращает первого успешно верифицированного подписанта.
+     * Если подписант отозван — пробуется следующий (как и при битой подписи).
+     *
+     * <p>Для каждого сертификата цепочки (кроме trust anchor) проверяются все CRL
+     * с совпадающим issuer DN среди embedded CRL из SignedData. Если ни один
+     * из matching CRL не определяет сертификат как отозванный — подписант
+     * считается валидным. При отсутствии подходящего CRL проверка пропускается
+     * (best-effort, warn).
+     *
+     * <p>Delta CRL и partial/indirect CRL (неподдерживаемые типы) пропускаются
+     * при подборе кандидата — верификатор проверяет следующий подходящий CRL.
+     *
+     * @param signedDataDer DER-байты ContentInfo(id-signedData)
+     * @param trustedCerts  список доверенных сертификатов (не пустой)
+     * @return результат с данными и сертификатом первого валидного подписанта
+     * @throws PkixException          если ни один подписант не прошёл верификацию
+     *                                (в том числе все отозваны)
+     * @throws IllegalArgumentException если {@code trustedCerts} пуст
+     */
+    public static VerifiedSignedData verifyAnyWithRevocationCheck(
+            byte[] signedDataDer, GostCertificate... trustedCerts) throws PkixException {
+        return verifyAnyWithRevocationCheck(signedDataDer, null, trustedCerts);
+    }
+
+    /**
+     * Верифицирует SignedData с проверкой отзыва по embedded и внешним CRL.
+     * OR-семантика.
+     *
+     * <p>Приоритет поиска CRL: сначала embedded (из SignedData), затем
+     * {@code externalCrls}. Сопоставление — по issuer DN.
+     *
+     * @param signedDataDer DER-байты ContentInfo(id-signedData)
+     * @param externalCrls  дополнительные CRL для проверки (может быть null)
+     * @param trustedCerts  список доверенных сертификатов (не пустой)
+     * @return результат с данными и сертификатом первого валидного подписанта
+     * @throws PkixException          при ошибке верификации или отзыве
+     * @throws IllegalArgumentException если {@code trustedCerts} пуст
+     */
+    public static VerifiedSignedData verifyAnyWithRevocationCheck(
+            byte[] signedDataDer, List<GostCrl> externalCrls, GostCertificate... trustedCerts)
+            throws PkixException {
+        return verifyInternal(signedDataDer, trustedCerts, false, true, externalCrls);
+    }
+
+    /**
+     * Верифицирует SignedData с проверкой отзыва по embedded CRL, все подписанты.
+     * AND-семантика.
+     *
+     * @param signedDataDer DER-байты ContentInfo(id-signedData)
+     * @param trustedCerts  список доверенных сертификатов (не пустой)
+     * @return все успешно верифицированные подписанты
+     * @throws PkixException          при ошибке верификации или отзыве
+     * @throws IllegalArgumentException если {@code trustedCerts} пуст
+     */
+    public static MultiSignerVerifiedData verifyAllWithRevocationCheck(
+            byte[] signedDataDer, GostCertificate... trustedCerts) throws PkixException {
+        return verifyAllWithRevocationCheck(signedDataDer, null, trustedCerts);
+    }
+
+    /**
+     * Верифицирует SignedData с проверкой отзыва по embedded и внешним CRL, все подписанты.
+     * AND-семантика.
+     *
+     * @param signedDataDer DER-байты ContentInfo(id-signedData)
+     * @param externalCrls  дополнительные CRL для проверки (может быть null)
+     * @param trustedCerts  список доверенных сертификатов (не пустой)
+     * @return все успешно верифицированные подписанты
+     * @throws PkixException          при ошибке верификации или отзыве
+     * @throws IllegalArgumentException если {@code trustedCerts} пуст
+     */
+    public static MultiSignerVerifiedData verifyAllWithRevocationCheck(
+            byte[] signedDataDer, List<GostCrl> externalCrls, GostCertificate... trustedCerts)
+            throws PkixException {
+        return verifyInternal(signedDataDer, trustedCerts, true, true, externalCrls);
     }
 
     // ========================================================================
@@ -82,8 +173,16 @@ public final class CmsSignedDataVerifier {
 
     @SuppressWarnings("unchecked")
     private static <T> T verifyInternal(
-            byte[] signedDataDer, GostCertificate[] trustedCerts, boolean strict)
+            byte[] signedDataDer,
+            GostCertificate[] trustedCerts,
+            boolean strict,
+            boolean checkRevocation,
+            List<GostCrl> externalCrls)
             throws PkixException {
+        if (checkRevocation && (trustedCerts == null || trustedCerts.length == 0)) {
+            throw new IllegalArgumentException(
+                    "trustedCerts must not be empty for revocation checking");
+        }
         SignedDataParsed parsed = parseSignedData(signedDataDer);
 
         int totalSigners = parsed.signerInfos().length;
@@ -92,44 +191,32 @@ public final class CmsSignedDataVerifier {
                     PkixException.Reason.OTHER, "SignedData contains no signerInfos");
         }
         List<SignerResult> results = new ArrayList<>();
+        PkixException lastRevocationError = null;
 
         for (int sn = 0; sn < totalSigners; sn++) {
             byte[] signerInfoDer = parsed.signerInfos()[sn];
             LOG.log(Level.DEBUG, "Verifying signer {0}/{1}", sn + 1, totalSigners);
+
+            SignerResult result;
+            List<GostCertificate> chain = null;
             try {
-                SignerResult result =
+                result =
                         verifyOneSigner(
                                 signerInfoDer,
                                 parsed.encapData(),
                                 parsed.embeddedCerts(),
                                 parsed.eContentTypeOid());
-                // Проверяем цепочку доверия
                 if (trustedCerts.length > 0) {
-                    validateCertChain(
-                            result.signerCertificate(),
-                            parsed.embeddedCerts(),
-                            Arrays.asList(trustedCerts));
-                }
-                LOG.log(
-                        Level.INFO,
-                        "SignedData verification passed (signer {0}/{1})",
-                        sn + 1,
-                        totalSigners);
-
-                if (!strict) {
-                    // OR-семантика: первый успешный
-                    return (T)
-                            new VerifiedSignedData(
-                                    parsed.encapData(),
+                    chain =
+                            buildAndValidateChain(
                                     result.signerCertificate(),
-                                    result.unsignedAttributes());
+                                    parsed.embeddedCerts(),
+                                    Arrays.asList(trustedCerts));
                 }
-                results.add(result);
             } catch (PkixException e) {
                 if (strict) {
-                    // AND-семантика: любой провал немедленно прерывает
                     throw new PkixException(
-                            PkixException.Reason.SIGNATURE_INVALID,
+                            e.reason(),
                             "Signer "
                                     + (sn + 1)
                                     + "/"
@@ -139,13 +226,61 @@ public final class CmsSignedDataVerifier {
                             e);
                 }
                 LOG.log(Level.DEBUG, "Signer {0} failed: {1}", sn + 1, e.getMessage());
+                continue;
             }
+
+            // Проверка отзыва: отзыв подписанта невалидирует его, как и битая подпись.
+            // В OR-режиме пробуем следующего, в AND-режиме — немедленное исключение.
+            if (checkRevocation && chain != null) {
+                try {
+                    validateRevocation(chain, parsed.embeddedCrls(), externalCrls);
+                } catch (PkixException e) {
+                    if (strict) {
+                        throw new PkixException(
+                                e.reason(),
+                                "Signer "
+                                        + (sn + 1)
+                                        + "/"
+                                        + totalSigners
+                                        + " failed revocation check: "
+                                        + e.getMessage(),
+                                e);
+                    }
+                    lastRevocationError = e;
+                    LOG.log(
+                            Level.DEBUG,
+                            "Signer {0} failed revocation check: {1}",
+                            sn + 1,
+                            e.getMessage());
+                    continue;
+                }
+            }
+
+            LOG.log(
+                    Level.INFO,
+                    "SignedData verification passed (signer {0}/{1})",
+                    sn + 1,
+                    totalSigners);
+
+            if (!strict) {
+                // OR-семантика: первый успешный
+                return (T)
+                        new VerifiedSignedData(
+                                parsed.encapData(),
+                                result.signerCertificate(),
+                                result.unsignedAttributes(),
+                                parsed.embeddedCrls());
+            }
+            results.add(result);
         }
 
         if (!strict) {
+            if (lastRevocationError != null) {
+                throw lastRevocationError;
+            }
             throw new PkixException(PkixException.Reason.OTHER, "No signer passed verification");
         }
-        return (T) new MultiSignerVerifiedData(parsed.encapData(), results);
+        return (T) new MultiSignerVerifiedData(parsed.encapData(), results, parsed.embeddedCrls());
     }
 
     private static SignedDataParsed parseSignedData(byte[] signedDataDer) throws PkixException {
@@ -209,9 +344,13 @@ public final class CmsSignedDataVerifier {
         }
 
         // [4] crls [1] IMPLICIT OPTIONAL
+        List<GostCrl> embeddedCrls;
         if (partIdx < signedDataParts.length
                 && DerCodec.isContextTag(signedDataParts[partIdx], 1)) {
-            partIdx++;
+            byte[] crlsField = signedDataParts[partIdx++];
+            embeddedCrls = parseEmbeddedCrls(crlsField);
+        } else {
+            embeddedCrls = new ArrayList<>();
         }
 
         // [last] signerInfos
@@ -226,7 +365,72 @@ public final class CmsSignedDataVerifier {
                     "SignedData signerInfos exceed maximum " + CmsConstants.MAX_SIGNER_INFOS);
         }
 
-        return new SignedDataParsed(encapData, signerInfos, eContentTypeOid, embeddedCerts);
+        return new SignedDataParsed(
+                encapData, signerInfos, eContentTypeOid, embeddedCerts, embeddedCrls);
+    }
+
+    /**
+     * Разбирает поле crls {@code [1] IMPLICIT SET OF RevocationInfoChoice} SignedData
+     * (RFC 5652 §5.1) в список CRL (только CertificateList, other-ветка не поддерживается).
+     *
+     * <p>Проверяет суммарный размер поля и количество CRL — defence-in-depth поверх
+     * уже существующих per-CRL лимитов ({@link GostCrl#DEFAULT_MAX_CRL_SIZE}).
+     * GostCrl.fromDer() выполняет только структурный разбор, без verify() на этом этапе —
+     * revoked-список не извлекается, CPU-стоимость низкая.
+     *
+     * @param crlsField DER-байты поля {@code [1]} (контекстный тег 1)
+     * @return список разобранных CRL (возможно пустой)
+     * @throws PkixException если превышены лимиты или CRL повреждён
+     */
+    private static List<GostCrl> parseEmbeddedCrls(byte[] crlsField) throws PkixException {
+        int[] lenInfo = DerCodec.decodeLength(crlsField, 1);
+        int contentStart = 1 + lenInfo[1];
+        int contentEnd = crlsField.length;
+
+        // Пустое содержимое [1] — легитимный случай (ноль CRL)
+        if (contentStart >= contentEnd) {
+            return new ArrayList<>();
+        }
+
+        // Проверяем общий размер поля до разбора (дёшево: byte[].length)
+        if (crlsField.length > CmsConstants.MAX_EMBEDDED_CRLS_TOTAL_SIZE) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "SignedData crls field exceeds maximum size "
+                            + CmsConstants.MAX_EMBEDDED_CRLS_TOTAL_SIZE
+                            + ", got "
+                            + crlsField.length);
+        }
+
+        List<GostCrl> crls = new ArrayList<>();
+        int pos = contentStart;
+
+        while (pos < contentEnd) {
+            if (crls.size() >= CmsConstants.MAX_EMBEDDED_CRLS) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "SignedData embedded CRLs exceed maximum "
+                                + CmsConstants.MAX_EMBEDDED_CRLS);
+            }
+            int[] crlLen = DerCodec.decodeLength(crlsField, pos + 1);
+            int crlTotal = 1 + crlLen[1] + crlLen[0];
+            if (pos + crlTotal > contentEnd) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "CRL TLV length exceeds remaining buffer in crls field");
+            }
+            byte[] crlDer = Arrays.copyOfRange(crlsField, pos, pos + crlTotal);
+            try {
+                crls.add(GostCrl.fromDer(crlDer));
+            } catch (IllegalArgumentException e) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "Corrupted CRL in SignedData crls field",
+                        e);
+            }
+            pos += crlTotal;
+        }
+        return crls;
     }
 
     /**
@@ -260,6 +464,11 @@ public final class CmsSignedDataVerifier {
             certCount++;
             int[] certLen = DerCodec.decodeLength(certsField, pos + 1);
             int certTotal = 1 + certLen[1] + certLen[0];
+            if (pos + certTotal > certsEnd) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "Certificate TLV length exceeds remaining buffer in certificates field");
+            }
             byte[] certDer = Arrays.copyOfRange(certsField, pos, pos + certTotal);
             try {
                 certs.add(parseCert(certDer));
@@ -452,19 +661,94 @@ public final class CmsSignedDataVerifier {
         }
     }
 
-    private static void validateCertChain(
+    /**
+     * Строит цепочку сертификатов и проверяет её через ChainValidator.
+     * Возвращает построенную цепочку для дальнейшей проверки отзыва.
+     *
+     * @return цепочка leaf-first
+     * @throws PkixException при ошибке построения или валидации цепочки
+     */
+    private static List<GostCertificate> buildAndValidateChain(
             GostCertificate signerCert,
             List<GostCertificate> embeddedCerts,
             List<GostCertificate> trustedCerts)
             throws PkixException {
-        try {
-            List<GostCertificate> chain =
-                    CertChainBuilder.buildChain(signerCert, embeddedCerts, trustedCerts);
-            List<PublicKeyParameters> caKeys =
-                    trustedCerts.stream().map(GostCertificate::getPublicKey).toList();
-            ChainValidator.validateChain(chain, caKeys);
-        } catch (PkixException e) {
-            throw e;
+        List<GostCertificate> chain =
+                CertChainBuilder.buildChain(signerCert, embeddedCerts, trustedCerts);
+        List<PublicKeyParameters> caKeys =
+                trustedCerts.stream().map(GostCertificate::getPublicKey).toList();
+        ChainValidator.validateChain(chain, caKeys);
+        return chain;
+    }
+
+    /**
+     * Проверяет статус отзыва для каждого сертификата цепочки (кроме trust anchor).
+     *
+     * <p>Для каждого сертификата проверяются ВСЕ matching CRL (с совпадающим issuer DN)
+     * из embedded и external списков. Сертификат считается валидным, только если
+     * ни один из проверенных CRL не определяет его как отозванный (fail-closed
+     * против downgrade-атаки: если embedded CRL устарел, а внешний содержит отзыв —
+     * верификатор дойдёт до внешнего и выявит отзыв).
+     *
+     * <p>Delta CRL и partial/indirect CRL (Reason.IDP_NOT_SUPPORTED) пропускаются.
+     * Остальные ошибки верификации пробрасываются немедленно (fail-closed).
+     * При отсутствии подходящего CRL проверка пропускается (best-effort, warn).
+     *
+     * @param chain        цепочка leaf-first
+     * @param embeddedCrls CRL из поля crls [1] SignedData
+     * @param externalCrls дополнительные CRL от вызывающего (может быть null)
+     * @throws PkixException если сертификат отозван или CRL невалиден
+     */
+    private static void validateRevocation(
+            List<GostCertificate> chain, List<GostCrl> embeddedCrls, List<GostCrl> externalCrls)
+            throws PkixException {
+        int n = chain.size();
+        for (int i = 0; i < n - 1; i++) {
+            GostCertificate cert = chain.get(i);
+            GostCertificate issuer = chain.get(i + 1);
+
+            byte[] certIssuerDn = cert.getIssuerDnBytes();
+            byte[] certSerial = cert.getSerialNumber();
+
+            List<GostCrl> candidates = new ArrayList<>();
+            if (embeddedCrls != null) {
+                candidates.addAll(embeddedCrls);
+            }
+            if (externalCrls != null) {
+                candidates.addAll(externalCrls);
+            }
+
+            boolean foundValidCrl = false;
+            for (GostCrl crl : candidates) {
+                if (!Arrays.equals(crl.getIssuerDnBytes(), certIssuerDn)) {
+                    continue;
+                }
+                try {
+                    CrlVerifier.verify(
+                            crl.getEncoded(), certSerial, issuer.getPublicKey(), certIssuerDn);
+                    foundValidCrl = true;
+                    // без break — проверяем все matching CRL;
+                    // если любой последующий CRL обнаружит отзыв — пробрасывается исключение
+                } catch (PkixException e) {
+                    if (e.reason() == PkixException.Reason.IDP_NOT_SUPPORTED) {
+                        LOG.log(
+                                Level.DEBUG,
+                                "CRL skipped (unsupported type: {0}), issuer={1}",
+                                e.getMessage(),
+                                crl.getIssuerDn());
+                        continue;
+                    }
+                    throw e;
+                }
+            }
+
+            if (!foundValidCrl) {
+                LOG.log(
+                        Level.WARNING,
+                        "No valid CRL found for cert chain[{0}], serial=0x{1}",
+                        i,
+                        new BigInteger(1, certSerial).toString(16));
+            }
         }
     }
 
@@ -472,5 +756,6 @@ public final class CmsSignedDataVerifier {
             byte[] encapData,
             byte[][] signerInfos,
             byte[] eContentTypeOid,
-            List<GostCertificate> embeddedCerts) {}
+            List<GostCertificate> embeddedCerts,
+            List<GostCrl> embeddedCrls) {}
 }

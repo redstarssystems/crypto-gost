@@ -345,7 +345,7 @@ public class TlsTestHelper {
     // ========================================================================
 
     public static byte[] buildAiaOcspExtension(String ocspUri) {
-        return GostCertificateBuilder.buildAiaOcspExtension(ocspUri);
+        return GostCertificateBuilder.buildAiaExtension(ocspUri, null);
     }
 
     public static byte[] buildCdpExtension(String... crlUris) {
@@ -453,7 +453,8 @@ public class TlsTestHelper {
                 null,
                 null,
                 null,
-                withIdpExtension);
+                withIdpExtension,
+                null);
     }
 
     /**

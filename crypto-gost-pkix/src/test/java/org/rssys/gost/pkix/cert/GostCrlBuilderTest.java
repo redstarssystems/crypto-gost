@@ -9,9 +9,11 @@ import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
+import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -254,8 +256,8 @@ class GostCrlBuilderTest {
     }
 
     @Test
-    @DisplayName("buildCrl с IDP-расширением — CrlVerifier должен reject")
-    void testBuildCrlWithIdpExtensionRejected() throws Exception {
+    @DisplayName("buildCrl с пустым IDP — принимается, indirectCRL=false")
+    void testBuildCrlWithEmptyIdpAccepted() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
@@ -266,10 +268,74 @@ class GostCrlBuilderTest {
                         .withIdpExtension()
                         .build();
 
+        // Пустой IDP (все флаги false) — не indirect, должен приниматься
+        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+    }
+
+    @Test
+    @DisplayName("buildCrl с indirectCRL=true в IDP — должен быть rejected")
+    void testBuildCrlWithIndirectCrlRejected() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        byte[] crlDer =
+                GostCrlBuilder.assembleCrl(
+                        null,
+                        kp.getPrivate(),
+                        issuerDn,
+                        GostSignatureHelper.nowGeneralizedTime(),
+                        "20990601120000Z",
+                        false,
+                        null,
+                        null,
+                        null,
+                        true,
+                        false,
+                        false,
+                        true,
+                        null);
+
         assertThrows(
                 PkixException.class,
                 () -> CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn),
-                "CRL с IDP должен быть rejected (partial/indirect не поддерживается)");
+                "CRL с indirectCRL=true должен быть rejected");
+    }
+
+    @Test
+    @DisplayName("indirectCRL=true в канонической IMPLICIT-кодировке (0x84 01 FF) — reject")
+    void testCanonicalImplicitIndirectCrlRejected() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        // Строим TBSCertList с hand-crafted IDP: каноническая implicit-кодировка
+        // indirectCRL = [4] IMPLICIT BOOLEAN true = 0x84 01 FF
+        byte[] idpSeq = DerCodec.encodeSequence(DerCodec.encodeTlv(0x84, new byte[] {(byte) 0xFF}));
+        byte[] idpExt =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid("2.5.29.28"), DerCodec.encodeTlv(0x04, idpSeq));
+
+        ByteArrayOutputStream tbsOut = new ByteArrayOutputStream();
+        tbsOut.write(DerCodec.encodeTlv(0x02, new byte[] {0x01})); // version
+        tbsOut.write(GostSignatureHelper.buildAlgId(params)); // sigAlg
+        tbsOut.write(issuerDn); // issuer
+        tbsOut.write(DerCodec.encodeTime(GostSignatureHelper.nowGeneralizedTime())); // thisUpdate
+        tbsOut.write(DerCodec.encodeTime("20990601120000Z")); // nextUpdate
+        tbsOut.write(DerCodec.encodeTlv(0xA0, DerCodec.encodeSequence(idpExt))); // crlExts [0]
+        byte[] tbs = DerCodec.encodeSequence(tbsOut.toByteArray());
+
+        // Подписываем
+        int hlen = params.hlen;
+        byte[] hash = GostSignatureHelper.doHash(tbs, hlen);
+        byte[] sig = Signature.signHash(hash, kp.getPrivate());
+        byte[] sigAlg = GostSignatureHelper.buildAlgId(params);
+        byte[] crlDer = DerCodec.encodeSequence(tbs, sigAlg, DerCodec.encodeBitString(sig));
+
+        assertThrows(
+                PkixException.class,
+                () -> CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn),
+                "CRL с каноническим indirectCRL=true (0x84 01 FF) должен быть rejected");
     }
 
     @Test
@@ -290,7 +356,8 @@ class GostCrlBuilderTest {
                         null,
                         null,
                         null,
-                        false);
+                        false,
+                        null);
 
         CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
     }
@@ -618,6 +685,48 @@ class GostCrlBuilderTest {
         assertTrue(
                 containsBytes(crlDer, DerCodec.encodeOid(GostOids.EXT_FRESHEST_CRL)),
                 "CRL должен содержать OID freshestCRL");
+    }
+
+    @Test
+    @DisplayName("FreshestCRL roundtrip: isFreshestCrl / getFreshestCrlUris")
+    void testFreshestCrlParseRoundtrip() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        byte[] crlDer =
+                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                        .withFreshestCrl("http://ca.example/delta.crl")
+                        .build();
+
+        GostCrl crl = new GostCrl(crlDer);
+        crl.verify(kp.getPublic());
+
+        assertTrue(
+                crl.isFreshestCrl(), "CRL с FreshestCRL должен возвращать isFreshestCrl() == true");
+        assertArrayEquals(
+                new String[] {"http://ca.example/delta.crl"},
+                crl.getFreshestCrlUris(),
+                "URI из FreshestCRL должен совпадать с исходным");
+    }
+
+    @Test
+    @DisplayName("isFreshestCrl: false для CRL без FreshestCRL")
+    void testCrlWithoutFreshestCrlNotFreshest() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        byte[] crlDer = GostCrlBuilder.create(kp.getPrivate(), issuerDn).build();
+
+        GostCrl crl = new GostCrl(crlDer);
+        crl.verify(kp.getPublic());
+
+        assertFalse(
+                crl.isFreshestCrl(),
+                "CRL без FreshestCRL должен возвращать isFreshestCrl() == false");
+        assertNull(
+                crl.getFreshestCrlUris(), "getFreshestCrlUris() должен быть null без расширения");
     }
 
     @Test
@@ -968,5 +1077,106 @@ class GostCrlBuilderTest {
         assertTrue(
                 crl.isRevoked(BigInteger.valueOf(3).toByteArray()),
                 "Сертификат с serial=3 должен быть найден как отозванный");
+    }
+
+    // ========================================================================
+    // AKI round-trip тесты
+    // ========================================================================
+
+    @Test
+    @DisplayName("AKI round-trip: withAki(byte[]) -> getAuthorityKeyIdentifier()")
+    void testAkiRoundTripBytes() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        byte[] skipperSki = Arrays.copyOf(Digest.digest256(new byte[32]), 32);
+
+        byte[] crlDer =
+                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .withAki(skipperSki)
+                        .build();
+
+        GostCrl crl = new GostCrl(crlDer);
+        crl.verify(kp.getPublic());
+        assertNotNull(crl.getAuthorityKeyIdentifier(), "AKI должен быть извлечён из CRL");
+        assertArrayEquals(
+                skipperSki,
+                crl.getAuthorityKeyIdentifier(),
+                "round-trip AKI байты должны совпадать");
+    }
+
+    @Test
+    @DisplayName("AKI round-trip: withAki(PublicKeyParameters) -> getAuthorityKeyIdentifier()")
+    void testAkiRoundTripPublicKey() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair caKp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        KeyPair signerKp = KeyGenerator.generateKeyPair(params);
+        byte[] expectedSki =
+                Digest.digest256(GostDerCodec.subjectPublicKeyPointBytes(signerKp.getPublic()));
+
+        byte[] crlDer =
+                GostCrlBuilder.create(caKp.getPrivate(), issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .withAki(signerKp.getPublic())
+                        .build();
+
+        GostCrl crl = new GostCrl(crlDer);
+        crl.verify(caKp.getPublic());
+        assertNotNull(crl.getAuthorityKeyIdentifier(), "AKI должен быть извлечён из CRL");
+        assertArrayEquals(
+                expectedSki,
+                crl.getAuthorityKeyIdentifier(),
+                "round-trip AKI через PublicKeyParameters должен совпадать с вычисленным SKI");
+    }
+
+    @Test
+    @DisplayName("CRL без withAki() -> getAuthorityKeyIdentifier() == null")
+    void testAkiNullWhenNotSet() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        byte[] crlDer =
+                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .build();
+
+        GostCrl crl = new GostCrl(crlDer);
+        crl.verify(kp.getPublic());
+        assertNull(
+                crl.getAuthorityKeyIdentifier(),
+                "AKI должен быть null, если withAki() не вызывался");
+    }
+
+    @Test
+    @DisplayName("AKI + другие расширения: все расширения присутствуют")
+    void testAkiWithOtherExtensions() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        byte[] aki = Arrays.copyOf(Digest.digest256(new byte[32]), 32);
+        String deltaUri = "http://ca.example/delta.crl";
+
+        byte[] crlDer =
+                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .withCrlNumber(42)
+                        .withFreshestCrl(deltaUri)
+                        .withAki(aki)
+                        .build();
+
+        GostCrl crl = new GostCrl(crlDer);
+        crl.verify(kp.getPublic());
+
+        assertNotNull(crl.getCrlNumber(), "cRLNumber должен быть извлечён");
+        assertEquals(BigInteger.valueOf(42), crl.getCrlNumber(), "cRLNumber должен быть 42");
+        assertTrue(crl.isFreshestCrl(), "isFreshestCrl() должен быть true");
+        assertEquals(deltaUri, crl.getFreshestCrlUris()[0], "FreshestCRL URI должен совпадать");
+        assertArrayEquals(aki, crl.getAuthorityKeyIdentifier(), "AKI должен совпадать");
     }
 }

@@ -420,6 +420,198 @@ class GostOcspResponseBuilderTest {
     // responseStatus ENUMERATED: проверка длины (RFC 6960 — значения 0..6, 1 байт)
     // ========================================================================
 
+    // ========================================================================
+    // byKey responder ID (RFC 6960 §4.1.1)
+    // ========================================================================
+
+    @Test
+    @DisplayName("byKey responder ID: round-trip построение → разбор → верификация")
+    void testByKeyRoundtrip() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] caDn = GostDnParser.encodeDn("CN=Test CA");
+        byte[] serialNumber = new byte[] {0x01};
+
+        byte[] ocspDer =
+                GostOcspResponseBuilder.create(serialNumber)
+                        .signer(kp.getPrivate(), kp.getPublic())
+                        .issuerDn(caDn)
+                        .withResponderByKey()
+                        .build();
+
+        assertNotNull(ocspDer);
+
+        GostOcspResponse parsed = GostOcspResponse.fromDer(ocspDer);
+        assertEquals(
+                GostOcspResponse.ResponderIdType.BY_KEY,
+                parsed.getResponderIdType(),
+                "responderIdType должен быть BY_KEY");
+        assertNotNull(parsed.getResponderKeyHash(), "keyHash не должен быть null для BY_KEY");
+        assertEquals(
+                GostOids.STREEBOG_256_HASH_LEN,
+                parsed.getResponderKeyHash().length,
+                "длина хэша должна быть 32 байта (Streebog-256)");
+
+        // Верификация через OcspVerifier должна пройти
+        OcspVerifier.verify(ocspDer, serialNumber, kp.getPublic());
+    }
+
+    @Test
+    @DisplayName("byKey responder ID: 512-битная кривая")
+    void testByKeyRoundtrip512() throws Exception {
+        ECParameters params = ECParameters.tc26a512();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] caDn = GostDnParser.encodeDn("CN=Test CA 512");
+        byte[] serialNumber = new byte[] {0x01};
+
+        byte[] ocspDer =
+                GostOcspResponseBuilder.create(serialNumber)
+                        .signer(kp.getPrivate(), kp.getPublic())
+                        .issuerDn(caDn)
+                        .withResponderByKey(GostOids.STREEBOG_512_HASH_LEN)
+                        .build();
+
+        GostOcspResponse parsed = GostOcspResponse.fromDer(ocspDer);
+        assertEquals(GostOcspResponse.ResponderIdType.BY_KEY, parsed.getResponderIdType());
+        assertEquals(
+                GostOids.STREEBOG_512_HASH_LEN,
+                parsed.getResponderKeyHash().length,
+                "длина хэша должна быть 64 байта (Streebog-512)");
+
+        // Публичный certificate-based путь — проходит через verifyResponderId
+        GostCertificate caCert =
+                GostCertificateBuilder.create(params, "CN=Test CA 512")
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240101000000Z")
+                        .notAfter("21060101000000Z")
+                        .assembleCert(kp.getPrivate());
+        OcspVerifier.verify(ocspDer, serialNumber, caCert);
+    }
+
+    @Test
+    @DisplayName("byKey responder ID: невалидный hlen → IllegalArgumentException")
+    void testByKeyInvalidHashLen() {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostOcspResponseBuilder.create(new byte[] {0x01})
+                                .signer(kp.getPrivate(), kp.getPublic())
+                                .issuerDn("CN=Test")
+                                .withResponderByKey(20));
+    }
+
+    @Test
+    @DisplayName("byKey responder ID: чужой ключ — верификация не должна пройти")
+    void testByKeyWrongSigner() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair goodKp = KeyGenerator.generateKeyPair(params);
+        KeyPair wrongKp = KeyGenerator.generateKeyPair(params);
+        byte[] caDn = GostDnParser.encodeDn("CN=Test CA");
+        byte[] serialNumber = new byte[] {0x01};
+
+        byte[] ocspDer =
+                GostOcspResponseBuilder.create(serialNumber)
+                        .signer(goodKp.getPrivate(), goodKp.getPublic())
+                        .issuerDn(caDn)
+                        .withResponderByKey()
+                        .build();
+
+        assertThrows(
+                PkixException.class,
+                () -> OcspVerifier.verify(ocspDer, serialNumber, wrongKp.getPublic()),
+                "Проверка byKey с чужим ключом должна падать");
+    }
+
+    @Test
+    @DisplayName("byKey responder ID: делегированный responder")
+    void testByKeyDelegatedResponder() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        PkixCertTestHelper.CertBundle ca = PkixCertTestHelper.createRootCA(params);
+
+        byte[] serialNumber = new byte[] {0x01};
+
+        byte[] ku =
+                GostCertificateBuilder.keyUsageFlags(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        PkixCertTestHelper.CertBundle responder =
+                PkixCertTestHelper.createCertSignedBy(
+                        params,
+                        ca.priv,
+                        ca.cert.getPublicKey(),
+                        ca.subjectDn,
+                        "20240101000000Z",
+                        "21060101000000Z",
+                        null,
+                        null,
+                        ku,
+                        new String[] {GostOids.EXT_OCSP_SIGNING},
+                        false,
+                        null);
+
+        byte[] ocspDer =
+                GostOcspResponseBuilder.create(serialNumber)
+                        .signer(responder.priv, responder.cert.getPublicKey())
+                        .caPublicKey(ca.cert.getPublicKey())
+                        .issuerDn(ca.subjectDn)
+                        .withDelegatedCerts(responder.cert.getEncoded())
+                        .withResponderByKey()
+                        .build();
+
+        GostOcspResponse parsed = GostOcspResponse.fromDer(ocspDer);
+        assertEquals(GostOcspResponse.ResponderIdType.BY_KEY, parsed.getResponderIdType());
+        assertEquals(
+                1,
+                parsed.getDelegatedCertificates().size(),
+                "Должен быть один делегированный сертификат");
+
+        OcspVerifier.verify(ocspDer, serialNumber, ca.cert);
+    }
+
+    @Test
+    @DisplayName("byKey responder ID: делегированный + byName — обратная совместимость")
+    void testByKeyDelegatedResponderByName() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        PkixCertTestHelper.CertBundle ca = PkixCertTestHelper.createRootCA(params);
+
+        byte[] serialNumber = new byte[] {0x01};
+
+        byte[] ku =
+                GostCertificateBuilder.keyUsageFlags(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        PkixCertTestHelper.CertBundle responder =
+                PkixCertTestHelper.createCertSignedBy(
+                        params,
+                        ca.priv,
+                        ca.cert.getPublicKey(),
+                        ca.subjectDn,
+                        "20240101000000Z",
+                        "21060101000000Z",
+                        null,
+                        null,
+                        ku,
+                        new String[] {GostOids.EXT_OCSP_SIGNING},
+                        false,
+                        null);
+
+        // byName (default) — обратная совместимость
+        byte[] ocspDer =
+                GostOcspResponseBuilder.create(serialNumber)
+                        .signer(responder.priv, responder.cert.getPublicKey())
+                        .issuerDn(ca.subjectDn)
+                        .withDelegatedCerts(responder.cert.getEncoded())
+                        .build();
+
+        GostOcspResponse parsed = GostOcspResponse.fromDer(ocspDer);
+        assertEquals(
+                GostOcspResponse.ResponderIdType.BY_NAME,
+                parsed.getResponderIdType(),
+                "По умолчанию должен быть BY_NAME");
+        assertNull(parsed.getResponderKeyHash(), "Для BY_NAME keyHash должен быть null");
+    }
+
     @Test
     @DisplayName("GostOcspResponse: ENUMERATED status длиной 2 байта -> PkixException")
     void testOcspResponseEnumeratedTooLong() {

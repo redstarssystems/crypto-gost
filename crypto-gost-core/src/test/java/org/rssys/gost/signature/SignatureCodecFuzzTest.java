@@ -1,9 +1,8 @@
 package org.rssys.gost.signature;
 
-import java.math.BigInteger;
-
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import java.math.BigInteger;
 import org.rssys.gost.util.FuzzTestUtils;
 
 /**

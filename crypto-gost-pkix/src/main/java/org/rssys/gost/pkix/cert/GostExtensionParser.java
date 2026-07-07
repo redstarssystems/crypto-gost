@@ -13,7 +13,7 @@ import org.rssys.gost.util.DerCodec;
 /**
  * Парсер X.509v3 расширений из DER-кодированного блока [3] EXPLICIT Extensions.
  *
- * <p>Распознаёт OID расширений: SubjectAltName, KeyUsage, ExtendedKeyUsage,
+ * <p>Распознаёт OID расширений: SubjectAltName, IssuerAltName, KeyUsage, ExtendedKeyUsage,
  * BasicConstraints, SubjectKeyIdentifier, AuthorityKeyIdentifier,
  * AuthorityInfoAccess, CRLDistributionPoints, CertificatePolicies.
  * Неизвестное critical extension -> {@link ExtensionsResult#hasUnknownCritical} = true.</p>
@@ -40,7 +40,10 @@ public final class GostExtensionParser {
     public static final class ExtensionsResult {
         public final String[] sanDnsNames;
         public final byte[][] sanIpAddresses;
+        public final String[] ianDnsNames;
+        public final byte[][] ianIpAddresses;
         public final boolean keyUsageValid;
+        public final boolean crlSignValid;
         public final boolean ekuValid;
         public final boolean ekuClientAuth;
         public final boolean ekuOcspSigning;
@@ -55,6 +58,7 @@ public final class GostExtensionParser {
         public final String[] ocspUris;
         public final String[] caIssuersUris;
         public final String[] cdpUris;
+        public final String[] freshestCrlUris;
         public final String[] certPolicyOids;
 
         /** Сырые DER-байты OID политик — для oid_filters matching (RFC 8446 §4.2.5). */
@@ -70,7 +74,10 @@ public final class GostExtensionParser {
         public ExtensionsResult(
                 String[] sanDnsNames,
                 byte[][] sanIpAddresses,
+                String[] ianDnsNames,
+                byte[][] ianIpAddresses,
                 boolean keyUsageValid,
+                boolean crlSignValid,
                 boolean ekuValid,
                 boolean ekuClientAuth,
                 boolean ekuOcspSigning,
@@ -85,6 +92,7 @@ public final class GostExtensionParser {
                 String[] ocspUris,
                 String[] caIssuersUris,
                 String[] cdpUris,
+                String[] freshestCrlUris,
                 String[] certPolicyOids,
                 int keyUsageBits,
                 byte[][] ekuOids,
@@ -93,7 +101,10 @@ public final class GostExtensionParser {
                 NameConstraintsData nameConstraints) {
             this.sanDnsNames = sanDnsNames;
             this.sanIpAddresses = sanIpAddresses;
+            this.ianDnsNames = ianDnsNames;
+            this.ianIpAddresses = ianIpAddresses;
             this.keyUsageValid = keyUsageValid;
+            this.crlSignValid = crlSignValid;
             this.ekuValid = ekuValid;
             this.ekuClientAuth = ekuClientAuth;
             this.ekuOcspSigning = ekuOcspSigning;
@@ -108,6 +119,7 @@ public final class GostExtensionParser {
             this.ocspUris = ocspUris;
             this.caIssuersUris = caIssuersUris;
             this.cdpUris = cdpUris;
+            this.freshestCrlUris = freshestCrlUris;
             this.certPolicyOids = certPolicyOids;
             this.keyUsageBits = keyUsageBits;
             this.ekuOids = ekuOids;
@@ -121,6 +133,9 @@ public final class GostExtensionParser {
                 new ExtensionsResult(
                         null,
                         null,
+                        null,
+                        null,
+                        true,
                         true,
                         true,
                         true,
@@ -134,6 +149,7 @@ public final class GostExtensionParser {
                         -1,
                         true,
                         false,
+                        null,
                         null,
                         null,
                         null,
@@ -199,9 +215,12 @@ public final class GostExtensionParser {
 
         ArrayList<String> sanList = new ArrayList<>();
         ArrayList<byte[]> ipList = new ArrayList<>();
+        ArrayList<String> ianDnsList = new ArrayList<>();
+        ArrayList<byte[]> ianIpList = new ArrayList<>();
         boolean kuPresent = false;
         boolean kuDigitalSignature = false;
         boolean kuKeyCertSign = false;
+        boolean kuCrlSign = false;
         boolean ekuPresent = false;
         boolean ekuServerAuth = false;
         boolean ekuClientAuth = false;
@@ -219,6 +238,7 @@ public final class GostExtensionParser {
         ArrayList<String> caIssuersList = new ArrayList<>();
         // CRLDistributionPoints и CertificatePolicies
         ArrayList<String> cdpList = new ArrayList<>();
+        ArrayList<String> freshestCrlList = new ArrayList<>();
         ArrayList<String> certPolicyList = new ArrayList<>();
         // Для oid_filters matching (RFC 8446 §4.2.5)
         Set<String> presentOids = new HashSet<>();
@@ -268,6 +288,11 @@ public final class GostExtensionParser {
                     int[] octTlv = readTlv(der, afterOid);
                     parseSanGeneralNames(der, octTlv[0], octTlv[1], sanList, ipList);
                 }
+            } else if (matchesOid(der, oidStart, oidLen, IAN_OID_BYTES)) {
+                if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
+                    int[] octTlv = readTlv(der, afterOid);
+                    parseSanGeneralNames(der, octTlv[0], octTlv[1], ianDnsList, ianIpList);
+                }
             } else if (matchesOid(der, oidStart, oidLen, KU_OID_BYTES)) {
                 kuPresent = true;
                 if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
@@ -282,6 +307,7 @@ public final class GostExtensionParser {
                             if (valueStart < bitTlv[1] && valueLen > 0) {
                                 kuDigitalSignature =
                                         (der[valueStart] & GostDerParser.KU_DIGITAL_SIGNATURE) != 0;
+                                kuCrlSign = (der[valueStart] & GostDerParser.KU_CRL_SIGN) != 0;
                                 // keyCertSign — бит 5 = 0x04 в первом байте (KU не определяет биты
                                 // ≥ 9)
                                 if (valueLen > 0)
@@ -399,6 +425,13 @@ public final class GostExtensionParser {
                     int[] octTlv = readTlv(der, afterOid);
                     parseCdpUris(der, octTlv[0], octTlv[1], cdpList);
                 }
+            } else if (matchesOid(der, oidStart, oidLen, FRESHEST_CRL_OID_BYTES)) {
+                // FreshestCRL (RFC 5280 §5.2.6) — точки распространения delta CRL.
+                // Структура DistributionPoint идентична CDP.
+                if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
+                    int[] octTlv = readTlv(der, afterOid);
+                    parseCdpUris(der, octTlv[0], octTlv[1], freshestCrlList);
+                }
             } else if (matchesOid(der, oidStart, oidLen, CP_OID_BYTES)) {
                 // CertificatePolicies (RFC 5280 §4.2.1.4) — OID политик сертификата.
                 if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
@@ -417,9 +450,13 @@ public final class GostExtensionParser {
 
         // keyCertSign проверка: если KU есть, нужен бит 5; если KU нет — не отклоняем
         boolean keyCertSignOk = !kuPresent || kuKeyCertSign;
+        // crlSignValid: если KeyUsage нет — без ограничений; если есть — нужен бит cRLSign
+        boolean crlSignValid = !kuPresent || kuCrlSign;
 
         String[] sanResult = sanList.isEmpty() ? null : sanList.toArray(new String[0]);
         byte[][] ipResult = ipList.isEmpty() ? null : ipList.toArray(new byte[0][]);
+        String[] ianDnsResult = ianDnsList.isEmpty() ? null : ianDnsList.toArray(new String[0]);
+        byte[][] ianIpResult = ianIpList.isEmpty() ? null : ianIpList.toArray(new byte[0][]);
         boolean kuValid = !kuPresent || kuDigitalSignature;
         boolean ekuValid = !ekuPresent || ekuServerAuth;
         boolean ekuClientAuthValid = !ekuPresent || ekuClientAuth;
@@ -428,7 +465,10 @@ public final class GostExtensionParser {
         return new ExtensionsResult(
                 sanResult,
                 ipResult,
+                ianDnsResult,
+                ianIpResult,
                 kuValid,
+                crlSignValid,
                 ekuValid,
                 ekuClientAuthValid,
                 // OCSP-делегат и TSA требуют обязательного EKU (restrictive):
@@ -448,6 +488,7 @@ public final class GostExtensionParser {
                 ocspList.isEmpty() ? null : ocspList.toArray(new String[0]),
                 caIssuersList.isEmpty() ? null : caIssuersList.toArray(new String[0]),
                 cdpList.isEmpty() ? null : cdpList.toArray(new String[0]),
+                freshestCrlList.isEmpty() ? null : freshestCrlList.toArray(new String[0]),
                 certPolicyList.isEmpty() ? null : certPolicyList.toArray(new String[0]),
                 keyUsageBitsLocal,
                 ekuOidsResult,
@@ -632,8 +673,7 @@ public final class GostExtensionParser {
      * DistributionPoint ::= SEQUENCE { distributionPoint [0] DistributionPointName OPTIONAL, ... }
      * DistributionPointName ::= [0] GeneralNames
      */
-    private static void parseCdpUris(
-            byte[] der, int cdpOuter, int cdpEnd, ArrayList<String> uriList) {
+    static void parseCdpUris(byte[] der, int cdpOuter, int cdpEnd, ArrayList<String> uriList) {
         if (cdpOuter >= cdpEnd || (der[cdpOuter] & 0xFF) != TAG_SEQUENCE) return;
         int[] seqTlv = readTlv(der, cdpOuter);
         int pos = seqTlv[0];

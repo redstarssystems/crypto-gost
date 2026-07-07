@@ -14,6 +14,8 @@ import org.rssys.gost.jca.spec.GostCurves;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
+import org.rssys.gost.pkix.cert.GostCrl;
+import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cms.*;
 import org.rssys.gost.signature.*;
 import org.rssys.gost.util.DerCodec;
@@ -187,6 +189,49 @@ class CmsCrossValidationTest {
             // L2: библиотечная верификация
             VerifiedSignedData vr = CmsSignedDataVerifier.verifyAny(signedDer, pair.caCert());
             assertNotNull(vr, "Библиотечная верификация detached SignedData не должна вернуть null");
+
+            return null;
+        });
+    }
+
+    @Test
+    @EnabledIf("opensslAvailable")
+    @DisplayName("SignedData с встроенным CRL: asn1parse + библиотечная верификация с извлечением CRL")
+    void testSignedDataWithEmbeddedCrl() throws Exception {
+        TempDirUtils.withTempDir("cms-crl-", dir -> {
+            CertPair pair = generateCaAndLeaf();
+            byte[] data = "CMS SignedData with CRL test".getBytes();
+
+            // Строим тестовый CRL
+            byte[] crlIssuerDn = buildDn("CRL Issuer");
+            byte[] crlDer =
+                    GostCrlBuilder.create(pair.leafKey(), crlIssuerDn)
+                            .nextUpdate("270601120000Z")
+                            .build();
+            GostCrl crl = GostCrl.fromDer(crlDer);
+
+            byte[] signedDer = CmsSignedDataBuilder.create()
+                    .data(data)
+                    .addSigner(pair.leafKey(), pair.leafCert())
+                    .addCrl(crl)
+                    .build();
+            Path signedPath = dir.resolve("signed_crl.der");
+            Files.write(signedPath, signedDer);
+
+            // L1: структурная валидация (asn1parse)
+            String[] asn1Cmd = new String[] {
+                    OpenSslChecker.resolveOpenSslBinary(), "asn1parse",
+                    "-inform", "DER", "-in", signedPath.toString() };
+            int asn1Exit = OpenSslChecker.run(asn1Cmd);
+            assertEquals(0, asn1Exit, "openssl asn1parse SignedData с CRL должен пройти");
+
+            // L2: библиотечная верификация + проверка извлечения CRL
+            VerifiedSignedData vr = CmsSignedDataVerifier.verifyAny(signedDer, pair.caCert());
+            assertNotNull(vr, "Верификация не должна вернуть null");
+            assertArrayEquals(data, vr.data(), "Данные должны совпадать");
+            assertEquals(1, vr.embeddedCrls().size(), "Ровно один CRL");
+            assertEquals(crl.getIssuerDn(), vr.embeddedCrls().get(0).getIssuerDn(),
+                    "Issuer DN CRL должен совпадать");
 
             return null;
         });

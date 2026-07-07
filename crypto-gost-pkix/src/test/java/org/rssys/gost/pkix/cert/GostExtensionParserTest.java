@@ -241,6 +241,78 @@ class GostExtensionParserTest {
     }
 
     // ---------------------------------------------------------------
+    // IssuerAltName (IAN)
+    // ---------------------------------------------------------------
+
+    @Test
+    @DisplayName("IAN: один dNSName")
+    void testIanDnsNameSingle() {
+        byte[] ianValue = DerCodec.encodeSequence(dnsName("issuer.example.com"));
+        byte[] ext = extension(IAN_OID_BYTES, ianValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNotNull(r.ianDnsNames, "ianDnsNames не null");
+        assertEquals(1, r.ianDnsNames.length, "один dNSName");
+        assertEquals("issuer.example.com", r.ianDnsNames[0]);
+        assertNull(r.ianIpAddresses, "нет IP адресов");
+        assertNull(r.sanDnsNames, "SAN не затронут");
+        assertTrue(r.presentExtensionOids.contains("2.5.29.18"), "OID IAN в presentExtensionOids");
+    }
+
+    @Test
+    @DisplayName("IAN: несколько dNSName")
+    void testIanDnsNameMultiple() {
+        byte[] ianValue =
+                DerCodec.encodeSequence(dnsName("ca1.example.com"), dnsName("ca2.example.com"));
+        byte[] ext = extension(IAN_OID_BYTES, ianValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertEquals(2, r.ianDnsNames.length);
+        assertEquals("ca1.example.com", r.ianDnsNames[0]);
+        assertEquals("ca2.example.com", r.ianDnsNames[1]);
+    }
+
+    @Test
+    @DisplayName("IAN: iPAddress")
+    void testIanIpAddress() {
+        byte[] ianValue =
+                DerCodec.encodeSequence(ipAddress((byte) 10, (byte) 0, (byte) 0, (byte) 1));
+        byte[] ext = extension(IAN_OID_BYTES, ianValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNotNull(r.ianIpAddresses, "ianIpAddresses не null");
+        assertEquals(1, r.ianIpAddresses.length);
+        assertArrayEquals(new byte[] {10, 0, 0, 1}, r.ianIpAddresses[0], "IPv4 адрес");
+    }
+
+    @Test
+    @DisplayName("IAN: IAN и SAN в одном сертификате не интерферируют")
+    void testIanAndSanIndependent() {
+        byte[] ianValue = DerCodec.encodeSequence(dnsName("issuer.host"));
+        byte[] sanValue = DerCodec.encodeSequence(dnsName("subject.host"));
+        byte[] ianExt = extension(IAN_OID_BYTES, ianValue);
+        byte[] sanExt = extension(SAN_OID_BYTES, sanValue);
+        byte[] seq = extensionsSeq(ianExt, sanExt);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNotNull(r.ianDnsNames, "IAN dNSName не null");
+        assertEquals("issuer.host", r.ianDnsNames[0]);
+        assertNotNull(r.sanDnsNames, "SAN dNSName не null");
+        assertEquals("subject.host", r.sanDnsNames[0]);
+    }
+
+    // ---------------------------------------------------------------
     // KeyUsage
     // ---------------------------------------------------------------
 
@@ -579,6 +651,34 @@ class GostExtensionParserTest {
                 GostExtensionParser.parseExtensionsFromSequence(seq, 0);
 
         assertNull(r.cdpUris, "constructed URI (0xA6) не должен приниматься как CDP URI");
+    }
+
+    // ---------------------------------------------------------------
+    // FreshestCRL
+    // ---------------------------------------------------------------
+
+    @Test
+    @DisplayName("FreshestCRL: один URI")
+    void testFreshestCrlSingleUri() {
+        byte[] fcValue =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeContextConstructed(
+                                        0,
+                                        DerCodec.encodeContextConstructed(
+                                                0,
+                                                DerCodec.encodeSequence(
+                                                        uriName(
+                                                                "http://crl.example.com/delta.crl"))))));
+        byte[] ext = extension(FRESHEST_CRL_OID_BYTES, fcValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNotNull(r.freshestCrlUris, "freshestCrlUris не null");
+        assertEquals(1, r.freshestCrlUris.length);
+        assertEquals("http://crl.example.com/delta.crl", r.freshestCrlUris[0]);
     }
 
     // ---------------------------------------------------------------

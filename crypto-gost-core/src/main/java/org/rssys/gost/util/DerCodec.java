@@ -45,6 +45,9 @@ public final class DerCodec {
     /** Контекстно-зависимый constructed-тег [1]. */
     public static final int TAG_CTX_CONSTRUCTED_1 = 0xA1;
 
+    /** Контекстно-зависимый constructed-тег [2]. */
+    public static final int TAG_CTX_CONSTRUCTED_2 = 0xA2;
+
     /** Контекстно-зависимый примитивный тег [0] (IMPLICIT). */
     public static final int TAG_CTX_PRIMITIVE_0 = 0x80;
 

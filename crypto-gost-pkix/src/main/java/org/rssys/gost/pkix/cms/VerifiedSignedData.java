@@ -3,6 +3,7 @@ package org.rssys.gost.pkix.cms;
 import java.util.Collections;
 import java.util.List;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCrl;
 
 /**
  * Результат успешной верификации CMS SignedData.
@@ -10,9 +11,13 @@ import org.rssys.gost.pkix.cert.GostCertificate;
  * @param data              извлечённые данные (для encapsulated) или {@code null} (detached)
  * @param signerCertificate сертификат подписанта
  * @param unsignedAttributes unsigned-атрибуты SignerInfo (CAdES метки времени и др.)
+ * @param embeddedCrls     CRL, встроенные в SignedData (поле crls [1] RFC 5652 §5.1)
  */
 public record VerifiedSignedData(
-        byte[] data, GostCertificate signerCertificate, List<CmsAttribute> unsignedAttributes) {
+        byte[] data,
+        GostCertificate signerCertificate,
+        List<CmsAttribute> unsignedAttributes,
+        List<GostCrl> embeddedCrls) {
 
     /**
      * Канонический конструктор — защитные копии.
@@ -23,6 +28,7 @@ public record VerifiedSignedData(
                 unsignedAttributes != null
                         ? List.copyOf(unsignedAttributes)
                         : Collections.emptyList();
+        embeddedCrls = embeddedCrls != null ? List.copyOf(embeddedCrls) : Collections.emptyList();
     }
 
     /**
@@ -62,6 +68,8 @@ public record VerifiedSignedData(
                 + signerCertificate
                 + ", unsignedAttributes="
                 + unsignedAttributes
+                + ", embeddedCrls="
+                + embeddedCrls.size()
                 + ", data=<"
                 + (data != null ? data.length : 0)
                 + " bytes>]";

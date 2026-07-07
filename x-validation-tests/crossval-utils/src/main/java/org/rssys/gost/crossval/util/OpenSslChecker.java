@@ -446,6 +446,32 @@ public final class OpenSslChecker {
     }
 
     /**
+     * Выполняет команду openssl и возвращает stdout (trimmed).
+     * При ненулевом exit-коде бросает RuntimeException с выводом в сообщении.
+     *
+     * <p>По образцу {@link #exec(String...)}, но возвращает stdout при успехе
+     * вместо void.</p>
+     */
+    public static String runAndCapture(String... cmd) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        pb.environment().putAll(getOpenSslEnv());
+        Process p = pb.start();
+        String out = new String(p.getInputStream().readAllBytes()).trim();
+        int exitCode = p.waitFor();
+        if (exitCode != 0) {
+            throw new RuntimeException(
+                    "Command failed (exit="
+                            + exitCode
+                            + "): "
+                            + String.join(" ", cmd)
+                            + "\n"
+                            + out);
+        }
+        return out;
+    }
+
+    /**
      * Определяет флаги провайдера/движка для команд OpenSSL,
      * специфичные для GOST TLS 1.3 (s_client/s_server).
      * <p>

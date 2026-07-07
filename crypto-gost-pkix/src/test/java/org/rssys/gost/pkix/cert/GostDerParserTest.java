@@ -217,6 +217,14 @@ class GostDerParserTest {
     }
 
     @Test
+    @DisplayName("oidBytesToDottedString: IAN -> 2.5.29.18")
+    void testOidToIan() {
+        String result =
+                GostDerParser.oidBytesToDottedString(IAN_OID_BYTES, 0, IAN_OID_BYTES.length);
+        assertEquals("2.5.29.18", result);
+    }
+
+    @Test
     @DisplayName("oidBytesToDottedString: пустой OID -> исключение")
     void testOidToEmpty() {
         assertThrows(

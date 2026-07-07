@@ -29,6 +29,9 @@ import org.rssys.gost.util.DerCodec;
  *     .notAfter("21010101000000Z")
  *     .sanDns("example.com")
  *     .keyUsage(KeyUsage.DIGITAL_SIGNATURE)
+ *     .ocspResponder("http://ocsp.example.com")
+ *     .caIssuer("http://ca.example.com/cert.p7c")
+ *     .crlDistributionPoints("http://crl.example.com/crl.crl")
  *     .assembleCert(issuerPriv);
  * </pre>
  *
@@ -58,6 +61,8 @@ public final class GostCertificateBuilder {
     private String notAfter;
     private String[] sanDnsNames;
     private String[] sanIps;
+    private String[] ianDnsNames;
+    private String[] ianIps;
     private byte[] additionalExtensions;
     private BigInteger serial = BigInteger.ONE;
     private byte[] keyUsageFlags;
@@ -66,9 +71,15 @@ public final class GostCertificateBuilder {
     private Boolean isCA;
     private Integer pathLen;
     private String ocspUri;
+    private String caIssuersUri;
     private String[] crlUris;
+    private String[] freshestCrlUris;
     private byte[] skiBytes;
     private byte[] akiBytes;
+    private String[] ncPermittedDns;
+    private String[] ncPermittedIps;
+    private String[] ncExcludedDns;
+    private String[] ncExcludedIps;
 
     private GostCertificateBuilder(ECParameters params, byte[] subjectDn) {
         this.params = params;
@@ -154,6 +165,20 @@ public final class GostCertificateBuilder {
         return this;
     }
 
+    /** Альтернативные DNS-имена издателя (IssuerAltName, RFC 5280 §4.2.1.7).
+     *  Информационное расширение — не участвует в hostname-верификации (RFC 6125). */
+    public GostCertificateBuilder ianDns(String... names) {
+        this.ianDnsNames = names;
+        return this;
+    }
+
+    /** Альтернативные IP-адреса издателя (IssuerAltName, RFC 5280 §4.2.1.7).
+     *  Информационное расширение — не участвует в hostname-верификации (RFC 6125). */
+    public GostCertificateBuilder ianIp(String... ips) {
+        this.ianIps = ips;
+        return this;
+    }
+
     public GostCertificateBuilder keyUsage(KeyUsage... usages) {
         this.keyUsageFlags = keyUsageFlags(usages);
         return this;
@@ -194,13 +219,38 @@ public final class GostCertificateBuilder {
         return this;
     }
 
+    /**
+     * Устанавливает URI OCSP-ответчика для AIA-расширения (id-ad-ocsp, RFC 5280 §4.2.2.1).
+     * Можно комбинировать с {@link #caIssuer(String)} — оба URI попадут в одно AIA-расширение.
+     */
     public GostCertificateBuilder ocspResponder(String uri) {
         this.ocspUri = uri;
         return this;
     }
 
+    /**
+     * Устанавливает URI caIssuers для AIA-расширения (id-ad-caIssuers, RFC 5280 §4.2.2.1).
+     * Можно комбинировать с {@link #ocspResponder(String)} — оба URI попадут в одно AIA-расширение.
+     */
+    public GostCertificateBuilder caIssuer(String uri) {
+        this.caIssuersUri = uri;
+        return this;
+    }
+
     public GostCertificateBuilder crlDistributionPoints(String... uris) {
         this.crlUris = uris;
+        return this;
+    }
+
+    /**
+     * Устанавливает FreshestCRL extension (RFC 5280 §5.2.6) — точки распространения delta CRL.
+     * Структура DistributionPoint идентична CDP, отличается только OID (2.5.29.46).
+     *
+     * @param uris URI точек распространения delta CRL
+     * @return this
+     */
+    public GostCertificateBuilder freshestCrl(String... uris) {
+        this.freshestCrlUris = uris;
         return this;
     }
 
@@ -235,6 +285,27 @@ public final class GostCertificateBuilder {
      */
     public GostCertificateBuilder aki(byte[] issuerSkiBytes) {
         this.akiBytes = issuerSkiBytes.clone();
+        return this;
+    }
+
+    /**
+     * Устанавливает NameConstraints (RFC 5280 §4.2.1.10).
+     * Расширение всегда critical (RFC 5280 §4.2.1.10 MUST be critical).
+     *
+     * @param permittedDns разрешённые dNSName (может быть {@code null})
+     * @param permittedIps разрешённые iPAddress в CIDR-нотации (может быть {@code null})
+     * @param excludedDns  запрещённые dNSName (может быть {@code null})
+     * @param excludedIps  запрещённые iPAddress в CIDR-нотации (может быть {@code null})
+     */
+    public GostCertificateBuilder nameConstraints(
+            String[] permittedDns,
+            String[] permittedIps,
+            String[] excludedDns,
+            String[] excludedIps) {
+        this.ncPermittedDns = permittedDns;
+        this.ncPermittedIps = permittedIps;
+        this.ncExcludedDns = excludedDns;
+        this.ncExcludedIps = excludedIps;
         return this;
     }
 
@@ -294,6 +365,10 @@ public final class GostCertificateBuilder {
                     || (sanIps != null && sanIps.length > 0)) {
                 allExts.write(buildSanExtension(sanDnsNames, sanIps));
             }
+            if ((ianDnsNames != null && ianDnsNames.length > 0)
+                    || (ianIps != null && ianIps.length > 0)) {
+                allExts.write(buildIssuerAltNameExtension(ianDnsNames, ianIps));
+            }
             if (keyUsageFlags != null) {
                 allExts.write(buildKeyUsageExtension(keyUsageFlags, true));
             }
@@ -303,17 +378,28 @@ public final class GostCertificateBuilder {
             if (isCA != null) {
                 allExts.write(buildBasicConstraintsExtension(isCA, pathLen));
             }
-            if (ocspUri != null) {
-                allExts.write(buildAiaOcspExtension(ocspUri));
+            if (ocspUri != null || caIssuersUri != null) {
+                allExts.write(buildAiaExtension(ocspUri, caIssuersUri));
             }
             if (crlUris != null) {
                 allExts.write(buildCdpExtension(crlUris));
+            }
+            if (freshestCrlUris != null) {
+                allExts.write(buildFreshestCrlExtension(freshestCrlUris));
             }
             if (skiBytes != null) {
                 allExts.write(buildSkiExtensionBytes(skiBytes));
             }
             if (akiBytes != null) {
                 allExts.write(buildAkiExtensionBytes(akiBytes));
+            }
+            if ((ncPermittedDns != null && ncPermittedDns.length > 0)
+                    || (ncPermittedIps != null && ncPermittedIps.length > 0)
+                    || (ncExcludedDns != null && ncExcludedDns.length > 0)
+                    || (ncExcludedIps != null && ncExcludedIps.length > 0)) {
+                allExts.write(
+                        buildNameConstraintsExtension(
+                                ncPermittedDns, ncPermittedIps, ncExcludedDns, ncExcludedIps));
             }
             if (additionalExtensions != null) {
                 allExts.write(additionalExtensions);
@@ -561,14 +647,39 @@ public final class GostCertificateBuilder {
         return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_BC), extValue);
     }
 
-    public static byte[] buildAiaOcspExtension(String ocspUri) {
-        byte[] uriBytes = ocspUri.getBytes(StandardCharsets.US_ASCII);
-        byte[] accessDesc =
-                DerCodec.encodeSequence(
-                        DerCodec.encodeOid(GostOids.OCSP_AD), DerCodec.encodeTlv(0x86, uriBytes));
-        byte[] aiaSeq = DerCodec.encodeSequence(accessDesc);
-        byte[] extValue = DerCodec.encodeOctetString(aiaSeq);
+    /**
+     * Строит одно AIA-расширение (RFC 5280 §4.2.2.1) с заданными URI.
+     * Поддерживает все комбинации: только OCSP, только caIssuers, или оба в одном расширении.
+     *
+     * @param ocspUri      URI OCSP-ответчика (id-ad-ocsp), или null
+     * @param caIssuersUri URI caIssuers (id-ad-caIssuers), или null
+     * @return DER-байты одного AIA-расширения со всеми не-null ссылками
+     * @throws IllegalArgumentException если оба параметра null
+     */
+    public static byte[] buildAiaExtension(String ocspUri, String caIssuersUri) {
+        if (ocspUri == null && caIssuersUri == null) {
+            throw new IllegalArgumentException(
+                    "At least one of ocspUri or caIssuersUri must be non-null");
+        }
+
+        ByteArrayOutputStream aiaSeq = new ByteArrayOutputStream();
+        if (ocspUri != null) {
+            byte[] ocspAccessDesc = accessDescription(GostOids.OCSP_AD, ocspUri);
+            aiaSeq.write(ocspAccessDesc, 0, ocspAccessDesc.length);
+        }
+        if (caIssuersUri != null) {
+            byte[] caIssuersAccessDesc = accessDescription(GostOids.CA_ISSUERS_AD, caIssuersUri);
+            aiaSeq.write(caIssuersAccessDesc, 0, caIssuersAccessDesc.length);
+        }
+        byte[] aiaSeqEncoded = DerCodec.encodeSequence(aiaSeq.toByteArray());
+        byte[] extValue = DerCodec.encodeOctetString(aiaSeqEncoded);
         return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_AIA), extValue);
+    }
+
+    private static byte[] accessDescription(String accessMethodOid, String uri) {
+        byte[] uriBytes = uri.getBytes(StandardCharsets.US_ASCII);
+        return DerCodec.encodeSequence(
+                DerCodec.encodeOid(accessMethodOid), DerCodec.encodeTlv(0x86, uriBytes));
     }
 
     public static byte[] buildSanExtension(String[] dnsNames, String[] ipAddresses) {
@@ -577,8 +688,33 @@ public final class GostCertificateBuilder {
         return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_SAN), extValue);
     }
 
+    /**
+     * Кодирует IssuerAltName extension (RFC 5280 §4.2.1.7).
+     * Структура идентична SubjectAltName (GeneralNames), отличается только OID.
+     *
+     * @param dnsNames    dNSName записи (может быть null/пустой)
+     * @param ipAddresses iPAddress записи (может быть null/пустой)
+     * @return DER-закодированное Extension (SEQUENCE { OID, OCTET STRING })
+     */
+    public static byte[] buildIssuerAltNameExtension(String[] dnsNames, String[] ipAddresses) {
+        byte[] gnSeq = GeneralNameCodec.encodeGeneralNames(dnsNames, ipAddresses);
+        byte[] extValue = DerCodec.encodeOctetString(gnSeq);
+        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_IAN), extValue);
+    }
+
     public static byte[] buildCdpExtension(String... crlUris) {
         return buildDistributionPointExtension(GostOids.EXT_CDP, crlUris);
+    }
+
+    /**
+     * Кодирует FreshestCRL extension (RFC 5280 §5.2.6).
+     * Структура DistributionPoint идентична CDP, отличается только OID.
+     *
+     * @param uris URI точек распространения delta CRL
+     * @return DER-закодированное Extension (SEQUENCE { OID, OCTET STRING })
+     */
+    public static byte[] buildFreshestCrlExtension(String... uris) {
+        return buildDistributionPointExtension(GostOids.EXT_FRESHEST_CRL, uris);
     }
 
     /**
@@ -624,6 +760,88 @@ public final class GostCertificateBuilder {
         byte[] pointBytes = GostDerCodec.subjectPublicKeyPointBytes(issuerPub);
         byte[] ski = Digest.digest256(pointBytes);
         return buildAkiExtension(ski);
+    }
+
+    /**
+     * Строит DER-кодированное расширение NameConstraints (RFC 5280 §4.2.1.10).
+     * Всегда critical (RFC 5280 §4.2.1.10 MUST be critical).
+     * min/max не поддерживаются — {@link ChainValidator} режектит сертификаты с ними.
+     *
+     * @param permittedDns разрешённые dNSName (может быть {@code null}/пустой)
+     * @param permittedIps разрешённые iPAddress в CIDR-нотации (может быть {@code null}/пустой)
+     * @param excludedDns  запрещённые dNSName (может быть {@code null}/пустой)
+     * @param excludedIps  запрещённые iPAddress в CIDR-нотации (может быть {@code null}/пустой)
+     * @return DER-кодированное расширение Extension SEQUENCE
+     * @throws IllegalArgumentException если все списки null или пусты
+     */
+    public static byte[] buildNameConstraintsExtension(
+            String[] permittedDns,
+            String[] permittedIps,
+            String[] excludedDns,
+            String[] excludedIps) {
+        if (isEmptyNc(permittedDns)
+                && isEmptyNc(permittedIps)
+                && isEmptyNc(excludedDns)
+                && isEmptyNc(excludedIps)) {
+            throw new IllegalArgumentException(
+                    "NameConstraints must contain at least one constraint");
+        }
+        ByteArrayOutputStream ncSeq = new ByteArrayOutputStream();
+        try {
+            if (!isEmptyNc(permittedDns) || !isEmptyNc(permittedIps)) {
+                byte[] gsP = encodeGeneralSubtreesNc(permittedDns, permittedIps);
+                ncSeq.write(DerCodec.encodeContextConstructed(0, gsP));
+            }
+            if (!isEmptyNc(excludedDns) || !isEmptyNc(excludedIps)) {
+                byte[] gsE = encodeGeneralSubtreesNc(excludedDns, excludedIps);
+                ncSeq.write(DerCodec.encodeContextConstructed(1, gsE));
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
+        }
+        byte[] ncContent = DerCodec.encodeSequence(ncSeq.toByteArray());
+        byte[] extValue = DerCodec.encodeOctetString(ncContent);
+        return DerCodec.encodeSequence(
+                DerCodec.encodeOid(GostOids.EXT_NAME_CONSTRAINTS),
+                DerCodec.encodeBoolean(true),
+                extValue);
+    }
+
+    private static boolean isEmptyNc(String[] arr) {
+        return arr == null || arr.length == 0;
+    }
+
+    /**
+     * Собирает SEQUENCE OF GeneralSubtree для permitted или excluded поддерева.
+     */
+    private static byte[] encodeGeneralSubtreesNc(String[] dnsNames, String[] ips) {
+        ByteArrayOutputStream gs = new ByteArrayOutputStream();
+        try {
+            if (dnsNames != null) {
+                for (String dns : dnsNames) {
+                    byte[] gn = GeneralNameCodec.encodeDnsName(dns);
+                    gs.write(encodeGeneralSubtree(gn));
+                }
+            }
+            if (ips != null) {
+                for (String ipCidr : ips) {
+                    byte[] gn = GeneralNameCodec.encodeIpConstraint(ipCidr);
+                    gs.write(encodeGeneralSubtree(gn));
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
+        }
+        return DerCodec.encodeSequence(gs.toByteArray());
+    }
+
+    /**
+     * Собирает GeneralSubtree SEQUENCE { base GeneralName } без min/max.
+     * RFC 5280 требует minimum=0 (DEFAULT), maximum=absent.
+     * Любые другие значения ChainValidator режектит — не выставляем их.
+     */
+    private static byte[] encodeGeneralSubtree(byte[] baseGeneralName) {
+        return DerCodec.encodeSequence(baseGeneralName);
     }
 
     // ========================================================================

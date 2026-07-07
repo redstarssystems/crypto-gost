@@ -89,6 +89,18 @@ public final class GostCrl {
 
     private volatile BigInteger baseCrlNumber;
 
+    // IDP-расширение (2.5.29.28) — заполняются при verify
+    private volatile boolean idpPresent;
+    private volatile boolean idpOnlyContainsUserCerts;
+    private volatile boolean idpOnlyContainsCACerts;
+    private volatile boolean idpIndirectCrl;
+
+    // AKI extension (2.5.29.35) — keyIdentifier подписанта CRL
+    private volatile byte[] akiBytes;
+
+    // FreshestCRL extension (2.5.29.46) — URI delta CRL
+    private volatile String[] freshestCrlUris;
+
     /**
      * Парсит DER-закодированный CertificateList (RFC 5280 §5.1).
      *
@@ -607,6 +619,51 @@ public final class GostCrl {
         return baseCrlNumber != null;
     }
 
+    /** @return true если CRL содержит IssuingDistributionPoint расширение */
+    public boolean isIdp() {
+        return idpPresent;
+    }
+
+    /** @return true если IDP содержит indirectCRL флаг (indirect CRL — вне scope) */
+    public boolean isIndirectCrl() {
+        return idpIndirectCrl;
+    }
+
+    /** @return true если IDP с флагом onlyContainsUserCerts */
+    public boolean isOnlyContainsUserCerts() {
+        return idpOnlyContainsUserCerts;
+    }
+
+    /** @return true если IDP с флагом onlyContainsCACerts */
+    public boolean isOnlyContainsCACerts() {
+        return idpOnlyContainsCACerts;
+    }
+
+    /** @return true если CRL содержит FreshestCRL (2.5.29.46) */
+    public boolean isFreshestCrl() {
+        return freshestCrlUris != null;
+    }
+
+    /**
+     * AuthorityKeyIdentifier (RFC 5280 §5.2.1): идентификатор ключа подписанта CRL.
+     * Обычно совпадает с SKI сертификата подписанта.
+     *
+     * @return байты keyIdentifier или null
+     */
+    public byte[] getAuthorityKeyIdentifier() {
+        return akiBytes != null ? akiBytes.clone() : null;
+    }
+
+    /**
+     * FreshestCRL (RFC 5280 §5.2.6): URI для получения delta CRL.
+     * Структура DistributionPoint идентична CDP.
+     *
+     * @return копия массива URI или null
+     */
+    public String[] getFreshestCrlUris() {
+        return freshestCrlUris == null ? null : freshestCrlUris.clone();
+    }
+
     /**
      * Возвращает reasonCode для отозванного сертификата.
      *
@@ -649,9 +706,7 @@ public final class GostCrl {
                 int afterOid = oidTlv[1];
 
                 if (matchesOid(der, oidTlv[0], oidTlv[1] - oidTlv[0], IDP_OID_BYTES)) {
-                    throw new PkixException(
-                            PkixException.Reason.IDP_NOT_SUPPORTED,
-                            "CRL: issuingDistributionPoint not supported");
+                    parseIdpExtension(der, afterOid, oce);
                 }
 
                 if (matchesOid(
@@ -664,12 +719,164 @@ public final class GostCrl {
                     }
                 }
 
+                if (matchesOid(der, oidTlv[0], oidTlv[1] - oidTlv[0], FRESHEST_CRL_OID_BYTES)) {
+                    parseFreshestCrlExtension(der, afterOid, oce);
+                }
+
+                if (matchesOid(der, oidTlv[0], oidTlv[1] - oidTlv[0], AKI_OID_BYTES)) {
+                    parseAkiExtension(der, afterOid, oce);
+                }
+
                 if (matchesOid(der, oidTlv[0], oidTlv[1] - oidTlv[0], CRL_NUMBER_OID_BYTES)) {
                     this.crlNumber = parseExtensionInteger(der, afterOid, oce);
                 }
             }
             p = extTlv[1];
         }
+    }
+
+    /**
+     * Парсит IssuingDistributionPoint extension (RFC 5280 §5.2.5).
+     *
+     * <p>Извлекает флаги: onlyContainsUserCerts, onlyContainsCACerts, indirectCRL.
+     * Остальные поля ([0] distributionPoint, [3] onlySomeReasons,
+     * [5] onlyContainsAttributeCerts) игнорируются.
+     *
+     * <p>Принимает позицию сразу после OID — пропускает опциональный BOOLEAN (critical).
+     *
+     * @param der DER-поток CRL
+     * @param pos позиция после OID в extension SEQUENCE
+     * @param end конец extension SEQUENCE
+     */
+    private void parseIdpExtension(byte[] der, int pos, int end) throws PkixException {
+        if (pos < end && (der[pos] & 0xFF) == TAG_BOOLEAN) {
+            pos = readTlv(der, pos)[1];
+        }
+        if (pos >= end || (der[pos] & 0xFF) != TAG_OCTET_STRING) {
+            return;
+        }
+        int[] octTlv = readTlv(der, pos);
+        int idpPos = octTlv[0];
+        int idpEnd = octTlv[1];
+        if (idpPos >= idpEnd || (der[idpPos] & 0xFF) != TAG_SEQUENCE) {
+            return;
+        }
+        int[] idpSeq = readTlv(der, idpPos);
+        int p = idpSeq[0];
+        int pe = idpSeq[1];
+
+        boolean onlyContainsUserCerts = false;
+        boolean onlyContainsCACerts = false;
+        boolean indirectCRL = false;
+
+        while (p < pe) {
+            int tag = der[p] & 0xFF;
+            if (tag == 0xA1 || tag == 0x81) {
+                // [1] onlyContainsUserCerts BOOLEAN
+                onlyContainsUserCerts = parseIdpBoolean(der, p);
+            } else if (tag == 0xA2 || tag == 0x82) {
+                // [2] onlyContainsCACerts BOOLEAN
+                onlyContainsCACerts = parseIdpBoolean(der, p);
+            } else if (tag == 0xA4 || tag == 0x84) {
+                // [4] indirectCRL BOOLEAN
+                indirectCRL = parseIdpBoolean(der, p);
+            }
+            p = readTlv(der, p)[1];
+        }
+
+        this.idpPresent = true;
+        this.idpOnlyContainsUserCerts = onlyContainsUserCerts;
+        this.idpOnlyContainsCACerts = onlyContainsCACerts;
+        this.idpIndirectCrl = indirectCRL;
+
+        if (indirectCRL) {
+            throw new PkixException(
+                    PkixException.Reason.IDP_NOT_SUPPORTED,
+                    "CRL: indirect CRL (issuingDistributionPoint with indirectCRL) not supported");
+        }
+    }
+
+    /**
+     * Парсит FreshestCRL extension (RFC 5280 §5.2.6).
+     * Структура DistributionPoint идентична CDP — переиспользует
+     * {@link GostExtensionParser#parseCdpUris} для извлечения URI.
+     *
+     * @param der DER-поток CRL
+     * @param pos позиция после OID в extension SEQUENCE
+     * @param end конец extension SEQUENCE
+     */
+    private void parseFreshestCrlExtension(byte[] der, int pos, int end) {
+        if (pos < end && (der[pos] & 0xFF) == TAG_BOOLEAN) {
+            pos = readTlv(der, pos)[1];
+        }
+        if (pos >= end || (der[pos] & 0xFF) != TAG_OCTET_STRING) {
+            return;
+        }
+        int[] octTlv = readTlv(der, pos);
+        var uriList = new ArrayList<String>();
+        GostExtensionParser.parseCdpUris(der, octTlv[0], octTlv[1], uriList);
+        if (!uriList.isEmpty()) {
+            this.freshestCrlUris = uriList.toArray(String[]::new);
+        }
+    }
+
+    /**
+     * Парсит AuthorityKeyIdentifier extension (RFC 5280 §5.2.1).
+     * Извлекает keyIdentifier [0] IMPLICIT. Поля authorityCertIssuer [1]
+     * и authorityCertSerialNumber [2] игнорируются.
+     *
+     * @param der DER-поток CRL
+     * @param pos позиция после OID в extension SEQUENCE
+     * @param end конец extension SEQUENCE
+     */
+    private void parseAkiExtension(byte[] der, int pos, int end) {
+        if (pos < end && (der[pos] & 0xFF) == TAG_BOOLEAN) {
+            pos = readTlv(der, pos)[1];
+        }
+        if (pos >= end || (der[pos] & 0xFF) != TAG_OCTET_STRING) {
+            return;
+        }
+        int[] octTlv = readTlv(der, pos);
+        if (octTlv[0] >= octTlv[1] || (der[octTlv[0]] & 0xFF) != TAG_SEQUENCE) {
+            return;
+        }
+        int[] akiSeqTlv = readTlv(der, octTlv[0]);
+        int akiPos = akiSeqTlv[0];
+        int akiEnd = akiSeqTlv[1];
+        if (akiPos < akiEnd) {
+            int tag = der[akiPos] & 0xFF;
+            // [0] IMPLICIT keyIdentifier — tag 0x80 (primitive) или 0xA0 (constructed)
+            if (tag == 0x80 || tag == 0xA0) {
+                int[] ctxTlv = readTlv(der, akiPos);
+                this.akiBytes = Arrays.copyOfRange(der, ctxTlv[0], ctxTlv[1]);
+            }
+        }
+    }
+
+    /**
+     * Извлекает BOOLEAN значение из контекстно-тегированного поля IDP
+     * (RFC 5280 §5.2.5, Appendix A — DEFINITIONS IMPLICIT TAGS).
+     *
+     * <p>Каноническая кодировка — IMPLICIT: тег 0x81/0x82/0x84,
+     * значение — байт 0x00/0xFF напрямую, без вложенного BOOLEAN-TLV.
+     * Также поддерживается EXPLICIT (constructed 0xA1/0xA2/0xA4
+     * с вложенным 01 01 FF) — толерантность к чужим кодировщикам.
+     */
+    private static boolean parseIdpBoolean(byte[] der, int pos) {
+        int tag = der[pos] & 0xFF;
+        int[] tlv = readTlv(der, pos);
+        if (tlv[1] > tlv[0]) {
+            if (tag == 0x81 || tag == 0x82 || tag == 0x84) {
+                // IMPLICIT BOOLEAN: первый байт содержимого — значение
+                return der[tlv[0]] != 0;
+            }
+            // EXPLICIT BOOLEAN: constructed с вложенным BOOLEAN TLV
+            if (tlv[0] < tlv[1] && (der[tlv[0]] & 0xFF) == TAG_BOOLEAN) {
+                int[] boolTlv = readTlv(der, tlv[0]);
+                return boolTlv[0] < boolTlv[1] && der[boolTlv[0]] != 0;
+            }
+        }
+        return false;
     }
 
     /**

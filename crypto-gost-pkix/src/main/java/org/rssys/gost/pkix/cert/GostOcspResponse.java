@@ -29,6 +29,12 @@ public final class GostOcspResponse {
     private static final int MAX_DELEGATED_CERTS = 5;
     private static final int MAX_SINGLE_RESPONSES = 256;
 
+    /** Тип responder ID в ответе (RFC 6960 §4.1.1). */
+    public enum ResponderIdType {
+        BY_NAME,
+        BY_KEY
+    }
+
     private final int responseStatus;
     private final Instant producedAt;
     private final List<SingleOcspResponse> responses;
@@ -36,6 +42,8 @@ public final class GostOcspResponse {
     private final byte[] sigValue;
     private final List<byte[]> delegatedCertificates;
     private final byte[] nonce;
+    private final ResponderIdType responderIdType;
+    private final byte[] responderKeyHash;
     private volatile boolean signatureVerified;
 
     /**
@@ -86,6 +94,8 @@ public final class GostOcspResponse {
             this.sigValue = null;
             this.delegatedCertificates = Collections.emptyList();
             this.nonce = null;
+            this.responderIdType = null;
+            this.responderKeyHash = null;
             return;
         }
 
@@ -137,15 +147,34 @@ public final class GostOcspResponse {
             tbsPos = readTlv(der, tbsPos)[1];
         }
 
-        // responderID: byName [1] или byKey [2]
+        // responderID: byName [1] или byKey [2] (RFC 6960 §4.1.1)
         if (tbsPos >= tbsEnd) {
             throw new PkixException("OCSP: expected responderID");
         }
         int ridTag = der[tbsPos] & 0xFF;
-        if (ridTag == DerCodec.TAG_CTX_CONSTRUCTED_0 || ridTag == DerCodec.TAG_CTX_CONSTRUCTED_1) {
+        if (ridTag == DerCodec.TAG_CTX_CONSTRUCTED_1) {
+            // byName [1] — пропускаем, валидация DN не требуется
             tbsPos = readTlv(der, tbsPos)[1];
+            this.responderIdType = ResponderIdType.BY_NAME;
+            this.responderKeyHash = null;
+        } else if (ridTag == DerCodec.TAG_CTX_CONSTRUCTED_2) {
+            // byKey [2] EXPLICIT KeyHash, где KeyHash ::= OCTET STRING (RFC 6960 §4.1.1)
+            int[] byKeyExpl = readTlv(der, tbsPos);
+            int khPos = byKeyExpl[0];
+            int khEnd = byKeyExpl[1];
+            if (khPos >= khEnd || (der[khPos] & 0xFF) != DerCodec.TAG_OCTET_STRING) {
+                throw new PkixException("OCSP: expected OCTET STRING inside byKey responderID");
+            }
+            int[] keyHashTlv = readTlv(der, khPos);
+            int khLen = keyHashTlv[1] - keyHashTlv[0];
+            if (khLen < 20 || khLen > 64) {
+                throw new PkixException("OCSP: responderKeyHash invalid length: " + khLen);
+            }
+            this.responderKeyHash = Arrays.copyOfRange(der, keyHashTlv[0], keyHashTlv[1]);
+            this.responderIdType = ResponderIdType.BY_KEY;
+            tbsPos = byKeyExpl[1];
         } else {
-            throw new PkixException("OCSP: expected responderID");
+            throw new PkixException("OCSP: expected responderID (byName [1] or byKey [2])");
         }
 
         // producedAt GeneralizedTime
@@ -459,6 +488,27 @@ public final class GostOcspResponse {
      */
     public List<byte[]> getDelegatedCertificates() {
         return delegatedCertificates;
+    }
+
+    /**
+     * @return тип responder ID: {@link ResponderIdType#BY_NAME} или
+     *         {@link ResponderIdType#BY_KEY}, или {@code null} если статус ответа не успешный
+     */
+    public ResponderIdType getResponderIdType() {
+        return responderIdType;
+    }
+
+    /**
+     * Возвращает хэш ключа responder'а, если responder ID — {@link ResponderIdType#BY_KEY}.
+     *
+     * <p>Хэш вычислен через Streebog (ГОСТ-конвенция). Non-GOST клиенты
+     * не могут сопоставить это значение с сертификатом подписанта.
+     * Для универсальной совместимости используйте byName.</p>
+     *
+     * @return копия хэша ключа или {@code null} если responder ID не byKey
+     */
+    public byte[] getResponderKeyHash() {
+        return responderKeyHash != null ? responderKeyHash.clone() : null;
     }
 
     // ========================================================================

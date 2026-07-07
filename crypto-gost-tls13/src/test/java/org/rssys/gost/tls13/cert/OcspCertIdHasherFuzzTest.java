@@ -77,20 +77,27 @@ class OcspCertIdHasherFuzzTest {
         byte[] issuerContent = data.consumeBytes(data.consumeInt(1, 32));
         int issuerLen = issuerContent.length;
         // Пресеты для фиксированных полей
-        byte[] version = { (byte) 0xA0, 0x03, 0x02, 0x01, 0x02 };
-        byte[] serial = { 0x02, 0x01, 0x7B };
-        byte[] sigAlgPrefix = { 0x30, 0x0A, 0x06, 0x08 };
-        byte[] validity = { 0x30, 0x04, 0x00, 0x00, 0x00, 0x00 };
-        byte[] subject = { 0x30, 0x04, 0x00, 0x00, 0x00, 0x00 };
-        byte[] spki = { 0x30, 0x04, 0x00, 0x00, 0x00, 0x00 };
+        byte[] version = {(byte) 0xA0, 0x03, 0x02, 0x01, 0x02};
+        byte[] serial = {0x02, 0x01, 0x7B};
+        byte[] sigAlgPrefix = {0x30, 0x0A, 0x06, 0x08};
+        byte[] validity = {0x30, 0x04, 0x00, 0x00, 0x00, 0x00};
+        byte[] subject = {0x30, 0x04, 0x00, 0x00, 0x00, 0x00};
+        byte[] spki = {0x30, 0x04, 0x00, 0x00, 0x00, 0x00};
         // issuer OCTET STRING: 0x04 + len + content
         int issuerTlvLen = 1 + 1 + issuerLen;
         // tbsCertificate content
-        int tbsContentLen = version.length + serial.length + sigAlgPrefix.length + oidBytes.length
-                + issuerTlvLen + validity.length + subject.length + spki.length;
+        int tbsContentLen =
+                version.length
+                        + serial.length
+                        + sigAlgPrefix.length
+                        + oidBytes.length
+                        + issuerTlvLen
+                        + validity.length
+                        + subject.length
+                        + spki.length;
         // sigAlg: 30 0A 06 08 + 8-byte OID = 12 bytes
         int sigAlgLen = 12;
-        byte[] sigVal = { 0x03, 0x04, 0x00, 0x00, 0x00, 0x00 };
+        byte[] sigVal = {0x03, 0x04, 0x00, 0x00, 0x00, 0x00};
         // Certificate content = tbsCertTLV + sigAlg + sigVal
         int tbsTlvLen = 2 + tbsContentLen;
         int certContentLen = tbsTlvLen + sigAlgLen + sigVal.length;
