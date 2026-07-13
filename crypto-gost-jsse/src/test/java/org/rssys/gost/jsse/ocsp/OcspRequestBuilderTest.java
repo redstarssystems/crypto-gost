@@ -10,6 +10,7 @@ import org.rssys.gost.api.Digest;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.pkix.cert.GostDerParser;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
 
 /**
@@ -312,7 +313,7 @@ class OcspRequestBuilderTest {
                 OcspRequestBuilder.create()
                         .targetCert(server.cert.getEncoded())
                         .issuerCert(root.cert.getEncoded())
-                        .signKey(null)
+                        .signKey((PrivateKeyParameters) null)
                         .params(ECParameters.tc26a256())
                         .build()
                         .der();

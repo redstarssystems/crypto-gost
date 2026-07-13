@@ -56,11 +56,10 @@ class TlsClientCertOcspAgeTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(root.priv, root.cert.getPublicKey())
                         .issuerDn(root.subjectDn)
                         .thisUpdate(ocspThisUpdate)
                         .noNextUpdate()
-                        .build();
+                        .sign(root.priv);
 
         GostCertificate leafWithStaple = new GostCertificate(leaf.cert.getEncoded());
         leafWithStaple.setOcspResponse(ocsp);

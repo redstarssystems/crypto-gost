@@ -44,6 +44,8 @@ public final class GostOcspResponse {
     private final byte[] nonce;
     private final ResponderIdType responderIdType;
     private final byte[] responderKeyHash;
+    private final byte[] responderIdDer;
+    private final byte[] encoded;
     private volatile boolean signatureVerified;
 
     /**
@@ -64,323 +66,336 @@ public final class GostOcspResponse {
                             + der.length);
         }
 
-        // OCSPResponse ::= SEQUENCE { responseStatus, responseBytes }
-        int[] ocspSeq = parseSequence(der, 0);
-        int pos = ocspSeq[0];
-        int end = ocspSeq[1];
+        this.encoded = der.clone();
 
-        // responseStatus ENUMERATED
-        if (pos >= end || (der[pos] & 0xFF) != 0x0A) {
-            throw new PkixException("OCSP: expected ENUMERATED status");
-        }
-        int[] statusTlv = readTlv(der, pos);
-        if (statusTlv[1] - statusTlv[0] > 1) {
-            throw new PkixException(
-                    "OCSP: ENUMERATED responseStatus too long ("
-                            + (statusTlv[1] - statusTlv[0])
-                            + " bytes), expected 1 byte per RFC 6960");
-        }
-        int statusVal = 0;
-        for (int i = statusTlv[0]; i < statusTlv[1]; i++) {
-            statusVal = (statusVal << 8) | (der[i] & 0xFF);
-        }
-        this.responseStatus = statusVal;
-        pos = statusTlv[1];
-
-        if (statusVal != 0) {
-            this.producedAt = null;
-            this.responses = Collections.emptyList();
-            this.tbsRaw = null;
-            this.sigValue = null;
-            this.delegatedCertificates = Collections.emptyList();
-            this.nonce = null;
-            this.responderIdType = null;
-            this.responderKeyHash = null;
-            return;
-        }
-
-        // [0] EXPLICIT responseBytes
-        if (pos >= end || (der[pos] & 0xFF) != DerCodec.TAG_CTX_CONSTRUCTED_0) {
-            throw new PkixException("OCSP: expected [0] EXPLICIT responseBytes");
-        }
-        int[] rbExplTlv = readTlv(der, pos);
-        pos = rbExplTlv[0];
-
-        // ResponseBytes SEQUENCE { OID, OCTET STRING }
-        int[] rbSeq = parseSequence(der, pos);
-        int rbPos = rbSeq[0];
-        int rbEnd = rbSeq[1];
-
-        // OID id-pkix-ocsp-basic
-        if (rbPos >= rbEnd || (der[rbPos] & 0xFF) != 0x06) {
-            throw new PkixException("OCSP: expected OID");
-        }
-        int[] oidTlv = readTlv(der, rbPos);
-        if (!matchesOid(der, oidTlv[0], oidTlv[1] - oidTlv[0], OCSP_BASIC_OID_BYTES)) {
-            throw new PkixException("OCSP: responseType is not id-pkix-ocsp-basic");
-        }
-        rbPos = oidTlv[1];
-
-        // OCTET STRING -> BasicOCSPResponse
-        if (rbPos >= rbEnd || (der[rbPos] & 0xFF) != 0x04) {
-            throw new PkixException("OCSP: expected OCTET STRING");
-        }
-        int[] octTlv = readTlv(der, rbPos);
-
-        // BasicOCSPResponse SEQUENCE { tbsResponseData, sigAlg, sig, [0] certs }
-        int[] basicSeq = parseSequence(der, octTlv[0]);
-        int basicStart = basicSeq[0];
-        int basicEnd = basicSeq[1];
-        int bpPos = basicStart;
-
-        // tbsResponseData — сохраняем для проверки подписи
-        int[] tbsSeq = parseSequence(der, bpPos);
-        this.tbsRaw = Arrays.copyOfRange(der, bpPos, tbsSeq[1]);
-        bpPos = tbsSeq[1];
-
-        // Парсим tbsResponseData
-        int tbsPos = tbsSeq[0];
-        int tbsEnd = tbsSeq[1];
-
-        // version [0] EXPLICIT (опционально)
-        if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
-            tbsPos = readTlv(der, tbsPos)[1];
-        }
-
-        // responderID: byName [1] или byKey [2] (RFC 6960 §4.1.1)
-        if (tbsPos >= tbsEnd) {
-            throw new PkixException("OCSP: expected responderID");
-        }
-        int ridTag = der[tbsPos] & 0xFF;
-        if (ridTag == DerCodec.TAG_CTX_CONSTRUCTED_1) {
-            // byName [1] — пропускаем, валидация DN не требуется
-            tbsPos = readTlv(der, tbsPos)[1];
-            this.responderIdType = ResponderIdType.BY_NAME;
-            this.responderKeyHash = null;
-        } else if (ridTag == DerCodec.TAG_CTX_CONSTRUCTED_2) {
-            // byKey [2] EXPLICIT KeyHash, где KeyHash ::= OCTET STRING (RFC 6960 §4.1.1)
-            int[] byKeyExpl = readTlv(der, tbsPos);
-            int khPos = byKeyExpl[0];
-            int khEnd = byKeyExpl[1];
-            if (khPos >= khEnd || (der[khPos] & 0xFF) != DerCodec.TAG_OCTET_STRING) {
-                throw new PkixException("OCSP: expected OCTET STRING inside byKey responderID");
-            }
-            int[] keyHashTlv = readTlv(der, khPos);
-            int khLen = keyHashTlv[1] - keyHashTlv[0];
-            if (khLen < 20 || khLen > 64) {
-                throw new PkixException("OCSP: responderKeyHash invalid length: " + khLen);
-            }
-            this.responderKeyHash = Arrays.copyOfRange(der, keyHashTlv[0], keyHashTlv[1]);
-            this.responderIdType = ResponderIdType.BY_KEY;
-            tbsPos = byKeyExpl[1];
-        } else {
-            throw new PkixException("OCSP: expected responderID (byName [1] or byKey [2])");
-        }
-
-        // producedAt GeneralizedTime
-        if (tbsPos >= tbsEnd || (der[tbsPos] & 0xFF) != 0x18) {
-            throw new PkixException("OCSP: expected GeneralizedTime for producedAt");
-        }
         try {
-            this.producedAt = parseTime(der, tbsPos);
-        } catch (IllegalArgumentException e) {
-            throw new PkixException(
-                    PkixException.Reason.PARSE_ERROR, "OCSP: malformed producedAt time", e);
-        }
-        tbsPos = readTlv(der, tbsPos)[1];
+            // OCSPResponse ::= SEQUENCE { responseStatus, responseBytes }
+            int[] ocspSeq = parseSequence(der, 0);
+            int pos = ocspSeq[0];
+            int end = ocspSeq[1];
 
-        // responses SEQUENCE OF SingleResponse
-        if (tbsPos >= tbsEnd || (der[tbsPos] & 0xFF) != TAG_SEQUENCE) {
-            throw new PkixException("OCSP: expected responses SEQUENCE");
-        }
-        int[] respSeq = parseSequence(der, tbsPos);
-        int rpPos = respSeq[0];
-        int respEnd = respSeq[1];
-
-        List<SingleOcspResponse> parsedResponses = new ArrayList<>();
-        int certIdHashLen = GostOids.STREEBOG_256_HASH_LEN;
-
-        int responseCount = 0;
-        while (rpPos < respEnd) {
-            if (responseCount >= MAX_SINGLE_RESPONSES) {
+            // responseStatus ENUMERATED
+            if (pos >= end || (der[pos] & 0xFF) != 0x0A) {
+                throw new PkixException("OCSP: expected ENUMERATED status");
+            }
+            int[] statusTlv = readTlv(der, pos);
+            if (statusTlv[1] - statusTlv[0] > 1) {
                 throw new PkixException(
-                        "Too many SingleResponse entries in OCSP response: " + responseCount);
+                        "OCSP: ENUMERATED responseStatus too long ("
+                                + (statusTlv[1] - statusTlv[0])
+                                + " bytes), expected 1 byte per RFC 6960");
             }
-            int[] srSeq = parseSequence(der, rpPos);
-            int[] certIdSeq = parseSequence(der, srSeq[0]);
+            int statusVal = 0;
+            for (int i = statusTlv[0]; i < statusTlv[1]; i++) {
+                statusVal = (statusVal << 8) | (der[i] & 0xFF);
+            }
+            this.responseStatus = statusVal;
+            pos = statusTlv[1];
 
-            // CertID: hashAlgorithm SEQUENCE { OID, params }
-            int cidPos = certIdSeq[0];
-            int[] hashAlgSeq = parseSequence(der, cidPos);
-            int haPos = hashAlgSeq[0];
-            if (haPos >= hashAlgSeq[1] || (der[haPos] & 0xFF) != 0x06) {
-                throw new PkixException("OCSP: CertID hashAlgorithm OID missing");
+            if (statusVal != 0) {
+                this.producedAt = null;
+                this.responses = Collections.emptyList();
+                this.tbsRaw = null;
+                this.sigValue = null;
+                this.delegatedCertificates = Collections.emptyList();
+                this.nonce = null;
+                this.responderIdType = null;
+                this.responderKeyHash = null;
+                this.responderIdDer = null;
+                return;
             }
-            int[] haOid = readTlv(der, haPos);
-            boolean isStb256 =
-                    matchesOid(der, haOid[0], haOid[1] - haOid[0], STREEBOG256_OID_BYTES);
-            boolean isStb512 =
-                    matchesOid(der, haOid[0], haOid[1] - haOid[0], STREEBOG512_OID_BYTES);
-            if (!isStb256 && !isStb512) {
-                throw new PkixException(
-                        "OCSP: CertID hashAlgorithm must be Streebog-256 or Streebog-512");
-            }
-            certIdHashLen =
-                    isStb512 ? GostOids.STREEBOG_512_HASH_LEN : GostOids.STREEBOG_256_HASH_LEN;
-            cidPos = hashAlgSeq[1];
 
-            // issuerNameHash OCTET STRING
-            int[] nameHashTlv = readTlv(der, cidPos);
-            if (nameHashTlv[1] - nameHashTlv[0] != certIdHashLen) {
-                throw new PkixException(
-                        "OCSP: issuerNameHash length mismatch for CertID hashAlgorithm");
+            // [0] EXPLICIT responseBytes
+            if (pos >= end || (der[pos] & 0xFF) != DerCodec.TAG_CTX_CONSTRUCTED_0) {
+                throw new PkixException("OCSP: expected [0] EXPLICIT responseBytes");
             }
-            byte[] issuerNameHash = Arrays.copyOfRange(der, nameHashTlv[0], nameHashTlv[1]);
-            cidPos = nameHashTlv[1];
+            int[] rbExplTlv = readTlv(der, pos);
+            pos = rbExplTlv[0];
 
-            // issuerKeyHash OCTET STRING
-            int[] keyHashTlv = readTlv(der, cidPos);
-            if (keyHashTlv[1] - keyHashTlv[0] != certIdHashLen) {
-                throw new PkixException(
-                        "OCSP: issuerKeyHash length mismatch for CertID hashAlgorithm");
+            // ResponseBytes SEQUENCE { OID, OCTET STRING }
+            int[] rbSeq = parseSequence(der, pos);
+            int rbPos = rbSeq[0];
+            int rbEnd = rbSeq[1];
+
+            // OID id-pkix-ocsp-basic
+            if (rbPos >= rbEnd || (der[rbPos] & 0xFF) != 0x06) {
+                throw new PkixException("OCSP: expected OID");
             }
-            byte[] issuerKeyHash = Arrays.copyOfRange(der, keyHashTlv[0], keyHashTlv[1]);
-            cidPos = keyHashTlv[1];
-
-            // certSerialNumber INTEGER
-            int[] cidSerialTlv = readTlv(der, cidPos);
-            byte[] certIdSerial = Arrays.copyOfRange(der, cidSerialTlv[0], cidSerialTlv[1]);
-
-            // certStatus
-            int stPos = cidSerialTlv[1];
-            if (stPos >= srSeq[1]) {
-                throw new PkixException("OCSP: certStatus missing");
+            int[] oidTlv = readTlv(der, rbPos);
+            if (!matchesOid(der, oidTlv[0], oidTlv[1] - oidTlv[0], OCSP_BASIC_OID_BYTES)) {
+                throw new PkixException("OCSP: responseType is not id-pkix-ocsp-basic");
             }
-            int certStatusTag = der[stPos] & 0xFF;
-            // RFC 6960 §2.2: good кодируется как [0] IMPLICIT NULL (длина строго 0).
-            // Проверяем обе формы тега — primitive 0x80 и constructed 0xA0, которые
-            // isGood() трактует как алиас: constructed good с непустым содержимым —
-            // DER-malleability, отклоняем наравне с primitive.
-            if ((certStatusTag == DerCodec.TAG_CTX_PRIMITIVE_0
-                            || certStatusTag == DerCodec.TAG_CTX_CONSTRUCTED_0)
-                    && (stPos + 1 >= srSeq[1] || der[stPos + 1] != 0x00)) {
-                throw new PkixException("OCSP: malformed good status");
-            }
-            stPos = readTlv(der, stPos)[1];
+            rbPos = oidTlv[1];
 
-            // Пропускаем singleUpdateExtensions [0] EXPLICIT если есть
-            int timePos = stPos;
-            while (timePos < srSeq[1]) {
-                int tag = der[timePos] & 0xFF;
-                if (tag == DerCodec.TAG_CTX_CONSTRUCTED_0) {
-                    timePos = readTlv(der, timePos)[1];
-                    continue;
+            // OCTET STRING -> BasicOCSPResponse
+            if (rbPos >= rbEnd || (der[rbPos] & 0xFF) != 0x04) {
+                throw new PkixException("OCSP: expected OCTET STRING");
+            }
+            int[] octTlv = readTlv(der, rbPos);
+
+            // BasicOCSPResponse SEQUENCE { tbsResponseData, sigAlg, sig, [0] certs }
+            int[] basicSeq = parseSequence(der, octTlv[0]);
+            int basicStart = basicSeq[0];
+            int basicEnd = basicSeq[1];
+            int bpPos = basicStart;
+
+            // tbsResponseData — сохраняем для проверки подписи
+            int[] tbsSeq = parseSequence(der, bpPos);
+            this.tbsRaw = Arrays.copyOfRange(der, bpPos, tbsSeq[1]);
+            bpPos = tbsSeq[1];
+
+            // Парсим tbsResponseData
+            int tbsPos = tbsSeq[0];
+            int tbsEnd = tbsSeq[1];
+
+            // version [0] EXPLICIT (опционально)
+            if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
+                tbsPos = readTlv(der, tbsPos)[1];
+            }
+
+            // responderID: byName [1] или byKey [2] (RFC 6960 §4.1.1)
+            if (tbsPos >= tbsEnd) {
+                throw new PkixException("OCSP: expected responderID");
+            }
+            int savedResponderPos = tbsPos;
+            int ridTag = der[tbsPos] & 0xFF;
+            if (ridTag == DerCodec.TAG_CTX_CONSTRUCTED_1) {
+                // byName [1] — пропускаем, валидация DN не требуется
+                tbsPos = readTlv(der, tbsPos)[1];
+                this.responderIdType = ResponderIdType.BY_NAME;
+                this.responderKeyHash = null;
+            } else if (ridTag == DerCodec.TAG_CTX_CONSTRUCTED_2) {
+                // byKey [2] EXPLICIT KeyHash, где KeyHash ::= OCTET STRING (RFC 6960 §4.1.1)
+                int[] byKeyExpl = readTlv(der, tbsPos);
+                int khPos = byKeyExpl[0];
+                int khEnd = byKeyExpl[1];
+                if (khPos >= khEnd || (der[khPos] & 0xFF) != DerCodec.TAG_OCTET_STRING) {
+                    throw new PkixException("OCSP: expected OCTET STRING inside byKey responderID");
                 }
-                if (tag == TAG_UTC_TIME || tag == TAG_GENERALIZED_TIME) {
-                    break;
+                int[] keyHashTlv = readTlv(der, khPos);
+                int khLen = keyHashTlv[1] - keyHashTlv[0];
+                if (khLen < 20 || khLen > 64) {
+                    throw new PkixException("OCSP: responderKeyHash invalid length: " + khLen);
                 }
-                // Неизвестный тег — пропускаем TLV
-                timePos = readTlv(der, timePos)[1];
+                this.responderKeyHash = Arrays.copyOfRange(der, keyHashTlv[0], keyHashTlv[1]);
+                this.responderIdType = ResponderIdType.BY_KEY;
+                tbsPos = byKeyExpl[1];
+            } else {
+                throw new PkixException("OCSP: expected responderID (byName [1] or byKey [2])");
             }
+            this.responderIdDer = Arrays.copyOfRange(der, savedResponderPos, tbsPos);
 
-            if (timePos >= srSeq[1]) {
-                throw new PkixException("OCSP: thisUpdate missing");
+            // producedAt GeneralizedTime
+            if (tbsPos >= tbsEnd || (der[tbsPos] & 0xFF) != 0x18) {
+                throw new PkixException("OCSP: expected GeneralizedTime for producedAt");
             }
-
-            // thisUpdate
-            Instant thisUpdate;
             try {
-                thisUpdate = parseTime(der, timePos);
+                this.producedAt = parseTime(der, tbsPos);
             } catch (IllegalArgumentException e) {
                 throw new PkixException(
-                        PkixException.Reason.PARSE_ERROR, "OCSP: malformed thisUpdate time", e);
+                        PkixException.Reason.PARSE_ERROR, "OCSP: malformed producedAt time", e);
             }
-            timePos = readTlv(der, timePos)[1];
+            tbsPos = readTlv(der, tbsPos)[1];
 
-            // [0] EXPLICIT nextUpdate (опционально)
-            Instant nextUpdate = null;
-            if (timePos < srSeq[1] && (der[timePos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
-                int[] nuExplTlv = readTlv(der, timePos);
-                if (nuExplTlv[0] < nuExplTlv[1]) {
-                    try {
-                        nextUpdate = parseTime(der, nuExplTlv[0]);
-                    } catch (IllegalArgumentException e) {
-                        throw new PkixException(
-                                PkixException.Reason.PARSE_ERROR,
-                                "OCSP: malformed nextUpdate time",
-                                e);
+            // responses SEQUENCE OF SingleResponse
+            if (tbsPos >= tbsEnd || (der[tbsPos] & 0xFF) != TAG_SEQUENCE) {
+                throw new PkixException("OCSP: expected responses SEQUENCE");
+            }
+            int[] respSeq = parseSequence(der, tbsPos);
+            int rpPos = respSeq[0];
+            int respEnd = respSeq[1];
+
+            List<SingleOcspResponse> parsedResponses = new ArrayList<>();
+            int certIdHashLen = GostOids.STREEBOG_256_HASH_LEN;
+
+            int responseCount = 0;
+            while (rpPos < respEnd) {
+                if (responseCount >= MAX_SINGLE_RESPONSES) {
+                    throw new PkixException(
+                            "Too many SingleResponse entries in OCSP response: " + responseCount);
+                }
+                int[] srSeq = parseSequence(der, rpPos);
+                int[] certIdSeq = parseSequence(der, srSeq[0]);
+
+                // CertID: hashAlgorithm SEQUENCE { OID, params }
+                int cidPos = certIdSeq[0];
+                int[] hashAlgSeq = parseSequence(der, cidPos);
+                int haPos = hashAlgSeq[0];
+                if (haPos >= hashAlgSeq[1] || (der[haPos] & 0xFF) != 0x06) {
+                    throw new PkixException("OCSP: CertID hashAlgorithm OID missing");
+                }
+                int[] haOid = readTlv(der, haPos);
+                boolean isStb256 =
+                        matchesOid(der, haOid[0], haOid[1] - haOid[0], STREEBOG256_OID_BYTES);
+                boolean isStb512 =
+                        matchesOid(der, haOid[0], haOid[1] - haOid[0], STREEBOG512_OID_BYTES);
+                if (!isStb256 && !isStb512) {
+                    throw new PkixException(
+                            "OCSP: CertID hashAlgorithm must be Streebog-256 or Streebog-512");
+                }
+                certIdHashLen =
+                        isStb512 ? GostOids.STREEBOG_512_HASH_LEN : GostOids.STREEBOG_256_HASH_LEN;
+                cidPos = hashAlgSeq[1];
+
+                // issuerNameHash OCTET STRING
+                int[] nameHashTlv = readTlv(der, cidPos);
+                if (nameHashTlv[1] - nameHashTlv[0] != certIdHashLen) {
+                    throw new PkixException(
+                            "OCSP: issuerNameHash length mismatch for CertID hashAlgorithm");
+                }
+                byte[] issuerNameHash = Arrays.copyOfRange(der, nameHashTlv[0], nameHashTlv[1]);
+                cidPos = nameHashTlv[1];
+
+                // issuerKeyHash OCTET STRING
+                int[] keyHashTlv = readTlv(der, cidPos);
+                if (keyHashTlv[1] - keyHashTlv[0] != certIdHashLen) {
+                    throw new PkixException(
+                            "OCSP: issuerKeyHash length mismatch for CertID hashAlgorithm");
+                }
+                byte[] issuerKeyHash = Arrays.copyOfRange(der, keyHashTlv[0], keyHashTlv[1]);
+                cidPos = keyHashTlv[1];
+
+                // certSerialNumber INTEGER
+                int[] cidSerialTlv = readTlv(der, cidPos);
+                byte[] certIdSerial = Arrays.copyOfRange(der, cidSerialTlv[0], cidSerialTlv[1]);
+
+                // certStatus
+                int stPos = cidSerialTlv[1];
+                if (stPos >= srSeq[1]) {
+                    throw new PkixException("OCSP: certStatus missing");
+                }
+                int certStatusTag = der[stPos] & 0xFF;
+                // RFC 6960 §2.2: good кодируется как [0] IMPLICIT NULL (длина строго 0).
+                // Проверяем обе формы тега — primitive 0x80 и constructed 0xA0, которые
+                // isGood() трактует как алиас: constructed good с непустым содержимым —
+                // DER-malleability, отклоняем наравне с primitive.
+                if ((certStatusTag == DerCodec.TAG_CTX_PRIMITIVE_0
+                                || certStatusTag == DerCodec.TAG_CTX_CONSTRUCTED_0)
+                        && (stPos + 1 >= srSeq[1] || der[stPos + 1] != 0x00)) {
+                    throw new PkixException("OCSP: malformed good status");
+                }
+                stPos = readTlv(der, stPos)[1];
+
+                // Пропускаем singleUpdateExtensions [0] EXPLICIT если есть
+                int timePos = stPos;
+                while (timePos < srSeq[1]) {
+                    int tag = der[timePos] & 0xFF;
+                    if (tag == DerCodec.TAG_CTX_CONSTRUCTED_0) {
+                        timePos = readTlv(der, timePos)[1];
+                        continue;
+                    }
+                    if (tag == TAG_UTC_TIME || tag == TAG_GENERALIZED_TIME) {
+                        break;
+                    }
+                    // Неизвестный тег — пропускаем TLV
+                    timePos = readTlv(der, timePos)[1];
+                }
+
+                if (timePos >= srSeq[1]) {
+                    throw new PkixException("OCSP: thisUpdate missing");
+                }
+
+                // thisUpdate
+                Instant thisUpdate;
+                try {
+                    thisUpdate = parseTime(der, timePos);
+                } catch (IllegalArgumentException e) {
+                    throw new PkixException(
+                            PkixException.Reason.PARSE_ERROR, "OCSP: malformed thisUpdate time", e);
+                }
+                timePos = readTlv(der, timePos)[1];
+
+                // [0] EXPLICIT nextUpdate (опционально)
+                Instant nextUpdate = null;
+                if (timePos < srSeq[1] && (der[timePos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
+                    int[] nuExplTlv = readTlv(der, timePos);
+                    if (nuExplTlv[0] < nuExplTlv[1]) {
+                        try {
+                            nextUpdate = parseTime(der, nuExplTlv[0]);
+                        } catch (IllegalArgumentException e) {
+                            throw new PkixException(
+                                    PkixException.Reason.PARSE_ERROR,
+                                    "OCSP: malformed nextUpdate time",
+                                    e);
+                        }
                     }
                 }
+
+                parsedResponses.add(
+                        new SingleOcspResponse(
+                                certIdSerial,
+                                certStatusTag,
+                                thisUpdate,
+                                nextUpdate,
+                                issuerNameHash,
+                                issuerKeyHash));
+                rpPos = srSeq[1];
+                responseCount++;
             }
+            this.responses = Collections.unmodifiableList(parsedResponses);
 
-            parsedResponses.add(
-                    new SingleOcspResponse(
-                            certIdSerial,
-                            certStatusTag,
-                            thisUpdate,
-                            nextUpdate,
-                            issuerNameHash,
-                            issuerKeyHash));
-            rpPos = srSeq[1];
-            responseCount++;
-        }
-        this.responses = Collections.unmodifiableList(parsedResponses);
-
-        // responseExtensions [1] EXPLICIT Extensions OPTIONAL — извлекаем nonce
-        tbsPos = respSeq[1];
-        byte[] parsedNonce = null;
-        if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_1) {
-            int[] reExplTlv = readTlv(der, tbsPos);
-            int[] reSeq = parseSequence(der, reExplTlv[0]);
-            int rePos = reSeq[0];
-            int reEnd = reSeq[1];
-            while (rePos < reEnd) {
-                int[] extTlv = parseSequence(der, rePos);
-                int extContent = extTlv[0];
-                int extContentEnd = extTlv[1];
-                if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x06) {
-                    int[] extOidTlv = readTlv(der, extContent);
-                    if (matchesOid(
-                            der, extOidTlv[0], extOidTlv[1] - extOidTlv[0], OCSP_NONCE_OID_BYTES)) {
-                        extContent = extOidTlv[1];
-                        if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x01) {
-                            extContent = readTlv(der, extContent)[1];
-                        }
-                        if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x04) {
-                            int[] nonceOctTlv = readTlv(der, extContent);
-                            parsedNonce = Arrays.copyOfRange(der, nonceOctTlv[0], nonceOctTlv[1]);
+            // responseExtensions [1] EXPLICIT Extensions OPTIONAL — извлекаем nonce
+            tbsPos = respSeq[1];
+            byte[] parsedNonce = null;
+            if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_1) {
+                int[] reExplTlv = readTlv(der, tbsPos);
+                int[] reSeq = parseSequence(der, reExplTlv[0]);
+                int rePos = reSeq[0];
+                int reEnd = reSeq[1];
+                while (rePos < reEnd) {
+                    int[] extTlv = parseSequence(der, rePos);
+                    int extContent = extTlv[0];
+                    int extContentEnd = extTlv[1];
+                    if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x06) {
+                        int[] extOidTlv = readTlv(der, extContent);
+                        if (matchesOid(
+                                der,
+                                extOidTlv[0],
+                                extOidTlv[1] - extOidTlv[0],
+                                OCSP_NONCE_OID_BYTES)) {
+                            extContent = extOidTlv[1];
+                            if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x01) {
+                                extContent = readTlv(der, extContent)[1];
+                            }
+                            if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x04) {
+                                int[] nonceOctTlv = readTlv(der, extContent);
+                                parsedNonce =
+                                        Arrays.copyOfRange(der, nonceOctTlv[0], nonceOctTlv[1]);
+                            }
                         }
                     }
+                    rePos = extTlv[1];
                 }
-                rePos = extTlv[1];
             }
-        }
-        this.nonce = parsedNonce;
+            this.nonce = parsedNonce;
 
-        // signatureAlgorithm — пропускаем
-        if (bpPos >= basicEnd || (der[bpPos] & 0xFF) != TAG_SEQUENCE) {
-            throw new PkixException("OCSP: signatureAlgorithm missing");
-        }
-        int[] sigAlgTlv = readTlv(der, bpPos);
-        bpPos = sigAlgTlv[1];
+            // signatureAlgorithm — пропускаем
+            if (bpPos >= basicEnd || (der[bpPos] & 0xFF) != TAG_SEQUENCE) {
+                throw new PkixException("OCSP: signatureAlgorithm missing");
+            }
+            int[] sigAlgTlv = readTlv(der, bpPos);
+            bpPos = sigAlgTlv[1];
 
-        // signature BIT STRING
-        if (bpPos >= basicEnd || (der[bpPos] & 0xFF) != TAG_BIT_STRING) {
-            throw new PkixException("OCSP: signature BIT STRING missing");
-        }
-        int[] sigBitTlv = readTlv(der, bpPos);
-        if (sigBitTlv[1] <= sigBitTlv[0] + 1) {
-            throw new PkixException("OCSP: signature BIT STRING too short");
-        }
-        this.sigValue = Arrays.copyOfRange(der, sigBitTlv[0] + 1, sigBitTlv[1]);
-        bpPos = sigBitTlv[1];
+            // signature BIT STRING
+            if (bpPos >= basicEnd || (der[bpPos] & 0xFF) != TAG_BIT_STRING) {
+                throw new PkixException("OCSP: signature BIT STRING missing");
+            }
+            int[] sigBitTlv = readTlv(der, bpPos);
+            if (sigBitTlv[1] <= sigBitTlv[0] + 1) {
+                throw new PkixException("OCSP: signature BIT STRING too short");
+            }
+            this.sigValue = Arrays.copyOfRange(der, sigBitTlv[0] + 1, sigBitTlv[1]);
+            bpPos = sigBitTlv[1];
 
-        // certs [0] EXPLICIT SEQUENCE OF Certificate (опционально) — парсим сразу
-        if (bpPos < basicEnd && (der[bpPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
-            this.delegatedCertificates =
-                    Collections.unmodifiableList(parseDelegatedCerts(der, bpPos));
-        } else {
-            this.delegatedCertificates = Collections.emptyList();
+            // certs [0] EXPLICIT SEQUENCE OF Certificate (опционально) — парсим сразу
+            if (bpPos < basicEnd && (der[bpPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
+                this.delegatedCertificates =
+                        Collections.unmodifiableList(parseDelegatedCerts(der, bpPos));
+            } else {
+                this.delegatedCertificates = Collections.emptyList();
+            }
+        } catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
+            throw new PkixException("Malformed OCSP response DER", e);
         }
     }
 
@@ -414,6 +429,39 @@ public final class GostOcspResponse {
      */
     public static GostOcspResponse fromDer(byte[] der) throws PkixException {
         return new GostOcspResponse(der);
+    }
+
+    /**
+     * Создаёт OCSP-ответ из PEM или DER-байтов с автоопределением формата.
+     *
+     * <p>Определяет формат по первому байту: {@code 0x30} = DER,
+     * {@code 0x2D} = PEM (строка начинается с '-').
+     *
+     * @param data PEM или DER-байты OCSP-ответа
+     * @return распарсенный OCSP-ответ
+     * @throws PkixException при структурной ошибке DER
+     */
+    public static GostOcspResponse fromPemOrDer(byte[] data) throws PkixException {
+        if (GostPemUtils.isPem(data)) {
+            return new GostOcspResponse(GostPemUtils.pemToDer(data));
+        }
+        return new GostOcspResponse(data);
+    }
+
+    /**
+     * @return полный DER-кодированный OCSPResponse (defensive copy)
+     */
+    public byte[] getEncoded() {
+        return encoded.clone();
+    }
+
+    /**
+     * Кодирует OCSP-ответ в PEM-формат (Base64 с заголовками).
+     *
+     * @return PEM-строка с заголовком {@code -----BEGIN OCSP RESPONSE-----}
+     */
+    public String toPem() {
+        return GostPemUtils.toPem(encoded, "OCSP RESPONSE");
     }
 
     // ========================================================================
@@ -509,6 +557,18 @@ public final class GostOcspResponse {
      */
     public byte[] getResponderKeyHash() {
         return responderKeyHash != null ? responderKeyHash.clone() : null;
+    }
+
+    /**
+     * Возвращает полный DER-кодированный ResponderID.
+     *
+     * <p>Байты включают EXPLICIT-тег (0xA1 for byName, 0xA2 for byKey)
+     * и могут быть встроены в OcspIdentifier как есть.</p>
+     *
+     * @return копия сырого DER ResponderID, или {@code null} если статус не успешный
+     */
+    public byte[] getResponderIdDer() {
+        return responderIdDer != null ? responderIdDer.clone() : null;
     }
 
     // ========================================================================

@@ -811,4 +811,113 @@ class DerCodecTest {
                 () -> DerCodec.parseBitString(data, 0),
                 "INDEFINITE_LENGTH в parseBitString должен бросать исключение");
     }
+
+    // ========================================================================
+    // collectImplicitOctets — BER-lenient сбор октетов [0] IMPLICIT OCTET STRING
+    // ========================================================================
+
+    @Test
+    @DisplayName("collectImplicitOctets: primitive OCTET STRING (0x04) definite")
+    void collectImplicitOctetsPrimitive() {
+        byte[] data = {0x04, 0x03, 0x0A, 0x0B, 0x0C};
+        assertArrayEquals(
+                new byte[] {0x0A, 0x0B, 0x0C},
+                DerCodec.collectImplicitOctets(data, 0),
+                "primitive OCTET STRING должен вернуть своё содержимое");
+    }
+
+    @Test
+    @DisplayName("collectImplicitOctets: constructed [0] indefinite с одним сегментом (КриптоПРО)")
+    void collectImplicitOctetsContextIndefiniteSingle() {
+        // A0 80 04 04 <4 байта> 00 00 — типичное кодирование encryptedContent КриптоПРО
+        byte[] data = {(byte) 0xA0, (byte) 0x80, 0x04, 0x04, 0x11, 0x22, 0x33, 0x44, 0x00, 0x00};
+        assertArrayEquals(
+                new byte[] {0x11, 0x22, 0x33, 0x44},
+                DerCodec.collectImplicitOctets(data, 0),
+                "constructed [0] indefinite с одним OCTET STRING -> его октеты");
+    }
+
+    @Test
+    @DisplayName("collectImplicitOctets: constructed [0] indefinite сегментированный -> склейка")
+    void collectImplicitOctetsContextIndefiniteSegmented() {
+        // A0 80 04 02 AA BB 04 03 CC DD EE 00 00 — два сегмента подряд
+        byte[] data = {
+            (byte) 0xA0,
+            (byte) 0x80,
+            0x04,
+            0x02,
+            (byte) 0xAA,
+            (byte) 0xBB,
+            0x04,
+            0x03,
+            (byte) 0xCC,
+            (byte) 0xDD,
+            (byte) 0xEE,
+            0x00,
+            0x00
+        };
+        assertArrayEquals(
+                new byte[] {(byte) 0xAA, (byte) 0xBB, (byte) 0xCC, (byte) 0xDD, (byte) 0xEE},
+                DerCodec.collectImplicitOctets(data, 0),
+                "сегменты должны склеиваться в порядке следования");
+    }
+
+    @Test
+    @DisplayName("collectImplicitOctets: вложенный constructed OCTET STRING (24 80) внутри [0]")
+    void collectImplicitOctetsNestedConstructed() {
+        // A0 80 24 80 04 02 AA BB 04 01 CC 00 00 00 00
+        byte[] data = {
+            (byte) 0xA0,
+            (byte) 0x80,
+            0x24,
+            (byte) 0x80,
+            0x04,
+            0x02,
+            (byte) 0xAA,
+            (byte) 0xBB,
+            0x04,
+            0x01,
+            (byte) 0xCC,
+            0x00,
+            0x00,
+            0x00,
+            0x00
+        };
+        assertArrayEquals(
+                new byte[] {(byte) 0xAA, (byte) 0xBB, (byte) 0xCC},
+                DerCodec.collectImplicitOctets(data, 0),
+                "вложенный constructed OCTET STRING должен рекурсивно собираться");
+    }
+
+    @Test
+    @DisplayName("collectImplicitOctets: constructed [0] definite-length")
+    void collectImplicitOctetsContextDefinite() {
+        // A0 06 04 04 <4 байта> — constructed context [0] с definite длиной
+        byte[] data = {(byte) 0xA0, 0x06, 0x04, 0x04, 0x01, 0x02, 0x03, 0x04};
+        assertArrayEquals(
+                new byte[] {0x01, 0x02, 0x03, 0x04},
+                DerCodec.collectImplicitOctets(data, 0),
+                "constructed [0] definite должен собираться так же, как indefinite");
+    }
+
+    @Test
+    @DisplayName("collectImplicitOctets: неожиданный тег -> reject (fail-closed)")
+    void collectImplicitOctetsRejectsUnexpectedTag() {
+        // 0x80 primitive context [0] — этот метод его не принимает (обрабатывается отдельно)
+        byte[] data = {(byte) 0x80, 0x02, 0x01, 0x02};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.collectImplicitOctets(data, 0),
+                "неожиданный тег должен приводить к fail-closed отказу");
+    }
+
+    @Test
+    @DisplayName("collectImplicitOctets: primitive с indefinite-length -> reject")
+    void collectImplicitOctetsRejectsPrimitiveIndefinite() {
+        byte[] data = {0x04, (byte) 0x80, 0x01, 0x02, 0x00, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.collectImplicitOctets(data, 0),
+                "primitive OCTET STRING с indefinite-length недопустим по X.690");
+    }
 }

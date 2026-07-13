@@ -5,6 +5,7 @@ import com.code_intelligence.jazzer.junit.FuzzTest;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.signature.ECParameters;
@@ -43,7 +44,7 @@ class CrlVerifierDelegatedFuzzTest {
             byte[] caSkiExt = GostCertificateBuilder.buildSkiExtension(CA_KP.getPublic());
 
             CA_CERT =
-                    GostCertificateBuilder.assembleCert(
+                    GostCertificateBuilder.sign(
                             GostCertificateBuilder.create(PARAMS, "CN=Fuzz CA,O=FuzzOrg,C=RU")
                                     .publicKey(CA_KP.getPublic())
                                     .notBefore("260601000000Z")
@@ -52,8 +53,7 @@ class CrlVerifierDelegatedFuzzTest {
                                     .additionalExtensions(
                                             concatExtensions(caKuExt, caBcExt, caSkiExt))
                                     .buildTbs(),
-                            CA_KP.getPrivate(),
-                            PARAMS);
+                            GostSigner.of(CA_KP.getPrivate()));
 
             KeyPair leafKp = KeyGenerator.generateKeyPair(PARAMS);
             byte[] leafAkiExt = GostCertificateBuilder.buildAkiExtension(caSkiBytes);
@@ -66,7 +66,7 @@ class CrlVerifierDelegatedFuzzTest {
                             .serial(BigInteger.valueOf(2))
                             .additionalExtensions(leafAkiExt)
                             .buildTbs();
-            LEAF_CERT = GostCertificateBuilder.assembleCert(leafTbs, CA_KP.getPrivate(), PARAMS);
+            LEAF_CERT = GostCertificateBuilder.sign(leafTbs, GostSigner.of(CA_KP.getPrivate()));
             LEAF_SERIAL = LEAF_CERT.getSerialNumberBigInt().toByteArray();
         } catch (Exception e) {
             throw new RuntimeException(e);
@@ -136,10 +136,10 @@ class CrlVerifierDelegatedFuzzTest {
         try {
             // Строим валидный CRL, подписанный CA-ключом
             byte[] crlDer =
-                    GostCrlBuilder.create(CA_KP.getPrivate(), CA_ISSUER_DN)
+                    GostCrlBuilder.create(CA_ISSUER_DN)
                             .withCrlNumber(1)
                             .nextUpdate("20990601120000Z")
-                            .build();
+                            .sign(CA_KP.getPrivate());
 
             CrlVerifier.verifyDelegated(
                     crlDer,

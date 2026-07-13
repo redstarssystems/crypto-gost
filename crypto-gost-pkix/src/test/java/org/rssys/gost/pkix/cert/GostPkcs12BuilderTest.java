@@ -343,11 +343,18 @@ class GostPkcs12BuilderTest {
     }
 
     @Test
-    @DisplayName("friendlyName > 64 UTF-8 байт -> IllegalArgumentException")
-    void testFriendlyNameTooLong() {
-        String longName = "a".repeat(65);
+    @DisplayName("friendlyName: 64 ASCII-символа проходят, 65 -> IllegalArgumentException")
+    void testFriendlyNameLengthBoundary() {
+        // Лимит меряется в байтах UTF-16BE (BMPString): 128 байт = 64 символа.
+        String maxName = "a".repeat(64);
+        assertDoesNotThrow(
+                () -> GostPkcs12Builder.create().friendlyName(maxName),
+                "64 ASCII-символа (128 байт UTF-16BE) должны проходить");
+
+        String tooLong = "a".repeat(65);
         assertThrows(
                 IllegalArgumentException.class,
-                () -> GostPkcs12Builder.create().friendlyName(longName));
+                () -> GostPkcs12Builder.create().friendlyName(tooLong),
+                "65 ASCII-символов (130 байт UTF-16BE) должны отвергаться");
     }
 }

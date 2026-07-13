@@ -5,10 +5,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.util.DerCodec;
 
 /**
- * Кодек GeneralName (RFC 5280 §4.2.1.6) — DNS, IP, directoryName.
+ * Кодек GeneralName (RFC 5280 §4.2.1.6) — DNS, IP, rfc822Name, URI, directoryName, otherName.
  *
  * <p>Переиспользуется в {@link GostCertificateBuilder} (SAN) и {@link GostCrlBuilder}
  * (certificateIssuer в indirect CRL).</p>
@@ -23,8 +24,17 @@ public final class GeneralNameCodec {
     /** GeneralName tag: iPAddress [7] */
     private static final int TAG_IP_ADDRESS = 0x87;
 
+    /** GeneralName tag: rfc822Name [1] */
+    private static final int TAG_RFC822_NAME = 0x81;
+
+    /** GeneralName tag: uniformResourceIdentifier [6] */
+    private static final int TAG_URI = 0x86;
+
     /** GeneralName tag: directoryName [4] */
     private static final int TAG_DIRECTORY_NAME = 0xA4;
+
+    /** GeneralName tag: otherName [0] (IMPLICIT, заменяет SEQUENCE OtherName) */
+    private static final int TAG_OTHER_NAME = 0xA0;
 
     /**
      * Кодирует GeneralName типа dNSName (RFC 5280 §4.2.1.6).
@@ -52,6 +62,66 @@ public final class GeneralNameCodec {
     }
 
     /**
+     * Кодирует GeneralName типа rfc822Name (RFC 5280 §4.2.1.6).
+     * Значение — IA5String (US-ASCII).
+     *
+     * @param email email-адрес (например, {@code "user@example.com"})
+     * @return DER-encoded GeneralName
+     */
+    public static byte[] encodeRfc822Name(String email) {
+        return DerCodec.encodeTlv(TAG_RFC822_NAME, email.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    /**
+     * Кодирует GeneralName типа uniformResourceIdentifier (RFC 5280 §4.2.1.6).
+     * Значение — IA5String (US-ASCII).
+     *
+     * @param uri URI (например, {@code "https://example.com"})
+     * @return DER-encoded GeneralName
+     */
+    public static byte[] encodeUri(String uri) {
+        return DerCodec.encodeTlv(TAG_URI, uri.getBytes(StandardCharsets.US_ASCII));
+    }
+
+    /**
+     * Кодирует GeneralName типа otherName (RFC 5280 §4.2.1.6).
+     *
+     * <p>Структура (тег [0] IMPLICIT заменяет SEQUENCE OtherName):
+     * <pre>
+     * A0 &lt;len&gt;               -- IMPLICIT [0], без вложенного тега SEQUENCE
+     *   06 &lt;len&gt; &lt;oid&gt;      -- type-id
+     *   A0 &lt;len&gt;              -- [0] EXPLICIT
+     *     &lt;valueDer&gt;          -- значение, уже DER-кодированное со своим тегом
+     * </pre>
+     *
+     * @param oid      OID типа (например, {@code "1.3.6.1.4.1.311.20.2.3"} для UPN)
+     * @param valueDer DER-кодированное значение со своим тегом (будет обёрнуто в [0] EXPLICIT)
+     * @return DER-encoded GeneralName
+     */
+    public static byte[] encodeOtherName(String oid, byte[] valueDer) {
+        ByteArrayOutputStream content = new ByteArrayOutputStream();
+        try {
+            content.write(DerCodec.encodeOid(oid));
+            content.write(DerCodec.encodeContextConstructed(0, valueDer));
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        return DerCodec.encodeTlv(TAG_OTHER_NAME, content.toByteArray());
+    }
+
+    /**
+     * Кодирует otherName с UPN (User Principal Name).
+     * Значение — UTF8String.
+     *
+     * @param upn User Principal Name (например, {@code "user@domain.ru"})
+     * @return DER-encoded GeneralName
+     */
+    public static byte[] encodeOtherNameUpn(String upn) {
+        byte[] upnValue = DerCodec.encodeUTF8String(upn);
+        return encodeOtherName(GostOids.ID_MS_UPN, upnValue);
+    }
+
+    /**
      * Кодирует GeneralName типа directoryName (RFC 5280 §4.2.1.6).
      * Обёртка над DER-кодированным Distinguished Name.
      *
@@ -67,7 +137,8 @@ public final class GeneralNameCodec {
      *
      * @param generalNames массив DER-кодированных GeneralName (результаты
      *                     {@link #encodeDnsName}, {@link #encodeIpAddress},
-     *                     {@link #encodeDirectoryName})
+     *                     {@link #encodeDirectoryName}, {@link #encodeRfc822Name},
+     *                     {@link #encodeUri}, {@link #encodeOtherName})
      * @return DER-encoded SEQUENCE OF GeneralName
      */
     public static byte[] encodeGeneralNames(byte[]... generalNames) {

@@ -101,6 +101,8 @@ public final class AuthenticatedStream {
         byte[] masterBytes = masterKey.getKey();
         try {
             byte[] keyMaterial =
+                    // count=2 (cmacKey || ctrKey) безопасно при R=1: счётчик KDF_TREE
+                    // занимает 1 октет, i in {1,2} гарантированно в него влезает.
                     KdfTreeGostR3411_2012_256.generate(
                             masterBytes, KDF_LABEL, streamNonce, 2, KEY_LEN);
             try {

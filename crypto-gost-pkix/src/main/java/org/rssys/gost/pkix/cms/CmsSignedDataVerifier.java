@@ -7,13 +7,13 @@ import java.security.cert.CertificateException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.ChainValidator;
 import org.rssys.gost.pkix.cert.CrlVerifier;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
+import org.rssys.gost.pkix.cert.GostSignatureHelper;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
@@ -283,6 +283,11 @@ public final class CmsSignedDataVerifier {
         return (T) new MultiSignerVerifiedData(parsed.encapData(), results, parsed.embeddedCrls());
     }
 
+    // Родственный, но НЕ идентичный разбор SignedData есть в SignedDataParts.parse() (пакет cms):
+    // там — нейтральный raw-разбор полей для пересборки в CAdESExtender. Здесь разбор идёт дальше —
+    // интерпретирует encapContentInfo и применяет DoS-лимиты (MAX_SIGNER_INFOS/MAX_EMBEDDED_CERTS),
+    // прошёл отдельные P0-фиксы. Сознательно не унифицированы (см. javadoc SignedDataParts): цена
+    // общей абстракции для двух разных контрактов выше выгоды.
     private static SignedDataParsed parseSignedData(byte[] signedDataDer) throws PkixException {
         CmsContentInfo contentInfo = CmsContentInfo.decode(signedDataDer);
         if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
@@ -378,11 +383,15 @@ public final class CmsSignedDataVerifier {
      * GostCrl.fromDer() выполняет только структурный разбор, без verify() на этом этапе —
      * revoked-список не извлекается, CPU-стоимость низкая.
      *
+     * <p>Package-private для переиспользования из {@link GostPkcs7#formatText(byte[])}:
+     * та же DoS-защищённая логика разбора поля {@code crls [1]}, что и в верификации —
+     * по образцу {@link #parseEmbeddedCertificates(byte[], int)}, чтобы не дублировать её.</p>
+     *
      * @param crlsField DER-байты поля {@code [1]} (контекстный тег 1)
      * @return список разобранных CRL (возможно пустой)
      * @throws PkixException если превышены лимиты или CRL повреждён
      */
-    private static List<GostCrl> parseEmbeddedCrls(byte[] crlsField) throws PkixException {
+    static List<GostCrl> parseEmbeddedCrls(byte[] crlsField) throws PkixException {
         int[] lenInfo = DerCodec.decodeLength(crlsField, 1);
         int contentStart = 1 + lenInfo[1];
         int contentEnd = crlsField.length;
@@ -578,8 +587,9 @@ public final class CmsSignedDataVerifier {
             }
         }
 
-        // [4] signatureAlgorithm
-        idx++;
+        // [4] signatureAlgorithm — читаем OID; консистентность с ключом проверяем ниже,
+        // когда разрешён сертификат подписанта (fail-closed против algorithm-confusion).
+        String signatureAlgOid = CmsAlgorithmIdentifier.decode(siParts[idx++]).algorithmOid();
 
         // [5] signature
         byte[] sigOctet = siParts[idx];
@@ -619,6 +629,8 @@ public final class CmsSignedDataVerifier {
             throw new PkixException(PkixException.Reason.OTHER, "Signer certificate not found");
         }
 
+        validateSignatureAlgorithm(signatureAlgOid, pubKey.getParams().hlen);
+
         if (!Signature.verifyHash(signedAttrsHash, signatureValue, pubKey)) {
             throw new PkixException(PkixException.Reason.SIGNATURE_INVALID, "Signature invalid");
         }
@@ -627,13 +639,54 @@ public final class CmsSignedDataVerifier {
     }
 
     private static byte[] digestFor(byte[] data, String digestOid) throws PkixException {
-        if (GostOids.DIGEST_512.equals(digestOid)) {
-            return Digest.digest512(data);
+        try {
+            return GostSignatureHelper.digestByOid(digestOid, data);
+        } catch (IllegalArgumentException e) {
+            throw new PkixException("Unsupported digest algorithm: " + digestOid);
         }
-        if (GostOids.DIGEST_256.equals(digestOid)) {
-            return Digest.digest256(data);
+    }
+
+    /**
+     * Проверяет OID из {@code SignerInfo.signatureAlgorithm} (RFC 5652 §5.3) в режиме fail-closed.
+     *
+     * <p>Легитимные продюсеры используют два семейства OID для ГОСТ Р 34.10-2012:
+     * OID открытого ключа ({@code 1.2.643.7.1.1.1.1/.2}; так делают КриптоПро, openssl gost-engine
+     * и данная библиотека) и signWithDigest ({@code 1.2.643.7.1.1.3.2/.3}; так делает BouncyCastle).
+     * Оба принимаются. Реальная защита от подмены алгоритма — сверка объявленной OID-битности
+     * (256/512) с кривой открытого ключа сертификата: несоответствие означает попытку
+     * algorithm-confusion и отклоняется. Параметры алгоритма не проверяются строго — допустимы
+     * и NULL, и их отсутствие (разные продюсеры кодируют по-разному).
+     *
+     * @param signatureAlgOid OID из signatureAlgorithm подписанта
+     * @param keyHlen         длина хэша кривой ключа сертификата (32 -> 256-бит, 64 -> 512-бит)
+     * @throws PkixException если OID не из ожидаемого множества либо его битность не совпадает
+     *     с битностью ключа сертификата
+     */
+    private static void validateSignatureAlgorithm(String signatureAlgOid, int keyHlen)
+            throws PkixException {
+        boolean is256Oid =
+                GostOids.PUBLIC_KEY_256.equals(signatureAlgOid)
+                        || GostOids.SIGN_WITH_DIGEST_256.equals(signatureAlgOid);
+        boolean is512Oid =
+                GostOids.PUBLIC_KEY_512.equals(signatureAlgOid)
+                        || GostOids.SIGN_WITH_DIGEST_512.equals(signatureAlgOid);
+
+        if (!is256Oid && !is512Oid) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "Unexpected SignerInfo signatureAlgorithm OID: " + signatureAlgOid);
         }
-        throw new PkixException("Unsupported digest algorithm: " + digestOid);
+
+        boolean keyIs512 = keyHlen == GostOids.STREEBOG_512_HASH_LEN;
+        if (is512Oid != keyIs512) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "SignerInfo signatureAlgorithm OID "
+                            + signatureAlgOid
+                            + " does not match signer key size ("
+                            + (keyHlen * 8)
+                            + " bit)");
+        }
     }
 
     private static GostCertificate findCertByIssuerAndSerial(
@@ -690,7 +743,8 @@ public final class CmsSignedDataVerifier {
      * против downgrade-атаки: если embedded CRL устарел, а внешний содержит отзыв —
      * верификатор дойдёт до внешнего и выявит отзыв).
      *
-     * <p>Delta CRL и partial/indirect CRL (Reason.IDP_NOT_SUPPORTED) пропускаются.
+     * <p>Delta CRL (Reason.DELTA_CRL_NOT_SUPPORTED) и partial/indirect CRL
+     * (Reason.IDP_NOT_SUPPORTED) пропускаются.
      * Остальные ошибки верификации пробрасываются немедленно (fail-closed).
      * При отсутствии подходящего CRL проверка пропускается (best-effort, warn).
      *
@@ -730,7 +784,8 @@ public final class CmsSignedDataVerifier {
                     // без break — проверяем все matching CRL;
                     // если любой последующий CRL обнаружит отзыв — пробрасывается исключение
                 } catch (PkixException e) {
-                    if (e.reason() == PkixException.Reason.IDP_NOT_SUPPORTED) {
+                    if (e.reason() == PkixException.Reason.IDP_NOT_SUPPORTED
+                            || e.reason() == PkixException.Reason.DELTA_CRL_NOT_SUPPORTED) {
                         LOG.log(
                                 Level.DEBUG,
                                 "CRL skipped (unsupported type: {0}), issuer={1}",

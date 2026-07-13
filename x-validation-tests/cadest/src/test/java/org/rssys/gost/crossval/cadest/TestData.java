@@ -62,7 +62,8 @@ final class TestData {
                 .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
                         GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
                 .basicConstraints(true, null)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(1))
+                .sign(caKp.getPrivate());
 
         var leafKp = KeyGenerator.generateKeyPair(params);
         GostCertificate leafCert = GostCertificateBuilder.create(params, leafDn)
@@ -71,7 +72,8 @@ final class TestData {
                 .notBefore(NOT_BEFORE)
                 .notAfter(NOT_AFTER_LEAF)
                 .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(2))
+                .sign(caKp.getPrivate());
 
         return new CertPair(caCert, leafKp.getPrivate(), leafKp.getPublic(), leafCert);
     }
@@ -87,7 +89,8 @@ final class TestData {
                 .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
                         GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
                 .basicConstraints(true, null)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(3))
+                .sign(caKp.getPrivate());
     }
 
     // ========================================================================

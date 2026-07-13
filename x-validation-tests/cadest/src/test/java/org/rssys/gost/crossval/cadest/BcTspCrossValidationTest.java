@@ -446,7 +446,8 @@ class BcTspCrossValidationTest {
                 .notBefore("20250101000000Z")
                 .notAfter("20351231235959Z")
                 .extendedKeyUsage(true, GostOids.EXT_TIME_STAMPING)
-                .assembleCert(kp.getPrivate());
+                .serial(BigInteger.ONE)
+                .sign(kp.getPrivate());
     }
 
     private static X509Certificate buildBcSelfSignedCert(KeyPair kp, String dnStr)

@@ -1,14 +1,13 @@
 package org.rssys.gost.pkix.tsp;
 
 import java.math.BigInteger;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostSignatureHelper;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.pkix.cms.CmsAlgorithmIdentifier;
 import org.rssys.gost.pkix.cms.CmsSignedDataBuilder;
@@ -59,7 +58,7 @@ public final class TspResponseBuilder {
     private final String messageImprintAlgOid;
     private final BigInteger requestNonce;
 
-    private PrivateKeyParameters privateKey;
+    private GostSigner signer;
     private GostCertificate tsaCert;
     private String policyOid;
     private BigInteger serialNumber;
@@ -97,20 +96,30 @@ public final class TspResponseBuilder {
     }
 
     /**
-     * Устанавливает ключ и сертификат подписанта TSA.
+     * Устанавливает подписанта TSA (может быть HSM-адаптером) и его сертификат.
      *
-     * <p>Автоматически определяет алгоритм дайджеста по размеру ключа:
+     * <p>Автоматически определяет алгоритм дайджеста по параметрам подписанта:
      * hlen=32 -> Streebog-256, hlen=64 -> Streebog-512.
      */
-    public TspResponseBuilder signer(PrivateKeyParameters privateKey, GostCertificate cert) {
-        this.privateKey = Objects.requireNonNull(privateKey, "privateKey must not be null");
+    public TspResponseBuilder signer(GostSigner signer, GostCertificate cert) {
+        this.signer = Objects.requireNonNull(signer, "signer must not be null");
         this.tsaCert = Objects.requireNonNull(cert, "cert must not be null");
-        int hlen = privateKey.getParams().hlen;
+        int hlen = signer.getParams().hlen;
         this.digestOid =
                 (hlen == GostOids.STREEBOG_512_HASH_LEN)
                         ? GostOids.DIGEST_512
                         : GostOids.DIGEST_256;
         return this;
+    }
+
+    /**
+     * Устанавливает ключ и сертификат подписанта TSA (удобная перегрузка с ключом в памяти).
+     *
+     * <p>Автоматически определяет алгоритм дайджеста по размеру ключа:
+     * hlen=32 -> Streebog-256, hlen=64 -> Streebog-512.
+     */
+    public TspResponseBuilder signer(PrivateKeyParameters privateKey, GostCertificate cert) {
+        return signer(GostSigner.of(privateKey), cert);
     }
 
     /** OID политики TSA (обязательное). */
@@ -259,11 +268,8 @@ public final class TspResponseBuilder {
     // Приватные методы
     // ========================================================================
 
-    private static final DateTimeFormatter GEN_TIME_FMT =
-            DateTimeFormatter.ofPattern("yyyyMMddHHmmss'Z'").withZone(ZoneOffset.UTC);
-
     private void validateRequired() {
-        if (privateKey == null) {
+        if (signer == null) {
             throw new IllegalStateException("signer not set");
         }
         if (policyOid == null) {
@@ -275,7 +281,7 @@ public final class TspResponseBuilder {
     }
 
     private byte[] encodeTstInfo() {
-        String genTime = ZonedDateTime.now(ZoneOffset.UTC).format(GEN_TIME_FMT);
+        String genTime = GostSignatureHelper.nowGeneralizedTime();
 
         // version INTEGER v1(1)
         byte[] version = DerCodec.encodeInteger(1);
@@ -332,7 +338,7 @@ public final class TspResponseBuilder {
                         .data(tstInfoDer)
                         .contentType(GostOids.TST_INFO)
                         .digestAlgorithm(digestOid)
-                        .addSigner(privateKey, tsaCert);
+                        .addSigner(signer, tsaCert);
 
         if (cadesAttributes) {
             builder.withCAdES();

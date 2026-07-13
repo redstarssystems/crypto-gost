@@ -3,7 +3,8 @@ package org.rssys.gost.pkix.cert;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import org.rssys.gost.api.Signature;
+import java.util.Objects;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -16,23 +17,26 @@ import org.rssys.gost.util.DerCodec;
  * <p>Fluent API:
  * <pre>
  * byte[] ocsp = GostOcspResponseBuilder.create(serialNumber)
- *     .signer(signerPriv, signerPub)
  *     .issuerDn(caSubjectDer)
  *     .nextUpdate("20260101000000Z")
- *     .build();
+ *     .sign(signer);
  * </pre>
  *
  * <p>С делегированными сертификатами:
  * <pre>
  * byte[] ocsp = GostOcspResponseBuilder.create(serialNumber)
- *     .signer(responderPriv, responderPub)
  *     .caPublicKey(caPub)
  *     .issuerDn(caSubjectDer)
  *     .withDelegatedCerts(cert1Der, cert2Der)
- *     .build();
+ *     .sign(responderSigner);
  * </pre>
  *
- * <p>{@link #build()} возвращает wire-формат DER-байтов для передачи по сети.
+ * <p>Подписант передаётся в терминальный {@link #sign(GostSigner)} — единообразно с
+ * {@link GostCertificateBuilder}, {@link GostCrlBuilder}, {@link GostCsrBuilder}.
+ * Открытый ключ подписанта выводится из {@link GostSigner#getPublicKey()}; отдельно
+ * задавать его не нужно, что исключает риск несогласованной пары priv/pub.</p>
+ *
+ * <p>{@link #sign(GostSigner)} возвращает wire-формат DER-байтов для передачи по сети.
  * Для инспекции и проверки — consumer-класс {@link GostOcspResponse}:
  * {@code new GostOcspResponse(bytes).verify(caPub)}. Разделение producer
  * (OCSP-responder строит ответ) и consumer (клиент проверяет) осмысленно:
@@ -42,8 +46,6 @@ import org.rssys.gost.util.DerCodec;
 public final class GostOcspResponseBuilder {
 
     private final byte[] serialNumber;
-    private PrivateKeyParameters signerPriv;
-    private PublicKeyParameters signerPub;
     private PublicKeyParameters caPub;
     private byte[] caSubjectDer;
     private String nextUpdate;
@@ -69,14 +71,7 @@ public final class GostOcspResponseBuilder {
         return new GostOcspResponseBuilder(serialNumber);
     }
 
-    /** Ключ, подписывающий OCSP-ответ. */
-    public GostOcspResponseBuilder signer(PrivateKeyParameters priv, PublicKeyParameters pub) {
-        this.signerPriv = priv;
-        this.signerPub = pub;
-        return this;
-    }
-
-    /** Публичный ключ CA для CertID issuerKeyHash. По умолчанию = signerPub. */
+    /** Публичный ключ CA для CertID issuerKeyHash. По умолчанию = открытый ключ подписанта. */
     public GostOcspResponseBuilder caPublicKey(PublicKeyParameters pub) {
         this.caPub = pub;
         return this;
@@ -230,11 +225,21 @@ public final class GostOcspResponseBuilder {
         return this;
     }
 
-    /** Собирает и подписывает OCSP-ответ. */
-    public byte[] build() {
-        if (signerPriv == null || signerPub == null) {
-            throw new IllegalStateException("signer key must be set");
-        }
+    /**
+     * Собирает и подписывает OCSP-ответ подписантом (может быть HSM-адаптером).
+     * Открытый ключ подписанта выводится из {@link GostSigner#getPublicKey()}.
+     *
+     * <p>Параметры кривой (hlen) для хэширования TBS берутся из открытого ключа подписанта;
+     * параметры для CertID (hlenCa) — из ключа CA ({@link #caPublicKey}), или из того же
+     * ключа подписанта по умолчанию.</p>
+     *
+     * @param signer подписант OCSP-ответа
+     * @return DER-кодированный OCSPResponse
+     * @throws IllegalStateException если issuerDn не задан
+     */
+    public byte[] sign(GostSigner signer) {
+        Objects.requireNonNull(signer, "signer must not be null");
+        PublicKeyParameters signerPub = signer.getPublicKey();
         if (caSubjectDer == null) {
             throw new IllegalStateException("issuerDn must be set");
         }
@@ -263,7 +268,7 @@ public final class GostOcspResponseBuilder {
                         responderId);
         int hlen = signerPub.getParams().hlen;
         byte[] hash = GostSignatureHelper.doHash(tbs, hlen);
-        byte[] sig = Signature.signHash(hash, signerPriv);
+        byte[] sig = GostSignatureHelper.signHashChecked(hash, signer);
         byte[] sigAlg = GostSignatureHelper.buildAlgId(signerPub.getParams());
 
         byte[] basicOcsp;
@@ -277,6 +282,17 @@ public final class GostOcspResponseBuilder {
             basicOcsp = DerCodec.encodeSequence(tbs, sigAlg, DerCodec.encodeBitString(sig));
         }
         return wrapOcspResponse(basicOcsp);
+    }
+
+    /**
+     * Собирает и подписывает OCSP-ответ закрытым ключом в памяти.
+     * Удобная обёртка через {@link GostSigner#of(PrivateKeyParameters)}.
+     *
+     * @param signerPriv ключ, подписывающий OCSP-ответ
+     * @return DER-кодированный OCSPResponse
+     */
+    public byte[] sign(PrivateKeyParameters signerPriv) {
+        return sign(GostSigner.of(signerPriv));
     }
 
     private static byte[] wrapOcspResponse(byte[] basicOcsp) {

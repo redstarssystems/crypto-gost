@@ -32,7 +32,8 @@ class GostOcspRequestTest {
                         .notAfter("20351231235959Z")
                         .basicConstraints(true, null)
                         .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN)
-                        .assembleCert(caKp.getPrivate());
+                        .randomSerial()
+                        .sign(caKp.getPrivate());
 
         GostCertificate leaf =
                 GostCertificateBuilder.create(params, leafDn)
@@ -41,7 +42,8 @@ class GostOcspRequestTest {
                         .notBefore("20250101000000Z")
                         .notAfter("20261231235959Z")
                         .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                        .assembleCert(caKp.getPrivate());
+                        .randomSerial()
+                        .sign(caKp.getPrivate());
 
         return new CertPair(ca, leaf);
     }
@@ -206,5 +208,78 @@ class GostOcspRequestTest {
     void testOcspRequestOversizedRejected() {
         byte[] oversizedDer = new byte[65_537]; // на 1 больше MAX_OCSP_REQUEST_SIZE = 65_536
         assertThrows(PkixException.class, () -> GostOcspRequest.fromDer(oversizedDer));
+    }
+
+    // ========================================================================
+    // PEM round-trip
+    // ========================================================================
+
+    @Test
+    @DisplayName("PEM round-trip: toPem() -> fromPemOrDer() -> идентичность полей")
+    void testPemRoundTrip() throws Exception {
+        byte[] der =
+                GostOcspRequestBuilder.create()
+                        .targetCert(certs256.leaf.getEncoded())
+                        .issuerCert(certs256.ca.getEncoded())
+                        .build();
+
+        GostOcspRequest req = GostOcspRequest.fromDer(der);
+        String pem = req.toPem();
+        assertTrue(
+                pem.contains("-----BEGIN OCSP REQUEST-----"),
+                "PEM должен содержать BEGIN OCSP REQUEST");
+        assertTrue(
+                pem.contains("-----END OCSP REQUEST-----"),
+                "PEM должен содержать END OCSP REQUEST");
+
+        GostOcspRequest reparsed =
+                GostOcspRequest.fromPemOrDer(
+                        pem.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        assertEquals(req.getCertIds().size(), reparsed.getCertIds().size());
+        assertArrayEquals(
+                req.getCertIds().get(0).serialNumber(),
+                reparsed.getCertIds().get(0).serialNumber());
+        assertArrayEquals(req.getNonce(), reparsed.getNonce());
+        assertEquals(req.isSigned(), reparsed.isSigned());
+    }
+
+    @Test
+    @DisplayName("PEM fromPemOrDer: автоопределение DER")
+    void testPemFromPemOrDerAutoDetectsDer() throws Exception {
+        byte[] der =
+                GostOcspRequestBuilder.create()
+                        .targetCert(certs256.leaf.getEncoded())
+                        .issuerCert(certs256.ca.getEncoded())
+                        .build();
+
+        GostOcspRequest parsed = GostOcspRequest.fromPemOrDer(der);
+        assertEquals(1, parsed.getCertIds().size(), "fromPemOrDer должен парсить DER без ошибок");
+    }
+
+    @Test
+    @DisplayName("PEM fromPemOrDer: мусорные данные -> PkixException")
+    void testPemFromPemOrDerGarbage() {
+        assertThrows(
+                PkixException.class,
+                () -> GostOcspRequest.fromPemOrDer(new byte[] {0x00, 0x01, 0x02}));
+    }
+
+    @Test
+    @DisplayName("getEncoded: возвращает защитную копию исходного DER")
+    void testGetEncodedDefensiveCopy() throws Exception {
+        byte[] der =
+                GostOcspRequestBuilder.create()
+                        .targetCert(certs256.leaf.getEncoded())
+                        .issuerCert(certs256.ca.getEncoded())
+                        .build();
+
+        GostOcspRequest req = GostOcspRequest.fromDer(der);
+        byte[] encoded = req.getEncoded();
+        assertArrayEquals(der, encoded, "getEncoded должен вернуть точную копию исходного DER");
+
+        // Модификация копии не должна влиять на объект
+        encoded[0] = 0;
+        assertArrayEquals(
+                der, req.getEncoded(), "мутация возвращённого массива не должна менять состояние");
     }
 }

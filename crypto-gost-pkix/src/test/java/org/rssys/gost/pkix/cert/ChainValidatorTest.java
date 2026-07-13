@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
@@ -30,10 +31,10 @@ class ChainValidatorTest {
 
     /**
      * Цепочка: leaf ← ca1(CA) ← ca2(CA, pathLen=0) ← root(CA).
-     * ca2 с pathLen=0 запрещает следующие CA — но ca1 является CA → нарушение.
+     * ca2 с pathLen=0 запрещает следующие CA — но ca1 является CA -> нарушение.
      */
     @Test
-    @DisplayName("pathLenConstraint: ca2.pathLen=0, под ним есть CA → PATH_LEN_EXCEEDED")
+    @DisplayName("pathLenConstraint: ca2.pathLen=0, под ним есть CA -> PATH_LEN_EXCEEDED")
     void testPathLenExceeded() throws Exception {
         CertBundle root = createRootCa();
         CertBundle ca2 = createIntermediateCa(root, 0);
@@ -55,7 +56,7 @@ class ChainValidatorTest {
      * ca1 с pathLen=1: разрешён 1 CA, но под ca1 — 0 CA (только leaf). Валидно.
      */
     @Test
-    @DisplayName("pathLenConstraint: ca1.pathLen=1, под ним 0 CA → валидно")
+    @DisplayName("pathLenConstraint: ca1.pathLen=1, под ним 0 CA -> валидно")
     void testPathLenBoundaryValid() throws Exception {
         CertBundle root = createRootCa();
         CertBundle ca2 = createIntermediateCa(root, null);
@@ -74,10 +75,10 @@ class ChainValidatorTest {
 
     /**
      * Цепочка: leaf ← intermediate(CA, pathLen=0) ← root(CA).
-     * pathLen=0: разрешён только end-entity под этим CA. leaf не является CA → валидно.
+     * pathLen=0: разрешён только end-entity под этим CA. leaf не является CA -> валидно.
      */
     @Test
-    @DisplayName("pathLenConstraint: intermediate.pathLen=0, под ним только leaf → валидно")
+    @DisplayName("pathLenConstraint: intermediate.pathLen=0, под ним только leaf -> валидно")
     void testPathLenZeroWithLeafOnly() throws Exception {
         CertBundle root = createRootCa();
         CertBundle intermediate = createIntermediateCa(root, 0);
@@ -95,10 +96,10 @@ class ChainValidatorTest {
 
     /**
      * Цепочка: leaf ← ca(CA) ← root(CA, pathLen=0).
-     * root с pathLen=0 разрешает только end-entity под собой — но ca является CA → нарушение.
+     * root с pathLen=0 разрешает только end-entity под собой — но ca является CA -> нарушение.
      */
     @Test
-    @DisplayName("pathLenConstraint: root.pathLen=0, под ним есть CA → PATH_LEN_EXCEEDED")
+    @DisplayName("pathLenConstraint: root.pathLen=0, под ним есть CA -> PATH_LEN_EXCEEDED")
     void testPathLenExceededRoot() throws Exception {
         CertBundle root = createRootCa(0);
         CertBundle ca = createIntermediateCa(root, null);
@@ -115,7 +116,7 @@ class ChainValidatorTest {
      * root с pathLen=1: разрешён 1 CA — ca удовлетворяет ограничению.
      */
     @Test
-    @DisplayName("pathLenConstraint: root.pathLen=1, под ним 1 CA → валидно")
+    @DisplayName("pathLenConstraint: root.pathLen=1, под ним 1 CA -> валидно")
     void testPathLenBoundaryValidRoot() throws Exception {
         CertBundle root = createRootCa(1);
         CertBundle ca = createIntermediateCa(root, null);
@@ -133,12 +134,12 @@ class ChainValidatorTest {
 
     /**
      * Цепочка: leaf ← caSelf(CA, DN=intermediate) ← intermediate(CA, pathLen=0) ← root(CA).
-     * caSelf — self-issued (subjectDN == issuerDN == intermediate.subjectDN) → не считается.
-     * intermediate с pathLen=0: разрешён 0 не-self-issued CA, условие выполнено → валидно.
+     * caSelf — self-issued (subjectDN == issuerDN == intermediate.subjectDN) -> не считается.
+     * intermediate с pathLen=0: разрешён 0 не-self-issued CA, условие выполнено -> валидно.
      */
     @Test
     @DisplayName(
-            "pathLenConstraint: int.pathLen=0, под ним self-issued CA → не считается → валидно")
+            "pathLenConstraint: int.pathLen=0, под ним self-issued CA -> не считается -> валидно")
     void testSelfIssuedNotCountedPathLen() throws Exception {
         CertBundle root = createRootCa();
         CertBundle intermediate = createIntermediateCa(root, 0);
@@ -153,10 +154,10 @@ class ChainValidatorTest {
 
     /**
      * Цепочка: leaf ← ca(CA, DN≠intermediate) ← intermediate(CA, pathLen=0) ← root(CA).
-     * ca — НЕ self-issued → считается. intermediate с pathLen=0: разрешён 0 CA, но ca — 1 → нарушение.
+     * ca — НЕ self-issued -> считается. intermediate с pathLen=0: разрешён 0 CA, но ca — 1 -> нарушение.
      */
     @Test
-    @DisplayName("pathLenConstraint: int.pathLen=0, под ним НЕ self-issued CA → PATH_LEN_EXCEEDED")
+    @DisplayName("pathLenConstraint: int.pathLen=0, под ним НЕ self-issued CA -> PATH_LEN_EXCEEDED")
     void testSelfIssuedPathLenExceeded() throws Exception {
         CertBundle root = createRootCa();
         CertBundle intermediate = createIntermediateCa(root, 0);
@@ -174,7 +175,7 @@ class ChainValidatorTest {
     // ========================================================================
 
     @Test
-    @DisplayName("Пустая цепочка → PkixException")
+    @DisplayName("Пустая цепочка -> PkixException")
     void testEmptyChain() throws Exception {
         var unusedKey = KeyGenerator.generateKeyPair(PARAMS).getPublic();
         assertThrows(
@@ -191,7 +192,7 @@ class ChainValidatorTest {
      * с внутренним (TBSCertificate.signature) — нарушение RFC 5280 §4.1.1.2.
      */
     @Test
-    @DisplayName("algorithm mismatch: внешний ≠ внутренний AlgId → ALG_MISMATCH")
+    @DisplayName("algorithm mismatch: внешний ≠ внутренний AlgId -> ALG_MISMATCH")
     void testAlgorithmMismatch() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
@@ -222,7 +223,7 @@ class ChainValidatorTest {
      * if it encounters a critical extension it does not recognize».
      */
     @Test
-    @DisplayName("unknown critical extension → UNKNOWN_CRITICAL_EXTENSION")
+    @DisplayName("unknown critical extension -> UNKNOWN_CRITICAL_EXTENSION")
     void testUnknownCriticalExtension() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeafWithUnknownCriticalExt(root);
@@ -488,7 +489,7 @@ class ChainValidatorTest {
      * Root с NC permitted=example.com, leaf evil.com — reject.
      */
     @Test
-    @DisplayName("NameConstraints: trust anchor с NC — SAN вне namespace → reject")
+    @DisplayName("NameConstraints: trust anchor с NC — SAN вне namespace -> reject")
     void testNameConstraintsOnTrustAnchorFail() throws Exception {
         CertBundle root = createRootCaWithNameConstraints(buildNcPermittedDns("example.com"));
         CertBundle leaf = createLeafWithSan(root, "evil.com", null);
@@ -566,10 +567,10 @@ class ChainValidatorTest {
     // ========================================================================
 
     /**
-     * Leaf с POLICY_KC1, required = KC1 → успех.
+     * Leaf с POLICY_KC1, required = KC1 -> успех.
      */
     @Test
-    @DisplayName("CertificatePolicies: leaf с требуемой политикой → валидно")
+    @DisplayName("CertificatePolicies: leaf с требуемой политикой -> валидно")
     void testPolicyCheckLeafHasMatchingPolicy() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
@@ -582,10 +583,10 @@ class ChainValidatorTest {
     }
 
     /**
-     * Leaf с anyPolicy, required = KC1 → успех (anyPolicy удовлетворяет любой политике).
+     * Leaf с anyPolicy, required = KC1 -> успех (anyPolicy удовлетворяет любой политике).
      */
     @Test
-    @DisplayName("CertificatePolicies: leaf с anyPolicy, required=KC1 → валидно")
+    @DisplayName("CertificatePolicies: leaf с anyPolicy, required=KC1 -> валидно")
     void testPolicyCheckLeafHasAnyPolicy() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeafWithPolicy(root, GostOids.ANY_POLICY);
@@ -598,10 +599,10 @@ class ChainValidatorTest {
     }
 
     /**
-     * Leaf с POLICY_KC2, required = KC1 → POLICY_VIOLATION.
+     * Leaf с POLICY_KC2, required = KC1 -> POLICY_VIOLATION.
      */
     @Test
-    @DisplayName("CertificatePolicies: leaf с KC2, required=KC1 → POLICY_VIOLATION")
+    @DisplayName("CertificatePolicies: leaf с KC2, required=KC1 -> POLICY_VIOLATION")
     void testPolicyCheckLeafPolicyMismatch() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC2);
@@ -622,10 +623,10 @@ class ChainValidatorTest {
     }
 
     /**
-     * Leaf без расширения CertificatePolicies, required = KC1 → POLICY_VIOLATION.
+     * Leaf без расширения CertificatePolicies, required = KC1 -> POLICY_VIOLATION.
      */
     @Test
-    @DisplayName("CertificatePolicies: leaf без расширения, required=KC1 → POLICY_VIOLATION")
+    @DisplayName("CertificatePolicies: leaf без расширения, required=KC1 -> POLICY_VIOLATION")
     void testPolicyCheckLeafNoExtension() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
@@ -646,10 +647,10 @@ class ChainValidatorTest {
     }
 
     /**
-     * Несколько required OID, leaf содержит один из них → успех.
+     * Несколько required OID, leaf содержит один из них -> успех.
      */
     @Test
-    @DisplayName("CertificatePolicies: несколько required, один совпадает → валидно")
+    @DisplayName("CertificatePolicies: несколько required, один совпадает -> валидно")
     void testPolicyCheckMultipleRequiredOneMatches() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
@@ -664,10 +665,10 @@ class ChainValidatorTest {
     }
 
     /**
-     * requiredPolicyOids = null → без проверки политик, обратная совместимость.
+     * requiredPolicyOids = null -> без проверки политик, обратная совместимость.
      */
     @Test
-    @DisplayName("CertificatePolicies: requiredPolicyOids=null → без проверки политик")
+    @DisplayName("CertificatePolicies: requiredPolicyOids=null -> без проверки политик")
     void testPolicyCheckNoRequiredPolicies() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
@@ -684,13 +685,13 @@ class ChainValidatorTest {
     // ========================================================================
 
     @Test
-    @DisplayName("validateChainWithRevocation: CRL, leaf не отозван → успех")
+    @DisplayName("validateChainWithRevocation: CRL, leaf не отозван -> успех")
     void testRevocationCrlNotRevoked() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
 
         byte[] crlDer =
-                GostCrlBuilder.create(root.priv, root.dn).nextUpdate("21000101000000Z").build();
+                GostCrlBuilder.create(root.dn).nextUpdate("21000101000000Z").sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
         List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
@@ -703,18 +704,17 @@ class ChainValidatorTest {
     }
 
     @Test
-    @DisplayName("validateChainWithRevocation: OCSP good → успех")
+    @DisplayName("validateChainWithRevocation: OCSP good -> успех")
     void testRevocationOcspGood() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
 
         byte[] ocspGood =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(root.priv, root.pub)
                         .issuerDn(root.dn)
                         .nextUpdate("21000101000000Z")
                         .good()
-                        .build();
+                        .sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
         List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
@@ -725,23 +725,22 @@ class ChainValidatorTest {
     }
 
     @Test
-    @DisplayName("validateChainWithRevocation: OCSP+CRL, OCSP приоритет → успех")
+    @DisplayName("validateChainWithRevocation: OCSP+CRL, OCSP приоритет -> успех")
     void testRevocationOcspOverCrl() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
 
         byte[] ocspGood =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(root.priv, root.pub)
                         .issuerDn(root.dn)
                         .nextUpdate("21000101000000Z")
                         .good()
-                        .build();
+                        .sign(root.priv);
         byte[] crlDer =
-                GostCrlBuilder.create(root.priv, root.dn)
+                GostCrlBuilder.create(root.dn)
                         .nextUpdate("21000101000000Z")
                         .addRevoked(leaf.cert.getSerialNumber(), "20250101000000Z")
-                        .build();
+                        .sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
         List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
@@ -752,16 +751,16 @@ class ChainValidatorTest {
     }
 
     @Test
-    @DisplayName("validateChainWithRevocation: leaf отозван по CRL → PkixException")
+    @DisplayName("validateChainWithRevocation: leaf отозван по CRL -> PkixException")
     void testRevocationCrlRevoked() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
 
         byte[] crlDer =
-                GostCrlBuilder.create(root.priv, root.dn)
+                GostCrlBuilder.create(root.dn)
                         .nextUpdate("21000101000000Z")
                         .addRevoked(leaf.cert.getSerialNumber(), "20250101000000Z")
-                        .build();
+                        .sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
         List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
@@ -773,18 +772,17 @@ class ChainValidatorTest {
     }
 
     @Test
-    @DisplayName("validateChainWithRevocation: leaf отозван по OCSP → PkixException")
+    @DisplayName("validateChainWithRevocation: leaf отозван по OCSP -> PkixException")
     void testRevocationOcspRevoked() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
 
         byte[] ocspRevoked =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(root.priv, root.pub)
                         .issuerDn(root.dn)
                         .nextUpdate("21000101000000Z")
                         .revoked("20250101000000Z")
-                        .build();
+                        .sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
         List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
@@ -797,13 +795,13 @@ class ChainValidatorTest {
     }
 
     @Test
-    @DisplayName("validateChainWithRevocation: цепочка невалидна → ошибка до проверки отзыва")
+    @DisplayName("validateChainWithRevocation: цепочка невалидна -> ошибка до проверки отзыва")
     void testRevocationChainInvalidFirst() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
 
         byte[] crlDer =
-                GostCrlBuilder.create(root.priv, root.dn).nextUpdate("21000101000000Z").build();
+                GostCrlBuilder.create(root.dn).nextUpdate("21000101000000Z").sign(root.priv);
 
         var wrongKp = KeyGenerator.generateKeyPair(PARAMS);
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
@@ -821,7 +819,7 @@ class ChainValidatorTest {
     }
 
     @Test
-    @DisplayName("validateChainWithRevocation: null в revocationData → пропуск, успех")
+    @DisplayName("validateChainWithRevocation: null в revocationData -> пропуск, успех")
     void testRevocationNullEntry() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
@@ -835,7 +833,7 @@ class ChainValidatorTest {
     }
 
     @Test
-    @DisplayName("validateChainWithRevocation: все null → вырождается в validateChain")
+    @DisplayName("validateChainWithRevocation: все null -> вырождается в validateChain")
     void testRevocationAllNull() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
@@ -851,7 +849,7 @@ class ChainValidatorTest {
 
     @Test
     @DisplayName(
-            "validateChainWithRevocation: размер revocationData != chain.size() → IllegalArgumentException")
+            "validateChainWithRevocation: размер revocationData != chain.size() -> IllegalArgumentException")
     void testRevocationSizeMismatch() throws Exception {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
@@ -863,6 +861,161 @@ class ChainValidatorTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+    }
+
+    // ========================================================================
+    // NameConstraints: rfc822Name, URI, otherName enforcement
+    // ========================================================================
+
+    @Test
+    @DisplayName("NameConstraints: permitted rfc822Name — leaf входит")
+    void testNcPermittedRfc822Match() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedRfc822("example.com"));
+        CertBundle leaf = createLeafWithRfc822(ca, "user@example.com");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted rfc822Name — leaf вне permitted -> REJECT")
+    void testNcPermittedRfc822Mismatch() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedRfc822("example.com"));
+        CertBundle leaf = createLeafWithRfc822(ca, "user@evil.com");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: otherName + leaf имеет otherName -> REJECT (fail-closed)")
+    void testNcOtherNameLeafHasOtherName() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca = createIntermediateCaWithNameConstraints(root, buildNcWithOtherName());
+        CertBundle leaf = createLeafWithUpn(ca, "user@domain.ru");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: otherName + leaf без otherName — WARNING (безопасно)")
+    void testNcOtherNameLeafNoOtherName() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca = createIntermediateCaWithNameConstraints(root, buildNcWithOtherName());
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: многоуровневое накопление rfc822Name (дедушка->внук->leaf)")
+    void testNcRfc822MultiLevelAccumulation() throws Exception {
+        CertBundle root = createRootCaWithNameConstraints(buildNcPermittedRfc822("example.com"));
+        CertBundle subCa = createIntermediateCa(root, null);
+        CertBundle leaf = createLeafWithRfc822(subCa, "user@example.com");
+
+        List<GostCertificate> chain = List.of(leaf.cert, subCa.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    @Test
+    @DisplayName(
+            "NameConstraints: excluded rfc822Name mailbox-form + leaf с этим адресом -> REJECT")
+    void testNcRfc822MailboxFormExcluded() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcWithMailboxExcluded("admin@example.com"));
+        CertBundle leaf = createLeafWithRfc822(ca, "admin@example.com");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    @Test
+    @DisplayName(
+            "NameConstraints: rfc822Name mailbox-form + leaf без rfc822Name -> WARNING (безопасно)")
+    void testNcRfc822MailboxFormNoLeafMatch() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcWithMailboxExcluded("admin@example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: URI с ведущей точкой — матчит поддомен, не матчит голый хост")
+    void testNcUriDotPrefixMatch() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedUri(".example.com"));
+        CertBundle leafMatch = createLeafWithUri(ca, "https://host.example.com/path");
+        CertBundle leafExact = createLeafWithUri(ca, "https://example.com/path");
+
+        List<GostCertificate> chainMatch = List.of(leafMatch.cert, ca.cert, root.cert);
+        List<GostCertificate> chainExact = List.of(leafExact.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chainMatch, trustedKeys));
+        assertThrows(
+                PkixException.class, () -> ChainValidator.validateChain(chainExact, trustedKeys));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: URI без точки — точное совпадение хоста")
+    void testNcUriExactMatch() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedUri("example.com"));
+        CertBundle leafMatch = createLeafWithUri(ca, "https://example.com/path");
+        CertBundle leafSub = createLeafWithUri(ca, "https://host.example.com/path");
+
+        List<GostCertificate> chainMatch = List.of(leafMatch.cert, ca.cert, root.cert);
+        List<GostCertificate> chainSub = List.of(leafSub.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chainMatch, trustedKeys));
+        assertThrows(
+                PkixException.class, () -> ChainValidator.validateChain(chainSub, trustedKeys));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: URI с IP-хостом под активным ограничением -> REJECT")
+    void testNcUriIpHostReject() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedUri("example.com"));
+        CertBundle leaf = createLeafWithUri(ca, "https://1.2.3.4/path");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
     }
 
     // ========================================================================
@@ -933,6 +1086,143 @@ class ChainValidatorTest {
         return buildNameConstraintsExtension(ps, null, true);
     }
 
+    /** Сборка NameConstraints: только permitted rfc822Name. */
+    private static byte[] buildNcPermittedRfc822(String... names) {
+        byte[][] subs = new byte[names.length][];
+        for (int i = 0; i < names.length; i++) {
+            byte[] base = DerCodec.encodeTlv(0x81, names[i].getBytes(StandardCharsets.US_ASCII));
+            subs[i] = generalSubtreeNc(base, null, null);
+        }
+        byte[] gs = generalSubtreesNc(subs);
+        byte[] ps = DerCodec.encodeContextConstructed(0, gs);
+        return buildNameConstraintsExtension(ps, null, true);
+    }
+
+    /** Сборка NameConstraints: только permitted URI. */
+    private static byte[] buildNcPermittedUri(String... uris) {
+        byte[][] subs = new byte[uris.length][];
+        for (int i = 0; i < uris.length; i++) {
+            byte[] base = DerCodec.encodeTlv(0x86, uris[i].getBytes(StandardCharsets.US_ASCII));
+            subs[i] = generalSubtreeNc(base, null, null);
+        }
+        byte[] gs = generalSubtreesNc(subs);
+        byte[] ps = DerCodec.encodeContextConstructed(0, gs);
+        return buildNameConstraintsExtension(ps, null, true);
+    }
+
+    /**
+     * Сборка NameConstraints с otherName-записью (тег 0xA0) —
+     * парсер не распознаёт otherName и ставит hasUnsupportedNameType=true.
+     */
+    private static byte[] buildNcWithOtherName() {
+        byte[] otherBase = DerCodec.encodeTlv(0xA0, new byte[] {0x06, 0x00});
+        byte[] sub = generalSubtreeNc(otherBase, null, null);
+        byte[] gs = generalSubtreesNc(sub);
+        byte[] ps = DerCodec.encodeContextConstructed(0, gs);
+        return buildNameConstraintsExtension(ps, null, true);
+    }
+
+    /**
+     * Сборка NameConstraints с rfc822Name исключением в mailbox-форме
+     * (содержит '@') — парсер должен взвести hasUnsupportedRfc822Form.
+     */
+    private static byte[] buildNcWithMailboxExcluded(String email) {
+        byte[] base = DerCodec.encodeTlv(0x81, email.getBytes(StandardCharsets.US_ASCII));
+        byte[] sub = generalSubtreeNc(base, null, null);
+        byte[] gs = generalSubtreesNc(sub);
+        byte[] es = DerCodec.encodeContextConstructed(1, gs);
+        return buildNameConstraintsExtension(null, es, true);
+    }
+
+    /**
+     * Создаёт leaf с rfc822Name в SAN.
+     */
+    private static CertBundle createLeafWithRfc822(CertBundle issuer, String... emails)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Leaf RFC822");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .sanRfc822Name(emails)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                subjectDn);
+    }
+
+    /**
+     * Создаёт leaf с URI в SAN.
+     */
+    private static CertBundle createLeafWithUri(CertBundle issuer, String... uris)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Leaf URI");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .sanUri(uris)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                subjectDn);
+    }
+
+    /**
+     * Создаёт leaf с otherName (UPN) в SAN.
+     */
+    private static CertBundle createLeafWithUpn(CertBundle issuer, String upn) throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Leaf UPN");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .sanUpn(upn)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                subjectDn);
+    }
+
     /** GeneralSubtree SEQUENCE. */
     private static byte[] generalSubtreeNc(byte[] base, Integer min, Integer max) {
         java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
@@ -1000,7 +1290,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 subjectDn);
     }
 
@@ -1029,7 +1319,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate())),
                 dn);
     }
 
@@ -1064,7 +1354,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 subjectDn);
     }
 
@@ -1092,7 +1382,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate())),
                 dn);
     }
 
@@ -1122,7 +1412,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 subjectDn);
     }
 
@@ -1151,7 +1441,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 issuer.dn);
     }
 
@@ -1177,7 +1467,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 subjectDn);
     }
 
@@ -1208,7 +1498,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 subjectDn);
     }
 
@@ -1230,7 +1520,7 @@ class ChainValidatorTest {
 
     /**
      * Порча внешнего AlgorithmIdentifier сертификата — внутренний (в TBS) и внешний
-     * перестают совпадать → isAlgConsistent() == false.
+     * перестают совпадать -> isAlgConsistent() == false.
      * <p>
      * Ищет второе вхождение байт AlgorithmIdentifier в DER (первое — внутри TBS,
      * второе — внешний AlgId) и портит байт в OID внешнего.
@@ -1286,7 +1576,7 @@ class ChainValidatorTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 subjectDn);
     }
 

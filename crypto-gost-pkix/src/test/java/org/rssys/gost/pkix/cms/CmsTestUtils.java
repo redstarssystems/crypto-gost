@@ -80,7 +80,8 @@ public final class CmsTestUtils {
                 .notAfter("360101000000Z")
                 .basicConstraints(false, null)
                 .extendedKeyUsage(GostOids.EXT_TIME_STAMPING)
-                .assembleCert(privKey);
+                .randomSerial()
+                .sign(privKey);
     }
 
     /**
@@ -115,7 +116,7 @@ public final class CmsTestUtils {
         byte[] serialEnc = DerCodec.encodeInteger(serial);
         byte[] sigAlg =
                 CmsAlgorithmIdentifier.encode(
-                        is512 ? GostOids.SIGN_ALG_512 : GostOids.SIGN_ALG_256);
+                        is512 ? GostOids.SIGN_WITH_DIGEST_512 : GostOids.SIGN_WITH_DIGEST_256);
         byte[] notBefore = DerCodec.encodeTlv(DerCodec.TAG_UTC_TIME, "260101000000Z".getBytes());
         byte[] notAfter = DerCodec.encodeTlv(DerCodec.TAG_UTC_TIME, "360101000000Z".getBytes());
         byte[] validity = DerCodec.encodeSequence(notBefore, notAfter);

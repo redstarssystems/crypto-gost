@@ -1,6 +1,9 @@
 package org.rssys.gost.pkix.tsp;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -86,5 +89,70 @@ class TspRequestBuilderTest {
         CryptoRandom.INSTANCE.nextBytes(hash);
         byte[] req = TspRequestBuilder.create().messageImprint(hash, GostOids.DIGEST_512).build();
         assertTrue(req.length > 0);
+    }
+
+    @Test
+    @DisplayName("Повторный build() на одном билдере даёт разные nonce (anti-replay)")
+    void nonceDiffersBetweenBuildsOnSameBuilder() {
+        byte[] hash = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(hash);
+        TspRequestBuilder builder =
+                TspRequestBuilder.create().messageImprint(hash, GostOids.DIGEST_256);
+
+        builder.build();
+        BigInteger first = builder.getNonce();
+        builder.build();
+        BigInteger second = builder.getNonce();
+
+        assertNotNull(first, "nonce первой сборки не null");
+        assertNotNull(second, "nonce второй сборки не null");
+        assertNotEquals(
+                first,
+                second,
+                "два build() на одном билдере не должны переиспользовать nonce (защита от replay)");
+    }
+
+    @Test
+    @DisplayName("getNonce() до build() бросает IllegalStateException")
+    void getNonceBeforeBuildThrows() {
+        byte[] hash = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(hash);
+        TspRequestBuilder builder =
+                TspRequestBuilder.create().messageImprint(hash, GostOids.DIGEST_256);
+        assertThrows(
+                IllegalStateException.class,
+                builder::getNonce,
+                "getNonce() до build() должен бросать исключение (нет pre-build peek)");
+    }
+
+    @Test
+    @DisplayName("Явно заданный nonce переиспользуется между build() намеренно")
+    void explicitNoncePreservedAcrossBuilds() {
+        byte[] hash = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(hash);
+        BigInteger explicit = BigInteger.valueOf(424242);
+        TspRequestBuilder builder =
+                TspRequestBuilder.create()
+                        .messageImprint(hash, GostOids.DIGEST_256)
+                        .nonce(explicit);
+
+        builder.build();
+        assertEquals(explicit, builder.getNonce(), "явный nonce сохраняется после build()");
+        builder.build();
+        assertEquals(
+                explicit,
+                builder.getNonce(),
+                "явный nonce не регенерируется — это осознанный выбор вызывающего");
+    }
+
+    @Test
+    @DisplayName("Opt-out nonce(null): getNonce() после build() возвращает null")
+    void optOutNonceReturnsNull() {
+        byte[] hash = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(hash);
+        TspRequestBuilder builder =
+                TspRequestBuilder.create().messageImprint(hash, GostOids.DIGEST_256).nonce(null);
+        builder.build();
+        assertNull(builder.getNonce(), "явный opt-out nonce(null) -> getNonce() возвращает null");
     }
 }

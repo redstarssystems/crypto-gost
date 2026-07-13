@@ -6,6 +6,7 @@ import static org.rssys.gost.pkix.cert.GostDerParser.*;
 import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
@@ -27,10 +28,7 @@ class GostOcspResponseBuilderTest {
         byte[] serialNumber = new byte[] {0x01};
 
         byte[] ocspDer =
-                GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
-                        .issuerDn(caDn)
-                        .build();
+                GostOcspResponseBuilder.create(serialNumber).issuerDn(caDn).sign(kp.getPrivate());
 
         assertNotNull(ocspDer);
         assertTrue(ocspDer.length > 100);
@@ -48,10 +46,7 @@ class GostOcspResponseBuilderTest {
         byte[] serialNumber = new byte[] {0x01};
 
         byte[] ocspDer =
-                GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
-                        .issuerDn(caDn)
-                        .build();
+                GostOcspResponseBuilder.create(serialNumber).issuerDn(caDn).sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -67,10 +62,7 @@ class GostOcspResponseBuilderTest {
         byte[] serialNumber = new byte[] {0x01};
 
         byte[] ocspDer =
-                GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
-                        .issuerDn(caDn)
-                        .build();
+                GostOcspResponseBuilder.create(serialNumber).issuerDn(caDn).sign(kp.getPrivate());
 
         assertNotNull(ocspDer);
         OcspVerifier.verify(ocspDer, serialNumber, kp.getPublic());
@@ -132,7 +124,7 @@ class GostOcspResponseBuilderTest {
 
     private static byte[] buildDummyOcspResponse() throws Exception {
         byte[] tbs = new byte[] {0x30, 0x03, 0x02, 0x01, 0x00};
-        byte[] sigAlg = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_ALG_256));
+        byte[] sigAlg = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_WITH_DIGEST_256));
         byte[] sig = DerCodec.encodeBitString(new byte[64]);
         byte[] basicOcsp = DerCodec.encodeSequence(tbs, sigAlg, sig);
         byte[] basicOctet = DerCodec.encodeOctetString(basicOcsp);
@@ -159,19 +151,19 @@ class GostOcspResponseBuilderTest {
                         .notBefore("20240501120000Z")
                         .notAfter("21060101120000Z")
                         .issuerDn(caDn)
+                        .randomSerial()
                         .buildTbs();
         GostCertificate delCert =
-                GostCertificateBuilder.assembleCert(delTbs, caKp.getPrivate(), params);
+                GostCertificateBuilder.sign(delTbs, GostSigner.of(caKp.getPrivate()));
         byte[][] delegatedCerts = new byte[][] {delCert.getEncoded()};
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(delKp.getPrivate(), delKp.getPublic())
                         .caPublicKey(caKp.getPublic())
                         .issuerDn(caDn)
                         .nextUpdate("21010101000000Z")
                         .withDelegatedCerts(delegatedCerts)
-                        .build();
+                        .sign(delKp.getPrivate());
 
         assertNotNull(ocspDer);
 
@@ -198,10 +190,9 @@ class GostOcspResponseBuilderTest {
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
                         .issuerDn(caDn)
                         .nonce(nonce)
-                        .build();
+                        .sign(kp.getPrivate());
 
         // Навигация DER: OCSPResponse -> responseBytes [0] -> OID -> OCTET STRING
         // -> BasicOCSPResponse -> tbsResponseData -> ... -> responses -> responseExtensions [1]
@@ -264,10 +255,9 @@ class GostOcspResponseBuilderTest {
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
                         .issuerDn(caDn)
                         .nonce(nonce)
-                        .build();
+                        .sign(kp.getPrivate());
 
         // strict=true — nonce должен совпадать
         OcspVerifier.verify(ocspDer, serialNumber, kp.getPublic(), caDn, null, nonce);
@@ -294,10 +284,9 @@ class GostOcspResponseBuilderTest {
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
                         .issuerDn(caDn)
                         .revoked("20260101000000Z")
-                        .build();
+                        .sign(kp.getPrivate());
 
         PkixException ex =
                 assertThrows(
@@ -324,13 +313,12 @@ class GostOcspResponseBuilderTest {
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
                         .issuerDn(issuerDn)
                         .caPublicKey(kp.getPublic())
                         .producedAt(now)
                         .thisUpdate(now)
                         .nextUpdate(future)
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertNotNull(ocspDer, "OCSP-ответ должен быть не null");
 
@@ -404,7 +392,7 @@ class GostOcspResponseBuilderTest {
                 DerCodec.encodeContextConstructed(1, DerCodec.encodeSequence(new byte[0]));
         byte[] tbsResponseData = DerCodec.encodeSequence(responderId, time, responses);
 
-        byte[] sigAlg = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_ALG_256));
+        byte[] sigAlg = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_WITH_DIGEST_256));
         byte[] sig = DerCodec.encodeBitString(new byte[64]);
         byte[] basicOcsp = DerCodec.encodeSequence(tbsResponseData, sigAlg, sig);
         byte[] basicOctet = DerCodec.encodeOctetString(basicOcsp);
@@ -434,10 +422,9 @@ class GostOcspResponseBuilderTest {
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
                         .issuerDn(caDn)
                         .withResponderByKey()
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertNotNull(ocspDer);
 
@@ -466,10 +453,9 @@ class GostOcspResponseBuilderTest {
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(kp.getPrivate(), kp.getPublic())
                         .issuerDn(caDn)
                         .withResponderByKey(GostOids.STREEBOG_512_HASH_LEN)
-                        .build();
+                        .sign(kp.getPrivate());
 
         GostOcspResponse parsed = GostOcspResponse.fromDer(ocspDer);
         assertEquals(GostOcspResponse.ResponderIdType.BY_KEY, parsed.getResponderIdType());
@@ -484,7 +470,8 @@ class GostOcspResponseBuilderTest {
                         .publicKey(kp.getPublic())
                         .notBefore("20240101000000Z")
                         .notAfter("21060101000000Z")
-                        .assembleCert(kp.getPrivate());
+                        .randomSerial()
+                        .sign(kp.getPrivate());
         OcspVerifier.verify(ocspDer, serialNumber, caCert);
     }
 
@@ -498,7 +485,6 @@ class GostOcspResponseBuilderTest {
                 IllegalArgumentException.class,
                 () ->
                         GostOcspResponseBuilder.create(new byte[] {0x01})
-                                .signer(kp.getPrivate(), kp.getPublic())
                                 .issuerDn("CN=Test")
                                 .withResponderByKey(20));
     }
@@ -514,10 +500,9 @@ class GostOcspResponseBuilderTest {
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(goodKp.getPrivate(), goodKp.getPublic())
                         .issuerDn(caDn)
                         .withResponderByKey()
-                        .build();
+                        .sign(goodKp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -553,12 +538,11 @@ class GostOcspResponseBuilderTest {
 
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(responder.priv, responder.cert.getPublicKey())
                         .caPublicKey(ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
                         .withDelegatedCerts(responder.cert.getEncoded())
                         .withResponderByKey()
-                        .build();
+                        .sign(responder.priv);
 
         GostOcspResponse parsed = GostOcspResponse.fromDer(ocspDer);
         assertEquals(GostOcspResponse.ResponderIdType.BY_KEY, parsed.getResponderIdType());
@@ -599,10 +583,9 @@ class GostOcspResponseBuilderTest {
         // byName (default) — обратная совместимость
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(serialNumber)
-                        .signer(responder.priv, responder.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
                         .withDelegatedCerts(responder.cert.getEncoded())
-                        .build();
+                        .sign(responder.priv);
 
         GostOcspResponse parsed = GostOcspResponse.fromDer(ocspDer);
         assertEquals(

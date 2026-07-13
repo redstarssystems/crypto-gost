@@ -3,7 +3,7 @@ package org.rssys.gost.pkix.cert;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
-import org.rssys.gost.api.Signature;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -57,7 +57,8 @@ public final class GostOcspRequestBuilder {
     private byte[] pendingTargetCert;
     private int hashLen = GostOids.STREEBOG_256_HASH_LEN;
     private boolean hashLenSet;
-    private PrivateKeyParameters signKey;
+    private GostSigner signer;
+    private boolean signerFromGostSignerApi;
     private ECParameters params;
     private byte[] generatedNonce;
 
@@ -118,12 +119,29 @@ public final class GostOcspRequestBuilder {
      * При задании {@code signKey} поле {@code params} обязательно.
      */
     public GostOcspRequestBuilder signKey(PrivateKeyParameters key) {
-        this.signKey = key;
+        this.signer = GostSigner.of(key);
+        this.signerFromGostSignerApi = false;
         return this;
     }
 
     /**
-     * Параметры эллиптической кривой для подписи (обязательно при {@link #signKey}).
+     * Подписант запроса (может быть HSM-адаптером).
+     *
+     * <p>Параметры кривой и {@code hlen} неявно определяются подписантом
+     * ({@link GostSigner#getParams()}). Вызов {@link #params(ECParameters)}
+     * вместе с этим методом запрещён — {@link #build()} бросит
+     * {@link IllegalStateException}.
+     *
+     * <p>Если подпись не нужна — не вызывайте этот метод; запрос будет без подписи.
+     */
+    public GostOcspRequestBuilder signKey(GostSigner signer) {
+        this.signer = signer;
+        this.signerFromGostSignerApi = true;
+        return this;
+    }
+
+    /**
+     * Параметры эллиптической кривой для подписи (обязательно при {@link #signKey(PrivateKeyParameters)}).
      */
     public GostOcspRequestBuilder params(ECParameters params) {
         this.params = params;
@@ -164,10 +182,12 @@ public final class GostOcspRequestBuilder {
             TbsRequestData data = buildTbsRequestData(certPairs, certIdHashLen, generatedNonce);
             byte[] tbsDer = data.tbsDer();
 
-            if (signKey != null) {
-                return buildSignedRequest(tbsDer, signKey, params);
+            if (signer != null) {
+                return buildSignedRequest(tbsDer, signer);
             }
             return DerCodec.encodeSequence(tbsDer);
+        } catch (RuntimeException e) {
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException("Failed to build OCSPRequest", e);
         }
@@ -177,15 +197,30 @@ public final class GostOcspRequestBuilder {
      * Определяет длину хэша CertID с учётом валидации.
      */
     private int resolveCertIdHashLen() {
-        if (signKey != null) {
-            if (params == null) {
-                throw new IllegalStateException("params must be set when signKey is provided");
+        if (signer != null) {
+            ECParameters effectiveParams;
+            if (signerFromGostSignerApi) {
+                if (params != null) {
+                    throw new IllegalStateException(
+                            "params() must not be called together with signKey(GostSigner);"
+                                    + " params are derived from GostSigner.getParams()");
+                }
+                effectiveParams = signer.getParams();
+            } else {
+                if (params == null) {
+                    throw new IllegalStateException("params must be set when signKey is provided");
+                }
+                effectiveParams = params;
             }
-            if (hashLenSet && hashLen != params.hlen) {
+            if (hashLenSet && hashLen != effectiveParams.hlen) {
                 throw new IllegalStateException(
-                        "hashLen (" + hashLen + ") must match params.hlen (" + params.hlen + ")");
+                        "hashLen ("
+                                + hashLen
+                                + ") must match params.hlen ("
+                                + effectiveParams.hlen
+                                + ")");
             }
-            return params.hlen;
+            return effectiveParams.hlen;
         }
         return hashLen;
     }
@@ -272,14 +307,13 @@ public final class GostOcspRequestBuilder {
     /**
      * Строит запрос с подписью (RFC 9215 §4.2).
      */
-    private static byte[] buildSignedRequest(
-            byte[] tbsDer, PrivateKeyParameters signKey, ECParameters params) {
-        int hlen = params.hlen;
+    private static byte[] buildSignedRequest(byte[] tbsDer, GostSigner signer) {
+        int hlen = signer.getParams().hlen;
 
         byte[] hash = GostSignatureHelper.doHash(tbsDer, hlen);
-        byte[] sig = Signature.signHash(hash, signKey);
+        byte[] sig = GostSignatureHelper.signHashChecked(hash, signer);
 
-        byte[] sigAlg = GostSignatureHelper.buildAlgId(params);
+        byte[] sigAlg = GostSignatureHelper.buildAlgId(signer.getParams());
         byte[] signature = DerCodec.encodeSequence(sigAlg, DerCodec.encodeBitString(sig));
         byte[] optSig = DerCodec.encodeContextConstructed(0, signature);
         return DerCodec.encodeSequence(tbsDer, optSig);

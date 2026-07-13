@@ -34,7 +34,8 @@ class GostOcspRequestBuilderTest {
                         .notAfter("20351231235959Z")
                         .basicConstraints(true, null)
                         .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN)
-                        .assembleCert(caKp.getPrivate());
+                        .randomSerial()
+                        .sign(caKp.getPrivate());
 
         GostCertificate leaf =
                 GostCertificateBuilder.create(params, leafDn)
@@ -43,7 +44,8 @@ class GostOcspRequestBuilderTest {
                         .notBefore("20250101000000Z")
                         .notAfter("20261231235959Z")
                         .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                        .assembleCert(caKp.getPrivate());
+                        .randomSerial()
+                        .sign(caKp.getPrivate());
 
         return new CertPair(ca, leaf);
     }

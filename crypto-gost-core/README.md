@@ -26,8 +26,9 @@
 - **ECDH (ГОСТ Р 34.10-2012)** — сырой общий секрет (X-координата
   точки), для протокольных реализаций (TLS 1.3), RFC 9367 §6.1.1.
 
-- **VKO\_GOSTR3410\_2012\_256** — согласование ключей с UKM и
-  хэшированием Стрибог-256, RFC 7836 §4.3.1.
+- **VKO\_GOSTR3410\_2012\_256/512** — согласование ключей с UKM и
+  хэшированием Стрибог (256 или 512 бит в зависимости от кривой), RFC
+  7836 §4.3.1.
 
 - **KExp15/KImp15** — экспорт и импорт ключей на шифре Кузнечик
   (MAC-then-Encrypt), RFC 9189 §8.2.1.
@@ -1345,6 +1346,67 @@ sign/verify.**
 - `verify(data, sig)` и `verifyHash(hash, sig)` принимают подписи,
   созданные как через `sign`, так и через `signHash`.
 
+### Абстракция подписанта — `GostSigner` (HSM/PKCS#11)
+
+`GostSigner` (пакет `org.rssys.gost.api`) отделяет операцию подписи от
+материала закрытого ключа. Это позволяет подписывать внутри аппаратного
+модуля (HSM, PKCS#11, внешний CSP), не извлекая закрытый ключ в память
+JVM: потребитель отдаёт хэш, получает готовую подпись. Интерфейс
+используется X.509-строителями модуля `crypto-gost-pkix`
+(`GostCertificateBuilder`, `GostCrlBuilder`, `GostCsrBuilder`).
+
+Интерфейс содержит три метода:
+
+- `byte[] signHash(byte[] hash)` — подпись готового хэша, результат в
+  формате `s ∥ r` big-endian (как `Signature.signHash`);
+
+- `ECParameters getParams()` — параметры кривой (нужны для выбора длины
+  хэша и построения AlgorithmIdentifier);
+
+- `PublicKeyParameters getPublicKey()` — открытый ключ подписанта (для
+  self-verify).
+
+Для сценариев без HSM используйте `GostSigner.of(priv)` — тонкий мост
+поверх ключа в памяти. Открытый ключ выводится немедленно (Q = d·G) в
+момент вызова `of()`.
+
+Дефолтный подписант поверх ключа в памяти
+
+    import org.rssys.gost.api.GostSigner;
+    import org.rssys.gost.api.KeyGenerator;
+    import org.rssys.gost.api.KeyPair;
+    import org.rssys.gost.signature.ECParameters;
+    KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
+    GostSigner signer = GostSigner.of(pair.getPrivate());
+    byte[] hash = Digest.digest256(data);
+    byte[] signature = signer.signHash(hash); // 64 байта
+    boolean ok = Signature.verifyHash(hash, signature, signer.getPublicKey());
+
+Собственная реализация поверх внешнего модуля (HSM)
+
+    final class Pkcs11Signer implements GostSigner {
+        // ... ссылка на сессию/слот PKCS#11 ...
+        public byte[] signHash(byte[] hash) {
+            // вызов C_Sign внутри HSM; закрытый ключ не покидает модуль.
+            // Результат — подпись ГОСТ Р 34.10 в формате s ∥ r big-endian.
+            return hsmSignGost(hash);
+        }
+        public ECParameters getParams()      { return ECParameters.tc26a256(); }
+        public PublicKeyParameters getPublicKey() { return hsmPublicKey(); }
+    }
+
+X.509-строители после подписи выполняют **fail-closed**-проверку: длина
+подписи и self-verify открытым ключом подписанта. Это ловит неисправный
+HSM-адаптер, вернувший усечённый буфер или подпись не тем ключом, чем
+заявлено (например, неверно сконфигурированный слот). Self-verify
+подтверждает лишь **внутреннюю самосогласованность** подписанта — он не
+гарантирует, что это правильный ключ издателя (подключение к чужому
+слоту библиотека обнаружить не может, это ответственность оператора).
+
+Реализация `GostSigner` сама отвечает за потокобезопасность — библиотека
+не сериализует вызовы. PKCS#11-сессии часто требуют отдельной сессии на
+поток или явной синхронизации.
+
 ### JCA (org.rssys.gost.jca)
 
 Генерация ключевой пары, подпись и верификация
@@ -1576,7 +1638,6 @@ VKO + KDF вырабатывают сессионные ключи — то ес
     import org.rssys.gost.api.KeyPair;
     import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
     import org.rssys.gost.signature.ECParameters;
-    import org.rssys.gost.jca.spec.GostUkmParameterSpec;
     import java.math.BigInteger;
     import org.rssys.gost.util.CryptoRandom;
     import java.util.Arrays;

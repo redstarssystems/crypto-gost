@@ -26,10 +26,11 @@ public final class CertChainBuilder {
      * <p>Алгоритм:
      * <ol>
      *   <li>Начать с {@code leaf}</li>
-     *   <li>Для каждого сертификата найти issuer по совпадению
+     *   <li>Собрать всех кандидатов-issuer по совпадению
      *       {@link GostCertificate#getIssuerDnBytes()} → {@link GostCertificate#getSubjectDnBytes()}
      *       в {@code pool}, затем в {@code trustedRoots}</li>
-     *   <li>На каждом шаге проверять подпись: {@code current.verifySignature(issuer.getPublicKey())}</li>
+     *   <li>Выбрать issuer среди кандидатов (приоритет по AKI/SKI, см. ниже), проверяя
+     *       подпись {@code current.verifySignature(issuer.getPublicKey())}</li>
      *   <li>Остановиться на self-signed или последнем из {@code trustedRoots}</li>
      * </ol>
      *
@@ -39,13 +40,18 @@ public final class CertChainBuilder {
      *   <li>лимит глубины {@link CmsConstants#MAX_CERT_CHAIN_LENGTH} — жёсткий потолок</li>
      * </ul>
      *
-     * <p>Если в pool несколько сертификатов с одинаковым subject DN (перевыпуск),
-     * берётся первый. При коллизии DN, если первый найденный кандидат не проходит
-     * проверку подписи, остальные кандидаты с тем же DN не пробуются — верификация
-     * завершается ошибкой {@link PkixException.Reason#SIGNATURE_INVALID}.
-     * В легитимном сценарии ротации ключей CA это может дать ложноотрицательный
-     * результат. Полноценная поддержка (приоритизация по AKI/SKI) —
-     * предмет будущего улучшения.
+     * <p>Если в pool/trustedRoots несколько сертификатов с одинаковым subject DN
+     * (ротация ключей CA), кандидаты приоритизируются по совпадению их SKI с AKI
+     * подписываемого сертификата (RFC 5280 §4.2.1.1), затем пробуются остальные с тем
+     * же DN — до первого, чью подпись удаётся проверить.
+     * {@link PkixException.Reason#SIGNATURE_INVALID} бросается только если ни один
+     * кандидат уровня не подошёл.
+     *
+     * <p><b>Ограничение (non-goal):</b> это не полный backtracking по нескольким путям.
+     * Если кандидат проходит проверку подписи, но выше по цепочке упирается в
+     * {@link PkixException.Reason#INCOMPLETE_CHAIN}, альтернативный кандидат того же
+     * уровня, ведущий к доверенному корню, не пробуется. Разрешается только коллизия
+     * Subject DN на одном уровне.
      *
      * @param leaf         листовой сертификат (подписант)
      * @param pool         промежуточные сертификаты из SignedData.certificates
@@ -82,24 +88,27 @@ public final class CertChainBuilder {
             }
 
             byte[] issuerDn = current.getIssuerDnBytes();
-            GostCertificate issuer = findBySubjectDn(issuerDn, pool);
-            if (issuer == null) {
-                issuer = findBySubjectDn(issuerDn, trustedRoots);
-            }
-            if (issuer == null) {
-                throw new PkixException(
-                        PkixException.Reason.INCOMPLETE_CHAIN,
-                        "Certificate chain: issuer not found in certificates pool or trusted roots");
-            }
 
-            ByteBuffer issuerSubjectWrap = ByteBuffer.wrap(issuer.getSubjectDnBytes());
-            if (!visited.add(issuerSubjectWrap)) {
+            // Loop-detection — один раз на уровень глубины (по issuer subject DN),
+            // до перебора кандидатов с этим DN. Все кандидаты уровня имеют один subject DN
+            // (== issuerDn по построению collectBySubjectDn), поэтому если оставить проверку
+            // внутри retry-цикла, второй кандидат при коллизии DN дал бы visited.add()==false
+            // и CHAIN_LOOP вместо честной попытки — ровно в сценарии ротации ключей CA.
+            if (!visited.add(ByteBuffer.wrap(issuerDn))) {
                 throw new PkixException(
                         PkixException.Reason.CHAIN_LOOP,
                         "Certificate chain: loop detected — duplicate subject DN");
             }
 
-            if (!current.verifySignature(issuer.getPublicKey())) {
+            List<GostCertificate> candidates = collectBySubjectDn(issuerDn, pool, trustedRoots);
+            if (candidates.isEmpty()) {
+                throw new PkixException(
+                        PkixException.Reason.INCOMPLETE_CHAIN,
+                        "Certificate chain: issuer not found in certificates pool or trusted roots");
+            }
+
+            GostCertificate issuer = selectIssuer(current, candidates);
+            if (issuer == null) {
                 throw new PkixException(
                         PkixException.Reason.SIGNATURE_INVALID,
                         "Certificate chain: signature verification failed for issuer");
@@ -122,13 +131,62 @@ public final class CertChainBuilder {
         return chain;
     }
 
-    private static GostCertificate findBySubjectDn(
-            byte[] subjectDnBytes, List<GostCertificate> certs) {
+    private static List<GostCertificate> collectBySubjectDn(
+            byte[] subjectDnBytes, List<GostCertificate> pool, List<GostCertificate> trustedRoots) {
+        // pool раньше trustedRoots: промежуточные предпочтительнее для построения пути,
+        // корень сверяется отдельно (trustedRoots.contains по полному DER) в конце.
+        List<GostCertificate> result = new ArrayList<>();
+        collectInto(subjectDnBytes, pool, result);
+        collectInto(subjectDnBytes, trustedRoots, result);
+        return result;
+    }
+
+    private static void collectInto(
+            byte[] subjectDnBytes, List<GostCertificate> certs, List<GostCertificate> out) {
         for (GostCertificate c : certs) {
             if (Arrays.equals(c.getSubjectDnBytes(), subjectDnBytes)) {
+                out.add(c);
+            }
+        }
+    }
+
+    /**
+     * Выбирает issuer из кандидатов одного subject DN: сперва по совпадению SKI кандидата
+     * с AKI подписываемого сертификата, затем перебором остальных, до первого, чья подпись
+     * проверяется. Возвращает {@code null}, если ни один кандидат не подошёл.
+     */
+    private static GostCertificate selectIssuer(
+            GostCertificate current, List<GostCertificate> candidates) {
+        for (GostCertificate c : orderByAkiSki(current, candidates)) {
+            if (current.verifySignature(c.getPublicKey())) {
                 return c;
             }
         }
         return null;
+    }
+
+    /**
+     * Ставит вперёд кандидатов, чей SKI совпадает с AKI подписываемого сертификата
+     * (RFC 5280 §4.2.1.1): при ротации ключей CA с одинаковым Subject DN это указывает
+     * на правильный ключ. Если AKI отсутствует или кандидат один — порядок не меняется.
+     */
+    private static List<GostCertificate> orderByAkiSki(
+            GostCertificate current, List<GostCertificate> candidates) {
+        byte[] aki = current.getAuthorityKeyIdentifier();
+        if (aki == null || candidates.size() == 1) {
+            return candidates;
+        }
+        List<GostCertificate> matched = new ArrayList<>(candidates.size());
+        List<GostCertificate> rest = new ArrayList<>(candidates.size());
+        for (GostCertificate c : candidates) {
+            byte[] ski = c.getSubjectKeyIdentifier();
+            if (ski != null && Arrays.equals(ski, aki)) {
+                matched.add(c);
+            } else {
+                rest.add(c);
+            }
+        }
+        matched.addAll(rest);
+        return matched;
     }
 }

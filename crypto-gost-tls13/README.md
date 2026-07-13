@@ -19,7 +19,8 @@ RFC 9367) с ГОСТ-криптографией:
 
     - **Cipher suites**: `TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`.
 
-    - **ECDHE**: CryptoPro-A (256-bit), CryptoPro-B (512-bit)
+    - **ECDHE**: GC256A/B/C/D (256-bit), GC512A/B/C (512-bit) — 7
+      именованных групп по RFC 9367 §3.1
 
     - **Per-record TLSTREE re-keying** — смена ключа шифрования на
       каждую TLS-запись.
@@ -266,6 +267,11 @@ RFC 9367) с ГОСТ-криптографией:
                 return null; // fallback на default-сертификат
             }), transport);
 
+Реализация `SniCertificateSelector` MUST быть thread-safe (может
+вызываться конкурентно из разных handshake-потоков). Лямбда с захватом
+локальных переменных без дополнительной синхронизации — только для
+однопоточных сценариев.
+
 ## Клиентская сессия (анонимная)
 
 Анонимный клиент (без сертификата, без валидации сервера) использует
@@ -490,7 +496,8 @@ handshake. Поддерживаются значения 512, 1024, 2048, 4096 (
     };
 
     TlsSession client = TlsSession.createClient(
-            new TlsClientConfig(ciphersuite)
+            new TlsClientConfig(ciphersuite, caPublicKey)
+                    .withServerHostname("gost.example.com")
                     .withClientCertificateSelector(selector),
             transport);
     client.handshakeAsClient();

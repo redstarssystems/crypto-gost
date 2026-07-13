@@ -39,9 +39,9 @@ class GostPkcs7Test {
         KeyPair crlKp = KeyGenerator.generateKeyPair(PARAMS);
         byte[] crlIssuerDn = GostDnParser.encodeDn("CN=Test CRL Issuer");
         byte[] crlDer =
-                GostCrlBuilder.create(crlKp.getPrivate(), crlIssuerDn)
+                GostCrlBuilder.create(crlIssuerDn)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(crlKp.getPrivate());
         testCrl = GostCrl.fromDer(crlDer);
     }
 

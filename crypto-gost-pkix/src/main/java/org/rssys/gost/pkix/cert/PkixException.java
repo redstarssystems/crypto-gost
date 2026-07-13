@@ -27,6 +27,7 @@ public class PkixException extends Exception {
         PARSE_ERROR,
         THIS_UPDATE_FUTURE,
         IDP_NOT_SUPPORTED,
+        DELTA_CRL_NOT_SUPPORTED,
         REVOKED,
         INCOMPLETE_CHAIN,
         CHAIN_LOOP,

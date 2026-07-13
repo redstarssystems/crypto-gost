@@ -36,7 +36,7 @@ public final class GenerateCsrWithKey {
         Files.writeString(privFile, privPem);
         System.out.println("Private key: " + privFile.toAbsolutePath().normalize());
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(privKey, pubKey, subjectDn);
+        byte[] csrDer = GostCsrBuilder.create(subjectDn, pubKey).sign(privKey);
 
         String csrPem =
                 "-----BEGIN CERTIFICATE REQUEST-----\n"

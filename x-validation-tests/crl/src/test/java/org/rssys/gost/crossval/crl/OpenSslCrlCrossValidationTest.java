@@ -1,5 +1,6 @@
 package org.rssys.gost.crossval.crl;
 
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.stream.Stream;
@@ -60,7 +61,8 @@ class OpenSslCrlCrossValidationTest {
                 .notAfter("20351231235959Z")
                 .basicConstraints(true, null)
                 .keyUsage(KeyUsage.KEY_CERT_SIGN, KeyUsage.CRL_SIGN)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.ONE)
+                .sign(caKp.getPrivate());
     }
 
     private static byte[] buildCrl(
@@ -68,7 +70,7 @@ class OpenSslCrlCrossValidationTest {
             byte[] issuerDnDer,
             byte[][] revokedSerials, String[] revocationDates,
             String thisUpdate, String nextUpdate) {
-        GostCrlBuilder builder = GostCrlBuilder.create(caPriv, issuerDnDer)
+        GostCrlBuilder builder = GostCrlBuilder.create(issuerDnDer)
                 .thisUpdate(thisUpdate)
                 .nextUpdate(nextUpdate);
         if (revokedSerials != null) {
@@ -76,7 +78,7 @@ class OpenSslCrlCrossValidationTest {
                 builder.addRevoked(revokedSerials[i], revocationDates[i]);
             }
         }
-        return builder.build();
+        return builder.sign(caPriv);
     }
 
     // ========================================================================
@@ -139,7 +141,8 @@ class OpenSslCrlCrossValidationTest {
                     .issuerDn(ca.getSubjectDnBytes())
                     .notBefore("20250101000000Z")
                     .notAfter("20261231235959Z")
-                    .assembleCert(caKp.getPrivate());
+                    .serial(BigInteger.TWO)
+                    .sign(caKp.getPrivate());
 
             byte[] crlDer = buildCrl(caKp.getPrivate(), caKp.getPublic(),
                     ca.getSubjectDnBytes(),
@@ -184,7 +187,7 @@ class OpenSslCrlCrossValidationTest {
             KeyPair caKp = genKey(PARAMS_256);
             GostCertificate ca = buildCa(PARAMS_256, caKp, "CN=Test CA,O=Test");
 
-            byte[] crlDer = GostCrlBuilder.create(caKp.getPrivate(),
+            byte[] crlDer = GostCrlBuilder.create(
                             ca.getSubjectDnBytes())
                     .thisUpdate("20260101000000Z")
                     .nextUpdate("20260701000000Z")
@@ -193,7 +196,7 @@ class OpenSslCrlCrossValidationTest {
                             "20260401120000Z",
                             ReasonCode.KEY_COMPROMISE,
                             null, null))
-                    .build();
+                    .sign(caKp.getPrivate());
             Path crlPath = dir.resolve("crl.der");
             Files.write(crlPath, crlDer);
 
@@ -287,13 +290,13 @@ class OpenSslCrlCrossValidationTest {
             KeyPair caKp = genKey(PARAMS_256);
             GostCertificate ca = buildCa(PARAMS_256, caKp, "CN=Test CA,O=Test");
 
-            byte[] crlDer = GostCrlBuilder.create(caKp.getPrivate(),
+            byte[] crlDer = GostCrlBuilder.create(
                             ca.getSubjectDnBytes())
                     .thisUpdate("20260101000000Z")
                     .nextUpdate("20260701000000Z")
                     .withCrlNumber(2)
                     .withDeltaCrlIndicator(1)
-                    .build();
+                    .sign(caKp.getPrivate());
             Path crlPath = dir.resolve("crl.der");
             Files.write(crlPath, crlDer);
             Path caPath = dir.resolve("ca.der");
@@ -333,13 +336,13 @@ class OpenSslCrlCrossValidationTest {
             GostCertificate ca = buildCa(PARAMS_256, caKp, "CN=Test CA,O=Test");
 
             String deltaUri = "http://ca.example/delta.crl";
-            byte[] crlDer = GostCrlBuilder.create(caKp.getPrivate(),
+            byte[] crlDer = GostCrlBuilder.create(
                             ca.getSubjectDnBytes())
                     .thisUpdate("20260706120000Z")
                     .nextUpdate("20270706120000Z")
                     .withCrlNumber(3)
                     .withFreshestCrl(deltaUri)
-                    .build();
+                    .sign(caKp.getPrivate());
             Path crlPath = dir.resolve("crl.der");
             Files.write(crlPath, crlDer);
             Path caPath = dir.resolve("ca.der");
@@ -396,12 +399,12 @@ class OpenSslCrlCrossValidationTest {
             byte[] caPubPoint = GostDerCodec.subjectPublicKeyPointBytes(caKp.getPublic());
             byte[] caSki = Digest.digest256(caPubPoint);
 
-            byte[] crlDer = GostCrlBuilder.create(caKp.getPrivate(),
+            byte[] crlDer = GostCrlBuilder.create(
                             ca.getSubjectDnBytes())
                     .thisUpdate("20260706120000Z")
                     .nextUpdate("20270706120000Z")
                     .withAki(caSki)
-                    .build();
+                    .sign(caKp.getPrivate());
             Path crlPath = dir.resolve("crl.der");
             Files.write(crlPath, crlDer);
             Path caPath = dir.resolve("ca.der");
@@ -466,14 +469,15 @@ class OpenSslCrlCrossValidationTest {
                             .notBefore("20250101000000Z")
                             .notAfter("20351231235959Z")
                             .keyUsage(KeyUsage.CRL_SIGN)
-                            .assembleCert(caKp.getPrivate());
+                            .serial(BigInteger.valueOf(3))
+                            .sign(caKp.getPrivate());
 
-            byte[] crlDer = GostCrlBuilder.create(signerKp.getPrivate(), issuerDn)
+            byte[] crlDer = GostCrlBuilder.create(issuerDn)
                     .thisUpdate("20260706120000Z")
                     .nextUpdate("20270706120000Z")
                     .withCrlNumber(1)
                     .withAki(signerSki)
-                    .build();
+                    .sign(signerKp.getPrivate());
             Path crlPath = dir.resolve("crl.der");
             Files.write(crlPath, crlDer);
 

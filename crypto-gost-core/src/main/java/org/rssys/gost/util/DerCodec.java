@@ -505,6 +505,107 @@ public final class DerCodec {
         return Arrays.copyOfRange(data, contentOff, contentOff + lenInfo[0]);
     }
 
+    /** Предел вложенности constructed OCTET STRING — защита от переполнения стека на злонамеренном BER. */
+    private static final int MAX_OCTET_STRING_NESTING = 32;
+
+    /**
+     * Собирает содержимое OCTET STRING, допуская BER-кодирования, которые
+     * {@link #parseOctetString} отклоняет. Предназначен для полей вида
+     * {@code [n] IMPLICIT OCTET STRING} (например {@code encryptedContent} в CMS),
+     * где КриптоПРО применяет constructed context-тег с indefinite-length.
+     *
+     * <p>Принимает:
+     * <ul>
+     *   <li>{@code 0x04} — primitive OCTET STRING (только definite-length);</li>
+     *   <li>{@code 0x24} — constructed OCTET STRING (definite или indefinite);</li>
+     *   <li>{@code 0xA0} — constructed context [0] ({@code [0] IMPLICIT} для
+     *       сегментированного OCTET STRING; сегменты внутри — {@code 0x04}/{@code 0x24}).</li>
+     * </ul>
+     * Содержимое всех вложенных сегментов конкатенируется в порядке следования.
+     * Любой иной тег -> {@link IllegalArgumentException} (fail-closed).
+     */
+    public static byte[] collectImplicitOctets(byte[] data, int offset) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        collectImplicitOctets(data, offset, out, 0);
+        return out.toByteArray();
+    }
+
+    private static void collectImplicitOctets(
+            byte[] data, int offset, ByteArrayOutputStream out, int depth) {
+        if (depth > MAX_OCTET_STRING_NESTING) {
+            throw new IllegalArgumentException(
+                    "OCTET STRING nesting exceeds "
+                            + MAX_OCTET_STRING_NESTING
+                            + " at offset "
+                            + offset);
+        }
+        if (offset < 0 || offset >= data.length) {
+            throw new IllegalArgumentException(
+                    "Offset " + offset + " out of bounds (data length " + data.length + ")");
+        }
+        int tag = data[offset] & 0xFF;
+
+        if (tag == TAG_OCTET_STRING) {
+            // primitive: indefinite-length по X.690 недопустима -> decodeDefiniteLength отвергнет
+            int[] lenInfo = decodeDefiniteLength(data, offset + 1, "OCTET STRING");
+            int contentOff = offset + 1 + lenInfo[1];
+            if (contentOff + lenInfo[0] > data.length) {
+                throw new IllegalArgumentException(
+                        "OCTET STRING at offset "
+                                + offset
+                                + ": content length "
+                                + lenInfo[0]
+                                + " out of bounds (data length "
+                                + data.length
+                                + ")");
+            }
+            out.write(data, contentOff, lenInfo[0]);
+            return;
+        }
+
+        if (tag == TAG_OCTET_STRING_CONSTRUCTED || tag == TAG_CTX_CONSTRUCTED_0) {
+            int[] lenInfo = decodeLength(data, offset + 1);
+            int contentOff = offset + 1 + lenInfo[1];
+            int contentEnd;
+            if (lenInfo[0] == INDEFINITE_LENGTH) {
+                contentEnd = findEoc(data, contentOff);
+            } else {
+                contentEnd = contentOff + lenInfo[0];
+                if (contentEnd > data.length) {
+                    throw new IllegalArgumentException(
+                            "Constructed OCTET STRING at offset "
+                                    + offset
+                                    + ": content length "
+                                    + lenInfo[0]
+                                    + " out of bounds (data length "
+                                    + data.length
+                                    + ")");
+                }
+            }
+            int pos = contentOff;
+            while (pos < contentEnd) {
+                int[] childLen = decodeLength(data, pos + 1);
+                int childTotal;
+                if (childLen[0] == INDEFINITE_LENGTH) {
+                    int childEoc = findEoc(data, pos + 1 + childLen[1]);
+                    childTotal = childEoc + 2 - pos; // включая пару байт EOC
+                } else {
+                    childTotal = 1 + childLen[1] + childLen[0];
+                }
+                collectImplicitOctets(data, pos, out, depth + 1);
+                pos += childTotal;
+            }
+            return;
+        }
+
+        throw new IllegalArgumentException(
+                "Unexpected tag 0x"
+                        + Integer.toHexString(tag)
+                        + " at offset "
+                        + offset
+                        + ": expected OCTET STRING (0x04/0x24) or constructed context [0] (0xA0)");
+    }
+
     /** Разбирает OID и возвращает строку вида {@code "1.2.643.7.1.1.1.1"}. */
     public static String parseOid(byte[] data, int offset) {
         checkTag(data, offset, TAG_OID, "OID");

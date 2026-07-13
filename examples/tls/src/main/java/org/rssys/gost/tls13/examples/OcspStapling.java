@@ -49,11 +49,7 @@ public final class OcspStapling {
                         caPriv, serverKp.getPublic(), params, caDn, serverDn, extBuf.toByteArray());
 
         byte[] serialNum = serverCert.getSerialNumber();
-        byte[] ocspDer =
-                GostOcspResponseBuilder.create(serialNum)
-                        .signer(caPriv, caKp.getPublic())
-                        .issuerDn(caDn)
-                        .build();
+        byte[] ocspDer = GostOcspResponseBuilder.create(serialNum).issuerDn(caDn).sign(caPriv);
 
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
         try (InMemoryTlsTransport serverTp = pair.getServerTransport();

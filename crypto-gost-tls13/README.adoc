@@ -14,7 +14,7 @@ toc::[]
 * *SNI (RFC 6066)* — указание имени сервера для multi-tenant развёртываний.
 * *KeyUpdate (RFC 8446 §4.6.3)* — обновление ключей шифрования трафика.
 * *Cipher suites*: `TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`.
-* *ECDHE*: CryptoPro-A (256-bit), CryptoPro-B (512-bit)
+* *ECDHE*: GC256A/B/C/D (256-bit), GC512A/B/C (512-bit) — 7 именованных групп по RFC 9367 §3.1
 * *Per-record TLSTREE re-keying* — смена ключа шифрования на каждую TLS-запись.
 * *Фрагментация и сборка* рукопожатий и записей (RFC 8446 §5.1).
 * *Session resumption*: `PSK` через `NewSessionTicket` (`InMemoryPskStore` in-memory, single-use).
@@ -212,6 +212,10 @@ TlsSession server = TlsSession.createServer(
             return null; // fallback на default-сертификат
         }), transport);
 ----
+
+NOTE: Реализация `SniCertificateSelector` MUST быть thread-safe (может вызываться
+конкурентно из разных handshake-потоков). Лямбда с захватом локальных переменных без
+дополнительной синхронизации — только для однопоточных сценариев.
 
 
 === Клиентская сессия (анонимная)
@@ -448,7 +452,8 @@ ClientCertificateSelector selector = (caDns, oidFilters) -> {
 };
 
 TlsSession client = TlsSession.createClient(
-        new TlsClientConfig(ciphersuite)
+        new TlsClientConfig(ciphersuite, caPublicKey)
+                .withServerHostname("gost.example.com")
                 .withClientCertificateSelector(selector),
         transport);
 client.handshakeAsClient();

@@ -409,7 +409,7 @@ class GostOcspPolicyTest {
 
     /**
      * Строит OCSP-ответ, эхируя nonce из полученного запроса (RFC 8954). Имитирует
-     * реальный responder: без эха nonce fail-closed верификатор (план 185) отклонит ответ.
+     * реальный responder: без эха nonce fail-closed верификатор отклонит ответ.
      *
      * @param requestDer сырой DER OCSP-запроса из мок-сервера
      * @param target     сертификат, чей статус подтверждаем (источник serialNumber)

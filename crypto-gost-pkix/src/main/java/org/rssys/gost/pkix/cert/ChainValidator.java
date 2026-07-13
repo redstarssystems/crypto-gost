@@ -2,6 +2,8 @@ package org.rssys.gost.pkix.cert;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -290,9 +292,12 @@ public final class ChainValidator {
                             + ")");
         }
 
+        int checked = 0;
+        int skipped = 0;
         for (int i = 0; i < n - 1; i++) {
             CertRevocationData rd = revocationData.get(i);
             if (rd == null) {
+                skipped++;
                 LOG.log(
                         Level.WARNING,
                         "No revocation data for cert chain[{0}], serial=0x{1}",
@@ -313,12 +318,18 @@ public final class ChainValidator {
                         issuer.getPublicKey(),
                         cert.getIssuerDnBytes());
             }
+            checked++;
         }
 
+        // Лог различает реально выполненные и пропущенные проверки: при всех null в
+        // revocationData метод вырождается в validateChain без проверки отзыва, и «passed»
+        // без счётчиков вводил бы в заблуждение при аудите логов постфактум.
         LOG.log(
                 Level.DEBUG,
-                "Certificate chain validation with revocation passed (leaf serial=0x{0})",
-                chain.get(0).getSerialNumberBigInt().toString(16));
+                "Certificate chain validation passed (leaf serial=0x{0}); revocation checked={1}, skipped={2}",
+                chain.get(0).getSerialNumberBigInt().toString(16),
+                checked,
+                skipped);
     }
 
     /**
@@ -385,21 +396,26 @@ public final class ChainValidator {
                                         + "]");
                     }
                     if (nc.hasUnsupportedNameType) {
-                        // БЕЗОПАСНОСТЬ: это WARNING, а не reject, только пока
-                        // GostCertificate НЕ экспонирует accessor'ы для
-                        // rfc822Name / URI / otherName из SAN.
-                        // parseSanGeneralNames() извлекает лишь dNSName [2] и
-                        // iPAddress [7]. Если в будущем добавят getSanEmails() /
-                        // getSanUris() / etc. — это место обязано быть
-                        // пересмотрено на предмет enforcement.
+                        // otherName в NameConstraints не поддерживается — правила
+                        // сопоставления для других OID не определены в RFC 5280.
+                        // Реальная проверка enforcement — в checkCertAgainstConstraints(),
+                        // где известен SAN листа: если лист имеет otherName -> REJECT
                         LOG.log(
                                 Level.WARNING,
                                 "Certificate chain: NameConstraints contains unsupported"
-                                        + " GeneralName type at cert["
+                                        + " GeneralName type (otherName) at cert["
                                         + i
                                         + "];"
-                                        + " constraints of this type are ignored"
-                                        + " (leaf SAN does not expose these name forms)");
+                                        + " enforcement depends on leaf SAN content");
+                    }
+                    if (nc.hasUnsupportedRfc822Form) {
+                        LOG.log(
+                                Level.WARNING,
+                                "Certificate chain: NameConstraints contains unsupported"
+                                        + " rfc822Name mailbox form at cert["
+                                        + i
+                                        + "];"
+                                        + " enforcement depends on leaf SAN content");
                     }
                     if (nc.hasInvalidMinMax) {
                         throw new PkixException(
@@ -415,7 +431,7 @@ public final class ChainValidator {
     }
 
     /**
-     * Проверяет SAN (dNSName, iPAddress) сертификата против списка накопленных ограничений.
+     * Проверяет SAN (все типы) сертификата против списка накопленных ограничений.
      * Каждый набор из accumulated должен быть удовлетворён (AND-семантика между уровнями CA).
      */
     private static void checkCertAgainstConstraints(
@@ -426,6 +442,10 @@ public final class ChainValidator {
 
         String[] sanDnsNames = cert.getSanDnsNames();
         byte[][] sanIps = cert.getSanIpAddresses();
+        String[] sanRfc822Names = cert.getSanRfc822Names();
+        String[] sanUris = cert.getSanUris();
+        byte[][] sanDirNames = cert.getSanDirectoryNames();
+        OtherNameEntry[] sanOtherNames = cert.getSanOtherNames();
 
         for (NameConstraintsData nc : accumulated) {
             // Permitted: ограничение применяется только к присутствующим SAN того же типа.
@@ -476,6 +496,118 @@ public final class ChainValidator {
                     }
                 }
             }
+
+            // --- rfc822Name ---
+            if (nc.permittedRfc822Names != null
+                    && nc.permittedRfc822Names.length > 0
+                    && sanRfc822Names != null) {
+                boolean matched = false;
+                for (String san : sanRfc822Names) {
+                    String domain = extractEmailDomain(san);
+                    if (isDnsNameInPermitted(domain, nc.permittedRfc822Names)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    throw new PkixException(
+                            "Certificate chain: SAN rfc822Name not in permitted subtrees");
+                }
+            }
+            if (nc.excludedRfc822Names != null && sanRfc822Names != null) {
+                for (String san : sanRfc822Names) {
+                    String domain = extractEmailDomain(san);
+                    if (isDnsNameInPermitted(domain, nc.excludedRfc822Names)) {
+                        throw new PkixException(
+                                "Certificate chain: SAN rfc822Name in excluded subtrees");
+                    }
+                }
+            }
+
+            // --- URI ---
+            if (nc.permittedUris != null && nc.permittedUris.length > 0 && sanUris != null) {
+                boolean matched = false;
+                for (String san : sanUris) {
+                    String host = extractUriHost(san);
+                    if (isUriHostInConstraint(host, nc.permittedUris)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    throw new PkixException("Certificate chain: SAN URI not in permitted subtrees");
+                }
+            }
+            if (nc.excludedUris != null && sanUris != null) {
+                for (String san : sanUris) {
+                    String host = extractUriHost(san);
+                    if (isUriHostInConstraint(host, nc.excludedUris)) {
+                        throw new PkixException("Certificate chain: SAN URI in excluded subtrees");
+                    }
+                }
+            }
+
+            // --- directoryName ---
+            if (nc.permittedDirectoryNames != null
+                    && nc.permittedDirectoryNames.length > 0
+                    && sanDirNames != null) {
+                boolean matched = false;
+                for (byte[] san : sanDirNames) {
+                    for (byte[] c : nc.permittedDirectoryNames) {
+                        if (Arrays.equals(san, c)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if (matched) break;
+                }
+                if (!matched) {
+                    throw new PkixException(
+                            "Certificate chain: SAN directoryName not in permitted subtrees");
+                }
+            }
+            if (nc.excludedDirectoryNames != null && sanDirNames != null) {
+                for (byte[] san : sanDirNames) {
+                    for (byte[] c : nc.excludedDirectoryNames) {
+                        if (Arrays.equals(san, c)) {
+                            throw new PkixException(
+                                    "Certificate chain: SAN directoryName in excluded subtrees");
+                        }
+                    }
+                }
+            }
+
+            // --- otherName: fail-closed если лист содержит otherName ---
+            if (nc.hasUnsupportedNameType && sanOtherNames != null) {
+                throw new PkixException(
+                        "Certificate chain: NameConstraints contain unsupported"
+                                + " GeneralName type (otherName)"
+                                + " and leaf cert has otherName in SAN;"
+                                + " constraints cannot be enforced — rejecting chain");
+            }
+            if (nc.hasUnsupportedNameType && sanOtherNames == null) {
+                LOG.log(
+                        Level.WARNING,
+                        "Certificate chain: NameConstraints contain unsupported"
+                                + " GeneralName type (otherName) but leaf has no"
+                                + " otherName in SAN — constraints not applicable");
+            }
+
+            // --- rfc822Name mailbox-form: fail-closed если лист содержит rfc822Name ---
+            if (nc.hasUnsupportedRfc822Form && sanRfc822Names != null) {
+                throw new PkixException(
+                        "Certificate chain: NameConstraints contain unsupported"
+                                + " rfc822Name mailbox form"
+                                + " and leaf cert has rfc822Name in SAN;"
+                                + " constraints cannot be enforced — rejecting chain");
+            }
+            if (nc.hasUnsupportedRfc822Form && sanRfc822Names == null) {
+                LOG.log(
+                        Level.WARNING,
+                        "Certificate chain: NameConstraints contain unsupported"
+                                + " rfc822Name mailbox form but leaf has no"
+                                + " rfc822Name in SAN — constraints not applicable");
+            }
         }
     }
 
@@ -525,5 +657,71 @@ public final class ChainValidator {
             }
         }
         return false;
+    }
+
+    /**
+     * Извлекает host из URI SAN. Fail-closed:
+     * — невалидный URI (URISyntaxException) -> {@link PkixException}
+     * — отсутствует authority/host -> {@link PkixException}
+     * — host является IP-адресом -> {@link PkixException} (RFC 5280 §4.2.1.10 MUST)
+     */
+    private static String extractUriHost(String uri) throws PkixException {
+        URI parsed;
+        try {
+            parsed = new URI(uri);
+        } catch (URISyntaxException e) {
+            throw new PkixException("Certificate chain: SAN URI is not a valid URI: " + uri, e);
+        }
+        String host = parsed.getHost();
+        if (host == null || host.isEmpty()) {
+            throw new PkixException(
+                    "Certificate chain: SAN URI missing authority/host component"
+                            + " under active URI NameConstraints: "
+                            + uri);
+        }
+        if (GostCertificate.isIpAddress(host)) {
+            throw new PkixException(
+                    "Certificate chain: SAN URI has IP address as host"
+                            + " under active URI NameConstraints (RFC 5280 MUST reject): "
+                            + uri);
+        }
+        return host;
+    }
+
+    /**
+     * Проверяет host из URI SAN против списка URI-ограничений (RFC 5280 §4.2.1.10).
+     *
+     * <p>Двухрежимный синтаксис, отличный от dNSName:
+     * <ul>
+     *   <li>Ограничение с ведущей точкой ({@code .example.com}) — suffix-совпадение,
+     *       но НЕ матчит голый {@code example.com} без поддомена
+     *   <li>Ограничение без ведущей точки ({@code example.com}) — точное совпадение хоста
+     * </ul>
+     */
+    private static boolean isUriHostInConstraint(String host, String[] constraints) {
+        String lower = host.toLowerCase();
+        for (String c : constraints) {
+            String lowerC = c.toLowerCase();
+            if (lowerC.startsWith(".")) {
+                if (lower.endsWith(lowerC) && lower.length() > lowerC.length()) {
+                    return true;
+                }
+            } else {
+                if (lower.equals(lowerC)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Извлекает доменную часть из rfc822Name (RFC 5280 §4.2.1.10).
+     * Ограничение применяется к доменной части, а не к полному адресу.
+     * Если '@' отсутствует — возвращается строка как есть (доменное имя).
+     */
+    private static String extractEmailDomain(String rfc822Name) {
+        int at = rfc822Name.lastIndexOf('@');
+        return at >= 0 ? rfc822Name.substring(at + 1) : rfc822Name;
     }
 }

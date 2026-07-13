@@ -284,12 +284,59 @@ public final class OcspVerifier {
             // Проверяем подпись OCSP-ответа ключом делегированного сертификата
             try {
                 ocsp.verify(dc.getPublicKey());
+                logDelegatedNoCheckStatus(dc);
                 return dc;
             } catch (PkixException ignored) {
                 // Пробуем следующий delegated cert
             }
         }
         return null;
+    }
+
+    /**
+     * Диагностика соответствия делегированного responder-сертификата RFC 6960
+     * §4.2.2.2.1. Решение доверять (pass/fail) НЕ меняется — отзыв делегата
+     * по-прежнему не проверяется. Логируется лишь аномалия для аудита.
+     *
+     * <p>Аномалия (case 2 RFC): CA явно повесил на делегата точку проверки отзыва
+     * (CDP или AIA-OCSP), но забыл id-pkix-ocsp-nocheck. Это регулярный CA/Browser
+     * Forum инцидент. Легальные случаи 1 (nocheck есть) и 3 (ничего не указано) —
+     * уровень DEBUG.</p>
+     *
+     * <p>Учитывается только id-ad-ocsp ({@code getOcspUris()}), не caIssuers: caIssuers
+     * указывает на родительский CA-сертификат и к проверке отзыва делегата отношения
+     * не имеет.</p>
+     */
+    private static void logDelegatedNoCheckStatus(GostCertificate dc) {
+        if (isMissingNoCheckAnomaly(dc)) {
+            LOG.log(
+                    Level.WARNING,
+                    "Delegated OCSP responder certificate (serial 0x{0}) has revocation"
+                            + " pointers but lacks id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1)",
+                    dc.getSerialNumberBigInt().toString(16));
+        } else {
+            LOG.log(
+                    Level.DEBUG,
+                    "Delegated OCSP responder certificate (serial 0x{0}) accepted;"
+                            + " ocsp-nocheck={1}",
+                    dc.getSerialNumberBigInt().toString(16),
+                    dc.hasOcspNoCheck());
+        }
+    }
+
+    /**
+     * Предикат аномалии RFC 6960 §4.2.2.2.1 (case 2): у делегата есть точка проверки
+     * отзыва (CDP или AIA-OCSP), но нет id-pkix-ocsp-nocheck. Вынесен отдельно, чтобы
+     * тесты могли перебрать все четыре угла условия {@code AND/!} без хрупкого перехвата
+     * лога. На решение доверять (pass/fail) НЕ влияет.
+     *
+     * <p>Учитывается только id-ad-ocsp ({@code getOcspUris()}), не caIssuers: caIssuers
+     * указывает на родительский CA-сертификат и к проверке отзыва делегата отношения
+     * не имеет.</p>
+     */
+    static boolean isMissingNoCheckAnomaly(GostCertificate dc) {
+        boolean hasOwnRevocationPointer = dc.getCdpUris() != null || dc.getOcspUris() != null;
+        return hasOwnRevocationPointer && !dc.hasOcspNoCheck();
     }
 
     /**
@@ -300,10 +347,7 @@ public final class OcspVerifier {
             SingleOcspResponse target, PublicKeyParameters issuerPub, GostCertificate issuerCert)
             throws PkixException {
         int hlen = issuerPub.getParams().hlen;
-        int certIdHashLen =
-                hlen == GostOids.STREEBOG_512_HASH_LEN
-                        ? GostOids.STREEBOG_512_HASH_LEN
-                        : GostOids.STREEBOG_256_HASH_LEN;
+        int certIdHashLen = hlen;
 
         // issuerNameHash = hash(subject DN issuer-а)
         byte[] issuerNameDer = issuerCert.getSubjectDnBytes();
@@ -441,10 +485,7 @@ public final class OcspVerifier {
         // CertID defense-in-depth (опционально в низкоуровневом API)
         if (expectedIssuerDn != null && issuerCertDer != null) {
             int hlen = caKey.getParams().hlen;
-            int certIdHashLen =
-                    hlen == GostOids.STREEBOG_512_HASH_LEN
-                            ? GostOids.STREEBOG_512_HASH_LEN
-                            : GostOids.STREEBOG_256_HASH_LEN;
+            int certIdHashLen = hlen;
 
             byte[] expectedNameHash = GostSignatureHelper.doHash(expectedIssuerDn, certIdHashLen);
             if (!MessageDigest.isEqual(target.issuerNameHash(), expectedNameHash)) {

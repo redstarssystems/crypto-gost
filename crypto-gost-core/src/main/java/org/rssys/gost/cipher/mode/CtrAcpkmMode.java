@@ -25,11 +25,10 @@ import org.rssys.gost.util.AuthenticationException;
  * </ul>
  * Симметричен: encrypt = decrypt для CTR-части.
  * <p>
- * <b>Примечание.</b> ACPKM-секционная смена ключа (RFC 8645 §6.2.2)
- * в данной реализации не выполняется, поскольку для целевого сценария
- * PBES2 (RFC 9337 §5.1.1) объём шифруемых данных всегда умещается
- * в одну секцию при любом разумном N. Для потокового bulk-шифрования
- * с ACPKM-режимом используйте специализированную реализацию.
+ * Секционная смена ключа ACPKM выполняется каждые {@code sectionSize} байт
+ * (ГОСТ Р 34.13-2015 §6.2, RFC 8645 §6.2.2). Размер секции задаётся при
+ * конструировании через константы {@link AcpkmSectionSize}.
+ * {@code sectionSize} обязан быть кратен размеру блока (16 байт).
  */
 public final class CtrAcpkmMode {
 
@@ -44,12 +43,29 @@ public final class CtrAcpkmMode {
     private static final byte[] KDF_TREE_LABEL =
             "kdf tree".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
+    /**
+     * Константа ACPKM_D_2018 — первые 256 бит D (RFC 8645).
+     * Используется для секционной смены ключа: K' = E_K(D[0..15]) || E_K(D[16..31]).
+     */
+    private static final byte[] ACPKM_D_2018 = {
+        (byte) 0x80, (byte) 0x81, (byte) 0x82, (byte) 0x83,
+        (byte) 0x84, (byte) 0x85, (byte) 0x86, (byte) 0x87,
+        (byte) 0x88, (byte) 0x89, (byte) 0x8a, (byte) 0x8b,
+        (byte) 0x8c, (byte) 0x8d, (byte) 0x8e, (byte) 0x8f,
+        (byte) 0x90, (byte) 0x91, (byte) 0x92, (byte) 0x93,
+        (byte) 0x94, (byte) 0x95, (byte) 0x96, (byte) 0x97,
+        (byte) 0x98, (byte) 0x99, (byte) 0x9a, (byte) 0x9b,
+        (byte) 0x9c, (byte) 0x9d, (byte) 0x9e, (byte) 0x9f
+    };
+
     private final Kuznyechik cipher;
     private final boolean useOmac;
+    private final int sectionSize;
 
     private byte[] ctr = new byte[BLOCK_SIZE];
     private byte[] gammaBuf = new byte[BLOCK_SIZE];
     private int byteCount;
+    private int processedBytes;
 
     private Mac mac;
     private byte[] computedTag;
@@ -57,10 +73,39 @@ public final class CtrAcpkmMode {
     private boolean initialized;
     private boolean forEncryption;
 
+    /**
+     * Создаёт экземпляр с размером секции по умолчанию (4096 байт).
+     *
+     * @param cipher  экземпляр Кузнечика
+     * @param useOmac {@code true} — OMAC-вариант
+     */
     public CtrAcpkmMode(Kuznyechik cipher, boolean useOmac) {
+        this(cipher, useOmac, AcpkmSectionSize.DEFAULT);
+    }
+
+    /**
+     * Создаёт экземпляр с заданным размером секции ACPKM.
+     *
+     * @param cipher      экземпляр Кузнечика
+     * @param useOmac     {@code true} — OMAC-вариант
+     * @param sectionSize размер секции в байтах, обязателен кратен 16 (BLOCK_SIZE)
+     * @throws IllegalArgumentException если {@code cipher == null}
+     * @throws IllegalArgumentException если {@code sectionSize < 16} или не кратен 16
+     */
+    public CtrAcpkmMode(Kuznyechik cipher, boolean useOmac, int sectionSize) {
         if (cipher == null) throw new IllegalArgumentException("cipher must not be null");
+        if (sectionSize < BLOCK_SIZE || sectionSize % BLOCK_SIZE != 0) {
+            throw new IllegalArgumentException(
+                    "sectionSize must be >= "
+                            + BLOCK_SIZE
+                            + " and a multiple of "
+                            + BLOCK_SIZE
+                            + ", got "
+                            + sectionSize);
+        }
         this.cipher = cipher;
         this.useOmac = useOmac;
+        this.sectionSize = sectionSize;
     }
 
     /**
@@ -91,6 +136,7 @@ public final class CtrAcpkmMode {
 
         this.forEncryption = forEncryption;
         this.computedTag = null;
+        this.processedBytes = 0;
 
         if (useOmac) {
             if (ukm == null || ukm.length != UKM_LEN) {
@@ -99,7 +145,8 @@ public final class CtrAcpkmMode {
             }
             // UKM[0..7] = S' (IV для CTR); UKM[8..15] = seed для KDF_TREE (RFC 9337 §5.1.1)
             byte[] seed = Arrays.copyOfRange(ukm, 8, 16);
-            // KDF_TREE разделяет DK на ключ шифрования K(1) и ключ MAC K(2)
+            // KDF_TREE разделяет DK на ключ шифрования K(1) и ключ MAC K(2).
+            // count=2 безопасно при R=1: счётчик занимает 1 октет, i in {1,2} влезает.
             byte[] derived =
                     KdfTreeGostR3411_2012_256.generate(dkBytes, KDF_TREE_LABEL, seed, 2, KEY_LEN);
             byte[] encKey = Arrays.copyOfRange(derived, 0, KEY_LEN);
@@ -153,17 +200,33 @@ public final class CtrAcpkmMode {
 
         if (len == 0) return 0;
 
-        for (int i = 0; i < len; i++) {
-            output[outOff + i] = calculateByte(input[inOff + i]);
-        }
+        int remaining = len;
+        int inPos = inOff;
+        int outPos = outOff;
 
-        if (useOmac) {
-            // MAC считается по шифртексту, не по открытому тексту (EtM)
-            if (forEncryption) {
-                mac.update(output, outOff, len);
-            } else {
-                mac.update(input, inOff, len);
+        while (remaining > 0) {
+            if (processedBytes >= sectionSize) {
+                acpkmNext();
+                processedBytes &= (BLOCK_SIZE - 1);
             }
+
+            int chunk = Math.min(remaining, sectionSize - processedBytes);
+            for (int i = 0; i < chunk; i++) {
+                output[outPos + i] = calculateByte(input[inPos + i]);
+            }
+            processedBytes += chunk;
+
+            if (useOmac) {
+                if (forEncryption) {
+                    mac.update(output, outPos, chunk);
+                } else {
+                    mac.update(input, inPos, chunk);
+                }
+            }
+
+            inPos += chunk;
+            outPos += chunk;
+            remaining -= chunk;
         }
 
         return len;
@@ -172,6 +235,7 @@ public final class CtrAcpkmMode {
     /**
      * Шифрование без OMAC (чистый CTR-ACPKM).
      * CTR симметричен — идентично {@link #decryptOnly}.
+     * Размер секции ACPKM — по умолчанию (4096 байт).
      *
      * @param dk   ключ (SymmetricKey)
      * @param ukm  UKM (16 байт, первые 8 = S')
@@ -179,11 +243,27 @@ public final class CtrAcpkmMode {
      * @return зашифрованные данные
      */
     public static byte[] encryptOnly(CipherParameters dk, byte[] ukm, byte[] data) {
-        return decryptOnly(dk, ukm, data);
+        return encryptOnly(dk, ukm, data, AcpkmSectionSize.DEFAULT);
+    }
+
+    /**
+     * Шифрование без OMAC (чистый CTR-ACPKM) с заданным размером секции.
+     * CTR симметричен — идентично {@link #decryptOnly(CipherParameters, byte[], byte[], int)}.
+     *
+     * @param dk          ключ (SymmetricKey)
+     * @param ukm         UKM (16 байт, первые 8 = S')
+     * @param data        открытые данные
+     * @param sectionSize размер секции ACPKM в байтах
+     * @return зашифрованные данные
+     */
+    public static byte[] encryptOnly(
+            CipherParameters dk, byte[] ukm, byte[] data, int sectionSize) {
+        return decryptOnly(dk, ukm, data, sectionSize);
     }
 
     /**
      * Однократное расшифрование данных (без OMAC — чистый CTR).
+     * Размер секции ACPKM — по умолчанию (4096 байт).
      *
      * @param dk   ключ (SymmetricKey)
      * @param ukm  UKM (16 байт, первые 8 = S')
@@ -191,16 +271,47 @@ public final class CtrAcpkmMode {
      * @return расшифрованные данные
      */
     public static byte[] decryptOnly(CipherParameters dk, byte[] ukm, byte[] data) {
-        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false);
+        return decryptOnly(dk, ukm, data, AcpkmSectionSize.DEFAULT);
+    }
+
+    /**
+     * Однократное расшифрование данных с заданным размером секции (без OMAC — чистый CTR).
+     *
+     * @param dk          ключ (SymmetricKey)
+     * @param ukm         UKM (16 байт, первые 8 = S')
+     * @param data        зашифрованные данные
+     * @param sectionSize размер секции ACPKM в байтах
+     * @return расшифрованные данные
+     */
+    public static byte[] decryptOnly(
+            CipherParameters dk, byte[] ukm, byte[] data, int sectionSize) {
+        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false, sectionSize);
         try {
             mode.init(false, ukm != null ? new ParametersWithIV(dk, ukm) : dk);
             byte[] result = new byte[data.length];
             mode.processBytes(data, 0, data.length, result, 0);
             return result;
         } finally {
-            // Затираем развёрнутые subKeys Kuznyechik сразу, не дожидаясь GC.
             mode.destroy();
         }
+    }
+
+    /**
+     * Секционная смена ключа ACPKM (ГОСТ Р 34.13-2015 §6.2, RFC 8645 §6.2.1).
+     *
+     * <p>Вычисляет новый ключ K' = E_K(D[0..15]) || E_K(D[16..31]),
+     * затирает временный буфер и заменяет раундовые ключи Кузнечика.
+     * Оба блока D шифруются на старом ключе; только после этого
+     * {@code cipher.init()} заменяет расписание (старое зануляется внутри
+     * {@code Kuznyechik.init()}).
+     */
+    private void acpkmNext() {
+        byte[] newKey = new byte[KEY_LEN];
+        cipher.processBlock(ACPKM_D_2018, 0, newKey, 0);
+        cipher.processBlock(ACPKM_D_2018, BLOCK_SIZE, newKey, BLOCK_SIZE);
+        SymmetricKey newSymKey = new SymmetricKey(newKey);
+        Arrays.fill(newKey, (byte) 0);
+        cipher.init(true, newSymKey);
     }
 
     /**
@@ -225,6 +336,7 @@ public final class CtrAcpkmMode {
     /**
      * Шифрование с CMAC (OMAC-вариант).
      * Возвращает шифртекст || 16-байтовый MAC.
+     * Размер секции ACPKM — по умолчанию (4096 байт).
      *
      * @param dk   ключ (SymmetricKey)
      * @param ukm  UKM (16 байт)
@@ -232,7 +344,22 @@ public final class CtrAcpkmMode {
      * @return шифртекст + CMAC (последние 16 байт)
      */
     public static byte[] encryptWithMac(CipherParameters dk, byte[] ukm, byte[] data) {
-        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true);
+        return encryptWithMac(dk, ukm, data, AcpkmSectionSize.DEFAULT);
+    }
+
+    /**
+     * Шифрование с CMAC (OMAC-вариант) с заданным размером секции.
+     * Возвращает шифртекст || 16-байтовый MAC.
+     *
+     * @param dk          ключ (SymmetricKey)
+     * @param ukm         UKM (16 байт)
+     * @param data        открытые данные
+     * @param sectionSize размер секции ACPKM в байтах
+     * @return шифртекст + CMAC (последние 16 байт)
+     */
+    public static byte[] encryptWithMac(
+            CipherParameters dk, byte[] ukm, byte[] data, int sectionSize) {
+        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true, sectionSize);
         try {
             mode.init(true, new ParametersWithIV(dk, ukm));
 
@@ -243,8 +370,6 @@ public final class CtrAcpkmMode {
             System.arraycopy(tag, 0, ct, data.length, MAC_TAG_LEN);
             return ct;
         } finally {
-            // Затираем производные ключи (encKey/macKey) и развёрнутые subKeys
-            // обоих экземпляров Kuznyechik сразу, не дожидаясь GC.
             mode.destroy();
         }
     }
@@ -252,6 +377,7 @@ public final class CtrAcpkmMode {
     /**
      * Расшифрование с проверкой CMAC (OMAC-вариант).
      * Ожидает на входе шифртекст || 16-байтовый MAC.
+     * Размер секции ACPKM — по умолчанию (4096 байт).
      *
      * @param dk   ключ (SymmetricKey)
      * @param ukm  UKM (16 байт)
@@ -261,6 +387,23 @@ public final class CtrAcpkmMode {
      */
     public static byte[] decryptWithMac(CipherParameters dk, byte[] ukm, byte[] data)
             throws AuthenticationException {
+        return decryptWithMac(dk, ukm, data, AcpkmSectionSize.DEFAULT);
+    }
+
+    /**
+     * Расшифрование с проверкой CMAC (OMAC-вариант) с заданным размером секции.
+     * Ожидает на входе шифртекст || 16-байтовый MAC.
+     *
+     * @param dk          ключ (SymmetricKey)
+     * @param ukm         UKM (16 байт)
+     * @param data        зашифрованные данные + MAC (последние 16 байт)
+     * @param sectionSize размер секции ACPKM в байтах
+     * @return расшифрованные данные (без MAC)
+     * @throws AuthenticationException если MAC не совпадает
+     */
+    public static byte[] decryptWithMac(
+            CipherParameters dk, byte[] ukm, byte[] data, int sectionSize)
+            throws AuthenticationException {
         if (data.length < MAC_TAG_LEN) {
             throw new AuthenticationException("Data too short for OMAC verification");
         }
@@ -268,14 +411,13 @@ public final class CtrAcpkmMode {
         byte[] ct = Arrays.copyOf(data, data.length - MAC_TAG_LEN);
         byte[] expectedTag = Arrays.copyOfRange(data, data.length - MAC_TAG_LEN, data.length);
 
-        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true);
+        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true, sectionSize);
         try {
             mode.init(false, new ParametersWithIV(dk, ukm));
 
             byte[] plaintext = new byte[ct.length];
             mode.processBytes(ct, 0, ct.length, plaintext, 0);
 
-            // CMAC считается по принятому шифртексту (EtM)
             byte[] computedTag = mode.getMacTag();
 
             if (!MessageDigest.isEqual(computedTag, expectedTag)) {
@@ -284,9 +426,56 @@ public final class CtrAcpkmMode {
 
             return plaintext;
         } finally {
-            // Затираем производные ключи (encKey/macKey) и развёрнутые subKeys
-            // обоих экземпляров Kuznyechik сразу, не дожидаясь GC.
             mode.destroy();
+        }
+    }
+
+    /**
+     * Вырабатывает ключи шифрования K(1) и имитовставки K(2) из CEK через KDF_TREE.
+     * RFC 9337 §5.1.1: KDF_TREE(cek, "kdf tree", kdfSeed, 2, 32) -> K(1)||K(2).
+     * Каждый ключ — 32 байта.
+     *
+     * @param cek     контентный ключ шифрования (CEK), 32 байта
+     * @param kdfSeed 8-байтовый seed для KDF_TREE (ukm[8..15])
+     * @return массив из двух ключей: [0] = K(1) (шифрование), [1] = K(2) (имитовставка)
+     */
+    public static byte[][] deriveContentKeys(byte[] cek, byte[] kdfSeed) {
+        if (cek.length != KEY_LEN) {
+            throw new IllegalArgumentException("CEK must be " + KEY_LEN + " bytes");
+        }
+        if (kdfSeed.length != 8) {
+            throw new IllegalArgumentException("KDF seed must be 8 bytes");
+        }
+        byte[] derived =
+                KdfTreeGostR3411_2012_256.generate(cek, KDF_TREE_LABEL, kdfSeed, 2, KEY_LEN);
+        byte[] encKey = Arrays.copyOfRange(derived, 0, KEY_LEN);
+        byte[] macKey = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
+        Arrays.fill(derived, (byte) 0);
+        return new byte[][] {encKey, macKey};
+    }
+
+    /**
+     * Вычисляет CMAC (ГОСТ Р 34.13-2015 §5.1) с ключом Кузнечика над переданными данными.
+     * Возвращает 16-байтовый тег. Экземпляр Cmac создаётся и затирается внутри вызова.
+     *
+     * @param macKey ключ имитовставки (32 байта), затирается после использования
+     * @param data   данные, по которым вычисляется имитовставка
+     * @return 16-байтовый CMAC-тег
+     */
+    public static byte[] computeCmac(byte[] macKey, byte[] data) {
+        Kuznyechik cmacCipher = new Kuznyechik();
+        Cmac cmac = new Cmac(cmacCipher);
+        SymmetricKey key = new SymmetricKey(macKey);
+        try {
+            cmac.init(key);
+            cmac.update(data, 0, data.length);
+            byte[] tag = new byte[MAC_TAG_LEN];
+            cmac.doFinal(tag, 0);
+            return tag;
+        } finally {
+            key.destroy();
+            cmac.destroy();
+            cmacCipher.destroy();
         }
     }
 
@@ -331,6 +520,7 @@ public final class CtrAcpkmMode {
     public void reset() {
         Arrays.fill(gammaBuf, (byte) 0);
         byteCount = 0;
+        processedBytes = 0;
         computedTag = null;
         initCounter(Arrays.copyOf(ctr, IV_LEN));
         cipher.reset();
@@ -346,6 +536,7 @@ public final class CtrAcpkmMode {
         cipher.destroy();
         Arrays.fill(ctr, (byte) 0);
         Arrays.fill(gammaBuf, (byte) 0);
+        processedBytes = 0;
         if (mac != null) {
             mac.destroy();
         }

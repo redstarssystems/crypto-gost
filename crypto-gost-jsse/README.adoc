@@ -26,7 +26,7 @@ toc::[]
 * *OCSP*: stapling (сервер прикладывает OCSP-ответ), client-side fetch (через `JdkHttpOcspFetcher`), кэширование.
 * *CRL*: client-side fetch (через `JdkHttpCrlFetcher`), политики `DISABLED` / `IF_CDP_PRESENT` / `REQUIRE`, SSRF-защита.
 * *Session resumption*: PSK через `NewSessionTicket`.
-* *Cipher suites*: `TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`.
+* *Cipher suites*: `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L/S` (RFC 9367 §3.1.2).
 * *Защита записей*: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446 §5.3, per-record TLSTREE re-keying.
 .. *Безопасность реализации:*
 * Constant-time сравнения для verify_data и PSK binders.
@@ -64,9 +64,11 @@ var caKp = KeyGenerator.generateKeyPair(params);
 byte[] caDn = GostDnParser.encodeDn("CN=Test CA");
 GostCertificate ca = GostCertificateBuilder.create(params, caDn)
     .publicKey(caKp.getPublic())
+    // Удобный способ: .notBeforeNow().validForYears(100)
     .notBefore("20250101120000Z").notAfter("21250101120000Z")
     .basicConstraints(true, null)   // <1>
-    .assembleCert(caKp.getPrivate());
+    .randomSerial()
+    .sign(caKp.getPrivate());
 
 // Серверный сертификат (подписан CA, SAN=localhost)
 var srvKp = KeyGenerator.generateKeyPair(params);
@@ -74,9 +76,11 @@ byte[] srvDn = GostDnParser.encodeDn("CN=localhost");
 GostCertificate server = GostCertificateBuilder.create(params, srvDn)
     .publicKey(srvKp.getPublic())
     .issuerDn(caDn)                  // <2>
+    // Удобный способ: .notBeforeNow().validForYears(100)
     .notBefore("20250101120000Z").notAfter("21250101120000Z")
     .sanDns("localhost")             // <3>
-    .assembleCert(caKp.getPrivate());
+    .randomSerial()
+    .sign(caKp.getPrivate());
 ----
 <1> `isCA=true, pathLen=null` — CA без ограничения длины цепочки.
 <2> Издатель — наш CA, а не сам субъект.
@@ -175,8 +179,10 @@ GostCertificate clientCert = GostCertificateBuilder.create(params,
         GostDnParser.encodeDn("CN=Test Client"))
     .publicKey(clientKp.getPublic())
     .issuerDn(caDn)
+    // Удобный способ: .notBeforeNow().validForYears(100)
     .notBefore("20250101120000Z").notAfter("21250101120000Z")
-    .assembleCert(caKp.getPrivate());
+    .randomSerial()
+    .sign(caKp.getPrivate());
 
 SSLContext cli = GostSsl.builder()
     .certificate(clientCert.getEncoded(),       // DER-байты сертификата
@@ -658,12 +664,19 @@ OcspRequest req = OcspRequestBuilder.create()
 byte[] ocspRequestDer = req.der();   // DER-байты OCSPRequest для отправки на респондер
 byte[] nonce = req.nonce();          // nonce для сверки с ответом
 
-// Запрос с подписью
+// Запрос с подписью (PrivateKeyParameters)
 OcspRequest signedReq = OcspRequestBuilder.create()
     .targetCert(certDer)
     .issuerCert(issuerDer)
     .signKey(privateKey)            // ключ для подписи (опционально)
     .params(ECParameters.tc26a256())// параметры кривой (обязательно с signKey)
+    .build();
+
+// Запрос с подписью через GostSigner (HSM-адаптер)
+OcspRequest hsmReq = OcspRequestBuilder.create()
+    .targetCert(certDer)
+    .issuerCert(issuerDer)
+    .signKey(gostSigner)            // GostSigner (параметры кривой берутся из signer)
     .build();
 ----
 
@@ -1039,13 +1052,10 @@ SslContextFactory.Server scf = new SslContextFactory.Server();
 scf.setSslContext(sslContext);
 scf.setIncludeProtocols("TLSv1.3");
 
-HttpConfiguration httpsConfig = new HttpConfiguration();
-httpsConfig.addCustomizer(new SecureRequestCustomizer());
-
 Server server = new Server();
 ServerConnector connector = new ServerConnector(server,
         new SslConnectionFactory(scf, "http/1.1"),
-        new HttpConnectionFactory(httpsConfig));
+        new HttpConnectionFactory(new HttpConfiguration()));
 connector.setPort(8443);
 server.addConnector(connector);
 
@@ -1428,8 +1438,8 @@ ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
 `CopyOnWriteArrayList` (read-heavy, lock-free reads, редкие writes).
 
 `GostSSLSessionContext` thread-safe — PSK-хранилище использует
-`InMemoryPskStore` (thread-safe), карта сессий — `synchronizedMap` с
-LRU-эвiction.
+`InMemoryPskStore` (thread-safe), карта сессий — `LinkedHashMap` с
+LRU-эвiction под `ReentrantLock`.
 
 
 === Загрузка сертификата
@@ -1462,7 +1472,7 @@ import org.rssys.gost.jsse.bridge.CertificateBridge;
 === Ограничения
 
 * Только TLS 1.3 (TLS 1.2 и ниже не поддерживаются).
-* Только ГОСТ-наборы (`TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`).
+* Только ГОСТ-наборы (`TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L/S`).
 * PSK-тикеты одноразовые (RFC 8446 §8.1).
 * KeyManagerFactory — только алгоритм `GostX509` (не `PKIX`, не `NewSunX509`).
 * Проверка nonce в OCSP-ответах — ответственность приложения (RFC 8954).

@@ -3,11 +3,13 @@ package org.rssys.gost.pkix.cert;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import org.rssys.gost.api.Digest;
-import org.rssys.gost.api.Signature;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -19,26 +21,38 @@ import org.rssys.gost.util.DerCodec;
  *
  * <p>Fluent API:
  * <pre>
- * byte[] crl = GostCrlBuilder.create(signerPriv, issuerDnDer)
- *     .thisUpdate("20250101000000Z")
- *     .nextUpdate("20260101000000Z")
+ * byte[] crl = GostCrlBuilder.create(issuerDnDer)
+ *     .thisUpdateNow()
+ *     .nextUpdateDays(30)
  *     .withIdpExtension()
  *     .addRevoked(serial, revocationDate)
- *     .build();
+ *     .sign(signer);
+ * </pre>
+ *
+ * <p>Альтернативно — явные даты для воспроизводимости:
+ * <pre>
+ *     .thisUpdate("20250101000000Z")
+ *     .nextUpdate("20260101000000Z")
  * </pre>
  *
  * <p>Симметричен {@link GostCrl} (парсинг) и {@link CrlVerifier} (проверка).</p>
  *
- * <p>{@link #build()} возвращает wire-формат DER-байтов для передачи по сети.
+ * <p>{@link #sign(GostSigner)} возвращает wire-формат DER-байтов для передачи по сети.
  * Для инспекции и проверки — consumer-класс {@link GostCrl}:
  * {@code new GostCrl(bytes).verify(caPub)}. Разделение producer (CA строит CRL)
  * и consumer (валидатор проверяет) осмысленно: CRL — fail-closed объект,
  * {@link GostCrl#getRevokedCertificates()} недоступен до вызова
  * {@link GostCrl#verify verify()}.</p>
+ *
+ * <p>Подписант передаётся в терминальный {@link #sign(GostSigner)} — единообразно с
+ * {@link GostCertificateBuilder} и {@link GostCsrBuilder}. В отличие от сертификата,
+ * у CRL нет публичного двухшагового пути (сборка TBS -> внешняя офлайн-подпись):
+ * CRL — рутинная частая операция против online-HSM, а офлайн-церемония (shipping TBS)
+ * релевантна редким событиям выпуска корневых/промежуточных сертификатов УЦ. Разные
+ * операционные модели -> у CRL только одношаговый {@code sign(...)}.</p>
  */
 public final class GostCrlBuilder {
 
-    private final PrivateKeyParameters signerPriv;
     private final byte[] issuerDnDer;
     private String thisUpdate;
     private String nextUpdate;
@@ -51,25 +65,23 @@ public final class GostCrlBuilder {
     private byte[] akiBytes;
     private final List<RevokedEntry> revokedEntries = new ArrayList<>();
 
-    private GostCrlBuilder(PrivateKeyParameters signerPriv, byte[] issuerDnDer) {
-        this.signerPriv = signerPriv;
+    private GostCrlBuilder(byte[] issuerDnDer) {
         this.issuerDnDer = issuerDnDer;
-        this.thisUpdate = GostSignatureHelper.nowGeneralizedTime();
     }
 
     /**
-     * Создаёт построитель CRL с обязательными параметрами.
+     * Создаёт построитель CRL с обязательным issuer Name.
+     * Подписант задаётся позже — в терминальном {@link #sign(GostSigner)}.
      *
-     * @param signerPriv   ключ, которым будет подписан CRL (ECParameters извлекаются из ключа)
      * @param issuerDnDer DER-кодированный issuer Name
      */
-    public static GostCrlBuilder create(PrivateKeyParameters signerPriv, byte[] issuerDnDer) {
-        return new GostCrlBuilder(signerPriv, issuerDnDer);
+    public static GostCrlBuilder create(byte[] issuerDnDer) {
+        return new GostCrlBuilder(issuerDnDer);
     }
 
     /** Удобная перегрузка: DN из строки "CN=..., O=..." */
-    public static GostCrlBuilder create(PrivateKeyParameters signerPriv, String issuerDn) {
-        return new GostCrlBuilder(signerPriv, GostDnParser.encodeDn(issuerDn));
+    public static GostCrlBuilder create(String issuerDn) {
+        return new GostCrlBuilder(GostDnParser.encodeDn(issuerDn));
     }
 
     /** @param time thisUpdate в формате GeneralizedTime (YYYYMMDDHHMMSSZ) */
@@ -93,6 +105,75 @@ public final class GostCrlBuilder {
     /** @param time nextUpdate как Instant (UTC) */
     public GostCrlBuilder nextUpdate(Instant time) {
         this.nextUpdate = GostSignatureHelper.formatGeneralizedTime(time);
+        return this;
+    }
+
+    /**
+     * Устанавливает thisUpdate = текущее UTC-время минус {@link GostOids#CLOCK_SKEW_MS} (5 мин).
+     *
+     * <p>Буфер симметричен {@link GostCertificateBuilder#notBeforeNow()}:
+     * {@link GostCrl#verify()} использует ту же константу {@code CLOCK_SKEW_MS}
+     * для fail-closed проверки thisUpdate-не-в-будущем
+     * ({@link PkixException.Reason#THIS_UPDATE_FUTURE}).
+     * Без буфера свежевыпущенный CRL от УЦ со спешащими часами был бы отклонён
+     * relying party.
+     *
+     * <p>Для тестов — используйте {@link #thisUpdate(String)} с фиксированной датой.
+     */
+    public GostCrlBuilder thisUpdateNow() {
+        this.thisUpdate =
+                GostSignatureHelper.formatGeneralizedTime(
+                        Instant.now().minusMillis(GostOids.CLOCK_SKEW_MS));
+        return this;
+    }
+
+    /**
+     * nextUpdate = thisUpdate + days (24-часовые сутки UTC).
+     *
+     * @throws IllegalStateException если {@code thisUpdate} не был задан
+     */
+    public GostCrlBuilder nextUpdateDays(int days) {
+        if (thisUpdate == null) {
+            throw new IllegalStateException("thisUpdate must be set before nextUpdateDays()");
+        }
+        Instant tu = GostSignatureHelper.parseAsn1Time(thisUpdate);
+        this.nextUpdate =
+                GostSignatureHelper.formatGeneralizedTime(
+                        tu.plusSeconds((long) days * 24L * 3600L));
+        return this;
+    }
+
+    /**
+     * nextUpdate = thisUpdate + months (календарные месяцы UTC).
+     * 31 января + 1 месяц → 28/29 февраля.
+     *
+     * @throws IllegalStateException если {@code thisUpdate} не был задан
+     */
+    public GostCrlBuilder nextUpdateMonths(int months) {
+        if (thisUpdate == null) {
+            throw new IllegalStateException("thisUpdate must be set before nextUpdateMonths()");
+        }
+        Instant tu = GostSignatureHelper.parseAsn1Time(thisUpdate);
+        this.nextUpdate =
+                GostSignatureHelper.formatGeneralizedTime(
+                        tu.atZone(ZoneOffset.UTC).plusMonths(months).toInstant());
+        return this;
+    }
+
+    /**
+     * nextUpdate = thisUpdate + years (календарные годы UTC).
+     * 29 февраля 2024 + 1 год → 28 февраля 2025.
+     *
+     * @throws IllegalStateException если {@code thisUpdate} не был задан
+     */
+    public GostCrlBuilder nextUpdateYears(int years) {
+        if (thisUpdate == null) {
+            throw new IllegalStateException("thisUpdate must be set before nextUpdateYears()");
+        }
+        Instant tu = GostSignatureHelper.parseAsn1Time(thisUpdate);
+        this.nextUpdate =
+                GostSignatureHelper.formatGeneralizedTime(
+                        tu.atZone(ZoneOffset.UTC).plusYears(years).toInstant());
         return this;
     }
 
@@ -216,22 +297,29 @@ public final class GostCrlBuilder {
     /**
      * Собирает и подписывает CRL.
      *
+     * @param signer подписант CRL (может быть HSM-адаптером); ECParameters берутся из него
      * @return DER-кодированный CertificateList
      * @throws IllegalStateException если deltaCRLIndicator задан без cRLNumber
      */
-    public byte[] build() {
+    public byte[] sign(GostSigner signer) {
+        Objects.requireNonNull(signer, "signer must not be null");
         // RFC 5280 §5.2.4: deltaCRLIndicator не может присутствовать без cRLNumber
         if (baseCrlNumber != null && crlNumber == null) {
             throw new IllegalStateException(
                     "deltaCRLIndicator requires cRLNumber extension (RFC 5280 §5.2.4)");
         }
+        // thisUpdate по умолчанию фиксируется в момент подписи (а не создания билдера):
+        // между create() и sign() может пройти время (отложенная подпись через HSM-воркер),
+        // и thisUpdate должен отражать момент выпуска CRL. Явный thisUpdate(...) имеет приоритет.
+        String effectiveThisUpdate =
+                (thisUpdate != null) ? thisUpdate : GostSignatureHelper.nowGeneralizedTime();
         RevokedEntry[] entries =
                 revokedEntries.isEmpty() ? null : revokedEntries.toArray(new RevokedEntry[0]);
-        return assembleCrl(
+        return assembleCrlCore(
                 entries,
-                signerPriv,
+                signer,
                 issuerDnDer,
-                thisUpdate,
+                effectiveThisUpdate,
                 nextUpdate,
                 false,
                 crlNumber,
@@ -240,7 +328,19 @@ public final class GostCrlBuilder {
                 withIdpExtension,
                 idpOnlyContainsUserCerts,
                 idpOnlyContainsCACerts,
+                false,
                 akiBytes);
+    }
+
+    /**
+     * Собирает и подписывает CRL закрытым ключом в памяти.
+     * Удобная обёртка через {@link GostSigner#of(PrivateKeyParameters)}.
+     *
+     * @param signerPriv ключ, которым подписывается CRL (ECParameters извлекаются из ключа)
+     * @return DER-кодированный CertificateList
+     */
+    public byte[] sign(PrivateKeyParameters signerPriv) {
+        return sign(GostSigner.of(signerPriv));
     }
 
     // ========================================================================
@@ -249,7 +349,7 @@ public final class GostCrlBuilder {
 
     /**
      * Внутренний метод сборки CRL — прямой доступ к параметрам сборки.
-     * Не предназначен для обычного использования — применяйте {@link #build()}.
+     * Не предназначен для обычного использования — применяйте {@link #sign(GostSigner)}.
      * Публичен только для специальных тестовых сценариев (например, сборка CRL
      * с устаревшим форматом версии для проверки fallback-веток верификации).
      *
@@ -336,6 +436,38 @@ public final class GostCrlBuilder {
             boolean idpOnlyContainsCACerts,
             boolean idpIndirectCrl,
             byte[] akiBytes) {
+        return assembleCrlCore(
+                revokedEntries,
+                GostSigner.of(signerPriv),
+                issuerDnDer,
+                thisUpdateGeneralizedTime,
+                nextUpdateGeneralizedTime,
+                legacyVersion,
+                crlNumber,
+                baseCrlNumber,
+                freshestCrlUris,
+                withIdpExtension,
+                idpOnlyContainsUserCerts,
+                idpOnlyContainsCACerts,
+                idpIndirectCrl,
+                akiBytes);
+    }
+
+    private static byte[] assembleCrlCore(
+            RevokedEntry[] revokedEntries,
+            GostSigner signer,
+            byte[] issuerDnDer,
+            String thisUpdateGeneralizedTime,
+            String nextUpdateGeneralizedTime,
+            boolean legacyVersion,
+            BigInteger crlNumber,
+            BigInteger baseCrlNumber,
+            String[] freshestCrlUris,
+            boolean withIdpExtension,
+            boolean idpOnlyContainsUserCerts,
+            boolean idpOnlyContainsCACerts,
+            boolean idpIndirectCrl,
+            byte[] akiBytes) {
         try {
             ByteArrayOutputStream tbsOut = new ByteArrayOutputStream();
             if (legacyVersion) {
@@ -343,7 +475,7 @@ public final class GostCrlBuilder {
             } else {
                 tbsOut.write(DerCodec.encodeTlv(0x02, new byte[] {0x01}));
             }
-            tbsOut.write(GostSignatureHelper.buildAlgId(signerPriv.getParams()));
+            tbsOut.write(GostSignatureHelper.buildAlgId(signer.getParams()));
             tbsOut.write(issuerDnDer);
             tbsOut.write(DerCodec.encodeTime(thisUpdateGeneralizedTime));
             if (nextUpdateGeneralizedTime != null) {
@@ -384,7 +516,7 @@ public final class GostCrlBuilder {
 
             if (freshestCrlUris != null) {
                 crlExts.write(
-                        GostCertificateBuilder.buildDistributionPointExtension(
+                        ExtensionsAccumulator.buildDistributionPointExtension(
                                 GostOids.EXT_FRESHEST_CRL, freshestCrlUris));
                 hasCrlExt = true;
             }
@@ -409,7 +541,7 @@ public final class GostCrlBuilder {
             }
 
             if (akiBytes != null) {
-                crlExts.write(GostCertificateBuilder.buildAkiExtension(akiBytes));
+                crlExts.write(ExtensionsAccumulator.buildAkiExtension(akiBytes));
                 hasCrlExt = true;
             }
 
@@ -419,10 +551,10 @@ public final class GostCrlBuilder {
             }
 
             byte[] tbsCertList = DerCodec.encodeSequence(tbsOut.toByteArray());
-            int hlen = signerPriv.getParams().hlen;
+            int hlen = signer.getParams().hlen;
             byte[] hash = GostSignatureHelper.doHash(tbsCertList, hlen);
-            byte[] sig = Signature.signHash(hash, signerPriv);
-            byte[] sigAlg = GostSignatureHelper.buildAlgId(signerPriv.getParams());
+            byte[] sig = GostSignatureHelper.signHashChecked(hash, signer);
+            byte[] sigAlg = GostSignatureHelper.buildAlgId(signer.getParams());
             return DerCodec.encodeSequence(tbsCertList, sigAlg, DerCodec.encodeBitString(sig));
         } catch (java.io.IOException e) {
             throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);

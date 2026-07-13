@@ -168,4 +168,145 @@ class GostExtensionParserFuzzTest {
             throw e;
         }
     }
+
+    // ========================================================================
+    // Targeted fuzz: otherName mutations
+    // ========================================================================
+
+    /**
+     * Targeted: otherName с внутренним тегом [1] EXPLICIT (0xA1) вместо [0] (0xA0).
+     * Парсер должен выкинуть IllegalArgumentException — not silent skip.
+     */
+    @FuzzTest
+    void fuzzOtherNameWrongInnerTag(FuzzedDataProvider data) {
+        byte[] oidBytes = data.consumeBytes(4);
+        if (oidBytes.length < 2) return;
+        int oidLen = oidBytes.length;
+        byte[] explContent = data.consumeBytes(data.consumeInt(0, 100));
+        int explLen = explContent.length;
+        int oidTlvLen = 1 + 1 + oidLen;
+        int innerTlvLen = 1 + 1 + explLen;
+        int otherContentLen = oidTlvLen + innerTlvLen;
+        int otherTlvLen = 1 + 1 + otherContentLen;
+        int sanSeqLen = 1 + 1 + otherTlvLen;
+        int octetLen = 1 + 1 + sanSeqLen;
+        int extContentLen = 5 + octetLen;
+        int extTlvLen = 1 + 1 + extContentLen;
+        int totalLen = 1 + 1 + extTlvLen;
+        byte[] input = new byte[totalLen];
+        int pos = 0;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) extTlvLen;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) extContentLen;
+        input[pos++] = 0x06;
+        input[pos++] = (byte) SAN_OID.length;
+        System.arraycopy(SAN_OID, 0, input, pos, SAN_OID.length);
+        pos += SAN_OID.length;
+        input[pos++] = 0x04;
+        input[pos++] = (byte) sanSeqLen;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) otherTlvLen;
+        input[pos++] = (byte) 0xA0;
+        input[pos++] = (byte) otherContentLen;
+        input[pos++] = 0x06;
+        input[pos++] = (byte) oidLen;
+        System.arraycopy(oidBytes, 0, input, pos, oidLen);
+        pos += oidLen;
+        input[pos++] = (byte) 0xA1; // [1] вместо [0]
+        input[pos++] = (byte) explLen;
+        System.arraycopy(explContent, 0, input, pos, explLen);
+        try {
+            GostExtensionParser.parseExtensionsFromSequence(input, 0);
+        } catch (RuntimeException e) {
+            rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * Targeted: otherName с [0] EXPLICIT нулевой длины (A0 00).
+     * После OID идёт EXPLICIT-тег без содержимого.
+     */
+    @FuzzTest
+    void fuzzOtherNameZeroExplicit(FuzzedDataProvider data) {
+        byte[] oidBytes = data.consumeBytes(4);
+        if (oidBytes.length < 2) return;
+        int oidLen = oidBytes.length;
+        int oidTlvLen = 1 + 1 + oidLen;
+        int explTlvLen = 2; // A0 00
+        int otherContentLen = oidTlvLen + explTlvLen;
+        int otherTlvLen = 1 + 1 + otherContentLen;
+        int sanSeqLen = 1 + 1 + otherTlvLen;
+        int octetLen = 1 + 1 + sanSeqLen;
+        int extContentLen = 5 + octetLen;
+        int extTlvLen = 1 + 1 + extContentLen;
+        int totalLen = 1 + 1 + extTlvLen;
+        byte[] input = new byte[totalLen];
+        int pos = 0;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) extTlvLen;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) extContentLen;
+        input[pos++] = 0x06;
+        input[pos++] = (byte) SAN_OID.length;
+        System.arraycopy(SAN_OID, 0, input, pos, SAN_OID.length);
+        pos += SAN_OID.length;
+        input[pos++] = 0x04;
+        input[pos++] = (byte) sanSeqLen;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) otherTlvLen;
+        input[pos++] = (byte) 0xA0;
+        input[pos++] = (byte) otherContentLen;
+        input[pos++] = 0x06;
+        input[pos++] = (byte) oidLen;
+        System.arraycopy(oidBytes, 0, input, pos, oidLen);
+        pos += oidLen;
+        input[pos++] = (byte) 0xA0;
+        input[pos++] = 0x00; // нулевая длина EXPLICIT
+        try {
+            GostExtensionParser.parseExtensionsFromSequence(input, 0);
+        } catch (RuntimeException e) {
+            rethrowIfBug(e);
+        }
+    }
+
+    /**
+     * Targeted: otherName с содержимым, начинающимся не с OID (0x06),
+     * а с произвольного тега.
+     */
+    @FuzzTest
+    void fuzzOtherNameNonOidFirst(FuzzedDataProvider data) {
+        byte[] content = data.consumeBytes(data.consumeInt(1, 100));
+        if (content.length < 1) return;
+        int contentLen = content.length;
+        int otherTlvLen = 1 + 1 + contentLen;
+        int sanSeqLen = 1 + 1 + otherTlvLen;
+        int octetLen = 1 + 1 + sanSeqLen;
+        int extContentLen = 5 + octetLen;
+        int extTlvLen = 1 + 1 + extContentLen;
+        int totalLen = 1 + 1 + extTlvLen;
+        byte[] input = new byte[totalLen];
+        int pos = 0;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) extTlvLen;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) extContentLen;
+        input[pos++] = 0x06;
+        input[pos++] = (byte) SAN_OID.length;
+        System.arraycopy(SAN_OID, 0, input, pos, SAN_OID.length);
+        pos += SAN_OID.length;
+        input[pos++] = 0x04;
+        input[pos++] = (byte) sanSeqLen;
+        input[pos++] = 0x30;
+        input[pos++] = (byte) otherTlvLen;
+        input[pos++] = (byte) 0xA0;
+        input[pos++] = (byte) contentLen;
+        content[0] = 0x02; // INTEGER вместо OID
+        System.arraycopy(content, 0, input, pos, contentLen);
+        try {
+            GostExtensionParser.parseExtensionsFromSequence(input, 0);
+        } catch (RuntimeException e) {
+            rethrowIfBug(e);
+        }
+    }
 }

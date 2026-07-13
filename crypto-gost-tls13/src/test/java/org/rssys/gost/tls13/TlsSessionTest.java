@@ -1592,10 +1592,9 @@ class TlsSessionTest {
         // Отозванный stapled-ответ обязан привести к fail-closed, симметрично серверу
         byte[] revoked =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(root.priv, root.cert.getPublicKey())
                         .issuerDn(root.subjectDn)
                         .revoked("20240601120000Z")
-                        .build();
+                        .sign(root.priv);
         leaf.cert.setOcspResponse(revoked);
 
         TlsSession session =

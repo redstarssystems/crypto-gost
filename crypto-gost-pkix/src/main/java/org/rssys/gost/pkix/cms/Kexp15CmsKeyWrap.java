@@ -12,44 +12,45 @@ import org.rssys.gost.pkix.GostOids;
  * Реализация {@link CmsKeyWrap} через KExp15/KImp15 (RFC 9189 §8.2.1).
  *
  * <p>Схема: MAC-then-Encrypt на шифре Кузнечик.
- * KEK -> KDF_TREE(label="kexp15", seed=UKM, R=2) -> K_MAC, K_ENC.
+ * Экспортные ключи вырабатываются по KEG (R 1323565.1.020-2018 §6.4.5.1):
+ * KDF_TREE_256(K_in=VKO, label="kdf tree", seed=UKM[16..24], R=1) -> K_MAC || K_ENC.
  * KExp15: CEK_MAC = CMAC(K_MAC, IV||CEK), wrapped = CTR-Encrypt(K_ENC, IV, CEK||CEK_MAC).
  */
 public final class Kexp15CmsKeyWrap implements CmsKeyWrap {
 
     private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cms.Kexp15CmsKeyWrap");
 
-    private static final String KEXP15_LABEL = "kexp15";
-    private static final byte[] KEXP15_LABEL_BYTES =
-            KEXP15_LABEL.getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    // Метка KDF_TREE для KEG — нормативная "kdf tree" (R 1323565.1.020-2018),
+    // а не "kexp15": именно её использует КриптоПРО/gost-engine при выводе K_MAC/K_ENC.
+    private static final byte[] KDF_TREE_LABEL_BYTES =
+            "kdf tree".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    // Смещение и длина seed для KDF_TREE внутри 32-байтового UKM: ukm_source+16, 8 байт.
+    private static final int KDF_SEED_OFFSET = 16;
+    private static final int KDF_SEED_LENGTH = 8;
     private static final int KEK_LENGTH = 32;
-    private static final int IV_LENGTH = 8;
 
     public Kexp15CmsKeyWrap() {}
 
     @Override
-    public byte[] wrap(byte[] cek, byte[] kek, byte[] ukm) {
+    public byte[] wrap(byte[] cek, byte[] kek, byte[] ukm, byte[] iv) {
         LOG.log(Level.DEBUG, "KExp15: wrapping CEK");
         byte[][] keys = deriveKeys(kek, ukm);
         SymmetricKey kMac = new SymmetricKey(keys[0]);
         SymmetricKey kEnc = new SymmetricKey(keys[1]);
-        byte[] iv = Arrays.copyOf(ukm, IV_LENGTH);
         try {
             return KeyExport.kExp15(cek, kMac, kEnc, iv);
         } finally {
             kMac.destroy();
             kEnc.destroy();
-            Arrays.fill(iv, (byte) 0);
         }
     }
 
     @Override
-    public byte[] unwrap(byte[] wrappedCek, byte[] kek, byte[] ukm) {
+    public byte[] unwrap(byte[] wrappedCek, byte[] kek, byte[] ukm, byte[] iv) {
         LOG.log(Level.DEBUG, "KExp15: unwrapping CEK");
         byte[][] keys = deriveKeys(kek, ukm);
         SymmetricKey kMac = new SymmetricKey(keys[0]);
         SymmetricKey kEnc = new SymmetricKey(keys[1]);
-        byte[] iv = Arrays.copyOf(ukm, IV_LENGTH);
         try {
             return KeyExport.kImp15(wrappedCek, kMac, kEnc, iv);
         } catch (org.rssys.gost.util.AuthenticationException e) {
@@ -57,7 +58,6 @@ public final class Kexp15CmsKeyWrap implements CmsKeyWrap {
         } finally {
             kMac.destroy();
             kEnc.destroy();
-            Arrays.fill(iv, (byte) 0);
         }
     }
 
@@ -66,12 +66,50 @@ public final class Kexp15CmsKeyWrap implements CmsKeyWrap {
         return GostOids.WRAP_KUZNYECHIK_KEXP15;
     }
 
+    /**
+     * Вычисляет UKM-множитель для VKO по правилу KEG (R 1323565.1.020-2018 §6.4.5.1).
+     *
+     * <p>В качестве синхропосылки VKO берутся первые 16 байт 32-байтового UKM,
+     * развёрнутые в обратном порядке и прочитанные как little-endian — это
+     * эквивалентно big-endian представлению первых 16 байт. Если первые 16 байт
+     * нулевые, используется значение 2¹²⁰ (единица в старшем октете, как в KEG).
+     *
+     * @param ukm полный UKM (не менее 16 байт)
+     * @return целочисленный множитель для VKO
+     */
+    public static java.math.BigInteger kegVkoUkm(byte[] ukm) {
+        byte[] first16 = Arrays.copyOfRange(ukm, 0, 16);
+        boolean allZero = true;
+        for (byte b : first16) {
+            if (b != 0) {
+                allZero = false;
+                break;
+            }
+        }
+        if (allZero) {
+            return java.math.BigInteger.ONE.shiftLeft(120);
+        }
+        return new java.math.BigInteger(1, first16);
+    }
+
     private static byte[][] deriveKeys(byte[] kek, byte[] ukm) {
+        // 512-бит: VKO_512 сразу даёт 64 байта = K_MAC || K_ENC (без KDF_TREE).
+        if (kek.length == KEK_LENGTH * 2) {
+            byte[] macKey = Arrays.copyOfRange(kek, 0, KEK_LENGTH);
+            byte[] encKey = Arrays.copyOfRange(kek, KEK_LENGTH, KEK_LENGTH * 2);
+            return new byte[][] {macKey, encKey};
+        }
+        // seed KDF_TREE — 8 байт UKM начиная со смещения 16 (KEG §6.4.5.1),
+        // а не весь UKM: остальные части UKM идут в VKO (0..16) и IV (24..32).
+        byte[] seed = Arrays.copyOfRange(ukm, KDF_SEED_OFFSET, KDF_SEED_OFFSET + KDF_SEED_LENGTH);
+        // count=2 (два 32-байтовых блока: K_MAC || K_ENC) безопасно при R=1:
+        // счётчик KDF_TREE занимает 1 октет, а i in {1,2} гарантированно в него влезает.
         byte[] allKeys =
-                KdfTreeGostR3411_2012_256.generate(kek, KEXP15_LABEL_BYTES, ukm, 2, KEK_LENGTH);
+                KdfTreeGostR3411_2012_256.generate(kek, KDF_TREE_LABEL_BYTES, seed, 2, KEK_LENGTH);
         byte[] macKey = Arrays.copyOfRange(allKeys, 0, KEK_LENGTH);
         byte[] encKey = Arrays.copyOfRange(allKeys, KEK_LENGTH, KEK_LENGTH * 2);
         Arrays.fill(allKeys, (byte) 0);
+        Arrays.fill(seed, (byte) 0);
         return new byte[][] {macKey, encKey};
     }
 }

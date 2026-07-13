@@ -1,0 +1,2 @@
+# KAT-фикстуры — бинарные файлы; отключаем текстовый diff и авто-EOL
+crypto-gost-pkix/src/test/resources/org/rssys/gost/pkix/cms/kat/* binary

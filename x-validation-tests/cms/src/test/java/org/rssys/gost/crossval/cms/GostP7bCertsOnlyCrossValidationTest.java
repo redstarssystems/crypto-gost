@@ -63,9 +63,9 @@ class GostP7bCertsOnlyCrossValidationTest {
         KeyPair crlKp = KeyGenerator.generateKeyPair(PARAMS);
         byte[] crlIssuerDn = GostDnParser.encodeDn("CN=CRL Issuer");
         byte[] crlDer =
-                GostCrlBuilder.create(crlKp.getPrivate(), crlIssuerDn)
+                GostCrlBuilder.create(crlIssuerDn)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(crlKp.getPrivate());
         testCrl = GostCrl.fromDer(crlDer);
     }
 
@@ -185,7 +185,7 @@ class GostP7bCertsOnlyCrossValidationTest {
                 .serial(BigInteger.valueOf(serial))
                 .notBefore("20250101000000Z")
                 .notAfter("21250101000000Z")
-                .assembleCert(kp.getPrivate());
+                .sign(kp.getPrivate());
     }
 
     static boolean opensslAvailable() {

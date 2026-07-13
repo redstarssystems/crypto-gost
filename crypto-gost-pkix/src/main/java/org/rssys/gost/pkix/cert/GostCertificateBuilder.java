@@ -3,18 +3,18 @@ package org.rssys.gost.pkix.cert;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
-import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
+import java.util.Objects;
 import org.rssys.gost.api.Digest;
-import org.rssys.gost.api.Signature;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.util.DerCodec;
 
 /**
@@ -25,14 +25,20 @@ import org.rssys.gost.util.DerCodec;
  * GostCertificate cert = GostCertificateBuilder.create(params, subjectDn)
  *     .publicKey(pub)
  *     .issuerDn(issuerDnDer)
- *     .notBefore("20250101000000Z")
- *     .notAfter("21010101000000Z")
+ *     .notBeforeNow()
+ *     .validForDays(365)
  *     .sanDns("example.com")
  *     .keyUsage(KeyUsage.DIGITAL_SIGNATURE)
  *     .ocspResponder("http://ocsp.example.com")
  *     .caIssuer("http://ca.example.com/cert.p7c")
  *     .crlDistributionPoints("http://crl.example.com/crl.crl")
- *     .assembleCert(issuerPriv);
+ *     .sign(issuerPriv);
+ * </pre>
+ *
+ * <p>Альтернативно — явные даты для воспроизводимости:
+ * <pre>
+ *     .notBefore("20250101000000Z")
+ *     .notAfter("21010101000000Z")
  * </pre>
  *
  * <p>Двухшаговый вариант (TBS отдельно):
@@ -42,7 +48,7 @@ import org.rssys.gost.util.DerCodec;
  *     .issuerDn(issuerDnDer)
  *     .notBefore(notBefore).notAfter(notAfter)
  *     .buildTbs();
- * GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, issuerPriv, params);
+ * GostCertificate cert = GostCertificateBuilder.sign(tbs, signer);
  * </pre>
  *
  * <p>Статические строители расширений ({@link #buildSanExtension}, {@link #buildKeyUsageExtension}
@@ -50,6 +56,17 @@ import org.rssys.gost.util.DerCodec;
  *
  * <p>Для самоподписанных сертификатов {@code .issuerDn()} можно опустить —
  * построитель автоматически подставит {@code subjectDn} в качестве issuer.</p>
+ *
+ * <p><b>Серийный номер:</b> обязателен — задаётся явным вызовом {@link #serial(BigInteger)}
+ * или {@link #randomSerial()}. Дефолта нет: {@link #buildTbs()} отвергает сборку без serial
+ * ({@link IllegalStateException}), закрывая insecure-by-default. Требование уникальности пары
+ * (issuer, serial) — RFC 5280 §4.1.2.2; требование ≥64 бит энтропии для случайных значений —
+ * CA/Browser Forum BR §7.1.</p>
+ *
+ * <p>Подписант передаётся в {@link #sign(GostSigner)} — единообразно с
+ * {@link GostCrlBuilder} и {@link GostCsrBuilder}. В отличие от остальных билдеров,
+ * у сертификата есть публичный двухшаговый путь {@link #buildTbs()} + {@link #sign(byte[], GostSigner)}
+ * для сценариев офлайн-церемонии (shipping TBS на подпись корневого/промежуточного УЦ).</p>
  */
 public final class GostCertificateBuilder {
 
@@ -59,27 +76,28 @@ public final class GostCertificateBuilder {
     private PublicKeyParameters pub;
     private String notBefore;
     private String notAfter;
-    private String[] sanDnsNames;
-    private String[] sanIps;
+    private final ExtensionsAccumulator ext = new ExtensionsAccumulator();
+
     private String[] ianDnsNames;
     private String[] ianIps;
-    private byte[] additionalExtensions;
-    private BigInteger serial = BigInteger.ONE;
-    private byte[] keyUsageFlags;
-    private String[] ekuOids;
-    private boolean ekuCritical;
-    private Boolean isCA;
-    private Integer pathLen;
+    private String[] ianRfc822Names;
+    private String[] ianUris;
+    private byte[][] ianDirectoryNames;
+    private OtherNameEntry[] ianOtherNames;
+
+    /** Обязателен: задаётся через {@link #serial} или {@link #randomSerial}; без него {@link #buildTbs} бросает исключение. */
+    private BigInteger serial = null;
+
     private String ocspUri;
     private String caIssuersUri;
     private String[] crlUris;
     private String[] freshestCrlUris;
-    private byte[] skiBytes;
     private byte[] akiBytes;
     private String[] ncPermittedDns;
     private String[] ncPermittedIps;
     private String[] ncExcludedDns;
     private String[] ncExcludedIps;
+    private boolean ocspNoCheck;
 
     private GostCertificateBuilder(ECParameters params, byte[] subjectDn) {
         this.params = params;
@@ -99,6 +117,70 @@ public final class GostCertificateBuilder {
     /** Удобная перегрузка: DN из строки "CN=..., O=..." */
     public static GostCertificateBuilder create(ECParameters params, String subjectDn) {
         return new GostCertificateBuilder(params, GostDnParser.encodeDn(subjectDn));
+    }
+
+    /**
+     * Создаёт {@link GostCertificateBuilder} из распарсенного CSR,
+     * копируя subject DN (байтово-точно через {@link GostCsrParser#getSubjectDnDer()})
+     * и открытый ключ заявителя.
+     *
+     * <p>Внутри вызывает {@link GostCsrParser#verifySelf()} — proof-of-possession
+     * обязателен. При провале выбрасывается {@link PkixException}
+     * с {@link PkixException.Reason#SIGNATURE_INVALID} — единственное
+     * checked-исключение в этом классе, поскольку метод выполняет
+     * криптографическую верификацию, а не строительный шаг билдера.</p>
+     *
+     * <p>Расширения из CSR <b>не копируются</b>. Оператор УЦ обязан явно
+     * проверить и перенести нужные расширения через {@link GostCsrParser#getExtensions()}
+     * и fluent-сеттеры билдера. См. документацию {@link GostCsrParser#getExtensions()}
+     * о границе доверия extensionRequest.</p>
+     *
+     * @param csr    распарсенный CSR (не null);
+     *               proof-of-possession проверяется внутри метода
+     * @param params параметры эллиптической кривой, которой УЦ будет
+     *               подписывать сертификат; не обязана совпадать с кривой
+     *               ключа заявителя из CSR (не null)
+     * @return предзаполненный билдер (subject DN, public key)
+     * @throws PkixException если proof-of-possession не пройден
+     */
+    public static GostCertificateBuilder fromCsrIdentity(GostCsrParser csr, ECParameters params)
+            throws PkixException {
+        Objects.requireNonNull(csr, "csr must not be null");
+        Objects.requireNonNull(params, "params must not be null");
+        if (!csr.verifySelf()) {
+            throw new PkixException(
+                    PkixException.Reason.SIGNATURE_INVALID,
+                    "CSR proof-of-possession verification failed: "
+                            + "signature does not match subject public key");
+        }
+        return create(params, csr.getSubjectDnDer()).publicKey(csr.getPublicKey());
+    }
+
+    /**
+     * Создаёт {@link GostCertificateBuilder} из существующего сертификата,
+     * копируя subject DN (байтово-точно через {@link GostCertificate#getSubjectDnBytes()})
+     * и открытый ключ субъекта.
+     *
+     * <p>Метод не выполняет криптографическую верификацию существующего сертификата.
+     * Ответственность за то, что {@code cert} получен из доверенного источника,
+     * лежит на вызывающем коде. В отличие от {@link #fromCsrIdentity}, где
+     * proof-of-possession проверяется через {@link GostCsrParser#verifySelf()}.</p>
+     *
+     * <p>Расширения из сертификата <b>не копируются</b>. Оператор УЦ обязан явно
+     * проверить и перенести нужные расширения через {@link GostCertificate#getExtensions()}
+     * и fluent-сеттеры билдера. Автоматическое копирование расширений при перевыпуске
+     * без повторной валидации (владение доменом, полномочия на EKU, статус CA)
+     * небезопасно.</p>
+     *
+     * @param cert   существующий сертификат (не null)
+     * @param params параметры эллиптической кривой для подписи нового сертификата (не null)
+     * @return предзаполненный билдер (subject DN, public key)
+     */
+    public static GostCertificateBuilder fromCertificate(
+            GostCertificate cert, ECParameters params) {
+        Objects.requireNonNull(cert, "cert must not be null");
+        Objects.requireNonNull(params, "params must not be null");
+        return create(params, cert.getSubjectDnBytes()).publicKey(cert.getPublicKey());
     }
 
     /** Открытый ключ субъекта (обязательно для buildTbs). */
@@ -137,7 +219,85 @@ public final class GostCertificateBuilder {
 
     /** @param time notBefore как Instant (UTC) */
     public GostCertificateBuilder notBefore(Instant time) {
-        this.notBefore = GENERALIZED_TIME_FORMATTER.format(time);
+        this.notBefore = GostSignatureHelper.formatGeneralizedTime(time);
+        return this;
+    }
+
+    /**
+     * Устанавливает notBefore = текущее UTC-время минус {@link GostOids#CLOCK_SKEW_MS} (5 мин).
+     *
+     * <p>Откат на 5 минут назад — стандартная практика УЦ: relying party с чуть
+     * отстающими часами не отвергнет свежевыпущенный сертификат как «ещё не валидный».
+     * {@link GostCertificate#isExpired()} уже имеет встроенную толерантность
+     * {@code CLOCK_SKEW_MS}, но сертификат должен быть валиден сразу после выпуска
+     * на любом проверяющем, а не только на тех, кто реализует clock skew.
+     *
+     * <p>Для тестов, где нужна побайтовая воспроизводимость, используйте
+     * {@link #notBefore(String)} или {@link #notBefore(Instant)} с фиксированной датой.
+     */
+    public GostCertificateBuilder notBeforeNow() {
+        this.notBefore =
+                GostSignatureHelper.formatGeneralizedTime(
+                        Instant.now().minusMillis(GostOids.CLOCK_SKEW_MS));
+        return this;
+    }
+
+    /**
+     * Устанавливает notAfter = notBefore + days.
+     * Сутки как 24 часа UTC (не календарные, без поправки на DST).
+     *
+     * @param days количество дней
+     * @return this
+     * @throws IllegalStateException если {@code notBefore} не был задан
+     */
+    public GostCertificateBuilder validForDays(int days) {
+        if (notBefore == null) {
+            throw new IllegalStateException("notBefore must be set before validForDays()");
+        }
+        Instant nb = GostSignatureHelper.parseAsn1Time(notBefore);
+        this.notAfter =
+                GostSignatureHelper.formatGeneralizedTime(
+                        nb.plusSeconds((long) days * 24L * 3600L));
+        return this;
+    }
+
+    /**
+     * Устанавливает notAfter = notBefore + months.
+     * Календарные месяцы UTC: «то же число через N месяцев».
+     * 31 января + 1 месяц → 28/29 февраля.
+     *
+     * @param months количество календарных месяцев
+     * @return this
+     * @throws IllegalStateException если {@code notBefore} не был задан
+     */
+    public GostCertificateBuilder validForMonths(int months) {
+        if (notBefore == null) {
+            throw new IllegalStateException("notBefore must be set before validForMonths()");
+        }
+        Instant nb = GostSignatureHelper.parseAsn1Time(notBefore);
+        this.notAfter =
+                GostSignatureHelper.formatGeneralizedTime(
+                        nb.atZone(ZoneOffset.UTC).plusMonths(months).toInstant());
+        return this;
+    }
+
+    /**
+     * Устанавливает notAfter = notBefore + years.
+     * Календарные годы UTC: «то же число через N лет».
+     * 29 февраля 2024 + 1 год → 28 февраля 2025.
+     *
+     * @param years количество календарных лет
+     * @return this
+     * @throws IllegalStateException если {@code notBefore} не был задан
+     */
+    public GostCertificateBuilder validForYears(int years) {
+        if (notBefore == null) {
+            throw new IllegalStateException("notBefore must be set before validForYears()");
+        }
+        Instant nb = GostSignatureHelper.parseAsn1Time(notBefore);
+        this.notAfter =
+                GostSignatureHelper.formatGeneralizedTime(
+                        nb.atZone(ZoneOffset.UTC).plusYears(years).toInstant());
         return this;
     }
 
@@ -151,17 +311,48 @@ public final class GostCertificateBuilder {
 
     /** @param time notAfter как Instant (UTC) */
     public GostCertificateBuilder notAfter(Instant time) {
-        this.notAfter = GENERALIZED_TIME_FORMATTER.format(time);
+        this.notAfter = GostSignatureHelper.formatGeneralizedTime(time);
         return this;
     }
 
     public GostCertificateBuilder sanDns(String... names) {
-        this.sanDnsNames = names;
+        ext.sanDns(names);
         return this;
     }
 
     public GostCertificateBuilder sanIp(String... ips) {
-        this.sanIps = ips;
+        ext.sanIp(ips);
+        return this;
+    }
+
+    public GostCertificateBuilder sanRfc822Name(String... emails) {
+        ext.sanRfc822Name(emails);
+        return this;
+    }
+
+    public GostCertificateBuilder sanUri(String... uris) {
+        ext.sanUri(uris);
+        return this;
+    }
+
+    /** Добавляет directoryName в SAN.
+     *  @param dnDer сырой DER DN (SEQUENCE OF RDN) */
+    public GostCertificateBuilder sanDirectoryName(byte[]... dnDer) {
+        ext.sanDirectoryName(dnDer);
+        return this;
+    }
+
+    /** Добавляет otherName общего вида в SAN.
+     *  @param oid      OID типа
+     *  @param valueDer DER-кодированное значение (будет обёрнуто в [0] EXPLICIT) */
+    public GostCertificateBuilder sanOtherName(String oid, byte[] valueDer) {
+        ext.sanOtherName(oid, valueDer);
+        return this;
+    }
+
+    /** Добавляет UPN (User Principal Name) в SAN. */
+    public GostCertificateBuilder sanUpn(String upn) {
+        ext.sanUpn(upn);
         return this;
     }
 
@@ -179,8 +370,39 @@ public final class GostCertificateBuilder {
         return this;
     }
 
+    public GostCertificateBuilder ianRfc822Name(String... emails) {
+        this.ianRfc822Names = emails;
+        return this;
+    }
+
+    public GostCertificateBuilder ianUri(String... uris) {
+        this.ianUris = uris;
+        return this;
+    }
+
+    /** Добавляет directoryName в IssuerAltName.
+     *  @param dnDer сырой DER DN (SEQUENCE OF RDN) */
+    public GostCertificateBuilder ianDirectoryName(byte[]... dnDer) {
+        this.ianDirectoryNames = dnDer;
+        return this;
+    }
+
+    /** Добавляет otherName общего вида в IssuerAltName.
+     *  @param oid      OID типа
+     *  @param valueDer DER-кодированное значение (будет обёрнуто в [0] EXPLICIT) */
+    public GostCertificateBuilder ianOtherName(String oid, byte[] valueDer) {
+        this.ianOtherNames = new OtherNameEntry[] {new OtherNameEntry(oid, valueDer)};
+        return this;
+    }
+
+    /** Добавляет UPN в IssuerAltName. */
+    public GostCertificateBuilder ianUpn(String upn) {
+        byte[] upnValue = DerCodec.encodeUTF8String(upn);
+        return ianOtherName(GostOids.ID_MS_UPN, upnValue);
+    }
+
     public GostCertificateBuilder keyUsage(KeyUsage... usages) {
-        this.keyUsageFlags = keyUsageFlags(usages);
+        ext.keyUsage(usages);
         return this;
     }
 
@@ -190,8 +412,7 @@ public final class GostCertificateBuilder {
      * @param oids dotted-string OID EKU (например {@link org.rssys.gost.pkix.GostOids#EXT_TIME_STAMPING})
      */
     public GostCertificateBuilder extendedKeyUsage(String... oids) {
-        this.ekuOids = oids;
-        this.ekuCritical = false;
+        ext.extendedKeyUsage(oids);
         return this;
     }
 
@@ -200,8 +421,7 @@ public final class GostCertificateBuilder {
      * Например {@code true} для TSA-сертификатов.
      */
     public GostCertificateBuilder extendedKeyUsage(boolean critical, String... oids) {
-        this.ekuOids = oids;
-        this.ekuCritical = critical;
+        ext.extendedKeyUsage(critical, oids);
         return this;
     }
 
@@ -211,11 +431,7 @@ public final class GostCertificateBuilder {
      * @throws IllegalArgumentException если pathLen задан при isCA=false
      */
     public GostCertificateBuilder basicConstraints(boolean isCA, Integer pathLen) {
-        if (pathLen != null && !isCA) {
-            throw new IllegalArgumentException("pathLen requires isCA=true");
-        }
-        this.isCA = isCA;
-        this.pathLen = pathLen;
+        ext.basicConstraints(isCA, pathLen);
         return this;
     }
 
@@ -234,6 +450,56 @@ public final class GostCertificateBuilder {
      */
     public GostCertificateBuilder caIssuer(String uri) {
         this.caIssuersUri = uri;
+        return this;
+    }
+
+    /**
+     * Помечает сертификат расширением id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1) —
+     * некритичным расширением с пустым значением (DER {@code NULL}).
+     *
+     * <p>Расширение говорит проверяющей стороне не проверять рекурсивно отзыв самого
+     * сертификата OCSP-респондера (иначе возникла бы циклическая зависимость: чтобы
+     * проверить OCSP-ответ, нужен ещё один OCSP-запрос про сертификат подписанта).</p>
+     *
+     * <p><b>Безопасность:</b> сертификат с этим расширением фактически невозможно
+     * эффективно отозвать — клиенты по определению не проверяют его отзыв. Поэтому его
+     * следует ставить <b>только на короткоживущие</b> (сутки-двое) сертификаты
+     * делегированного OCSP-респондера. Срок жизни библиотека не навязывает — это
+     * операционная политика CA.</p>
+     *
+     * <p>Расширение уместно только на сертификате с EKU {@code id-kp-OCSPSigning};
+     * {@link #buildTbs()} это проверяет и бросает {@link IllegalStateException},
+     * если EKU не задан fluent-методом {@link #extendedKeyUsage(String...)}. Проверка
+     * смотрит только на fluent-поле EKU: если EKU задаётся сырым DER через
+     * {@link #additionalExtensions(byte[])}, то и nocheck ставьте сырым DER.</p>
+     *
+     * <p>Не дублируется в {@code GostCsrBuilder} — расширение выражает решение
+     * выпускающей CA, а не запрос субъекта.</p>
+     */
+    public GostCertificateBuilder ocspNoCheck() {
+        this.ocspNoCheck = true;
+        return this;
+    }
+
+    /**
+     * Устанавливает OID политик сертификата (RFC 5280 §4.2.1.4), без квалификаторов.
+     *
+     * @param policyOids OID политик в точечной нотации (например, {@code "1.2.643.100.113.1"})
+     */
+    public GostCertificateBuilder certificatePolicies(String... policyOids) {
+        ext.certificatePolicies(policyOids);
+        return this;
+    }
+
+    /**
+     * Устанавливает политики сертификата с опциональными CPS-квалификаторами
+     * (RFC 5280 §4.2.1.4).
+     *
+     * @param policies политики; у каждой {@code cpsUri} может быть {@code null}
+     *                 если квалификатор не требуется
+     */
+    public GostCertificateBuilder certificatePolicyInfos(CertificatePolicy... policies) {
+        ext.certificatePolicyInfos(policies);
         return this;
     }
 
@@ -266,7 +532,15 @@ public final class GostCertificateBuilder {
             throw new IllegalStateException("publicKey must be set before ski()");
         }
         byte[] pointBytes = GostDerCodec.subjectPublicKeyPointBytes(pub);
-        this.skiBytes = Digest.digest256(pointBytes);
+        ext.ski(Digest.digest256(pointBytes));
+        return this;
+    }
+
+    /**
+     * AKI из готовых байтов SKI издателя (результат {@link ExtensionsAccumulator#buildSkiExtension}).
+     */
+    public GostCertificateBuilder aki(byte[] issuerSkiBytes) {
+        this.akiBytes = issuerSkiBytes.clone();
         return this;
     }
 
@@ -277,14 +551,6 @@ public final class GostCertificateBuilder {
     public GostCertificateBuilder aki(PublicKeyParameters issuerPub) {
         byte[] pointBytes = GostDerCodec.subjectPublicKeyPointBytes(issuerPub);
         this.akiBytes = Digest.digest256(pointBytes);
-        return this;
-    }
-
-    /**
-     * AKI из готовых байтов SKI издателя (результат {@link #buildSkiExtension}).
-     */
-    public GostCertificateBuilder aki(byte[] issuerSkiBytes) {
-        this.akiBytes = issuerSkiBytes.clone();
         return this;
     }
 
@@ -311,7 +577,7 @@ public final class GostCertificateBuilder {
 
     /** Сырые DER-байты дополнительных расширений (конкатенация). */
     public GostCertificateBuilder additionalExtensions(byte[] der) {
-        this.additionalExtensions = der;
+        ext.additionalExtensions(der);
         return this;
     }
 
@@ -335,6 +601,33 @@ public final class GostCertificateBuilder {
     }
 
     /**
+     * Генерирует криптографически случайный серийный номер сертификата.
+     *
+     * <p>Каждый вызов возвращает новый положительный {@link BigInteger}
+     * с не менее чем 127 битами эффективной энтропии (CA/Browser Forum BR §7.1
+     * требует ≥64, реализация — 128 бит CSPRNG-вывода, старший бит форсирован).
+     * Результат пригоден для прямой передачи в {@link #serial(BigInteger)}.
+     *
+     * <p>Не заменяет управление серийниками на уровне УЦ (БД, монотонный счётчик, HSM) —
+     * это низкоуровневый генератор для сертификатов, выпускаемых программно.</p>
+     *
+     * @return положительный BigInteger со случайным значением (bitLength == 128)
+     */
+    public static BigInteger generateSerial() {
+        return new BigInteger(128, CryptoRandom.INSTANCE).setBit(127);
+    }
+
+    /**
+     * Fluent-метод: генерирует случайный серийный номер и устанавливает его.
+     * Делегат в {@link #generateSerial()}.
+     *
+     * @return this
+     */
+    public GostCertificateBuilder randomSerial() {
+        return serial(generateSerial());
+    }
+
+    /**
      * Собирает TBSCertificate (DER).
      *
      * @return DER-кодированный TBSCertificate
@@ -349,8 +642,12 @@ public final class GostCertificateBuilder {
         if (notAfter == null) {
             throw new IllegalStateException("notAfter must be set");
         }
-        Instant notBeforeInstant = parseTimeString(notBefore);
-        Instant notAfterInstant = parseTimeString(notAfter);
+        if (serial == null) {
+            throw new IllegalStateException(
+                    "serial must be set explicitly via serial(...) or randomSerial()");
+        }
+        Instant notBeforeInstant = GostSignatureHelper.parseAsn1Time(notBefore);
+        Instant notAfterInstant = GostSignatureHelper.parseAsn1Time(notAfter);
         if (!notAfterInstant.isAfter(notBeforeInstant)) {
             throw new IllegalArgumentException(
                     "notAfter must be after notBefore: notBefore="
@@ -358,51 +655,50 @@ public final class GostCertificateBuilder {
                             + ", notAfter="
                             + notAfter);
         }
-        // Собираем все расширения
+        if (ocspNoCheck
+                && (ext.ekuOids == null
+                        || !Arrays.asList(ext.ekuOids).contains(GostOids.EXT_OCSP_SIGNING))) {
+            throw new IllegalStateException(
+                    "ocspNoCheck() requires extendedKeyUsage(EXT_OCSP_SIGNING)");
+        }
         ByteArrayOutputStream allExts = new ByteArrayOutputStream();
         try {
-            if ((sanDnsNames != null && sanDnsNames.length > 0)
-                    || (sanIps != null && sanIps.length > 0)) {
-                allExts.write(buildSanExtension(sanDnsNames, sanIps));
-            }
-            if ((ianDnsNames != null && ianDnsNames.length > 0)
-                    || (ianIps != null && ianIps.length > 0)) {
-                allExts.write(buildIssuerAltNameExtension(ianDnsNames, ianIps));
-            }
-            if (keyUsageFlags != null) {
-                allExts.write(buildKeyUsageExtension(keyUsageFlags, true));
-            }
-            if (ekuOids != null) {
-                allExts.write(buildEkuExtension(ekuOids, ekuCritical));
-            }
-            if (isCA != null) {
-                allExts.write(buildBasicConstraintsExtension(isCA, pathLen));
+            ext.writeExtensions(allExts);
+            if (hasAnyIanNames()) {
+                allExts.write(
+                        ExtensionsAccumulator.buildIssuerAltNameExtension(
+                                ianDnsNames,
+                                ianIps,
+                                ianRfc822Names,
+                                ianUris,
+                                ianDirectoryNames,
+                                ianOtherNames));
             }
             if (ocspUri != null || caIssuersUri != null) {
-                allExts.write(buildAiaExtension(ocspUri, caIssuersUri));
+                allExts.write(ExtensionsAccumulator.buildAiaExtension(ocspUri, caIssuersUri));
+            }
+            if (ocspNoCheck) {
+                allExts.write(ExtensionsAccumulator.buildOcspNoCheckExtension());
             }
             if (crlUris != null) {
-                allExts.write(buildCdpExtension(crlUris));
+                allExts.write(ExtensionsAccumulator.buildCdpExtension(crlUris));
             }
             if (freshestCrlUris != null) {
-                allExts.write(buildFreshestCrlExtension(freshestCrlUris));
-            }
-            if (skiBytes != null) {
-                allExts.write(buildSkiExtensionBytes(skiBytes));
+                allExts.write(ExtensionsAccumulator.buildFreshestCrlExtension(freshestCrlUris));
             }
             if (akiBytes != null) {
-                allExts.write(buildAkiExtensionBytes(akiBytes));
+                allExts.write(ExtensionsAccumulator.buildAkiExtension(akiBytes));
             }
             if ((ncPermittedDns != null && ncPermittedDns.length > 0)
                     || (ncPermittedIps != null && ncPermittedIps.length > 0)
                     || (ncExcludedDns != null && ncExcludedDns.length > 0)
                     || (ncExcludedIps != null && ncExcludedIps.length > 0)) {
                 allExts.write(
-                        buildNameConstraintsExtension(
+                        ExtensionsAccumulator.buildNameConstraintsExtension(
                                 ncPermittedDns, ncPermittedIps, ncExcludedDns, ncExcludedIps));
             }
-            if (additionalExtensions != null) {
-                allExts.write(additionalExtensions);
+            if (ext.additionalExtensions != null) {
+                allExts.write(ext.additionalExtensions);
             }
         } catch (IOException e) {
             throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
@@ -420,31 +716,63 @@ public final class GostCertificateBuilder {
 
     /**
      * Собирает и подписывает сертификат за один шаг (без отдельной TBS-сборки).
+     *
+     * <p>Fail-closed: проверяет согласованность {@code params} из {@code create(...)}
+     * и {@code signer.getParams()} — при несовпадении алгоритма подписи в TBS и фактического
+     * алгоритма выбрасывает {@link IllegalStateException}.</p>
      */
-    public GostCertificate assembleCert(PrivateKeyParameters issuerPriv) {
+    public GostCertificate sign(PrivateKeyParameters issuerPriv) {
+        return sign(GostSigner.of(issuerPriv));
+    }
+
+    /**
+     * Собирает и подписывает сертификат за один шаг подписантом (например, HSM).
+     *
+     * <p>Fail-closed: проверяет согласованность {@code params} из {@code create(...)}
+     * и {@code signer.getParams()} — при несовпадении выбрасывает {@link IllegalStateException}.
+     * Это закрывает риск, задокументированный в комментариях старого API:
+     * AlgorithmIdentifier в TBS и фактический алгоритм подписи обязаны совпадать.</p>
+     *
+     * @param signer подписант издателя
+     */
+    public GostCertificate sign(GostSigner signer) {
+        Objects.requireNonNull(signer, "signer must not be null");
+        // AlgorithmIdentifier в TBS строится из params (create-time), подпись — из signer.
+        // При рассинхроне кривых сертификат оказался бы некорректным; ловим до подписи.
+        if (!Arrays.equals(
+                GostSignatureHelper.buildAlgId(this.params),
+                GostSignatureHelper.buildAlgId(signer.getParams()))) {
+            throw new IllegalStateException(
+                    "Certificate AlgorithmIdentifier mismatch: "
+                            + "params from create() differ from signer.getParams()");
+        }
         byte[] tbs = buildTbs();
-        return assembleCert(tbs, issuerPriv, params);
+        return sign(tbs, signer);
     }
 
     // ========================================================================
-    // Статический assembleCert (двухшаговый режим: buildTbs отдельно)
+    // Статический sign (двухшаговый режим: buildTbs отдельно)
     // ========================================================================
 
     /**
      * Подписывает TBSCertificate и возвращает готовый сертификат.
      *
-     * <p>Для одношагового варианта — экземплярный {@link #assembleCert(PrivateKeyParameters)}.</p>
+     * <p>Подписант сам несёт параметры кривой (hlen, algId), поэтому закрытый ключ
+     * издателя не требуется. Для ключа в памяти — {@link GostSigner#of(PrivateKeyParameters)}.</p>
      *
-     * @param tbs       DER-кодированный TBSCertificate (результат {@link #buildTbs()})
-     * @param issuerPriv закрытый ключ издателя
-     * @param params    параметры эллиптической кривой
+     * <p>Двухшаговый путь (офлайн-церемония): TBS собирается через {@link #buildTbs()},
+     * увозится на подпись и подписывается здесь — билдер на этой стадии уже недоступен,
+     * поэтому метод статический. AlgorithmIdentifier уже зафиксирован внутри TBS.</p>
+     *
+     * @param tbs    DER-кодированный TBSCertificate (результат {@link #buildTbs()})
+     * @param signer подписант (может быть HSM-адаптером)
      * @return готовый сертификат {@link GostCertificate}
      */
-    public static GostCertificate assembleCert(
-            byte[] tbs, PrivateKeyParameters issuerPriv, ECParameters params) {
-        byte[] hash = GostSignatureHelper.doHash(tbs, params.hlen);
-        byte[] sig = Signature.signHash(hash, issuerPriv);
-        byte[] algId = GostSignatureHelper.buildAlgId(params);
+    public static GostCertificate sign(byte[] tbs, GostSigner signer) {
+        Objects.requireNonNull(signer, "signer must not be null");
+        byte[] hash = GostSignatureHelper.doHash(tbs, signer.getParams().hlen);
+        byte[] sig = GostSignatureHelper.signHashChecked(hash, signer);
+        byte[] algId = GostSignatureHelper.buildAlgId(signer.getParams());
         byte[] der = DerCodec.encodeSequence(tbs, algId, DerCodec.encodeBitString(sig));
         return new GostCertificate(der);
     }
@@ -490,12 +818,9 @@ public final class GostCertificateBuilder {
     }
 
     // ========================================================================
-    // Статические строители расширений (независимы от fluent-состояния)
+    // KeyUsage enum (обратная совместимость)
     // ========================================================================
 
-    /**
-     * Биты KeyUsage extension (RFC 5280 §4.2.1.3).
-     */
     public enum KeyUsage {
         DIGITAL_SIGNATURE(0x80),
         NON_REPUDIATION(0x40),
@@ -511,394 +836,133 @@ public final class GostCertificateBuilder {
         KeyUsage(int mask) {
             this.mask = mask;
         }
+
+        /**
+         * Проверяет, установлен ли этот флаг KeyUsage в битовой маске.
+         *
+         * @param bits сырая битовая маска KeyUsage (из {@code ExtensionsResult.keyUsageBits})
+         * @return true если флаг установлен
+         */
+        public boolean isSetIn(int bits) {
+            return (bits & mask) != 0;
+        }
     }
 
-    /** Собирает однобайтовую битовую маску KeyUsage. */
+    // ========================================================================
+    // Статические строители расширений — делегаты в ExtensionsAccumulator
+    // ========================================================================
+
     public static byte[] keyUsageFlags(KeyUsage... usages) {
-        int mask = 0;
-        for (KeyUsage u : usages) {
-            mask |= u.mask;
-        }
-        return new byte[] {(byte) mask};
+        return ExtensionsAccumulator.keyUsageFlags(usages);
     }
 
-    /**
-     * Кодирует расширение KeyUsage (OID 2.5.29.15, RFC 5280 §4.2.1.3).
-     * Non-critical по умолчанию. Для critical используйте
-     * {@link #buildKeyUsageExtension(boolean, KeyUsage...)}.
-     */
     public static byte[] buildKeyUsageExtension(KeyUsage... usages) {
-        return buildKeyUsageExtension(keyUsageFlags(usages), false);
+        return ExtensionsAccumulator.buildKeyUsageExtension(usages);
     }
 
-    /**
-     * Строит Extension keyUsage с явным флагом критичности (RFC 5280 §4.2.1.3 SHOULD critical).
-     *
-     * @param usages   перечисление KeyUsage
-     * @param critical {@code true} — расширение критическое
-     */
     public static byte[] buildKeyUsageExtension(boolean critical, KeyUsage... usages) {
-        return buildKeyUsageExtension(keyUsageFlags(usages), critical);
+        return ExtensionsAccumulator.buildKeyUsageExtension(
+                ExtensionsAccumulator.keyUsageFlags(usages), critical);
     }
 
-    /**
-     * Строит Extension keyUsage с явным флагом критичности (RFC 5280 §4.2.1.3 SHOULD critical).
-     *
-     * @param kuFlags  битовая маска KeyUsage
-     * @param critical {@code true} — расширение критическое
-     */
     public static byte[] buildKeyUsageExtension(byte[] kuFlags, boolean critical) {
-        byte[] extValue = DerCodec.encodeOctetString(DerCodec.encodeBitString(kuFlags));
-        if (critical) {
-            return DerCodec.encodeSequence(
-                    DerCodec.encodeOid(GostOids.EXT_KU), DerCodec.encodeBoolean(true), extValue);
-        }
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_KU), extValue);
+        return ExtensionsAccumulator.buildKeyUsageExtension(kuFlags, critical);
     }
 
-    /**
-     * Кодирует расширение KeyUsage (OID 2.5.29.15, RFC 5280 §4.2.1.3).
-     *
-     * <p><b>Контракт:</b> через {@link #buildTbs()} (fluent API) KeyUsage всегда
-     * critical. Через этот static-метод — non-critical по умолчанию.
-     * Для critical-варианта используйте {@link #buildKeyUsageExtension(byte[], boolean)}.
-     *
-     * @param kuFlags битовая маска KeyUsage
-     * @return DER-кодированное расширение без critical flag
-     */
-    public static byte[] buildKeyUsageExtension(byte[] kuFlags) {
-        return buildKeyUsageExtension(kuFlags, false);
-    }
-
-    public static byte[] buildEkuExtension(String[] oids) {
-        return buildEkuExtension(oids, false);
-    }
-
-    /**
-     * Строит Extension extKeyUsage с явным флагом критичности.
-     *
-     * @param oids     dotted-string OID EKU
-     * @param critical {@code true} — расширение критическое (RFC 5280 §4.2.1.12)
-     */
     public static byte[] buildEkuExtension(String[] oids, boolean critical) {
-        ByteArrayOutputStream ekuSeq = new ByteArrayOutputStream();
-        for (String oid : oids) {
-            try {
-                ekuSeq.write(DerCodec.encodeOid(oid));
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        }
-        if (critical) {
-            return DerCodec.encodeSequence(
-                    DerCodec.encodeOid(GostOids.EXT_EKU),
-                    DerCodec.encodeBoolean(true),
-                    DerCodec.encodeOctetString(DerCodec.encodeSequence(ekuSeq.toByteArray())));
-        }
-        return DerCodec.encodeSequence(
-                DerCodec.encodeOid(GostOids.EXT_EKU),
-                DerCodec.encodeOctetString(DerCodec.encodeSequence(ekuSeq.toByteArray())));
+        return ExtensionsAccumulator.buildEkuExtension(oids, critical);
     }
 
     public static byte[] buildCertificatePoliciesExtension(String[] policyOids) {
-        ByteArrayOutputStream cpSeq = new ByteArrayOutputStream();
-        for (String oid : policyOids) {
-            try {
-                byte[] policyInfoSeq = DerCodec.encodeSequence(DerCodec.encodeOid(oid));
-                cpSeq.write(policyInfoSeq);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        }
-        return DerCodec.encodeSequence(
-                DerCodec.encodeOid(GostOids.EXT_CP),
-                DerCodec.encodeOctetString(DerCodec.encodeSequence(cpSeq.toByteArray())));
+        return ExtensionsAccumulator.buildCertificatePoliciesExtension(
+                CertificatePolicy.fromOids(policyOids));
     }
 
-    /**
-     * Строит DER-кодированное расширение Basic Constraints (RFC 5280 §4.2.1.9).
-     *
-     * @param isCA    true — субъект является CA (добавляется BOOLEAN DEFAULT TRUE)
-     * @param pathLen максимальная глубина цепочки, null — без ограничения
-     * @throws IllegalArgumentException если pathLen задан при isCA=false
-     */
+    public static byte[] buildCertificatePoliciesExtension(CertificatePolicy[] policies) {
+        return ExtensionsAccumulator.buildCertificatePoliciesExtension(policies);
+    }
+
     public static byte[] buildBasicConstraintsExtension(boolean isCA, Integer pathLen) {
-        if (pathLen != null && !isCA) {
-            throw new IllegalArgumentException("pathLen requires isCA=true");
-        }
-        ByteArrayOutputStream bcSeq = new ByteArrayOutputStream();
-        try {
-            if (isCA) {
-                bcSeq.write(new byte[] {0x01, 0x01, (byte) 0xFF});
-            }
-            if (pathLen != null) {
-                bcSeq.write(DerCodec.encodeInteger(pathLen));
-            }
-        } catch (IOException e) {
-            throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
-        }
-        byte[] bcContent = DerCodec.encodeSequence(bcSeq.toByteArray());
-        byte[] extValue = DerCodec.encodeOctetString(bcContent);
-        if (isCA) {
-            // RFC 5280 §4.2.1.9: MUST critical для CA-сертификатов
-            return DerCodec.encodeSequence(
-                    DerCodec.encodeOid(GostOids.EXT_BC), DerCodec.encodeBoolean(true), extValue);
-        }
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_BC), extValue);
+        return ExtensionsAccumulator.buildBasicConstraintsExtension(isCA, pathLen);
     }
 
-    /**
-     * Строит одно AIA-расширение (RFC 5280 §4.2.2.1) с заданными URI.
-     * Поддерживает все комбинации: только OCSP, только caIssuers, или оба в одном расширении.
-     *
-     * @param ocspUri      URI OCSP-ответчика (id-ad-ocsp), или null
-     * @param caIssuersUri URI caIssuers (id-ad-caIssuers), или null
-     * @return DER-байты одного AIA-расширения со всеми не-null ссылками
-     * @throws IllegalArgumentException если оба параметра null
-     */
     public static byte[] buildAiaExtension(String ocspUri, String caIssuersUri) {
-        if (ocspUri == null && caIssuersUri == null) {
-            throw new IllegalArgumentException(
-                    "At least one of ocspUri or caIssuersUri must be non-null");
-        }
-
-        ByteArrayOutputStream aiaSeq = new ByteArrayOutputStream();
-        if (ocspUri != null) {
-            byte[] ocspAccessDesc = accessDescription(GostOids.OCSP_AD, ocspUri);
-            aiaSeq.write(ocspAccessDesc, 0, ocspAccessDesc.length);
-        }
-        if (caIssuersUri != null) {
-            byte[] caIssuersAccessDesc = accessDescription(GostOids.CA_ISSUERS_AD, caIssuersUri);
-            aiaSeq.write(caIssuersAccessDesc, 0, caIssuersAccessDesc.length);
-        }
-        byte[] aiaSeqEncoded = DerCodec.encodeSequence(aiaSeq.toByteArray());
-        byte[] extValue = DerCodec.encodeOctetString(aiaSeqEncoded);
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_AIA), extValue);
+        return ExtensionsAccumulator.buildAiaExtension(ocspUri, caIssuersUri);
     }
 
-    private static byte[] accessDescription(String accessMethodOid, String uri) {
-        byte[] uriBytes = uri.getBytes(StandardCharsets.US_ASCII);
-        return DerCodec.encodeSequence(
-                DerCodec.encodeOid(accessMethodOid), DerCodec.encodeTlv(0x86, uriBytes));
+    public static byte[] buildOcspNoCheckExtension() {
+        return ExtensionsAccumulator.buildOcspNoCheckExtension();
     }
 
-    public static byte[] buildSanExtension(String[] dnsNames, String[] ipAddresses) {
-        byte[] gnSeq = GeneralNameCodec.encodeGeneralNames(dnsNames, ipAddresses);
-        byte[] extValue = DerCodec.encodeOctetString(gnSeq);
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_SAN), extValue);
+    public static byte[] buildSanExtension(
+            String[] dnsNames,
+            String[] ipAddresses,
+            String[] rfc822Names,
+            String[] uris,
+            byte[][] directoryNames,
+            OtherNameEntry[] otherNames) {
+        return ExtensionsAccumulator.buildSanExtension(
+                dnsNames, ipAddresses, rfc822Names, uris, directoryNames, otherNames);
     }
 
-    /**
-     * Кодирует IssuerAltName extension (RFC 5280 §4.2.1.7).
-     * Структура идентична SubjectAltName (GeneralNames), отличается только OID.
-     *
-     * @param dnsNames    dNSName записи (может быть null/пустой)
-     * @param ipAddresses iPAddress записи (может быть null/пустой)
-     * @return DER-закодированное Extension (SEQUENCE { OID, OCTET STRING })
-     */
-    public static byte[] buildIssuerAltNameExtension(String[] dnsNames, String[] ipAddresses) {
-        byte[] gnSeq = GeneralNameCodec.encodeGeneralNames(dnsNames, ipAddresses);
-        byte[] extValue = DerCodec.encodeOctetString(gnSeq);
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_IAN), extValue);
+    public static byte[] buildIssuerAltNameExtension(
+            String[] dnsNames,
+            String[] ipAddresses,
+            String[] rfc822Names,
+            String[] uris,
+            byte[][] directoryNames,
+            OtherNameEntry[] otherNames) {
+        return ExtensionsAccumulator.buildIssuerAltNameExtension(
+                dnsNames, ipAddresses, rfc822Names, uris, directoryNames, otherNames);
     }
 
     public static byte[] buildCdpExtension(String... crlUris) {
-        return buildDistributionPointExtension(GostOids.EXT_CDP, crlUris);
+        return ExtensionsAccumulator.buildCdpExtension(crlUris);
     }
 
-    /**
-     * Кодирует FreshestCRL extension (RFC 5280 §5.2.6).
-     * Структура DistributionPoint идентична CDP, отличается только OID.
-     *
-     * @param uris URI точек распространения delta CRL
-     * @return DER-закодированное Extension (SEQUENCE { OID, OCTET STRING })
-     */
     public static byte[] buildFreshestCrlExtension(String... uris) {
-        return buildDistributionPointExtension(GostOids.EXT_FRESHEST_CRL, uris);
-    }
-
-    /**
-     * Кодирует extension типа DistributionPoint (CDP / Freshest CRL).
-     * Структура идентична для CDP (RFC 5280 §4.2.1.13) и
-     * Freshest CRL (RFC 5280 §5.2.6), отличается только OID.
-     */
-    static byte[] buildDistributionPointExtension(String oid, String... uris) {
-        ByteArrayOutputStream dps = new ByteArrayOutputStream();
-        for (String uri : uris) {
-            byte[] uriBytes = uri.getBytes(StandardCharsets.US_ASCII);
-            byte[] gnUri = DerCodec.encodeTlv(0x86, uriBytes);
-            byte[] fullName = DerCodec.encodeTlv(0xA0, gnUri);
-            byte[] distPointContent = DerCodec.encodeTlv(0xA0, fullName);
-            byte[] distPointSeq = DerCodec.encodeSequence(distPointContent);
-            try {
-                dps.write(distPointSeq);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        }
-        byte[] distributionPoints = DerCodec.encodeSequence(dps.toByteArray());
-        byte[] extValue = DerCodec.encodeOctetString(distributionPoints);
-        return DerCodec.encodeSequence(DerCodec.encodeOid(oid), extValue);
+        return ExtensionsAccumulator.buildFreshestCrlExtension(uris);
     }
 
     public static byte[] buildSkiExtension(PublicKeyParameters pub) {
-        byte[] pointBytes = GostDerCodec.subjectPublicKeyPointBytes(pub);
-        byte[] ski = Digest.digest256(pointBytes);
-        byte[] skiOctet = DerCodec.encodeOctetString(ski);
-        byte[] extValue = DerCodec.encodeOctetString(skiOctet);
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_SKI), extValue);
+        return ExtensionsAccumulator.buildSkiExtension(pub);
     }
 
     public static byte[] buildAkiExtension(byte[] issuerSkiBytes) {
-        byte[] keyIdentifier = DerCodec.encodeTlv(0x80, issuerSkiBytes);
-        byte[] akiValue = DerCodec.encodeSequence(keyIdentifier);
-        byte[] extValue = DerCodec.encodeOctetString(akiValue);
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_AKI), extValue);
+        return ExtensionsAccumulator.buildAkiExtension(issuerSkiBytes);
     }
 
     public static byte[] buildAkiExtension(PublicKeyParameters issuerPub) {
-        byte[] pointBytes = GostDerCodec.subjectPublicKeyPointBytes(issuerPub);
-        byte[] ski = Digest.digest256(pointBytes);
-        return buildAkiExtension(ski);
+        return ExtensionsAccumulator.buildAkiExtension(issuerPub);
     }
 
-    /**
-     * Строит DER-кодированное расширение NameConstraints (RFC 5280 §4.2.1.10).
-     * Всегда critical (RFC 5280 §4.2.1.10 MUST be critical).
-     * min/max не поддерживаются — {@link ChainValidator} режектит сертификаты с ними.
-     *
-     * @param permittedDns разрешённые dNSName (может быть {@code null}/пустой)
-     * @param permittedIps разрешённые iPAddress в CIDR-нотации (может быть {@code null}/пустой)
-     * @param excludedDns  запрещённые dNSName (может быть {@code null}/пустой)
-     * @param excludedIps  запрещённые iPAddress в CIDR-нотации (может быть {@code null}/пустой)
-     * @return DER-кодированное расширение Extension SEQUENCE
-     * @throws IllegalArgumentException если все списки null или пусты
-     */
     public static byte[] buildNameConstraintsExtension(
             String[] permittedDns,
             String[] permittedIps,
             String[] excludedDns,
             String[] excludedIps) {
-        if (isEmptyNc(permittedDns)
-                && isEmptyNc(permittedIps)
-                && isEmptyNc(excludedDns)
-                && isEmptyNc(excludedIps)) {
-            throw new IllegalArgumentException(
-                    "NameConstraints must contain at least one constraint");
-        }
-        ByteArrayOutputStream ncSeq = new ByteArrayOutputStream();
-        try {
-            if (!isEmptyNc(permittedDns) || !isEmptyNc(permittedIps)) {
-                byte[] gsP = encodeGeneralSubtreesNc(permittedDns, permittedIps);
-                ncSeq.write(DerCodec.encodeContextConstructed(0, gsP));
-            }
-            if (!isEmptyNc(excludedDns) || !isEmptyNc(excludedIps)) {
-                byte[] gsE = encodeGeneralSubtreesNc(excludedDns, excludedIps);
-                ncSeq.write(DerCodec.encodeContextConstructed(1, gsE));
-            }
-        } catch (IOException e) {
-            throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
-        }
-        byte[] ncContent = DerCodec.encodeSequence(ncSeq.toByteArray());
-        byte[] extValue = DerCodec.encodeOctetString(ncContent);
-        return DerCodec.encodeSequence(
-                DerCodec.encodeOid(GostOids.EXT_NAME_CONSTRAINTS),
-                DerCodec.encodeBoolean(true),
-                extValue);
-    }
-
-    private static boolean isEmptyNc(String[] arr) {
-        return arr == null || arr.length == 0;
-    }
-
-    /**
-     * Собирает SEQUENCE OF GeneralSubtree для permitted или excluded поддерева.
-     */
-    private static byte[] encodeGeneralSubtreesNc(String[] dnsNames, String[] ips) {
-        ByteArrayOutputStream gs = new ByteArrayOutputStream();
-        try {
-            if (dnsNames != null) {
-                for (String dns : dnsNames) {
-                    byte[] gn = GeneralNameCodec.encodeDnsName(dns);
-                    gs.write(encodeGeneralSubtree(gn));
-                }
-            }
-            if (ips != null) {
-                for (String ipCidr : ips) {
-                    byte[] gn = GeneralNameCodec.encodeIpConstraint(ipCidr);
-                    gs.write(encodeGeneralSubtree(gn));
-                }
-            }
-        } catch (IOException e) {
-            throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
-        }
-        return DerCodec.encodeSequence(gs.toByteArray());
-    }
-
-    /**
-     * Собирает GeneralSubtree SEQUENCE { base GeneralName } без min/max.
-     * RFC 5280 требует minimum=0 (DEFAULT), maximum=absent.
-     * Любые другие значения ChainValidator режектит — не выставляем их.
-     */
-    private static byte[] encodeGeneralSubtree(byte[] baseGeneralName) {
-        return DerCodec.encodeSequence(baseGeneralName);
+        return ExtensionsAccumulator.buildNameConstraintsExtension(
+                permittedDns, permittedIps, excludedDns, excludedIps);
     }
 
     // ========================================================================
-    // Приватные обёртки SKI/AKI (из готовых байтов, без повторного хеширования)
+    // Приватные проверки
     // ========================================================================
 
-    private static byte[] buildSkiExtensionBytes(byte[] ski) {
-        byte[] skiOctet = DerCodec.encodeOctetString(ski);
-        byte[] extValue = DerCodec.encodeOctetString(skiOctet);
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_SKI), extValue);
-    }
-
-    private static byte[] buildAkiExtensionBytes(byte[] aki) {
-        byte[] keyIdentifier = DerCodec.encodeTlv(0x80, aki);
-        byte[] akiValue = DerCodec.encodeSequence(keyIdentifier);
-        byte[] extValue = DerCodec.encodeOctetString(akiValue);
-        return DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.EXT_AKI), extValue);
+    private boolean hasAnyIanNames() {
+        return (ianDnsNames != null && ianDnsNames.length > 0)
+                || (ianIps != null && ianIps.length > 0)
+                || (ianRfc822Names != null && ianRfc822Names.length > 0)
+                || (ianUris != null && ianUris.length > 0)
+                || (ianDirectoryNames != null && ianDirectoryNames.length > 0)
+                || (ianOtherNames != null && ianOtherNames.length > 0);
     }
 
     // ========================================================================
     // Валидация времени
     // ========================================================================
 
-    /** Форматтер UTCTime: YYMMDDHHMMSSZ (RFC 5280 §4.1.2.5.1) */
-    private static final DateTimeFormatter UTC_TIME_FORMATTER =
-            DateTimeFormatter.ofPattern("yyMMddHHmmssX").withZone(ZoneOffset.UTC);
-
-    /** Форматтер GeneralizedTime: YYYYMMDDHHMMSSZ (RFC 5280 §4.1.2.5.2) */
-    private static final DateTimeFormatter GENERALIZED_TIME_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyyMMddHHmmssX").withZone(ZoneOffset.UTC);
-
-    /**
-     * Валидирует и парсит строку времени в формате UTCTime (13 символов) или
-     * GeneralizedTime (15 символов). Оба формата оканчиваются на 'Z' (UTC).
-     *
-     * @param timeStr строка в формате YYMMDDHHMMSSZ или YYYYMMDDHHMMSSZ
-     * @return Instant времени в UTC
-     * @throws IllegalArgumentException если формат неверен
-     */
-    static Instant parseTimeString(String timeStr) {
-        if (timeStr == null || !timeStr.endsWith("Z")) {
-            throw new IllegalArgumentException("Time string must end with 'Z': " + timeStr);
-        }
-        int len = timeStr.length();
-        DateTimeFormatter fmt;
-        if (len == 13) {
-            fmt = UTC_TIME_FORMATTER;
-        } else if (len == 15) {
-            fmt = GENERALIZED_TIME_FORMATTER;
-        } else {
-            throw new IllegalArgumentException(
-                    "Time string must be 13 or 15 chars (UTCTime or GeneralizedTime): " + timeStr);
-        }
-        try {
-            return Instant.from(fmt.parse(timeStr));
-        } catch (DateTimeException e) {
-            throw new IllegalArgumentException("Invalid time string: " + timeStr, e);
-        }
-    }
+    // Методы parseTimeString, UTC_TIME_FORMATTER и GENERALIZED_TIME_FORMATTER
+    // вынесены в GostSignatureHelper, чтобы избежать дублирования между
+    // Certificate и CRL builder'ами.
 }

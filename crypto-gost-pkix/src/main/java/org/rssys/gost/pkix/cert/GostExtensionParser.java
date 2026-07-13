@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.util.DerCodec;
 
 /**
@@ -40,8 +41,16 @@ public final class GostExtensionParser {
     public static final class ExtensionsResult {
         public final String[] sanDnsNames;
         public final byte[][] sanIpAddresses;
+        public final String[] sanRfc822Names;
+        public final String[] sanUris;
+        public final byte[][] sanDirectoryNames;
+        public final OtherNameEntry[] sanOtherNames;
         public final String[] ianDnsNames;
         public final byte[][] ianIpAddresses;
+        public final String[] ianRfc822Names;
+        public final String[] ianUris;
+        public final byte[][] ianDirectoryNames;
+        public final OtherNameEntry[] ianOtherNames;
         public final boolean keyUsageValid;
         public final boolean crlSignValid;
         public final boolean ekuValid;
@@ -64,6 +73,9 @@ public final class GostExtensionParser {
         /** Сырые DER-байты OID политик — для oid_filters matching (RFC 8446 §4.2.5). */
         public final byte[][] cpOids;
 
+        /** Политики сертификата с опциональными CPS-квалификаторами. */
+        public final CertificatePolicy[] certPolicies;
+
         /** Name Constraints (RFC 5280 §4.2.1.10) — null если расширение отсутствует. */
         public final NameConstraintsData nameConstraints;
 
@@ -74,8 +86,16 @@ public final class GostExtensionParser {
         public ExtensionsResult(
                 String[] sanDnsNames,
                 byte[][] sanIpAddresses,
+                String[] sanRfc822Names,
+                String[] sanUris,
+                byte[][] sanDirectoryNames,
+                OtherNameEntry[] sanOtherNames,
                 String[] ianDnsNames,
                 byte[][] ianIpAddresses,
+                String[] ianRfc822Names,
+                String[] ianUris,
+                byte[][] ianDirectoryNames,
+                OtherNameEntry[] ianOtherNames,
                 boolean keyUsageValid,
                 boolean crlSignValid,
                 boolean ekuValid,
@@ -98,11 +118,20 @@ public final class GostExtensionParser {
                 byte[][] ekuOids,
                 Set<String> presentExtensionOids,
                 byte[][] cpOids,
+                CertificatePolicy[] certPolicies,
                 NameConstraintsData nameConstraints) {
             this.sanDnsNames = sanDnsNames;
             this.sanIpAddresses = sanIpAddresses;
+            this.sanRfc822Names = sanRfc822Names;
+            this.sanUris = sanUris;
+            this.sanDirectoryNames = sanDirectoryNames;
+            this.sanOtherNames = sanOtherNames;
             this.ianDnsNames = ianDnsNames;
             this.ianIpAddresses = ianIpAddresses;
+            this.ianRfc822Names = ianRfc822Names;
+            this.ianUris = ianUris;
+            this.ianDirectoryNames = ianDirectoryNames;
+            this.ianOtherNames = ianOtherNames;
             this.keyUsageValid = keyUsageValid;
             this.crlSignValid = crlSignValid;
             this.ekuValid = ekuValid;
@@ -124,6 +153,7 @@ public final class GostExtensionParser {
             this.keyUsageBits = keyUsageBits;
             this.ekuOids = ekuOids;
             this.cpOids = cpOids;
+            this.certPolicies = certPolicies;
             this.presentExtensionOids = presentExtensionOids;
             this.nameConstraints = nameConstraints;
         }
@@ -131,6 +161,14 @@ public final class GostExtensionParser {
         /** Канонический пустой результат — гарантирует {@code ==} сравнение. */
         private static final ExtensionsResult EMPTY =
                 new ExtensionsResult(
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
                         null,
                         null,
                         null,
@@ -160,6 +198,7 @@ public final class GostExtensionParser {
                         0,
                         null,
                         Collections.emptySet(),
+                        null,
                         null,
                         null);
 
@@ -215,8 +254,16 @@ public final class GostExtensionParser {
 
         ArrayList<String> sanList = new ArrayList<>();
         ArrayList<byte[]> ipList = new ArrayList<>();
+        ArrayList<String> sanRfc822List = new ArrayList<>();
+        ArrayList<String> sanUriList = new ArrayList<>();
+        ArrayList<byte[]> sanDirNameList = new ArrayList<>();
+        ArrayList<OtherNameEntry> sanOtherNameList = new ArrayList<>();
         ArrayList<String> ianDnsList = new ArrayList<>();
         ArrayList<byte[]> ianIpList = new ArrayList<>();
+        ArrayList<String> ianRfc822List = new ArrayList<>();
+        ArrayList<String> ianUriList = new ArrayList<>();
+        ArrayList<byte[]> ianDirNameList = new ArrayList<>();
+        ArrayList<OtherNameEntry> ianOtherNameList = new ArrayList<>();
         boolean kuPresent = false;
         boolean kuDigitalSignature = false;
         boolean kuKeyCertSign = false;
@@ -245,6 +292,7 @@ public final class GostExtensionParser {
         int keyUsageBitsLocal = 0;
         ArrayList<byte[]> ekuOidList = new ArrayList<>();
         ArrayList<byte[]> cpOidList = new ArrayList<>();
+        ArrayList<CertificatePolicy> certPolicyInfosList = new ArrayList<>();
         // Name Constraints (RFC 5280 §4.2.1.10)
         NameConstraintsData ncLocal = null;
 
@@ -286,12 +334,30 @@ public final class GostExtensionParser {
             if (matchesOid(der, oidStart, oidLen, SAN_OID_BYTES)) {
                 if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
                     int[] octTlv = readTlv(der, afterOid);
-                    parseSanGeneralNames(der, octTlv[0], octTlv[1], sanList, ipList);
+                    parseSanGeneralNames(
+                            der,
+                            octTlv[0],
+                            octTlv[1],
+                            sanList,
+                            ipList,
+                            sanRfc822List,
+                            sanUriList,
+                            sanDirNameList,
+                            sanOtherNameList);
                 }
             } else if (matchesOid(der, oidStart, oidLen, IAN_OID_BYTES)) {
                 if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
                     int[] octTlv = readTlv(der, afterOid);
-                    parseSanGeneralNames(der, octTlv[0], octTlv[1], ianDnsList, ianIpList);
+                    parseSanGeneralNames(
+                            der,
+                            octTlv[0],
+                            octTlv[1],
+                            ianDnsList,
+                            ianIpList,
+                            ianRfc822List,
+                            ianUriList,
+                            ianDirNameList,
+                            ianOtherNameList);
                 }
             } else if (matchesOid(der, oidStart, oidLen, KU_OID_BYTES)) {
                 kuPresent = true;
@@ -436,7 +502,13 @@ public final class GostExtensionParser {
                 // CertificatePolicies (RFC 5280 §4.2.1.4) — OID политик сертификата.
                 if (afterOid < extContentEnd && (der[afterOid] & 0xFF) == TAG_OCTET_STRING) {
                     int[] octTlv = readTlv(der, afterOid);
-                    parseCertPolicyOids(der, octTlv[0], octTlv[1], certPolicyList, cpOidList);
+                    parseCertPolicyOids(
+                            der,
+                            octTlv[0],
+                            octTlv[1],
+                            certPolicyList,
+                            cpOidList,
+                            certPolicyInfosList);
                 }
             } else if (matchesOid(der, oidStart, oidLen, NC_OID_BYTES)) {
                 // NameConstraints (RFC 5280 §4.2.1.10)
@@ -457,16 +529,42 @@ public final class GostExtensionParser {
         byte[][] ipResult = ipList.isEmpty() ? null : ipList.toArray(new byte[0][]);
         String[] ianDnsResult = ianDnsList.isEmpty() ? null : ianDnsList.toArray(new String[0]);
         byte[][] ianIpResult = ianIpList.isEmpty() ? null : ianIpList.toArray(new byte[0][]);
+        String[] sanRfc822Result =
+                sanRfc822List.isEmpty() ? null : sanRfc822List.toArray(new String[0]);
+        String[] sanUriResult = sanUriList.isEmpty() ? null : sanUriList.toArray(new String[0]);
+        byte[][] sanDirNameResult =
+                sanDirNameList.isEmpty() ? null : sanDirNameList.toArray(new byte[0][]);
+        OtherNameEntry[] sanOtherNameResult =
+                sanOtherNameList.isEmpty() ? null : sanOtherNameList.toArray(new OtherNameEntry[0]);
+        String[] ianRfc822Result =
+                ianRfc822List.isEmpty() ? null : ianRfc822List.toArray(new String[0]);
+        String[] ianUriResult = ianUriList.isEmpty() ? null : ianUriList.toArray(new String[0]);
+        byte[][] ianDirNameResult =
+                ianDirNameList.isEmpty() ? null : ianDirNameList.toArray(new byte[0][]);
+        OtherNameEntry[] ianOtherNameResult =
+                ianOtherNameList.isEmpty() ? null : ianOtherNameList.toArray(new OtherNameEntry[0]);
         boolean kuValid = !kuPresent || kuDigitalSignature;
         boolean ekuValid = !ekuPresent || ekuServerAuth;
         boolean ekuClientAuthValid = !ekuPresent || ekuClientAuth;
         byte[][] ekuOidsResult = ekuOidList.isEmpty() ? null : ekuOidList.toArray(new byte[0][]);
         byte[][] cpOidsResult = cpOidList.isEmpty() ? null : cpOidList.toArray(new byte[0][]);
+        CertificatePolicy[] certPoliciesResult =
+                certPolicyInfosList.isEmpty()
+                        ? null
+                        : certPolicyInfosList.toArray(new CertificatePolicy[0]);
         return new ExtensionsResult(
                 sanResult,
                 ipResult,
+                sanRfc822Result,
+                sanUriResult,
+                sanDirNameResult,
+                sanOtherNameResult,
                 ianDnsResult,
                 ianIpResult,
+                ianRfc822Result,
+                ianUriResult,
+                ianDirNameResult,
+                ianOtherNameResult,
                 kuValid,
                 crlSignValid,
                 ekuValid,
@@ -492,8 +590,9 @@ public final class GostExtensionParser {
                 certPolicyList.isEmpty() ? null : certPolicyList.toArray(new String[0]),
                 keyUsageBitsLocal,
                 ekuOidsResult,
-                presentOids,
+                Collections.unmodifiableSet(presentOids),
                 cpOidsResult,
+                certPoliciesResult,
                 ncLocal);
     }
 
@@ -502,15 +601,20 @@ public final class GostExtensionParser {
     // ====================================================================
 
     /**
-     * Парсит GeneralNames SEQUENCE из SubjectAltName.
-     * Извлекает dNSName (tag 0x82) и iPAddress (tag 0x87) entries.
+     * Парсит GeneralNames SEQUENCE из SubjectAltName/IssuerAltName.
+     * Извлекает все типы GeneralName: dNSName, iPAddress, rfc822Name, URI,
+     * directoryName, otherName.
      */
     private static void parseSanGeneralNames(
             byte[] der,
             int gnOuter,
             int gnOuterEnd,
-            ArrayList<String> sanList,
-            ArrayList<byte[]> ipList) {
+            ArrayList<String> dnsList,
+            ArrayList<byte[]> ipList,
+            ArrayList<String> rfc822List,
+            ArrayList<String> uriList,
+            ArrayList<byte[]> dirNameList,
+            ArrayList<OtherNameEntry> otherNameList) {
         if (gnOuter >= gnOuterEnd || (der[gnOuter] & 0xFF) != TAG_SEQUENCE) return;
         int[] gnSeqTlv = readTlv(der, gnOuter);
         int gnPos = gnSeqTlv[0];
@@ -524,22 +628,62 @@ public final class GostExtensionParser {
             int gnTag = der[gnPos] & 0xFF;
             if (gnTag == TAG_DNS_NAME) {
                 int[] dnsTlv = readTlv(der, gnPos);
-                // dNSName — IA5String (RFC 5280 §4.2.1.6). US_ASCII декодирует lossy:
-                // байты >127 заменяются на U+FFFD. Обхода hostname-проверки нет
-                // (сравнение идёт по итоговой строке); это лишь data-quality аспект
-                // для логирования/отображения.
                 String name =
                         new String(
                                 der, dnsTlv[0], dnsTlv[1] - dnsTlv[0], StandardCharsets.US_ASCII);
-                sanList.add(name);
+                dnsList.add(name);
                 gnPos = dnsTlv[1];
             } else if (gnTag == TAG_IP_ADDRESS) {
                 int[] ipTlv = readTlv(der, gnPos);
                 int len = ipTlv[1] - ipTlv[0];
                 if (len == 4 || len == 16) {
                     ipList.add(Arrays.copyOfRange(der, ipTlv[0], ipTlv[1]));
+                } else {
+                    throw new IllegalArgumentException(
+                            "Malformed iPAddress in SAN: expected 4 or 16 bytes, got " + len);
                 }
                 gnPos = ipTlv[1];
+            } else if (gnTag == TAG_RFC822_NAME) {
+                int[] rfcTlv = readTlv(der, gnPos);
+                String email =
+                        new String(
+                                der, rfcTlv[0], rfcTlv[1] - rfcTlv[0], StandardCharsets.US_ASCII);
+                rfc822List.add(email.toLowerCase());
+                gnPos = rfcTlv[1];
+            } else if (gnTag == TAG_URI) {
+                int[] uriTlv = readTlv(der, gnPos);
+                String uri =
+                        new String(
+                                der, uriTlv[0], uriTlv[1] - uriTlv[0], StandardCharsets.US_ASCII);
+                uriList.add(uri);
+                gnPos = uriTlv[1];
+            } else if (gnTag == TAG_DIRECTORY_NAME) {
+                int[] dirTlv = readTlv(der, gnPos);
+                dirNameList.add(Arrays.copyOfRange(der, dirTlv[0], dirTlv[1]));
+                gnPos = dirTlv[1];
+            } else if (gnTag == 0xA0) {
+                // otherName [0] — IMPLICIT заменяет SEQUENCE OtherName.
+                // Содержимое: <OID TLV><[0] EXPLICIT value>
+                int[] otherTlv = readTlv(der, gnPos);
+                int otherPos = otherTlv[0];
+                int otherEnd = otherTlv[1];
+                if (otherPos < otherEnd && (der[otherPos] & 0xFF) == TAG_OID) {
+                    int[] oidTlv = readTlv(der, otherPos);
+                    String oid = DerCodec.parseOid(der, otherPos);
+                    int afterOid = oidTlv[1];
+                    if (afterOid < otherEnd && (der[afterOid] & 0xFF) == 0xA0) {
+                        int[] explicitTlv = readTlv(der, afterOid);
+                        byte[] valueDer = Arrays.copyOfRange(der, explicitTlv[0], explicitTlv[1]);
+                        otherNameList.add(new OtherNameEntry(oid, valueDer));
+                    } else {
+                        throw new IllegalArgumentException(
+                                "Malformed otherName in SAN: missing [0] EXPLICIT value");
+                    }
+                } else {
+                    throw new IllegalArgumentException(
+                            "Malformed otherName in SAN: missing type-id OID");
+                }
+                gnPos = otherTlv[1];
             } else {
                 gnPos = readTlv(der, gnPos)[1];
             }
@@ -733,17 +877,20 @@ public final class GostExtensionParser {
     // ====================================================================
 
     /**
-     * Парсит CertificatePolicies: извлекает policyIdentifier OID как точечную строку
-     * и параллельно собирает сырые DER-байты OID для oid_filters matching (RFC 8446 §4.2.5).
+     * Парсит CertificatePolicies: извлекает policyIdentifier OID как точечную строку,
+     * параллельно собирает сырые DER-байты OID для oid_filters matching (RFC 8446 §4.2.5)
+     * и извлекает CPS-квалификаторы (id-qt-cps) где присутствуют.
      * CertificatePolicies ::= SEQUENCE OF PolicyInformation
-     * PolicyInformation ::= SEQUENCE { policyIdentifier OID, ... }
+     * PolicyInformation ::= SEQUENCE { policyIdentifier OID,
+     *                                  policyQualifiers SEQUENCE OF PolicyQualifierInfo OPTIONAL }
      */
     private static void parseCertPolicyOids(
             byte[] der,
             int cpOuter,
             int cpEnd,
             ArrayList<String> oidList,
-            ArrayList<byte[]> cpOidBytes) {
+            ArrayList<byte[]> cpOidBytes,
+            ArrayList<CertificatePolicy> certPolicyInfosList) {
         if (cpOuter >= cpEnd || (der[cpOuter] & 0xFF) != TAG_SEQUENCE) return;
         int[] seqTlv = readTlv(der, cpOuter);
         int pos = seqTlv[0];
@@ -756,11 +903,51 @@ public final class GostExtensionParser {
             int[] piSeqTlv = readTlv(der, pos);
             int piPos = piSeqTlv[0];
             int piEnd = piSeqTlv[1];
+            String oidStr = null;
+            String cpsUri = null;
             if (piPos < piEnd && (der[piPos] & 0xFF) == TAG_OID) {
                 int[] oidTlv = readTlv(der, piPos);
-                String oidStr = oidBytesToDottedString(der, oidTlv[0], oidTlv[1] - oidTlv[0]);
+                oidStr = oidBytesToDottedString(der, oidTlv[0], oidTlv[1] - oidTlv[0]);
                 oidList.add(oidStr);
                 cpOidBytes.add(Arrays.copyOfRange(der, oidTlv[0], oidTlv[1]));
+                piPos = oidTlv[1];
+            }
+            // Парсим policyQualifiers если есть
+            if (piPos < piEnd && (der[piPos] & 0xFF) == TAG_SEQUENCE) {
+                int[] pqSeqTlv = readTlv(der, piPos);
+                int pqPos = pqSeqTlv[0];
+                int pqEnd = pqSeqTlv[1];
+                while (pqPos < pqEnd) {
+                    if ((der[pqPos] & 0xFF) != TAG_SEQUENCE) {
+                        pqPos = readTlv(der, pqPos)[1];
+                        continue;
+                    }
+                    int[] pqiTlv = readTlv(der, pqPos);
+                    int pqiPos = pqiTlv[0];
+                    int pqiEnd = pqiTlv[1];
+                    if (pqiPos < pqiEnd && (der[pqiPos] & 0xFF) == TAG_OID) {
+                        int[] qOidTlv = readTlv(der, pqiPos);
+                        String qualifierOid =
+                                oidBytesToDottedString(der, qOidTlv[0], qOidTlv[1] - qOidTlv[0]);
+                        if (GostOids.POLICY_QT_CPS.equals(qualifierOid)) {
+                            int afterQOid = qOidTlv[1];
+                            if (afterQOid < pqiEnd
+                                    && (der[afterQOid] & 0xFF) == DerCodec.TAG_IA5_STRING) {
+                                int[] ia5Tlv = readTlv(der, afterQOid);
+                                cpsUri =
+                                        new String(
+                                                der,
+                                                ia5Tlv[0],
+                                                ia5Tlv[1] - ia5Tlv[0],
+                                                java.nio.charset.StandardCharsets.US_ASCII);
+                            }
+                        }
+                    }
+                    pqPos = pqiTlv[1];
+                }
+            }
+            if (oidStr != null) {
+                certPolicyInfosList.add(new CertificatePolicy(oidStr, cpsUri));
             }
             pos = piSeqTlv[1];
         }
@@ -773,10 +960,9 @@ public final class GostExtensionParser {
     /**
      * Парсит расширение NameConstraints из extnValue OCTET STRING.
      *
-     * <p>Поддерживаемые типы GeneralName: dNSName [2] и iPAddress [7].
-     * Неподдерживаемые (rfc822Name, directoryName, URI, otherName) — флаг
-     * hasUnsupportedNameType. min != 0 или max присутствует — hasInvalidMinMax.
-     * non-critical — отдельный флаг (нарушение RFC 5280 §4.2.1.10).</p>
+     * <p>Поддерживаемые типы GeneralName: dNSName [2], iPAddress [7],
+     * rfc822Name [1], URI [6], directoryName [4].
+     * Неподдерживаемый: otherName [0] — флаг hasUnsupportedNameType.</p>
      *
      * <p>iPAddress в NameConstraints кодируется с маской: 8 байт (IPv4)
      * или 32 байта (IPv6) — в отличие от SAN, где 4/16 байт без маски.</p>
@@ -804,10 +990,17 @@ public final class GostExtensionParser {
 
         ArrayList<String> permDns = null;
         ArrayList<byte[]> permIp = null;
+        ArrayList<String> permRfc822 = null;
+        ArrayList<String> permUri = null;
+        ArrayList<byte[]> permDirName = null;
         ArrayList<String> exclDns = null;
         ArrayList<byte[]> exclIp = null;
+        ArrayList<String> exclRfc822 = null;
+        ArrayList<String> exclUri = null;
+        ArrayList<byte[]> exclDirName = null;
         boolean hasUnsupported = false;
         boolean hasInvalidMinMax = false;
+        boolean hasUnsupportedRfc822Form = false;
 
         while (pos < end) {
             int tag = der[pos] & 0xFF;
@@ -817,18 +1010,36 @@ public final class GostExtensionParser {
 
                 ArrayList<String> dnsOut = new ArrayList<>();
                 ArrayList<byte[]> ipOut = new ArrayList<>();
+                ArrayList<String> rfc822Out = new ArrayList<>();
+                ArrayList<String> uriOut = new ArrayList<>();
+                ArrayList<byte[]> dirNameOut = new ArrayList<>();
                 boolean[] flags =
-                        parseGeneralSubtrees(der, subtreeTlv[0], subtreeTlv[1], dnsOut, ipOut);
+                        parseGeneralSubtrees(
+                                der,
+                                subtreeTlv[0],
+                                subtreeTlv[1],
+                                dnsOut,
+                                ipOut,
+                                rfc822Out,
+                                uriOut,
+                                dirNameOut);
 
                 if (flags[0]) hasUnsupported = true;
                 if (flags[1]) hasInvalidMinMax = true;
+                if (flags[2]) hasUnsupportedRfc822Form = true;
 
                 if (isExcluded) {
                     if (!dnsOut.isEmpty()) exclDns = addToList(exclDns, dnsOut);
                     if (!ipOut.isEmpty()) exclIp = addToIpList(exclIp, ipOut);
+                    if (!rfc822Out.isEmpty()) exclRfc822 = addToList(exclRfc822, rfc822Out);
+                    if (!uriOut.isEmpty()) exclUri = addToList(exclUri, uriOut);
+                    if (!dirNameOut.isEmpty()) exclDirName = addToIpList(exclDirName, dirNameOut);
                 } else {
                     if (!dnsOut.isEmpty()) permDns = addToList(permDns, dnsOut);
                     if (!ipOut.isEmpty()) permIp = addToIpList(permIp, ipOut);
+                    if (!rfc822Out.isEmpty()) permRfc822 = addToList(permRfc822, rfc822Out);
+                    if (!uriOut.isEmpty()) permUri = addToList(permUri, uriOut);
+                    if (!dirNameOut.isEmpty()) permDirName = addToIpList(permDirName, dirNameOut);
                 }
                 pos = subtreeTlv[1];
             } else {
@@ -839,27 +1050,43 @@ public final class GostExtensionParser {
         return new NameConstraintsData(
                 permDns == null ? null : permDns.toArray(new String[0]),
                 permIp == null ? null : permIp.toArray(new byte[0][]),
+                permRfc822 == null ? null : permRfc822.toArray(new String[0]),
+                permUri == null ? null : permUri.toArray(new String[0]),
+                permDirName == null ? null : permDirName.toArray(new byte[0][]),
                 exclDns == null ? null : exclDns.toArray(new String[0]),
                 exclIp == null ? null : exclIp.toArray(new byte[0][]),
+                exclRfc822 == null ? null : exclRfc822.toArray(new String[0]),
+                exclUri == null ? null : exclUri.toArray(new String[0]),
+                exclDirName == null ? null : exclDirName.toArray(new byte[0][]),
                 hasUnsupported,
+                hasUnsupportedRfc822Form,
                 hasInvalidMinMax,
                 !critical);
     }
 
     /**
      * Парсит содержимое [0]/[1] GeneralSubtrees (SEQUENCE OF GeneralSubtree).
-     * Заполняет переданные списки dnsOut/ipOut и возвращает флаги ошибок.
+     * Заполняет переданные списки и возвращает флаги ошибок.
      *
-     * @return boolean[2]: [0]=hasUnsupported, [1]=hasInvalidMinMax
+     * @return boolean[3]: [0]=hasUnsupported (otherName), [1]=hasInvalidMinMax,
+     *                      [2]=hasUnsupportedRfc822Form (mailbox-форма rfc822Name)
      */
     private static boolean[] parseGeneralSubtrees(
-            byte[] der, int start, int end, ArrayList<String> dnsOut, ArrayList<byte[]> ipOut) {
+            byte[] der,
+            int start,
+            int end,
+            ArrayList<String> dnsOut,
+            ArrayList<byte[]> ipOut,
+            ArrayList<String> rfc822Out,
+            ArrayList<String> uriOut,
+            ArrayList<byte[]> dirNameOut) {
         boolean hasUnsupported = false;
         boolean hasInvalidMinMax = false;
+        boolean hasUnsupportedRfc822Form = false;
         int pos = start;
 
         if (pos >= end || (der[pos] & 0xFF) != TAG_SEQUENCE) {
-            return new boolean[] {hasUnsupported, hasInvalidMinMax};
+            return new boolean[] {hasUnsupported, hasInvalidMinMax, hasUnsupportedRfc822Form};
         }
         int[] seqTlv = readTlv(der, pos);
         pos = seqTlv[0];
@@ -898,6 +1125,28 @@ public final class GostExtensionParser {
                                     + " (expected 8 or 32)");
                 }
                 ipOut.add(Arrays.copyOfRange(der, gnTlv[0], gnTlv[1]));
+            } else if (gnTag == TAG_RFC822_NAME) {
+                String name =
+                        new String(
+                                der,
+                                gnTlv[0],
+                                gnTlv[1] - gnTlv[0],
+                                java.nio.charset.StandardCharsets.US_ASCII);
+                if (name.indexOf('@') >= 0) {
+                    hasUnsupportedRfc822Form = true;
+                } else {
+                    rfc822Out.add(name.toLowerCase());
+                }
+            } else if (gnTag == TAG_URI) {
+                String name =
+                        new String(
+                                der,
+                                gnTlv[0],
+                                gnTlv[1] - gnTlv[0],
+                                java.nio.charset.StandardCharsets.US_ASCII);
+                uriOut.add(name);
+            } else if (gnTag == TAG_DIRECTORY_NAME) {
+                dirNameOut.add(Arrays.copyOfRange(der, gnTlv[0], gnTlv[1]));
             } else {
                 hasUnsupported = true;
             }
@@ -929,7 +1178,7 @@ public final class GostExtensionParser {
             pos = subtreeSeqTlv[1];
         }
 
-        return new boolean[] {hasUnsupported, hasInvalidMinMax};
+        return new boolean[] {hasUnsupported, hasInvalidMinMax, hasUnsupportedRfc822Form};
     }
 
     private static ArrayList<String> addToList(ArrayList<String> target, ArrayList<String> src) {

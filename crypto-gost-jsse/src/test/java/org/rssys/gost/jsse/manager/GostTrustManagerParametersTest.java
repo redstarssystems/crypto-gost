@@ -14,7 +14,7 @@ import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
 
-@DisplayName("GostTrustManagerFactorySpi.init(ManagerFactoryParameters) (план 200, часть B)")
+@DisplayName("GostTrustManagerFactorySpi.init(ManagerFactoryParameters)")
 class GostTrustManagerParametersTest {
 
     private static PublicKeyParameters caKey() throws Exception {

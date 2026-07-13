@@ -1,7 +1,6 @@
 package org.rssys.gost.pkix.examples;
 
 import java.io.InputStream;
-import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
@@ -45,8 +44,8 @@ public final class TspRealServerDemo {
                         .publicKey(signerKp.getPublic())
                         .notBefore("20250101000000Z")
                         .notAfter("20350101000000Z")
-                        .serial(new BigInteger(63, CryptoRandom.INSTANCE))
-                        .assembleCert(signerKp.getPrivate());
+                        .serial(GostCertificateBuilder.generateSerial())
+                        .sign(signerKp.getPrivate());
 
         byte[] data = "TSP demo data".getBytes(StandardCharsets.UTF_8);
         byte[] cadesBes =

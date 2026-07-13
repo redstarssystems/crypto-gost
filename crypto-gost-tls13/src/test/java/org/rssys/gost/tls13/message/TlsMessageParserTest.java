@@ -785,6 +785,34 @@ class TlsMessageParserTest {
                         + ex.getMessage());
     }
 
+    @Test
+    @DisplayName(
+            "parseCertificate: malformed SAN iPAddress -> TlsException(ALERT_DECODE_ERROR), не краш")
+    // Страховка границы pkix->tls13: GostExtensionParser бросает IllegalArgumentException на
+    // битую iPAddress-запись (fail-closed), а parseCertificate обязан перехватить её и
+    // превратить в ALERT_DECODE_ERROR — чистое закрытие по протоколу вместо необработанного
+    // краша в живом handshake. Тест держит эту границу на случай рефакторинга try/catch.
+    void testParseCertificateMalformedSanIp() throws Exception {
+        byte[] certDer = TlsTestHelper.malformedSanIpCertDer();
+
+        ByteArrayOutputStream entry = new ByteArrayOutputStream();
+        TlsEncoding.encodeUint24(entry, certDer.length);
+        entry.write(certDer, 0, certDer.length);
+        TlsEncoding.encodeUint16(entry, 0); // расширения CertificateEntry отсутствуют
+
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        body.write(0); // request context
+        byte[] entryBytes = entry.toByteArray();
+        TlsEncoding.encodeUint24(body, entryBytes.length);
+        body.write(entryBytes, 0, entryBytes.length);
+
+        TlsException ex =
+                assertThrows(
+                        TlsException.class,
+                        () -> TlsMessageParser.parseCertificate(body.toByteArray()));
+        assertEquals(TlsConstants.ALERT_DECODE_ERROR, ex.getAlertCode());
+    }
+
     // =======================================================================
     // Тесты ALPN (RFC 7301)
     // =======================================================================

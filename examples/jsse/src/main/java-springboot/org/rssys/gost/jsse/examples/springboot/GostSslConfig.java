@@ -38,11 +38,14 @@ import java.util.Map;
 @Configuration
 public class GostSslConfig {
 
+    static {
+        Security.addProvider(new RssysGostJsseProvider());
+    }
+
     @Bean
     public WebServerFactoryCustomizer<TomcatServletWebServerFactory> gostSslCustomizer() {
         return factory -> {
             factory.addConnectorCustomizers(connector -> {
-                Security.addProvider(new RssysGostJsseProvider());
                 connector.setSecure(true);
                 connector.setScheme("https");
                 connector.setProperty("SSLEnabled", "true");

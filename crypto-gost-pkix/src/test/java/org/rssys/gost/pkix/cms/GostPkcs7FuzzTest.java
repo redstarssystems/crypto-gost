@@ -46,4 +46,23 @@ class GostPkcs7FuzzTest {
         } catch (Exception ignored) {
         }
     }
+
+    /**
+     * formatText — новая структурная точка входа (certs-only + crls[1] без signerInfos),
+     * которую verify-фаззер не покрывает. Логика разбора сертификатов и CRL уже фаззится
+     * (extractCertificates, CmsVerifierFuzzTest.parseEmbeddedCrls), но собственная навигация
+     * formatText по полям SignedData и форматирование недоверенных значений — нет.
+     * Ожидаемый исход на битом входе — только PkixException, без крашей.
+     */
+    @FuzzTest
+    void fuzzFormatText(FuzzedDataProvider data) {
+        byte[] der = data.consumeRemainingAsBytes();
+        try {
+            GostPkcs7.formatText(der);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        } catch (Exception ignored) {
+            // ожидаемо: битый DER -> PkixException
+        }
+    }
 }

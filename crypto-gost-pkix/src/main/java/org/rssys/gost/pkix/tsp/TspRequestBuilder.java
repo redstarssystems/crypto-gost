@@ -27,6 +27,8 @@ public final class TspRequestBuilder {
     private BigInteger nonce;
     private boolean certReq;
     private boolean nonceExplicitlySet;
+    private BigInteger effectiveNonce;
+    private boolean built;
 
     private TspRequestBuilder() {}
 
@@ -67,18 +69,37 @@ public final class TspRequestBuilder {
     }
 
     /**
-     * Возвращает nonce — заданный явно через {@link #nonce(BigInteger)} или
-     * авто-сгенерированный.
+     * Возвращает nonce, зафиксированный при последнем вызове {@link #build()}: заданный явно через
+     * {@link #nonce(BigInteger)} либо авто-сгенерированный.
      *
-     * @return nonce или {@code null} если nonce явно отключён через {@code nonce(null)}
+     * <p>Симметрично {@code GostOcspRequestBuilder.getNonce()}: до вызова {@link #build()} метод
+     * бросает исключение. Так исключается pre-build peek — единственное значение nonce берётся из
+     * фактически собранного запроса, а не из «предпросмотра», который мог бы разойтись с DER при
+     * повторной сборке.
+     *
+     * @return nonce из последнего {@code build()} или {@code null} если nonce отключён через
+     *     {@code nonce(null)}
+     * @throws IllegalStateException если {@code build()} ещё не вызывался
      */
     public BigInteger getNonce() {
-        if (nonce == null && !nonceExplicitlySet) {
-            byte[] nonceBytes = new byte[8];
-            CryptoRandom.INSTANCE.nextBytes(nonceBytes);
-            nonce = new BigInteger(1, nonceBytes);
+        if (!built) {
+            throw new IllegalStateException("getNonce() must be called after build()");
         }
-        return nonce;
+        return effectiveNonce;
+    }
+
+    /**
+     * Вычисляет nonce для текущей сборки. В авто-режиме генерирует новое значение на каждый вызов —
+     * два {@code build()} на одном билдере дают разные nonce (anti-replay, RFC 3161). Явно заданный
+     * nonce (в т.ч. opt-out {@code null}) переиспользуется намеренно.
+     */
+    private BigInteger resolveNonce() {
+        if (nonceExplicitlySet) {
+            return nonce;
+        }
+        byte[] nonceBytes = new byte[8];
+        CryptoRandom.INSTANCE.nextBytes(nonceBytes);
+        return new BigInteger(1, nonceBytes);
     }
 
     /**
@@ -91,7 +112,8 @@ public final class TspRequestBuilder {
         Objects.requireNonNull(messageImprintHash, "messageImprint must be set");
         Objects.requireNonNull(messageImprintAlgOid, "messageImprint hashAlgOid must be set");
 
-        BigInteger effectiveNonce = getNonce();
+        effectiveNonce = resolveNonce();
+        built = true;
 
         // version
         byte[] version = DerCodec.encodeInteger(1);

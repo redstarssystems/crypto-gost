@@ -12,7 +12,8 @@ import org.rssys.gost.mac.Hmac;
 /**
  * Тесты KDF_TREE_GOSTR3411_2012_256 (RFC 7836 §4.5, RFC 9337 §5.1.1).
  *
- * <p>Верифицирует структуру буфера: label || 0x00 || seed || INT(i,4) || INT(L,4).
+ * <p>Верифицирует структуру буфера: [i](1) || label || 0x00 || seed || [L]_b,
+ * а также эталонный вектор RFC 7836 Appendix B.
  */
 @DisplayName("KdfTreeGostR3411_2012_256 — RFC 7836 §4.5")
 class KdfTreeGostR3411_2012_256Test {
@@ -34,22 +35,65 @@ class KdfTreeGostR3411_2012_256Test {
         return out;
     }
 
-    private static byte[] intToBytes(int value) {
-        return new byte[] {
-            (byte) (value >> 24), (byte) (value >> 16), (byte) (value >> 8), (byte) value
-        };
+    /** Минимальное big-endian без ведущих нулей — как [L]_b в RFC 7836. */
+    private static byte[] bigEndianMinimal(int value) {
+        if (value == 0) return new byte[] {0};
+        int bits = 32 - Integer.numberOfLeadingZeros(value);
+        int bytes = (bits + 7) / 8;
+        byte[] result = new byte[bytes];
+        for (int i = bytes - 1; i >= 0; i--) {
+            result[i] = (byte) (value & 0xFF);
+            value >>>= 8;
+        }
+        return result;
     }
 
-    /** Строит буфер KDF_TREE и вычисляет эталонный HMAC. */
+    /**
+     * Строит буфер KDF_TREE по RFC 7836 §4.5 и вычисляет эталонный HMAC.
+     *
+     * <p>Формат: {@code [i](1) || label || 0x00 || seed || [L]_b}, где {@code [L]_b}
+     * — суммарная длина всего вывода в битах (count*keyLen*8), минимальное big-endian.
+     */
     private static byte[] computeKdfTreeBlock(
-            byte[] kin, byte[] label, byte[] seed, int i, int keyLen) {
-        byte[] buf = new byte[label.length + 1 + seed.length + 4 + 4];
-        System.arraycopy(label, 0, buf, 0, label.length);
-        buf[label.length] = 0;
-        System.arraycopy(seed, 0, buf, label.length + 1, seed.length);
-        System.arraycopy(intToBytes(i), 0, buf, label.length + 1 + seed.length, 4);
-        System.arraycopy(intToBytes(keyLen), 0, buf, label.length + 1 + seed.length + 4, 4);
+            byte[] kin, byte[] label, byte[] seed, int i, int count, int keyLen) {
+        byte[] lBytes = bigEndianMinimal(count * keyLen * 8);
+        byte[] buf = new byte[1 + label.length + 1 + seed.length + lBytes.length];
+        buf[0] = (byte) i;
+        System.arraycopy(label, 0, buf, 1, label.length);
+        buf[1 + label.length] = 0;
+        System.arraycopy(seed, 0, buf, 1 + label.length + 1, seed.length);
+        System.arraycopy(lBytes, 0, buf, 1 + label.length + 1 + seed.length, lBytes.length);
         return hmac256(kin, buf);
+    }
+
+    // ========================================================================
+    // Authoritative KAT — эталонный вектор RFC 7836 Appendix B (KDF_TREE)
+    // ========================================================================
+
+    @Test
+    @DisplayName("KAT RFC 7836 Appendix B: R=1, L=512 — байт-в-байт эталон")
+    void testKatRfc7836AppendixB() {
+        byte[] kin = new byte[32];
+        for (int i = 0; i < 32; i++) kin[i] = (byte) i;
+        byte[] label = {(byte) 0x26, (byte) 0xbd, (byte) 0xb8, (byte) 0x78};
+        byte[] seed = {(byte) 0xaf, 0x21, 0x43, 0x41, 0x45, 0x65, 0x63, 0x78};
+
+        byte[] expected =
+                hex(
+                        "22b6837845c6bef65ea71672b265831086d3c76aebe6dae91cad51d83f79d16b"
+                                + "074c9330599d7f8d712fca54392f4ddde93751206b3584c8f43f9e6dc51531f9");
+
+        byte[] result = KdfTreeGostR3411_2012_256.generate(kin, label, seed, 2, 32);
+        assertArrayEquals(
+                expected, result, "KDF_TREE должен совпадать с эталоном RFC 7836 Appendix B");
+    }
+
+    private static byte[] hex(String s) {
+        byte[] out = new byte[s.length() / 2];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
+        }
+        return out;
     }
 
     // ========================================================================
@@ -64,7 +108,7 @@ class KdfTreeGostR3411_2012_256Test {
         byte[] seed = fill(8, 0x02);
 
         byte[] result = KdfTreeGostR3411_2012_256.generate(kin, label, seed, 1, 32);
-        byte[] expected = computeKdfTreeBlock(kin, label, seed, 1, 32);
+        byte[] expected = computeKdfTreeBlock(kin, label, seed, 1, 1, 32);
 
         assertArrayEquals(expected, result);
         assertEquals(32, result.length);
@@ -81,8 +125,8 @@ class KdfTreeGostR3411_2012_256Test {
 
         assertEquals(32, result.length); // 2 * 16
 
-        byte[] expected1 = computeKdfTreeBlock(kin, label, seed, 1, 16);
-        byte[] expected2 = computeKdfTreeBlock(kin, label, seed, 2, 16);
+        byte[] expected1 = computeKdfTreeBlock(kin, label, seed, 1, 2, 16);
+        byte[] expected2 = computeKdfTreeBlock(kin, label, seed, 2, 2, 16);
 
         byte[] expected = new byte[32];
         System.arraycopy(expected1, 0, expected, 0, 16);
@@ -91,9 +135,24 @@ class KdfTreeGostR3411_2012_256Test {
         assertArrayEquals(expected, result);
     }
 
-    // ========================================================================
-    // Детерминизм и разнообразие выходов
-    // ========================================================================
+    @Test
+    @DisplayName(
+            "Само-согласованность: [L] в 1 байт (L<256 бит) — не-KAT, ловушка на хардкод ширины [L]")
+    void testSingleByteLengthEncoding() {
+        // count=1, keyLen=31 -> L = 248 бит (0xF8) кодируется одним октетом.
+        // Опубликованного вектора для L!=512 нет, поэтому сверяемся с независимым
+        // пересчётом HMAC того же формата. Цель — поймать возможный «хардкод 2 байта»
+        // в кодировании [L]_b, который эталонный вектор (L=512, 2 байта) не ловит.
+        byte[] kin = fill(32, 0x05);
+        byte[] label = "test".getBytes(StandardCharsets.US_ASCII);
+        byte[] seed = fill(8, (byte) 0x06);
+
+        byte[] result = KdfTreeGostR3411_2012_256.generate(kin, label, seed, 1, 31);
+        byte[] expected = Arrays.copyOf(computeKdfTreeBlock(kin, label, seed, 1, 1, 31), 31);
+
+        assertEquals(31, result.length);
+        assertArrayEquals(expected, result, "Кодирование [L] в 1 байт должно совпасть с эталоном");
+    }
 
     @Test
     @DisplayName("Детерминизм: одинаковые входы -> одинаковый выход")

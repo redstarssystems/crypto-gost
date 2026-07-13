@@ -1,4 +1,4 @@
-SUB_DIRS := kuznyechik digest-mac sign keys pkcs12 jsse jsse-server tls13 cms csr cert crl ocsp cadest
+SUB_DIRS := kuznyechik digest-mac sign keys pkcs12 jsse jsse-server tls13 cms csr cert crl ocsp cadest cadesc
 
 .PHONY: clean
 

@@ -288,7 +288,8 @@ class TspResponseTest {
                         .notAfter("260101000000Z")
                         .extendedKeyUsage(GostOids.EXT_SERVER_AUTH)
                         .publicKey(noTimeStampKp.getPublic())
-                        .assembleCert(noTimeStampKp.getPrivate());
+                        .randomSerial()
+                        .sign(noTimeStampKp.getPrivate());
 
         byte[] tstInfo = buildTstInfo(testHash256);
         byte[] timeStampToken =

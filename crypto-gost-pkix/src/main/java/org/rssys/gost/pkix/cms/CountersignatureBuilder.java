@@ -2,10 +2,10 @@ package org.rssys.gost.pkix.cms;
 
 import java.util.ArrayList;
 import java.util.List;
-import org.rssys.gost.api.Digest;
-import org.rssys.gost.api.Signature;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostSignatureHelper;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -29,24 +29,21 @@ public final class CountersignatureBuilder {
      *
      * @param parentSignatureValue содержимое октета signatureValue родительского
      *                            SignerInfo (s||r), без DER-обёртки tag/length
-     * @param countersignerKey    приватный ключ countersigner'а
-     * @param countersignerCert   сертификат countersigner'а
-     * @param digestOid           OID дайджеста ({@link GostOids#DIGEST_256}
-     *                            или {@link GostOids#DIGEST_512})
+     * @param countersigner        подписант countersignature (может быть HSM-адаптером)
+     * @param countersignerCert    сертификат countersigner'а
+     * @param digestOid            OID дайджеста ({@link GostOids#DIGEST_256}
+     *                             или {@link GostOids#DIGEST_512})
      * @return DER-байты SignerInfo (counter-signature)
      */
     public static byte[] buildCountersignature(
             byte[] parentSignatureValue,
-            PrivateKeyParameters countersignerKey,
+            GostSigner countersigner,
             GostCertificate countersignerCert,
             String digestOid) {
 
         boolean is512 = GostOids.DIGEST_512.equals(digestOid);
 
-        byte[] messageDigest =
-                is512
-                        ? Digest.digest512(parentSignatureValue)
-                        : Digest.digest256(parentSignatureValue);
+        byte[] messageDigest = GostSignatureHelper.digestByOid(digestOid, parentSignatureValue);
 
         // signedAttrs: только message-digest, без content-type
         byte[] digestOctet = DerCodec.encodeOctetString(messageDigest);
@@ -62,15 +59,18 @@ public final class CountersignatureBuilder {
         byte[] signedAttrsWrapped =
                 DerCodec.encodeContextConstructed(0, DerCodec.concat(sortedAttrs));
 
-        // Хеш signedAttrs и подпись
-        byte[] signedAttrsHash =
-                is512 ? Digest.digest512(signedAttrsForHash) : Digest.digest256(signedAttrsForHash);
-        byte[] signatureValue = Signature.signHash(signedAttrsHash, countersignerKey);
+        // Хеш signedAttrs и подпись с fail-closed self-verify
+        byte[] signedAttrsHash = GostSignatureHelper.digestByOid(digestOid, signedAttrsForHash);
+        byte[] signatureValue = GostSignatureHelper.signHashChecked(signedAttrsHash, countersigner);
 
         // Алгоритмы
-        byte[] digestAlgIdDer = CmsAlgorithmIdentifier.encodeOnlyOid(digestOid);
-        String signAlgOid = is512 ? GostOids.SIGN_ALG_512 : GostOids.SIGN_ALG_256;
-        byte[] signAlgIdDer = CmsAlgorithmIdentifier.encodeOnlyOid(signAlgOid);
+        // digestAlgorithm с NULL-параметрами (правило id-tc26-gost3411-2012-256/512,
+        // Р 1323565.1.025 §4.1/4.2; эталон openssl gost-engine кодирует NULL).
+        byte[] digestAlgIdDer = CmsAlgorithmIdentifier.encode(digestOid);
+        // SignerInfo.signatureAlgorithm: OID открытого ключа + NULL (RFC 4490 §3.2),
+        // как в основном подписанте — единообразно и совместимо с КриптоПро/openssl.
+        String signAlgOid = is512 ? GostOids.PUBLIC_KEY_512 : GostOids.PUBLIC_KEY_256;
+        byte[] signAlgIdDer = CmsAlgorithmIdentifier.encode(signAlgOid);
 
         // sid = IssuerAndSerialNumber
         byte[] sid =
@@ -91,5 +91,31 @@ public final class CountersignatureBuilder {
             sigOctet
         };
         return DerCodec.encodeSequence(signerInfoParts);
+    }
+
+    /**
+     * Строит DER-байты SignerInfo countersignature (удобная перегрузка с ключом в памяти).
+     *
+     * <p>Делегирует в {@link #buildCountersignature(byte[], GostSigner, GostCertificate, String)}
+     * через {@link GostSigner#of(PrivateKeyParameters)}.
+     *
+     * @param parentSignatureValue содержимое октета signatureValue родительского
+     *                            SignerInfo (s||r), без DER-обёртки tag/length
+     * @param countersignerKey    приватный ключ countersigner'а
+     * @param countersignerCert   сертификат countersigner'а
+     * @param digestOid           OID дайджеста ({@link GostOids#DIGEST_256}
+     *                            или {@link GostOids#DIGEST_512})
+     * @return DER-байты SignerInfo (counter-signature)
+     */
+    public static byte[] buildCountersignature(
+            byte[] parentSignatureValue,
+            PrivateKeyParameters countersignerKey,
+            GostCertificate countersignerCert,
+            String digestOid) {
+        return buildCountersignature(
+                parentSignatureValue,
+                GostSigner.of(countersignerKey),
+                countersignerCert,
+                digestOid);
     }
 }

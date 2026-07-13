@@ -1,5 +1,6 @@
 package org.rssys.gost.jsse.ocsp;
 
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.pkix.cert.GostOcspRequestBuilder;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -37,6 +38,7 @@ public final class OcspRequestBuilder {
     private byte[] issuerCert;
     private int hashLen = TlsConstants.STREEBOG_256_HASH_LEN;
     private PrivateKeyParameters signKey;
+    private GostSigner signer;
     private ECParameters params;
 
     private OcspRequestBuilder() {}
@@ -78,11 +80,23 @@ public final class OcspRequestBuilder {
      */
     public OcspRequestBuilder signKey(PrivateKeyParameters key) {
         this.signKey = key;
+        this.signer = null;
         return this;
     }
 
     /**
-     * Параметры эллиптической кривой для подписи (только с {@link #signKey}).
+     * Подписант запроса (может быть HSM-адаптером).
+     * Параметры не требуются — берутся из {@link GostSigner#getParams()}.
+     * При использовании этого метода вызов {@link #params(ECParameters)} игнорируется.
+     */
+    public OcspRequestBuilder signKey(GostSigner signer) {
+        this.signer = signer;
+        this.signKey = null;
+        return this;
+    }
+
+    /**
+     * Параметры эллиптической кривой для подписи (только с {@link #signKey(PrivateKeyParameters)}).
      */
     public OcspRequestBuilder params(ECParameters params) {
         this.params = params;
@@ -101,7 +115,9 @@ public final class OcspRequestBuilder {
         GostOcspRequestBuilder pkixBuilder =
                 GostOcspRequestBuilder.create().targetCert(targetCert).issuerCert(issuerCert);
 
-        if (signKey != null) {
+        if (signer != null) {
+            pkixBuilder.signKey(signer);
+        } else if (signKey != null) {
             pkixBuilder.signKey(signKey).params(params);
         } else {
             pkixBuilder.hashLen(hashLen);

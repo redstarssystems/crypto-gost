@@ -11,12 +11,16 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import org.rssys.gost.api.Digest;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.RssysGostProvider;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.CertId;
 import org.rssys.gost.pkix.cert.CertRevocationData;
+import org.rssys.gost.pkix.cert.CertificatePolicy;
+import org.rssys.gost.pkix.cert.CertificateTextFormatter;
 import org.rssys.gost.pkix.cert.ChainValidator;
 import org.rssys.gost.pkix.cert.CrlVerifier;
 import org.rssys.gost.pkix.cert.GostCertificate;
@@ -26,18 +30,22 @@ import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.GostCsrBuilder;
 import org.rssys.gost.pkix.cert.GostCsrParser;
 import org.rssys.gost.pkix.cert.GostDnParser;
+import org.rssys.gost.pkix.cert.GostExtensionParser;
 import org.rssys.gost.pkix.cert.GostOcspRequest;
 import org.rssys.gost.pkix.cert.GostOcspRequestBuilder;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
 import org.rssys.gost.pkix.cert.GostPkcs12Builder;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.pkix.cert.GostSignatureHelper;
 import org.rssys.gost.pkix.cert.OcspVerifier;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.pkix.cert.ReasonCode;
 import org.rssys.gost.pkix.cert.RevokedEntry;
 import org.rssys.gost.pkix.cert.SingleOcspResponse;
 import org.rssys.gost.pkix.cms.CAdESExtender;
+import org.rssys.gost.pkix.cms.CAdESSignerResult;
+import org.rssys.gost.pkix.cms.CAdESXLongData;
 import org.rssys.gost.pkix.cms.CertChainBuilder;
 import org.rssys.gost.pkix.cms.CmsEnvelopedDataBuilder;
 import org.rssys.gost.pkix.cms.CmsEnvelopedDataDecryptor;
@@ -142,6 +150,7 @@ public final class PkixDemo {
             section7_ocsp();
             section8_cmsSignedData();
             section9_cmsEnvelopedData();
+            section9_1_cmsEnvelopedDataOmac();
             section10_cmsSignedAndEnvelopedData();
             section11_gostOids();
             section12_certificatePolicies();
@@ -163,6 +172,10 @@ public final class PkixDemo {
             section28_cmsSignedDataRevocationCheck();
             section29_delegatedCrlSigner();
             section30_countersignature();
+            section31_gostSigner();
+            section32_certRenewal();
+            section33_cadesC();
+            section34_cadesXLongType1();
         } catch (Exception e) {
             System.out.println();
             System.out.println("!!! АВАРИЙНОЕ ЗАВЕРШЕНИЕ: " + e.getMessage());
@@ -206,11 +219,12 @@ public final class PkixDemo {
         byte[] caTbs =
                 GostCertificateBuilder.create(PARAMS, "CN=Demo Root CA,O=DemoOrg,C=RU")
                         .publicKey(caPubKey)
+                        .randomSerial()
                         .notBefore("260601000000Z")
                         .notAfter("360601000000Z")
                         .additionalExtensions(caExts.toByteArray())
                         .buildTbs();
-        caCert = GostCertificateBuilder.assembleCert(caTbs, caKey, PARAMS);
+        caCert = GostCertificateBuilder.sign(caTbs, GostSigner.of(caKey));
         System.out.println("[подготовка] CA-сертификат создан: " + caCert.getSubjectDn());
 
         // Leaf (подписан CA)
@@ -223,7 +237,8 @@ public final class PkixDemo {
                 GostCertificateBuilder.buildKeyUsageExtension(
                         GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
         byte[] leafEkuExt =
-                GostCertificateBuilder.buildEkuExtension(new String[] {GostOids.EXT_SERVER_AUTH});
+                GostCertificateBuilder.buildEkuExtension(
+                        new String[] {GostOids.EXT_SERVER_AUTH}, false);
         byte[] leafAkiExt = GostCertificateBuilder.buildAkiExtension(caSki);
 
         ByteArrayOutputStream leafExts = new ByteArrayOutputStream();
@@ -235,13 +250,14 @@ public final class PkixDemo {
         byte[] leafTbs =
                 GostCertificateBuilder.create(PARAMS, "CN=demo.example.com,O=DemoOrg,C=RU")
                         .publicKey(leafPubKey)
+                        .randomSerial()
                         .notBefore("250601000000Z")
                         .notAfter("270601000000Z")
                         .sanDns("demo.example.com")
                         .additionalExtensions(leafExts.toByteArray())
                         .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .buildTbs();
-        leafCert = GostCertificateBuilder.assembleCert(leafTbs, caKey, PARAMS);
+        leafCert = GostCertificateBuilder.sign(leafTbs, GostSigner.of(caKey));
         System.out.println("[подготовка] Leaf-сертификат создан: " + leafCert.getSubjectDn());
 
         // Самоподписанный сертификат для CMS (с уникальным серийным номером)
@@ -255,7 +271,7 @@ public final class PkixDemo {
                         .notAfter("270601000000Z")
                         .serial(BigInteger.TWO)
                         .buildTbs();
-        GostCertificate cmsGost = GostCertificateBuilder.assembleCert(cmsTbs, cmsKey, PARAMS);
+        GostCertificate cmsGost = GostCertificateBuilder.sign(cmsTbs, GostSigner.of(cmsKey));
         cmsCert = cmsGost;
         System.out.println(
                 "[подготовка] CMS-сертификат создан (self-signed, serial="
@@ -274,7 +290,7 @@ public final class PkixDemo {
                         .serial(BigInteger.valueOf(3))
                         .extendedKeyUsage(true, GostOids.EXT_TIME_STAMPING)
                         .buildTbs();
-        tsaCert = GostCertificateBuilder.assembleCert(tsaTbs, tsaKey, PARAMS);
+        tsaCert = GostCertificateBuilder.sign(tsaTbs, GostSigner.of(tsaKey));
         System.out.println(
                 "[подготовка] TSA-сертификат создан (self-signed, serial="
                         + tsaCert.getSerialNumberBigInt()
@@ -305,7 +321,7 @@ public final class PkixDemo {
                         .serial(BigInteger.valueOf(4))
                         .additionalExtensions(crlSignerExts.toByteArray())
                         .buildTbs();
-        crlSignerCert = GostCertificateBuilder.assembleCert(crlSignerTbs, caKey, PARAMS);
+        crlSignerCert = GostCertificateBuilder.sign(crlSignerTbs, GostSigner.of(caKey));
         System.out.println(
                 "[подготовка] CRL-подписант создан: "
                         + crlSignerCert.getSubjectDn()
@@ -315,7 +331,7 @@ public final class PkixDemo {
     }
 
     /**
-     * Создаёт самоподписанный GostCertificate через buildTbs + assembleCert
+     * Создаёт самоподписанный GostCertificate через buildTbs + sign
      * с заданным серийным номером.
      */
     private static GostCertificate makeSelfSignedCert(
@@ -328,7 +344,7 @@ public final class PkixDemo {
                         .notAfter("270601000000Z")
                         .serial(serial)
                         .buildTbs();
-        return GostCertificateBuilder.assembleCert(tbs, privKey, PARAMS);
+        return GostCertificateBuilder.sign(tbs, GostSigner.of(privKey));
     }
 
     private static void check(boolean condition, String label) {
@@ -359,15 +375,18 @@ public final class PkixDemo {
 
         var kp = KeyGenerator.generateKeyPair(PARAMS);
 
+        // Удобный способ: notBeforeNow() + validForDays(365)
+        // Альтернативно с явными датами: .notBefore("260701120000Z").notAfter("270701120000Z")
         byte[] tbs =
                 GostCertificateBuilder.create(PARAMS, "CN=Quick Start Test,O=MyOrg,C=RU")
                         .publicKey(kp.getPublic())
-                        .notBefore("260701120000Z")
-                        .notAfter("270701120000Z")
+                        .randomSerial()
+                        .notBeforeNow()
+                        .validForDays(365)
                         .sanDns("gost.example.com")
                         .buildTbs();
 
-        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), PARAMS);
+        GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate()));
         String pem = cert.toPem();
 
         check(cert.getEncoded().length > 0, "Сертификат создан и сериализован");
@@ -439,8 +458,8 @@ public final class PkixDemo {
 
         // Algorithm identifier
         check(
-                GostOids.SIGN_ALG_256.equals(leafCert.getSignatureAlgorithmOid()),
-                "getSignatureAlgorithmOid() — SIGN_ALG_256");
+                GostOids.SIGN_WITH_DIGEST_256.equals(leafCert.getSignatureAlgorithmOid()),
+                "getSignatureAlgorithmOid() — SIGN_WITH_DIGEST_256");
 
         // Hostname verification
         check(
@@ -548,12 +567,46 @@ public final class PkixDemo {
     private static void section4_csr() throws Exception {
         section("§4 CSR: построение, разбор и proof-of-possession");
 
-        // Построение CSR
+        // Построение CSR без расширений (статический API — обратная совместимость)
         byte[] csrDer =
-                GostCsrBuilder.buildCsr(leafKey, leafPubKey, "CN=demo.example.com,O=DemoOrg,C=RU");
+                GostCsrBuilder.create("CN=demo.example.com,O=DemoOrg,C=RU", leafPubKey)
+                        .sign(leafKey);
         check(csrDer.length > 0, "CSR DER собран");
 
-        // Разбор из DER
+        // Построение CSR с extensionRequest (fluent API)
+        byte[] csrExtDer =
+                GostCsrBuilder.create("CN=demo-san.example.com,O=DemoOrg,C=RU", leafPubKey)
+                        .sanDns("demo-san.example.com", "www.demo-san.example.com")
+                        .sanRfc822Name("admin@example.com")
+                        .sanUpn("user@domain.ru")
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .extendedKeyUsage(GostOids.EXT_SERVER_AUTH)
+                        .sign(leafKey);
+        check(csrExtDer.length > 0, "CSR с расширениями DER собран");
+
+        // Разбор CSR с расширениями
+        GostCsrParser csrExt = GostCsrParser.fromDer(csrExtDer);
+        check(csrExt.verifySelf(), "CSR с расширениями: proof-of-possession true");
+        check(csrExt.hasExtensions(), "CSR с расширениями: hasExtensions() true");
+        GostExtensionParser.ExtensionsResult extResult = csrExt.getExtensions();
+        check(
+                extResult.sanDnsNames != null && extResult.sanDnsNames.length > 0,
+                "CSR с расширениями: SAN распарсен");
+        check(
+                extResult.sanRfc822Names != null
+                        && extResult.sanRfc822Names[0].equals("admin@example.com"),
+                "CSR с расширениями: rfc822Name распарсен");
+        check(
+                extResult.sanOtherNames != null && extResult.sanOtherNames.length > 0,
+                "CSR с расширениями: otherName (UPN) распарсен");
+        check(
+                extResult.presentExtensionOids.contains(GostOids.EXT_SAN),
+                "CSR с расширениями: OID SAN в списке");
+        check(
+                extResult.presentExtensionOids.contains(GostOids.EXT_EKU),
+                "CSR с расширениями: OID EKU в списке");
+
+        // Разбор из DER (базовый CSR)
         GostCsrParser csr = GostCsrParser.fromDer(csrDer);
         check(csr != null, "CSR разобран из DER");
 
@@ -570,8 +623,8 @@ public final class PkixDemo {
         PublicKeyParameters csrPubKey = csr.getPublicKey();
         check(csrPubKey != null, "getPublicKey() из CSR не null");
         check(
-                GostOids.SIGN_ALG_256.equals(csr.getSignatureAlgorithmOid()),
-                "CSR getSignatureAlgorithmOid() — SIGN_ALG_256");
+                GostOids.SIGN_WITH_DIGEST_256.equals(csr.getSignatureAlgorithmOid()),
+                "CSR getSignatureAlgorithmOid() — SIGN_WITH_DIGEST_256");
 
         // Proof-of-possession
         check(csr.verifySelf(), "verifySelf() — proof-of-possession true");
@@ -585,6 +638,38 @@ public final class PkixDemo {
         GostCsrParser fromPem =
                 GostCsrParser.fromPemOrDer(csrPem.getBytes(StandardCharsets.US_ASCII));
         check(fromPem.verifySelf(), "fromPemOrDer: verifySelf() true");
+
+        // Выпуск сертификата из CSR через fromCsrIdentity
+        // fromCsrIdentity: проверяет PoP, копирует DN (байтово-точно) и publicKey
+        // Расширения не копируются — УЦ явно решает, что переносить
+        byte[] csrDnDer = csr.getSubjectDnDer();
+        check(
+                csrDnDer != null && csrDnDer.length > 0,
+                "getSubjectDnDer() — байтово-точный DER subject DN из CSR");
+        check(
+                csr.getSubjectDn().contains("CN=demo.example.com"),
+                "getSubjectDn() возвращает исходный DN");
+
+        // fromCsrIdentity с авто-проверкой PoP (бросает PkixException при провале)
+        GostCertificateBuilder csrCertBuilder =
+                GostCertificateBuilder.fromCsrIdentity(csr, caPubKey.getParams());
+        // УЦ задаёт issuer-поля, срок и подписывает
+        GostCertificate csrIssuedCert =
+                csrCertBuilder
+                        .issuerDn(caCert.getSubjectDnBytes())
+                        .notBefore("20250101000000Z")
+                        .notAfter("20260101000000Z")
+                        .randomSerial()
+                        .sign(GostSigner.of(caKey));
+        check(csrIssuedCert != null, "Сертификат из CSR выпущен через fromCsrIdentity");
+        check(
+                csrIssuedCert.getSubjectDn().equals(csr.getSubjectDn()),
+                "Subject DN сертификата совпадает с DN из CSR");
+        check(
+                Arrays.equals(
+                        GostDerCodec.subjectPublicKeyPointBytes(csr.getPublicKey()),
+                        GostDerCodec.subjectPublicKeyPointBytes(csrIssuedCert.getPublicKey())),
+                "Публичный ключ сертификата из CSR корректен");
 
         System.out.println("  OK: CSR — построение, разбор и проверка успешны");
     }
@@ -617,12 +702,12 @@ public final class PkixDemo {
             byte[] badTbs =
                     GostCertificateBuilder.create(PARAMS, "CN=Expired,O=DemoOrg,C=RU")
                             .publicKey(leafPubKey)
+                            .randomSerial()
                             .notBefore("200101000000Z")
                             .notAfter("200201000000Z")
                             .issuerDn(caCert.getIssuerDnBytes())
                             .buildTbs();
-            GostCertificate expiredCert =
-                    GostCertificateBuilder.assembleCert(badTbs, caKey, PARAMS);
+            GostCertificate expiredCert = GostCertificateBuilder.sign(badTbs, GostSigner.of(caKey));
             ChainValidator.validateChain(List.of(expiredCert, caCert), trustedKeys);
             check(false, "Просроченный сертификат должен вызывать ошибку");
         } catch (PkixException e) {
@@ -647,9 +732,9 @@ public final class PkixDemo {
 
         // Проверка отзыва через CRL: leaf не отозван
         byte[] crlDer =
-                GostCrlBuilder.create(caKey, "CN=Demo Root CA,O=DemoOrg,C=RU")
+                GostCrlBuilder.create("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .nextUpdate("270801120000Z")
-                        .build();
+                        .sign(caKey);
         ChainValidator.validateChainWithRevocation(
                 chain, trustedKeys, Arrays.asList(new CertRevocationData(null, crlDer), null));
         check(true, "validateChainWithRevocation(CRL) — leaf не отозван, успешно");
@@ -657,10 +742,9 @@ public final class PkixDemo {
         // Проверка отзыва через OCSP: leaf имеет статус good
         byte[] ocspGood =
                 GostOcspResponseBuilder.create(serial)
-                        .signer(caKey, caPubKey)
                         .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .good()
-                        .build();
+                        .sign(caKey);
         ChainValidator.validateChainWithRevocation(
                 chain, trustedKeys, Arrays.asList(new CertRevocationData(ocspGood, null), null));
         check(true, "validateChainWithRevocation(OCSP) — leaf good, успешно");
@@ -687,10 +771,10 @@ public final class PkixDemo {
 
         // Построение CRL
         byte[] crlDer =
-                GostCrlBuilder.create(caKey, "CN=Demo Root CA,O=DemoOrg,C=RU")
+                GostCrlBuilder.create("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .nextUpdate("270801120000Z")
                         .addRevoked(List.of(entry))
-                        .build();
+                        .sign(caKey);
         check(crlDer.length > 0, "CRL построен, размер " + crlDer.length + " байт");
 
         // Проверка: сертификат отозван
@@ -722,10 +806,9 @@ public final class PkixDemo {
         // Построение OCSP-ответа
         byte[] ocspResp =
                 GostOcspResponseBuilder.create(serial)
-                        .signer(caKey, caPubKey)
                         .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .good()
-                        .build();
+                        .sign(caKey);
         check(ocspResp.length > 0, "OCSP-ответ построен, размер " + ocspResp.length + " байт");
 
         // Проверка
@@ -735,11 +818,10 @@ public final class PkixDemo {
         // byKey responder ID — хэш Streebog-256 от публичного ключа подписанта
         byte[] ocspByKey =
                 GostOcspResponseBuilder.create(serial)
-                        .signer(caKey, caPubKey)
                         .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .withResponderByKey()
                         .good()
-                        .build();
+                        .sign(caKey);
         check(
                 ocspByKey.length > 0,
                 "OCSP-ответ byKey построен, размер " + ocspByKey.length + " байт");
@@ -754,6 +836,27 @@ public final class PkixDemo {
 
         OcspVerifier.verify(ocspByKey, serial, caCert);
         check(true, "OcspVerifier.verify() byKey — успешно");
+
+        // Выпуск сертификата делегированного OCSP-респондера.
+        // Такой сертификат короткоживущий и несёт id-pkix-ocsp-nocheck (RFC 6960
+        // §4.2.2.2.1): проверяющая сторона не проверяет его отзыв рекурсивно, иначе
+        // возникла бы циклическая зависимость (для проверки OCSP-ответа понадобился бы
+        // ещё один OCSP-запрос про подписанта). Расширение допустимо только вместе с
+        // EKU id-kp-OCSPSigning — иначе builder бросит IllegalStateException.
+        var responderKp = KeyGenerator.generateKeyPair(PARAMS);
+        GostCertificate responderCert =
+                GostCertificateBuilder.create(PARAMS, "CN=Delegated OCSP Responder,O=DemoOrg,C=RU")
+                        .publicKey(responderKp.getPublic())
+                        .randomSerial()
+                        .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
+                        .notBefore("20250101000000Z")
+                        .notAfter("20250103000000Z")
+                        .extendedKeyUsage(GostOids.EXT_OCSP_SIGNING)
+                        .ocspNoCheck()
+                        .sign(caKey);
+        check(
+                responderCert.isOcspSigning() && responderCert.hasOcspNoCheck(),
+                "Делегированный responder-сертификат: EKU OCSPSigning + id-pkix-ocsp-nocheck");
 
         System.out.println("  OK: OCSP — построение и проверка");
     }
@@ -819,6 +922,15 @@ public final class PkixDemo {
                 roundTrip.size() == 2,
                 "GostPkcs7.buildCertsOnly() — round-trip сертификатов: " + roundTrip.size());
 
+        // Человекочитаемый дамп .p7b-контейнера (GostPkcs7.formatText) и одного
+        // сертификата (CertificateTextFormatter.format) — структурный разбор без верификации.
+        String p7bText = GostPkcs7.formatText(certsOnlyP7b);
+        check(
+                p7bText.contains("PKCS#7") && p7bText.contains("ВНИМАНИЕ"),
+                "GostPkcs7.formatText() — человекочитаемый дамп с дисклеймером");
+        System.out.println();
+        System.out.println(CertificateTextFormatter.format(cmsCert));
+
         // Пользовательские signed-атрибуты
         byte[] attrSigned =
                 CmsSignedDataBuilder.create()
@@ -859,7 +971,7 @@ public final class PkixDemo {
     // ========================================================================
 
     private static void section9_cmsEnvelopedData() throws Exception {
-        section("§9 CMS EnvelopedData: шифрование и расшифровка файла");
+        section("§9 CMS EnvelopedData: шифрование и расшифровка файла (ktri)");
 
         CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
 
@@ -893,7 +1005,46 @@ public final class PkixDemo {
                             + ")");
         }
 
-        System.out.println("  OK: CMS EnvelopedData — шифрование и расшифровка");
+        System.out.println("  OK: CMS EnvelopedData (ktri) — шифрование и расшифровка");
+    }
+
+    // §9.1 CMS EnvelopedData OMAC — шифрование с имитовставкой (ТК26 §8.3.1)
+
+    private static void section9_1_cmsEnvelopedDataOmac() throws Exception {
+        section("§9.1 CMS EnvelopedData (ktri+OMAC): шифрование с имитовставкой");
+
+        CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
+
+        // Шифрование с имитовставкой (Encrypt-then-MAC)
+        byte[] enveloped =
+                CmsEnvelopedDataBuilder.create()
+                        .data(demoData)
+                        .addRecipient(cmsCert)
+                        .keyWrap(keyWrap)
+                        .withOmac()
+                        .build();
+        check(
+                enveloped.length > 0,
+                "EnvelopedData+OMAC построен, размер " + enveloped.length + " байт");
+
+        // Расшифрование — MAC проверяется автоматически, прозрачно
+        byte[] decrypted = CmsEnvelopedDataDecryptor.decrypt(enveloped, cmsKey, cmsCert, keyWrap);
+        check(
+                Arrays.equals(demoData, decrypted),
+                "Расшифрованные данные OMAC совпадают с оригиналом");
+
+        // Fail-closed: подмена данных → PkixException
+        byte[] tampered = Arrays.copyOf(enveloped, enveloped.length);
+        tampered[enveloped.length / 2] ^= 0xFF;
+        try {
+            CmsEnvelopedDataDecryptor.decrypt(tampered, cmsKey, cmsCert, keyWrap);
+            check(false, "OMAC подмена: ожидался PkixException");
+        } catch (PkixException e) {
+            check(true, "OMAC подмена: fail-closed — MAC проверка отклонила поддельные данные");
+        }
+
+        System.out.println(
+                "  OK: CMS EnvelopedData + OMAC — шифрование с имитовставкой и fail-closed");
     }
 
     // ========================================================================
@@ -946,8 +1097,8 @@ public final class PkixDemo {
         check(
                 GostOids.WRAP_KUZNYECHIK_KEXP15.equals("1.2.643.7.1.1.7.2.1"),
                 "WRAP_KUZNYECHIK_KEXP15");
-        check(GostOids.SIG_WITH_DIGEST_256.equals("1.2.643.7.1.1.1.1"), "SIG_WITH_DIGEST_256");
-        check(GostOids.SIGN_ALG_256.equals("1.2.643.7.1.1.3.2"), "SIGN_ALG_256");
+        check(GostOids.PUBLIC_KEY_256.equals("1.2.643.7.1.1.1.1"), "PUBLIC_KEY_256");
+        check(GostOids.SIGN_WITH_DIGEST_256.equals("1.2.643.7.1.1.3.2"), "SIGN_WITH_DIGEST_256");
         check(GostOids.DIGEST_256.equals("1.2.643.7.1.1.2.2"), "DIGEST_256");
         check(GostOids.KUZ_CTR_ACPKM.equals("1.2.643.7.1.1.5.2.1"), "KUZ_CTR_ACPKM");
         check(GostOids.EXT_SAN.equals("2.5.29.17"), "EXT_SAN");
@@ -1009,7 +1160,7 @@ public final class PkixDemo {
                         .issuerDn(caCert.getIssuerDnBytes())
                         .serial(BigInteger.valueOf(99))
                         .buildTbs();
-        GostCertificate policyLeaf = GostCertificateBuilder.assembleCert(tbs, caKey, PARAMS);
+        GostCertificate policyLeaf = GostCertificateBuilder.sign(tbs, GostSigner.of(caKey));
 
         // validateChain с KC1 — leaf содержит KC1, проверка проходит
         List<GostCertificate> chain2 = List.of(policyLeaf, caCert);
@@ -1027,6 +1178,55 @@ public final class PkixDemo {
         }
 
         System.out.println("  OK: Certificate policies — политики сертификатов");
+
+        // Новый fluent API: certificatePolicies(String...) — без квалификаторов
+        byte[] tbs2 =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .sanDns("fluent-cp.example.com")
+                        .certificatePolicies(GostOids.POLICY_KC1, GostOids.POLICY_KC2)
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .issuerDn(caCert.getIssuerDnBytes())
+                        .serial(BigInteger.valueOf(100))
+                        .buildTbs();
+        GostCertificate fluentLeaf = GostCertificateBuilder.sign(tbs2, GostSigner.of(caKey));
+
+        CertificatePolicy[] cpInfos = fluentLeaf.getCertificatePolicyInfos();
+        check(cpInfos != null && cpInfos.length == 2, "fluent API: 2 политики через getter");
+        check(
+                cpInfos[0].cpsUri() == null && cpInfos[1].cpsUri() == null,
+                "fluent API: без CPS — cpsUri == null");
+
+        // Новый fluent API: certificatePolicyInfos(CertificatePolicy...) — с CPS-квалификатором
+        String cpsUri = "https://ca.example.com/cps/russian-ca.html";
+        byte[] tbs3 =
+                GostCertificateBuilder.create(PARAMS, GostDnParser.encodeDn("CN=CpsDemo"))
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .sanDns("cps-demo.example.com")
+                        .certificatePolicyInfos(
+                                new CertificatePolicy(GostOids.POLICY_KC1, cpsUri),
+                                new CertificatePolicy(GostOids.POLICY_KC2))
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .issuerDn(caCert.getIssuerDnBytes())
+                        .serial(BigInteger.valueOf(101))
+                        .buildTbs();
+        GostCertificate cpsLeaf = GostCertificateBuilder.sign(tbs3, GostSigner.of(caKey));
+
+        CertificatePolicy[] cpsInfos = cpsLeaf.getCertificatePolicyInfos();
+        check(cpsInfos != null && cpsInfos.length == 2, "certificatePolicyInfos: 2 политики");
+        check(cpsUri.equals(cpsInfos[0].cpsUri()), "certificatePolicyInfos: CPS URI round-trip");
+        check(cpsInfos[1].cpsUri() == null, "certificatePolicyInfos: вторая политика без CPS");
+
+        // Валидация с политиками (только OID, CPS не влияет)
+        List<GostCertificate> chain3 = List.of(cpsLeaf, caCert);
+        ChainValidator.validateChain(chain3, trustedKeys, GostOids.POLICY_KC1);
+        check(true, "validateChain с KC1 через fluent API — валидно");
+
+        System.out.println("  OK: Fluent-API certificatePolicies / certificatePolicyInfos");
     }
 
     // ========================================================================
@@ -1085,10 +1285,10 @@ public final class PkixDemo {
                         serial2, "260901120000Z", ReasonCode.CESSATION_OF_OPERATION, null, null);
 
         byte[] crlDer =
-                GostCrlBuilder.create(caKey, "CN=Demo Root CA,O=DemoOrg,C=RU")
+                GostCrlBuilder.create("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .nextUpdate("270801120000Z")
                         .addRevoked(List.of(e1, e2))
-                        .build();
+                        .sign(caKey);
         check(crlDer.length > 0, "CRL с 2 записями построен, размер " + crlDer.length + " байт");
 
         // Проверка первой записи
@@ -1323,7 +1523,7 @@ public final class PkixDemo {
 
         // Строим CRL
         byte[] crlDer =
-                GostCrlBuilder.create(caKey, "CN=Demo Root CA,O=DemoOrg,C=RU")
+                GostCrlBuilder.create("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .nextUpdate("270801120000Z")
                         .addRevoked(
                                 new RevokedEntry(
@@ -1332,7 +1532,7 @@ public final class PkixDemo {
                                         ReasonCode.KEY_COMPROMISE,
                                         null,
                                         null))
-                        .build();
+                        .sign(caKey);
 
         // Разбор через GostCrl.fromDer()
         GostCrl crl = GostCrl.fromDer(crlDer);
@@ -1371,10 +1571,9 @@ public final class PkixDemo {
         // Строим OCSP-ответ
         byte[] ocspDer =
                 GostOcspResponseBuilder.create(leafCert.getSerialNumber())
-                        .signer(caKey, caPubKey)
                         .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .good()
-                        .build();
+                        .sign(caKey);
 
         // Разбор через fromDer()
         GostOcspResponse response = GostOcspResponse.fromDer(ocspDer);
@@ -1498,7 +1697,7 @@ public final class PkixDemo {
         resp.verify(hash, GostOids.DIGEST_256, nonce, tsaCert);
         check(resp.isSignatureVerified(), "Подпись TSA верифицирована");
 
-        System.out.println("  OK: TSP-сервер — round-trip запрос→ответ→верификация");
+        System.out.println("  OK: TSP-сервер — round-trip запрос->ответ->верификация");
     }
 
     // ========================================================================
@@ -1513,7 +1712,7 @@ public final class PkixDemo {
 
         // 1. Базовый CRL: два отозванных сертификата + cRLNumber
         byte[] baseCrl =
-                GostCrlBuilder.create(caKey, "CN=Demo Root CA,O=DemoOrg,C=RU")
+                GostCrlBuilder.create("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .withCrlNumber(1)
                         .withFreshestCrl("http://ca.example/delta.crl")
                         .withAki(caSki)
@@ -1532,12 +1731,12 @@ public final class PkixDemo {
                                                 ReasonCode.CERTIFICATE_HOLD,
                                                 null,
                                                 null)))
-                        .build();
+                        .sign(caKey);
         check(baseCrl.length > 0, "Base CRL построен, cRLNumber=1");
 
         // 2. Delta CRL: serial1 удалён (REMOVE_FROM_CRL)
         byte[] deltaCrl =
-                GostCrlBuilder.create(caKey, "CN=Demo Root CA,O=DemoOrg,C=RU")
+                GostCrlBuilder.create("CN=Demo Root CA,O=DemoOrg,C=RU")
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
                         .addRevoked(
@@ -1548,7 +1747,7 @@ public final class PkixDemo {
                                                 ReasonCode.REMOVE_FROM_CRL,
                                                 null,
                                                 null)))
-                        .build();
+                        .sign(caKey);
         check(deltaCrl.length > 0, "Delta CRL построен, ссылается на base cRLNumber=1");
 
         // 3. GostCrl: чтение метаданных (cRLNumber доступен без verify)
@@ -1579,7 +1778,7 @@ public final class PkixDemo {
                         .serial(BigInteger.valueOf(999))
                         .freshestCrl("http://ca.example/delta.crl")
                         .buildTbs();
-        GostCertificate fcCert = GostCertificateBuilder.assembleCert(fcCertTbs, caKey, PARAMS);
+        GostCertificate fcCert = GostCertificateBuilder.sign(fcCertTbs, GostSigner.of(caKey));
         check(fcCert.getFreshestCrlUris() != null, "Сертификат: getFreshestCrlUris() не null");
         checkEq(
                 "http://ca.example/delta.crl",
@@ -1596,11 +1795,11 @@ public final class PkixDemo {
                     "Delta CRL rejected при изолированной верификации");
         }
 
-        // 4. Merge-верификация: serial1 удалён → не отозван
+        // 4. Merge-верификация: serial1 удалён -> не отозван
         CrlVerifier.verify(baseCrl, deltaCrl, serial1, caPubKey, caCert.getSubjectDnBytes());
         System.out.println("  serial1 прошёл — удалён из CRL через REMOVE_FROM_CRL");
 
-        // 5. serial2 остался только в base → отозван
+        // 5. serial2 остался только в base -> отозван
         try {
             CrlVerifier.verify(baseCrl, deltaCrl, serial2, caPubKey, caCert.getSubjectDnBytes());
             check(false, "serial2 должен быть отозван");
@@ -1631,11 +1830,11 @@ public final class PkixDemo {
         // Строим CRL, отзывающий cmsCert
         GostCrl crl =
                 GostCrl.fromDer(
-                        GostCrlBuilder.create(cmsKey, cmsCert.getIssuerDnBytes())
+                        GostCrlBuilder.create(cmsCert.getIssuerDnBytes())
                                 .withCrlNumber(1)
                                 .nextUpdate("270801120000Z")
                                 .addRevoked(cmsCert.getSerialNumber(), "260801120000Z")
-                                .build());
+                                .sign(cmsKey));
 
         // CMS SignedData со встроенным CRL
         byte[] signedData =
@@ -1670,10 +1869,10 @@ public final class PkixDemo {
         // 1. Чистый CRL (cmsCert НЕ отозван) — верификация с проверкой отзыва
         GostCrl cleanCrl =
                 GostCrl.fromDer(
-                        GostCrlBuilder.create(cmsKey, cmsCert.getIssuerDnBytes())
+                        GostCrlBuilder.create(cmsCert.getIssuerDnBytes())
                                 .withCrlNumber(2)
                                 .nextUpdate("270801120000Z")
-                                .build());
+                                .sign(cmsKey));
 
         byte[] cleanSigned =
                 CmsSignedDataBuilder.create()
@@ -1691,11 +1890,11 @@ public final class PkixDemo {
         // 2. CRL с отозванным cmsCert — автоматическая проверка отклоняет
         GostCrl revokingCrl =
                 GostCrl.fromDer(
-                        GostCrlBuilder.create(cmsKey, cmsCert.getIssuerDnBytes())
+                        GostCrlBuilder.create(cmsCert.getIssuerDnBytes())
                                 .withCrlNumber(3)
                                 .nextUpdate("270801120000Z")
                                 .addRevoked(cmsCert.getSerialNumber(), "260801120000Z")
-                                .build());
+                                .sign(cmsKey));
 
         byte[] revokedSigned =
                 CmsSignedDataBuilder.create()
@@ -1744,11 +1943,11 @@ public final class PkixDemo {
                 new RevokedEntry(serial, "260801120000Z", ReasonCode.KEY_COMPROMISE, null, null);
 
         byte[] crlDer =
-                GostCrlBuilder.create(crlSignerKey, caCert.getSubjectDnBytes())
+                GostCrlBuilder.create(caCert.getSubjectDnBytes())
                         .withCrlNumber(10)
                         .nextUpdate("270801120000Z")
                         .addRevoked(List.of(entry))
-                        .build();
+                        .sign(crlSignerKey);
         check(crlDer.length > 0, "CRL подписан делегированным ключом, размер " + crlDer.length);
 
         // Проверка 1: ключ CA (fast path) — не подходит, fallback к подписанту
@@ -1777,10 +1976,10 @@ public final class PkixDemo {
 
         // Негативный: CRL подписан ключом leaf (без cRLSign) — должен быть rejected
         byte[] badCrl =
-                GostCrlBuilder.create(leafKey, caCert.getSubjectDnBytes())
+                GostCrlBuilder.create(caCert.getSubjectDnBytes())
                         .withCrlNumber(11)
                         .nextUpdate("270801120000Z")
-                        .build();
+                        .sign(leafKey);
         try {
             CrlVerifier.verifyDelegated(
                     badCrl,
@@ -1798,11 +1997,11 @@ public final class PkixDemo {
 
         // IDP: onlyContainsUserCerts
         byte[] idpCrl =
-                GostCrlBuilder.create(caKey, caCert.getSubjectDnBytes())
+                GostCrlBuilder.create(caCert.getSubjectDnBytes())
                         .withCrlNumber(12)
                         .nextUpdate("270801120000Z")
                         .withIdpExtension(true, false)
-                        .build();
+                        .sign(caKey);
         GostCrl parsedIdp = GostCrl.fromDer(idpCrl);
         parsedIdp.verify(caPubKey);
         check(parsedIdp.isIdp(), "IDP присутствует");
@@ -1881,6 +2080,236 @@ public final class PkixDemo {
         System.out.println("  OK: Countersignature — контрподпись создана и проверена");
     }
 
+    // ========================================================================
+    // §31 Абстракция подписанта — GostSigner (HSM/PKCS#11)
+    // ========================================================================
+
+    private static void section31_gostSigner() throws Exception {
+        section("§31 GostSigner: подпись через абстракцию (HSM-совместимость)");
+
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Signer Demo,O=DemoOrg,C=RU");
+        String caDn = "CN=Demo Root CA,O=DemoOrg,C=RU";
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(caPubKey)
+                        .randomSerial()
+                        .notBefore("20240101000000Z")
+                        .notAfter("21060101000000Z")
+                        .issuerDn(caDn)
+                        .buildTbs();
+
+        // Дефолтный подписант поверх ключа в памяти — тонкий мост для не-HSM сценариев.
+        GostSigner memSigner = GostSigner.of(caKey);
+        GostCertificate certViaMem = GostCertificateBuilder.sign(tbs, memSigner);
+        check(
+                certViaMem.verifySignature(caPubKey),
+                "cert через GostSigner.of(priv) верифицируется");
+
+        // Путь priv (обратно совместимый) даёт байт-в-байт тот же результат.
+        GostCertificate certViaPriv = GostCertificateBuilder.sign(tbs, GostSigner.of(caKey));
+        check(
+                Arrays.equals(certViaMem.getEncoded(), certViaPriv.getEncoded()),
+                "GostSigner.of(priv) и путь priv совпадают байт-в-байт");
+
+        // Кастомный подписант, эмулирующий внешний модуль (HSM/PKCS#11): закрытый ключ
+        // не передаётся билдеру напрямую — билдер отдаёт хэш и получает готовую подпись.
+        GostSigner hsm = new DemoHsmSigner(caKey);
+        GostCertificate certViaHsm = GostCertificateBuilder.sign(tbs, hsm);
+        check(certViaHsm.verifySignature(caPubKey), "cert через внешний подписант верифицируется");
+
+        // CSR и CRL — тот же паттерн.
+        byte[] csrDer = GostCsrBuilder.create("CN=Signer Demo", caPubKey).sign(hsm);
+        check(
+                GostCsrParser.fromDer(csrDer).verify(caPubKey),
+                "CSR через внешний подписант валиден");
+
+        byte[] crlDer = GostCrlBuilder.create(caDn).nextUpdate("20990101000000Z").sign(hsm);
+        new GostCrl(crlDer).verify(caPubKey);
+        check(true, "CRL через внешний подписант верифицируется");
+
+        // CMS SignedData через GostSigner — HSM/PKCS#11: закрытый ключ не покидает
+        // аппаратный модуль, билдер отдаёт хэш и получает готовую подпись
+        byte[] cmsPayload = "Hello GostSigner CMS".getBytes(StandardCharsets.UTF_8);
+        byte[] cmsViaHsm =
+                CmsSignedDataBuilder.create().data(cmsPayload).addSigner(hsm, caCert).build();
+        VerifiedSignedData vsd = CmsSignedDataVerifier.verifyAny(cmsViaHsm, caCert);
+        check(
+                Arrays.equals(vsd.data(), cmsPayload),
+                "CMS SignedData через GostSigner: данные восстановлены");
+
+        // OCSP-ответ через GostSigner — тот же HSM-паттерн: signer(hsm) вместо
+        // signer(privKey, pubKey), закрытый ключ не попадает в кучу JVM
+        byte[] caSerial = caCert.getSerialNumberBigInt().toByteArray();
+        byte[] ocspViaHsm =
+                GostOcspResponseBuilder.create(caSerial)
+                        .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
+                        .producedAt("20250101000000Z")
+                        .thisUpdate("20250101000000Z")
+                        .good()
+                        .sign(hsm);
+        OcspVerifier.verify(ocspViaHsm, caSerial, caCert);
+        check(true, "OCSP-ответ через GostSigner: верификация прошла");
+
+        // Fail-closed: неисправный подписант, вернувший подпись не тем ключом — self-verify ловит.
+        var otherKp = KeyGenerator.generateKeyPair(PARAMS);
+        GostSigner faulty = new MismatchedHsmSigner(caPubKey, otherKp.getPrivate());
+        try {
+            GostCertificateBuilder.sign(tbs, faulty);
+            check(false, "неисправный подписант должен приводить к исключению");
+        } catch (IllegalStateException e) {
+            check(true, "self-verify отверг подпись не тем ключом: " + e.getMessage());
+        }
+
+        System.out.println("  OK: GostSigner — абстракция подписи и fail-closed проверки");
+    }
+
+    // ========================================================================
+    // §32 Перевыпуск сертификата — fromCertificate + getExtensions (renewal)
+    // ========================================================================
+
+    private static void section32_certRenewal() throws Exception {
+        section("§32 Перевыпуск сертификата: fromCertificate + getExtensions");
+
+        // Сертификат, который мы будем перевыпускать
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Renewal Demo,O=DemoOrg,C=RU");
+        GostCertificate original =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(caPubKey)
+                        .notBefore("20240101000000Z")
+                        .notAfter("20250101000000Z")
+                        .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
+                        .randomSerial()
+                        .sanDns("demo.example.com")
+                        .keyUsage(
+                                GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE,
+                                GostCertificateBuilder.KeyUsage.KEY_ENCIPHERMENT)
+                        .extendedKeyUsage(GostOids.EXT_SERVER_AUTH)
+                        .basicConstraints(false, null)
+                        .sign(GostSigner.of(caKey));
+
+        // Identity-мост: DN и ключ из старого сертификата
+        GostCertificateBuilder renewedBuilder =
+                GostCertificateBuilder.fromCertificate(original, PARAMS);
+        check(renewedBuilder != null, "fromCertificate вернул не-null билдер");
+
+        // Оператор явно читает расширения и решает, что переносить
+        GostExtensionParser.ExtensionsResult ext = original.getExtensions();
+        check(original.hasExtensions(), "оригинал содержит расширения");
+
+        if (ext.sanDnsNames != null && ext.sanDnsNames.length > 0) {
+            renewedBuilder.sanDns(ext.sanDnsNames); // владение доменом перепроверено
+        }
+        if (ext.keyUsageBits != 0) {
+            // Переносим KeyUsage: проверяем каждый бит осознанно
+            if (GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE.isSetIn(ext.keyUsageBits)) {
+                renewedBuilder.keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+            }
+            if (GostCertificateBuilder.KeyUsage.KEY_ENCIPHERMENT.isSetIn(ext.keyUsageBits)) {
+                renewedBuilder.keyUsage(GostCertificateBuilder.KeyUsage.KEY_ENCIPHERMENT);
+            }
+        }
+        if (ext.isCA) {
+            renewedBuilder.basicConstraints(true, ext.pathLen);
+        }
+        // И так далее для каждого типа расширения — осознанное решение оператора
+
+        // Новые сроки и серийник, issuer тот же
+        GostCertificate renewed =
+                renewedBuilder
+                        .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
+                        .notBeforeNow()
+                        .validForDays(365)
+                        .randomSerial()
+                        .sign(GostSigner.of(caKey));
+
+        check(
+                renewed.getSubjectDn().equals(original.getSubjectDn()),
+                "Subject DN перевыпущенного сертификата совпадает с оригиналом");
+        check(
+                Arrays.equals(
+                        GostDerCodec.subjectPublicKeyPointBytes(renewed.getPublicKey()),
+                        GostDerCodec.subjectPublicKeyPointBytes(original.getPublicKey())),
+                "Публичный ключ перевыпущенного сертификата совпадает с оригиналом");
+        check(
+                !renewed.getSerialNumberBigInt().equals(original.getSerialNumberBigInt()),
+                "Серийный номер новый, не совпадает с оригиналом");
+        check(
+                renewed.getNotAfter().isAfter(original.getNotAfter()),
+                "Новый срок действия за пределами старого");
+
+        // Проверяем, что расширения перенесены корректно
+        String[] renewedSan = renewed.getSanDnsNames();
+        check(
+                renewedSan != null
+                        && renewedSan.length == 1
+                        && "demo.example.com".equals(renewedSan[0]),
+                "SAN dNSName перенесён при перевыпуске");
+
+        boolean renewedHasDs =
+                GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE.isSetIn(
+                        renewed.getExtensions().keyUsageBits);
+        check(renewedHasDs, "KeyUsage DIGITAL_SIGNATURE перенесён при перевыпуске");
+
+        System.out.println("  OK: перевыпуск сертификата через fromCertificate + getExtensions");
+    }
+
+    /**
+     * Демонстрационный подписант, эмулирующий внешний модуль (HSM). В реальном коде
+     * signHash() вызывал бы PKCS#11/внешний CSP, не извлекая закрытый ключ в память JVM.
+     */
+    private static final class DemoHsmSigner implements GostSigner {
+        private final PrivateKeyParameters key;
+
+        DemoHsmSigner(PrivateKeyParameters key) {
+            this.key = key;
+        }
+
+        @Override
+        public byte[] signHash(byte[] hash) {
+            return Signature.signHash(hash, key);
+        }
+
+        @Override
+        public ECParameters getParams() {
+            return key.getParams();
+        }
+
+        @Override
+        public PublicKeyParameters getPublicKey() {
+            return Signature.derivePublicKey(key);
+        }
+    }
+
+    /**
+     * Неисправный подписант: заявляет один открытый ключ, а подписывает другим —
+     * имитация неверно сконфигурированного слота HSM. Ловится self-verify билдера.
+     */
+    private static final class MismatchedHsmSigner implements GostSigner {
+        private final PublicKeyParameters declaredPublic;
+        private final PrivateKeyParameters actualPrivate;
+
+        MismatchedHsmSigner(
+                PublicKeyParameters declaredPublic, PrivateKeyParameters actualPrivate) {
+            this.declaredPublic = declaredPublic;
+            this.actualPrivate = actualPrivate;
+        }
+
+        @Override
+        public byte[] signHash(byte[] hash) {
+            return Signature.signHash(hash, actualPrivate);
+        }
+
+        @Override
+        public ECParameters getParams() {
+            return actualPrivate.getParams();
+        }
+
+        @Override
+        public PublicKeyParameters getPublicKey() {
+            return declaredPublic;
+        }
+    }
+
     private static byte[] concatDemoExtensions(byte[]... exts) {
         if (exts.length == 0) return null;
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -1892,5 +2321,191 @@ public final class PkixDemo {
             throw new RuntimeException(e);
         }
         return out.toByteArray();
+    }
+
+    // ========================================================================
+    // §33 CAdES-C — Complete validation data references
+    // ========================================================================
+
+    private static void section33_cadesC() throws Exception {
+        section("§33 CAdES-C: Complete validation data references (RFC 5126 §6.2)");
+
+        byte[] data = "Документ для CAdES-C".getBytes(StandardCharsets.UTF_8);
+
+        // Строим CAdES-BES
+        byte[] cadesBes =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(cmsKey, cmsCert)
+                        .addCertificate(caCert)
+                        .withCAdES()
+                        .build();
+        check(cadesBes.length > 0, "CAdES-BES подпись создана");
+
+        // Строим CRL для сертификата подписанта
+        byte[] crlDer =
+                GostCrlBuilder.create(caCert.getSubjectDnBytes())
+                        .thisUpdateNow()
+                        .nextUpdateDays(30)
+                        .withCrlNumber(1)
+                        .sign(caKey);
+        GostCrl signerCrl = new GostCrl(crlDer);
+        check(signerCrl != null, "CRL создан");
+
+        // Расширяем до CAdES-C — добавляем ссылки на сертификаты и отзыв
+        List<GostCertificate> chain = List.of(cmsCert, caCert);
+        List<GostCrl> crlsForChain = Arrays.asList(signerCrl, null);
+        List<GostOcspResponse> ocspForChain = Arrays.asList(null, null);
+
+        byte[] cadesC =
+                CAdESExtender.embedCompleteRefs(cadesBes, chain, crlsForChain, ocspForChain);
+        check(cadesC.length > 0, "CAdES-C подпись создана");
+        check(cadesC.length > cadesBes.length, "CAdES-C больше BES (добавлены C-атрибуты)");
+
+        // Convenience-перегрузка через CertRevocationData
+        List<CertRevocationData> revData =
+                Arrays.asList(new CertRevocationData(null, crlDer), null);
+        byte[] cadesCFromCRD = CAdESExtender.embedCompleteRefs(cadesBes, chain, revData);
+        check(
+                java.util.Arrays.equals(cadesC, cadesCFromCRD),
+                "CertRevocationData-перегрузка даёт идентичный результат");
+
+        // Верификация CAdES-C
+        VerifiedCAdESData result = CAdESExtender.verifyCAdESC(cadesC, caCert);
+        check(result.signers().size() == 1, "CAdES-C: один подписант");
+        check(
+                !result.signers().get(0).completeCertRefs().isEmpty(),
+                "CAdES-C: completeCertificateRefs заполнены");
+        check(
+                !result.signers().get(0).completeRevocRefs().isEmpty(),
+                "CAdES-C: completeRevocationRefs заполнены");
+
+        // CAdES-C без C-атрибутов — верификация должна провалиться
+        try {
+            CAdESExtender.verifyCAdESC(cadesBes, caCert);
+            check(false, "CAdES-C без C-атрибутов должен падать");
+        } catch (PkixException e) {
+            check(true, "CAdES-C без C-атрибутов отвергнут: " + e.reason());
+        }
+
+        // Revoked сертификат всё равно проходит CAdES-C (отзыв проверяется в X-Long)
+        byte[] revokingCrlDer =
+                GostCrlBuilder.create(caCert.getSubjectDnBytes())
+                        .thisUpdateNow()
+                        .nextUpdateDays(30)
+                        .withCrlNumber(2)
+                        .addRevoked(
+                                cmsCert.getSerialNumberBigInt(),
+                                GostSignatureHelper.nowGeneralizedTime())
+                        .sign(caKey);
+        GostCrl revokingCrl = new GostCrl(revokingCrlDer);
+
+        List<GostCrl> revokingCrlsForChain = Arrays.asList(revokingCrl, null);
+        byte[] cadesCRevoked =
+                CAdESExtender.embedCompleteRefs(
+                        cadesBes, chain, revokingCrlsForChain, Arrays.asList(null, null));
+        VerifiedCAdESData revokedResult = CAdESExtender.verifyCAdESC(cadesCRevoked, caCert);
+        check(
+                revokedResult.signers().size() == 1,
+                "CAdES-C с отозванным сертификатом — верификация прошла (так и задумано)");
+
+        System.out.println("  OK: CAdES-C — создание и верификация");
+    }
+
+    // §34 CAdES-X Long Type 1 — долгосрочная подпись с проверкой отзыва
+
+    private static void section34_cadesXLongType1() throws Exception {
+        section("§34 CAdES-X Long Type 1: построение и верификация (RFC 5126 §6.3)");
+
+        byte[] data = "Документ для CAdES-X Long Type 1".getBytes(StandardCharsets.UTF_8);
+
+        // 1. Строим CAdES-BES
+        byte[] cadesBes =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(cmsKey, cmsCert)
+                        .addCertificate(caCert)
+                        .withCAdES()
+                        .build();
+        check(cadesBes.length > 0, "CAdES-BES подпись создана");
+
+        // 2. Добавляем метку времени (CAdES-BES -> CAdES-T) через локальный TSP
+        byte[] hash = GostSignatureHelper.digestByOid(GostOids.DIGEST_256, data);
+        BigInteger nonce = new BigInteger(64, CryptoRandom.INSTANCE);
+        byte[] request =
+                TspRequestBuilder.create()
+                        .messageImprint(hash, GostOids.DIGEST_256)
+                        .nonce(nonce)
+                        .build();
+        byte[] responseDer =
+                TspResponseBuilder.create(request)
+                        .signer(tsaKey, tsaCert)
+                        .serialNumber(BigInteger.valueOf(1))
+                        .withCAdES()
+                        .buildGranted();
+        TspResponse tspResp = TspResponse.fromDer(responseDer);
+        tspResp.verify(hash, GostOids.DIGEST_256, nonce, tsaCert);
+
+        byte[] cadesT = CAdESExtender.embedTimestamp(cadesBes, tspResp.timeStampTokenDer());
+        check(cadesT.length > cadesBes.length, "CAdES-T больше BES (добавлена метка)");
+
+        // 3. Строим цепочку и данные отзыва
+        List<GostCertificate> chain =
+                CertChainBuilder.buildChain(cmsCert, List.of(caCert), List.of(caCert));
+        byte[] crlDer =
+                GostCrlBuilder.create(caCert.getSubjectDnBytes())
+                        .thisUpdateNow()
+                        .nextUpdateDays(30)
+                        .withCrlNumber(1)
+                        .sign(caKey);
+        GostCrl crl = new GostCrl(crlDer);
+
+        // 4. Строим CAdES-X Long Type 1 (tspUrl=null — метка уже есть)
+        //    crlsForChain: [signerCrl, caCrl] — без корневого CRL
+        //    chain = [signer, ca] (корень исключён из revocRefs)
+        List<GostCertificate> chainSub = chain.subList(0, chain.size() - 1);
+        List<GostCrl> crlsForChain = Arrays.asList(crl, null);
+        List<GostOcspResponse> ocspForChain = Arrays.asList(null, null);
+
+        byte[] cadesXLong =
+                CAdESExtender.embedXLongType1(
+                        cadesT, chainSub, crlsForChain, ocspForChain, null, null);
+        check(cadesXLong.length > cadesT.length, "CAdES-X Long больше CAdES-T");
+        System.out.println("  Размер CAdES-X Long: " + cadesXLong.length + " байт");
+
+        // 5. Верификация CAdES-X Long Type 1
+        VerifiedCAdESData result = CAdESExtender.verifyCAdESXLong(cadesXLong, caCert);
+        check(result.signers().size() == 1, "CAdES-X Long: один подписант");
+        check(Arrays.equals(data, result.data()), "CAdES-X Long: данные совпадают");
+
+        CAdESSignerResult sr = result.signers().get(0);
+        check(!sr.certificateValues().isEmpty(), "CAdES-X Long: certificateValues заполнены");
+
+        CAdESXLongData.RevocationValuesDecoded revocValues = sr.revocationValues();
+        check(!revocValues.crls().isEmpty(), "CAdES-X Long: revocationValues.crls заполнены");
+        check(revocValues.crls().get(0) != null, "CAdES-X Long: есть CRL для подписанта");
+
+        // 6. Revoked сертификат → жёсткая ошибка (fail-closed)
+        byte[] revokedCrlDer =
+                GostCrlBuilder.create(caCert.getSubjectDnBytes())
+                        .thisUpdateNow()
+                        .nextUpdateDays(30)
+                        .withCrlNumber(2)
+                        .addRevoked(cmsCert.getSerialNumberBigInt(), Instant.now().toString())
+                        .sign(caKey);
+        GostCrl revokedCrl = new GostCrl(revokedCrlDer);
+
+        List<GostCrl> revokedCrlList = Arrays.asList(revokedCrl, null);
+        byte[] cadesXLongRevoked =
+                CAdESExtender.embedXLongType1(
+                        cadesT, chainSub, revokedCrlList, ocspForChain, null, null);
+        try {
+            CAdESExtender.verifyCAdESXLong(cadesXLongRevoked, caCert);
+            check(false, "CAdES-X Long с отозванным сертификатом должен падать");
+        } catch (PkixException e) {
+            check(true, "CAdES-X Long: отозванный сертификат отвергнут: " + e.reason());
+        }
+
+        System.out.println("  OK: CAdES-X Long Type 1 — построение и верификация");
     }
 }

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.Digest;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.jca.spec.GostDerCodec;
@@ -50,15 +51,15 @@ class CrlVerifierDelegatedTest {
 
         issuerDn = GostDnParser.encodeDn("CN=Test CA,O=TestOrg,C=RU");
         caCert =
-                GostCertificateBuilder.assembleCert(
+                GostCertificateBuilder.sign(
                         GostCertificateBuilder.create(PARAMS, "CN=Test CA,O=TestOrg,C=RU")
                                 .publicKey(caPub)
+                                .randomSerial()
                                 .notBefore("260601000000Z")
                                 .notAfter("360601000000Z")
                                 .additionalExtensions(concatExtensions(caKuExt, caBcExt, caSkiExt))
                                 .buildTbs(),
-                        caKey,
-                        PARAMS);
+                        GostSigner.of(caKey));
 
         // CRL-подписант с cRLSign (не CA)
         KeyPair signerKp = KeyGenerator.generateKeyPair(PARAMS);
@@ -72,7 +73,7 @@ class CrlVerifierDelegatedTest {
         byte[] signerAkiExt = GostCertificateBuilder.buildAkiExtension(caSki);
 
         signerCert =
-                GostCertificateBuilder.assembleCert(
+                GostCertificateBuilder.sign(
                         GostCertificateBuilder.create(PARAMS, "CN=CRL Signer,O=TestOrg,C=RU")
                                 .publicKey(signerPub)
                                 .issuerDn(issuerDn)
@@ -82,8 +83,7 @@ class CrlVerifierDelegatedTest {
                                 .additionalExtensions(
                                         concatExtensions(signerKuExt, signerSkiExt, signerAkiExt))
                                 .buildTbs(),
-                        caKey,
-                        PARAMS);
+                        GostSigner.of(caKey));
         signerCertDer = signerCert.getEncoded();
 
         // Leaf без cRLSign (только digitalSignature)
@@ -98,7 +98,7 @@ class CrlVerifierDelegatedTest {
         byte[] leafAkiExt = GostCertificateBuilder.buildAkiExtension(caSki);
 
         leafCert =
-                GostCertificateBuilder.assembleCert(
+                GostCertificateBuilder.sign(
                         GostCertificateBuilder.create(PARAMS, "CN=Leaf,O=TestOrg,C=RU")
                                 .publicKey(leafPub)
                                 .issuerDn(issuerDn)
@@ -108,8 +108,7 @@ class CrlVerifierDelegatedTest {
                                 .additionalExtensions(
                                         concatExtensions(leafKuExt, leafSkiExt, leafAkiExt))
                                 .buildTbs(),
-                        caKey,
-                        PARAMS);
+                        GostSigner.of(caKey));
     }
 
     // Вспомогательные поля / методы
@@ -131,10 +130,10 @@ class CrlVerifierDelegatedTest {
     @DisplayName("CRL подписан делегированным ключом — verifyDelegated успешно")
     void testDelegatedSignerVerified() throws Exception {
         byte[] crl =
-                GostCrlBuilder.create(signerKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(1)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(signerKey);
 
         assertDoesNotThrow(
                 () ->
@@ -152,10 +151,10 @@ class CrlVerifierDelegatedTest {
     @DisplayName("CA-ключ не подходит — fallback к delegated подписанту работает")
     void testCaKeyFailsFallbackToDelegated() throws Exception {
         byte[] crl =
-                GostCrlBuilder.create(signerKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(signerKey);
 
         // Без delegated signers — CA-ключ не подходит
         assertThrows(
@@ -172,10 +171,10 @@ class CrlVerifierDelegatedTest {
     @DisplayName("verifyDelegated с minCrlNumber — защита от rollback")
     void testDelegatedWithMinCrlNumber() throws Exception {
         byte[] crl =
-                GostCrlBuilder.create(signerKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(3)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(signerKey);
 
         // cRLNumber=3 >= min=2 — ok
         CrlVerifier.verifyDelegated(
@@ -210,10 +209,10 @@ class CrlVerifierDelegatedTest {
     @DisplayName("Сертификат подписанта без cRLSign — reject")
     void testDelegatedSignerWithoutCrlSignRejected() throws Exception {
         byte[] crl =
-                GostCrlBuilder.create(signerKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(4)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(signerKey);
 
         // Leaf cert не имеет cRLSign, должен быть reject
         assertThrows(
@@ -233,10 +232,10 @@ class CrlVerifierDelegatedTest {
     @DisplayName("CRL подписан leaf-ключом (без cRLSign) — reject")
     void testCrlSignedByLeafKeyRejected() throws Exception {
         byte[] crl =
-                GostCrlBuilder.create(leafKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(5)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(leafKey);
 
         assertThrows(
                 PkixException.class,
@@ -255,10 +254,10 @@ class CrlVerifierDelegatedTest {
     @DisplayName("Пустой список подписантов + CA не подходит — reject")
     void testEmptySignerListRejected() throws Exception {
         byte[] crl =
-                GostCrlBuilder.create(signerKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(6)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(signerKey);
 
         assertThrows(
                 PkixException.class,
@@ -274,10 +273,10 @@ class CrlVerifierDelegatedTest {
         // CRL подписан нашим signerKey, но в качестве подписанта передаём leafCert
         // (leafCert подписан CA, но у него нет cRLSign — isCrlSigner() = false, отсев)
         byte[] crl =
-                GostCrlBuilder.create(signerKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(7)
                         .nextUpdate("270601120000Z")
-                        .build();
+                        .sign(signerKey);
 
         // signerKey — в списке подписантов (проходит isCrlSigner, verifySignature)
         // leafCert — нет cRLSign, будет пропущен

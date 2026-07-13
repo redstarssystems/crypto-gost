@@ -21,6 +21,9 @@
     <properties>
         <skipTests>false</skipTests>
         <openssl.binary>/opt/openssl-3.6.0-gost/bin/openssl</openssl.binary>
+        <!-- Системный OpenSSL с ГОСТ-движком (engine gost) для CMS EnvelopedData:
+             gostprov-провайдер из /opt не реализует GOST asym-cipher. -->
+        <openssl.system.binary>/usr/bin/openssl</openssl.system.binary>
         <cryptcp.binary>/opt/cprocsp/bin/amd64/cryptcp</cryptcp.binary>
     </properties>
 
@@ -70,6 +73,7 @@
                 <configuration>
                     <systemPropertyVariables>
                         <openssl.binary>${openssl.binary}</openssl.binary>
+                        <openssl.system.binary>${openssl.system.binary}</openssl.system.binary>
                         <cryptcp.binary>${cryptcp.binary}</cryptcp.binary>
                     </systemPropertyVariables>
                 </configuration>

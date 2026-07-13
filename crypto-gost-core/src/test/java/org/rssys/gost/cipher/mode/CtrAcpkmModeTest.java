@@ -357,4 +357,183 @@ class CtrAcpkmModeTest {
         CryptoRandom.INSTANCE.nextBytes(b);
         return b;
     }
+
+    // ========================================================================
+    // ACPKM-рекейинг: граничные тесты
+    // ========================================================================
+
+    /**
+     * Тестовый размер секции — 32 байта (2 блока), чтобы границы были легко достижимы.
+     */
+    private static final int TEST_SECTION = 32;
+
+    @Test
+    @DisplayName("ACPKM: sectionSize не кратен BLOCK_SIZE -> IllegalArgumentException")
+    void testSectionSizeNotMultipleOfBlock() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new CtrAcpkmMode(new Kuznyechik(), false, 17));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new CtrAcpkmMode(new Kuznyechik(), false, 31));
+        assertThrows(
+                IllegalArgumentException.class, () -> new CtrAcpkmMode(new Kuznyechik(), false, 8));
+    }
+
+    @Test
+    @DisplayName("ACPKM: sectionSize = 16 (минимум) принимается")
+    void testSectionSizeMinimal() {
+        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false, 16);
+        mode.init(true, new ParametersWithIV(key, ukm));
+        byte[] pt = randomBytes(16);
+        byte[] ct = new byte[16];
+        mode.processBytes(pt, 0, 16, ct, 0);
+        byte[] dec = new byte[16];
+        mode.init(false, new ParametersWithIV(key, ukm));
+        mode.processBytes(ct, 0, 16, dec, 0);
+        assertArrayEquals(pt, dec);
+    }
+
+    @Test
+    @DisplayName("ACPKM: roundtrip на границе sectionSize - 1 (рекейинг не срабатывает)")
+    void testAcpkmBoundaryBelow() {
+        byte[] data = randomBytes(TEST_SECTION - 1);
+        byte[] ct = encryptNoOmac(key, ukm, data, TEST_SECTION);
+        byte[] pt = decryptNoOmac(key, ukm, ct, TEST_SECTION);
+        assertArrayEquals(data, pt);
+    }
+
+    @Test
+    @DisplayName("ACPKM: roundtrip на границе sectionSize (ровно одна секция)")
+    void testAcpkmBoundaryExact() {
+        byte[] data = randomBytes(TEST_SECTION);
+        byte[] ct = encryptNoOmac(key, ukm, data, TEST_SECTION);
+        byte[] pt = decryptNoOmac(key, ukm, ct, TEST_SECTION);
+        assertArrayEquals(data, pt);
+    }
+
+    @Test
+    @DisplayName("ACPKM: roundtrip на границе sectionSize + 1 (пересечение секции)")
+    void testAcpkmBoundaryAbove() {
+        byte[] data = randomBytes(TEST_SECTION + 1);
+        byte[] ct = encryptNoOmac(key, ukm, data, TEST_SECTION);
+        byte[] pt = decryptNoOmac(key, ukm, ct, TEST_SECTION);
+        assertArrayEquals(data, pt);
+    }
+
+    @Test
+    @DisplayName("ACPKM: roundtrip через 3 секции")
+    void testAcpkmMultipleSections() {
+        byte[] data = randomBytes(TEST_SECTION * 3 - 5);
+        byte[] ct = encryptNoOmac(key, ukm, data, TEST_SECTION);
+        byte[] pt = decryptNoOmac(key, ukm, ct, TEST_SECTION);
+        assertArrayEquals(data, pt);
+    }
+
+    // ========================================================================
+    // ACPKM-рекейинг: потоковая подача чанками
+    // ========================================================================
+
+    @Test
+    @DisplayName("ACPKM: потоковые чанки через границу секции — результат совпадает с монолитным")
+    void testAcpkmStreamingChunksMatchMonolithic() {
+        int chunkSize = 5;
+        byte[] data = randomBytes(TEST_SECTION * 2 + 7);
+
+        byte[] ctMonolithic = encryptNoOmac(key, ukm, data, TEST_SECTION);
+
+        byte[] ctStreaming = encryptNoOmacStreaming(key, ukm, data, TEST_SECTION, chunkSize);
+
+        assertArrayEquals(
+                ctMonolithic,
+                ctStreaming,
+                "потоковая подача чанками должна давать тот же шифртекст, что и монолитная");
+    }
+
+    @Test
+    @DisplayName("ACPKM: чанки по 1 байту через 3 секции")
+    void testAcpkmStreamingByteByByte() {
+        byte[] data = randomBytes(TEST_SECTION * 2 + 7);
+        byte[] ctMonolithic = encryptNoOmac(key, ukm, data, TEST_SECTION);
+        byte[] ctByteByByte = encryptNoOmacStreaming(key, ukm, data, TEST_SECTION, 1);
+        assertArrayEquals(ctMonolithic, ctByteByByte);
+    }
+
+    @Test
+    @DisplayName("ACPKM: чанки ровно по границе секции")
+    void testAcpkmStreamingExactSectionChunks() {
+        byte[] data = randomBytes(TEST_SECTION * 3);
+        byte[] ctMonolithic = encryptNoOmac(key, ukm, data, TEST_SECTION);
+        byte[] ctBySection = encryptNoOmacStreaming(key, ukm, data, TEST_SECTION, TEST_SECTION);
+        assertArrayEquals(ctMonolithic, ctBySection);
+    }
+
+    // ========================================================================
+    // PKCS12/PBES2 регресс на границе 4096 (дефолтный sectionSize)
+    // ========================================================================
+
+    @Test
+    @DisplayName("PKCS12/PBES2: encryptWithMac/decryptWithMac roundtrip на границе 4096 байт")
+    void testPbes2Boundary4096() throws Exception {
+        byte[] data = randomBytes(4096);
+        byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, data);
+        byte[] pt = CtrAcpkmMode.decryptWithMac(key, ukm, ct);
+        assertArrayEquals(data, pt);
+    }
+
+    @Test
+    @DisplayName(
+            "PKCS12/PBES2: encryptWithMac/decryptWithMac roundtrip 4097 байт (пересечение секции)")
+    void testPbes2Boundary4097() throws Exception {
+        byte[] data = randomBytes(4097);
+        byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, data);
+        byte[] pt = CtrAcpkmMode.decryptWithMac(key, ukm, ct);
+        assertArrayEquals(data, pt);
+    }
+
+    @Test
+    @DisplayName("PKCS12/PBES2: encryptWithMac/decryptWithMac roundtrip 8192 байта (2 секции)")
+    void testPbes2Boundary8192() throws Exception {
+        byte[] data = randomBytes(8192);
+        byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, data);
+        byte[] pt = CtrAcpkmMode.decryptWithMac(key, ukm, ct);
+        assertArrayEquals(data, pt);
+    }
+
+    // ========================================================================
+    // ACPKM-рекейинг: helpers с sectionSize
+    // ========================================================================
+
+    private static byte[] encryptNoOmac(SymmetricKey k, byte[] u, byte[] pt, int sectionSize) {
+        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false, sectionSize);
+        mode.init(true, new ParametersWithIV(k, u));
+        byte[] ct = new byte[pt.length];
+        mode.processBytes(pt, 0, pt.length, ct, 0);
+        return ct;
+    }
+
+    private static byte[] decryptNoOmac(SymmetricKey k, byte[] u, byte[] ct, int sectionSize) {
+        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false, sectionSize);
+        mode.init(false, new ParametersWithIV(k, u));
+        byte[] pt = new byte[ct.length];
+        mode.processBytes(ct, 0, ct.length, pt, 0);
+        return pt;
+    }
+
+    /**
+     * Шифрует данные, подавая их в processBytes() чанками заданного размера.
+     */
+    private static byte[] encryptNoOmacStreaming(
+            SymmetricKey k, byte[] u, byte[] pt, int sectionSize, int chunkSize) {
+        CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false, sectionSize);
+        mode.init(true, new ParametersWithIV(k, u));
+        byte[] ct = new byte[pt.length];
+        int pos = 0;
+        while (pos < pt.length) {
+            int len = Math.min(chunkSize, pt.length - pos);
+            mode.processBytes(pt, pos, len, ct, pos);
+            pos += len;
+        }
+        return ct;
+    }
 }

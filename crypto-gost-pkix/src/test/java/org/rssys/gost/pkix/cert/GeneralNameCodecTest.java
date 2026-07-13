@@ -4,10 +4,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.util.DerCodec;
 
 /**
- * Тесты {@link GeneralNameCodec}: кодирование GeneralName (DNS, IP, directoryName).
+ * Тесты {@link GeneralNameCodec}: кодирование всех типов GeneralName.
  */
 @DisplayName("GeneralNameCodec: кодирование GeneralName")
 class GeneralNameCodecTest {
@@ -45,7 +46,12 @@ class GeneralNameCodecTest {
                         new String[] {"example.com"}, new String[] {"127.0.0.1"});
         byte[] sanExt =
                 GostCertificateBuilder.buildSanExtension(
-                        new String[] {"example.com"}, new String[] {"127.0.0.1"});
+                        new String[] {"example.com"},
+                        new String[] {"127.0.0.1"},
+                        null,
+                        null,
+                        null,
+                        null);
 
         byte[][] sanParts = DerCodec.parseSequenceContents(sanExt, 0);
         byte[] sanValue = DerCodec.parseOctetString(sanParts[1], 0);
@@ -65,5 +71,88 @@ class GeneralNameCodecTest {
         assertNotNull(gnSeq);
         assertEquals(0x30, gnSeq[0], "SEQUENCE OF GeneralName начинается с 0x30");
         assertTrue(gnSeq.length > 20);
+    }
+
+    @Test
+    @DisplayName("encodeRfc822Name: правильный тег rfc822Name [1] (0x81)")
+    void testEncodeRfc822NameTag() {
+        byte[] gn = GeneralNameCodec.encodeRfc822Name("user@example.com");
+        assertNotNull(gn);
+        assertEquals(0x81, gn[0] & 0xFF, "rfc822Name должен кодироваться с тегом 0x81");
+    }
+
+    @Test
+    @DisplayName("encodeUri: правильный тег URI [6] (0x86)")
+    void testEncodeUriTag() {
+        byte[] gn = GeneralNameCodec.encodeUri("https://example.com");
+        assertNotNull(gn);
+        assertEquals(0x86, gn[0] & 0xFF, "URI должен кодироваться с тегом 0x86");
+    }
+
+    @Test
+    @DisplayName("encodeOtherName: IMPLICIT [0] — нет вложенного SEQUENCE")
+    void testEncodeOtherNameImplicit() {
+        byte[] upnValue = DerCodec.encodeUTF8String("user@domain.ru");
+        byte[] gn = GeneralNameCodec.encodeOtherName(GostOids.ID_MS_UPN, upnValue);
+        assertNotNull(gn);
+        // Тег 0xA0 — IMPLICIT [0], заменяет SEQUENCE OtherName
+        assertEquals(0xA0, gn[0] & 0xFF, "otherName должен кодироваться с тегом 0xA0");
+        // Проверяем отсутствие вложенного SEQUENCE (0x30) на втором уровне:
+        // После TLV-заголовка содержимое начинается с OID (0x06), не с SEQUENCE (0x30)
+        // DER: A0 <len1> 06 <len2> <oid>
+        int tlvHeaderEnd = 1;
+        int firstLenByte = gn[tlvHeaderEnd] & 0xFF;
+        int headerSize;
+        if (firstLenByte < 0x80) {
+            headerSize = 2; // тег + короткая длина
+        } else if (firstLenByte == 0x81) {
+            headerSize = 3;
+        } else if (firstLenByte == 0x82) {
+            headerSize = 4;
+        } else {
+            throw new AssertionError("Неожиданный формат длины: " + firstLenByte);
+        }
+        int contentStart = headerSize;
+        assertTrue(contentStart < gn.length, "содержимое должно быть после заголовка");
+        assertEquals(
+                0x06,
+                gn[contentStart] & 0xFF,
+                "после заголовка должен быть OID (0x06), не SEQUENCE (0x30)");
+    }
+
+    @Test
+    @DisplayName("encodeOtherNameUpn: UPN через convenience-метод")
+    void testEncodeOtherNameUpn() {
+        byte[] gn = GeneralNameCodec.encodeOtherNameUpn("user@domain.ru");
+        assertNotNull(gn);
+        assertEquals(0xA0, gn[0] & 0xFF, "UPN otherName должен кодироваться с тегом 0xA0");
+        // Проверяем, что в DER есть ожидаемый OID в теле
+        // DER: A0 <len> 06 <upn-oid-len> <upn-oid-bytes>
+        // Ищем 0x06 (OID tag) после заголовка TLV
+        assertTrue(gn.length > 10, "otherName должен быть достаточно длинным");
+        boolean foundOidTag = false;
+        for (int i = 2; i < gn.length - 1; i++) {
+            if ((gn[i] & 0xFF) == 0x06) {
+                foundOidTag = true;
+                break;
+            }
+        }
+        assertTrue(foundOidTag, "в теле otherName должен быть OID (0x06)");
+    }
+
+    @Test
+    @DisplayName("encodeGeneralNames(byte[][]): все типы вместе")
+    void testEncodeGeneralNamesAllTypes() {
+        byte[] dns = GeneralNameCodec.encodeDnsName("example.com");
+        byte[] ip = GeneralNameCodec.encodeIpAddress("127.0.0.1");
+        byte[] rfc822 = GeneralNameCodec.encodeRfc822Name("user@example.com");
+        byte[] uri = GeneralNameCodec.encodeUri("https://example.com");
+        byte[] other = GeneralNameCodec.encodeOtherNameUpn("user@domain.ru");
+        byte[] dirName = GeneralNameCodec.encodeDirectoryName(GostDnParser.encodeDn("CN=Test"));
+
+        byte[] gnSeq = GeneralNameCodec.encodeGeneralNames(dns, ip, rfc822, uri, dirName, other);
+        assertNotNull(gnSeq);
+        assertEquals(0x30, gnSeq[0], "SEQUENCE OF GeneralName начинается с 0x30");
+        assertTrue(gnSeq.length > 50, "должно быть >50 байт для 6 имён");
     }
 }

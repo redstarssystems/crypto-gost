@@ -3,6 +3,7 @@ package org.rssys.gost.pkix.cert;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -30,7 +31,7 @@ class GostCsrParserTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         String dn = "CN=TestParser,O=Org,OU=Dev,C=RU";
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), dn);
+        byte[] csrDer = GostCsrBuilder.create(dn, kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser parsed = GostCsrParser.fromDer(csrDer);
 
         assertEquals(0, parsed.getVersion(), "Версия CSR должна быть 0 (v1)");
@@ -58,7 +59,7 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a512();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=Test512");
+        byte[] csrDer = GostCsrBuilder.create("CN=Test512", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser parsed = GostCsrParser.fromDer(csrDer);
 
         assertEquals("CN=Test512", parsed.getSubjectDn());
@@ -75,7 +76,8 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=VerifySelf");
+        byte[] csrDer =
+                GostCsrBuilder.create("CN=VerifySelf", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser parsed = GostCsrParser.fromDer(csrDer);
 
         assertTrue(parsed.verifySelf(), "CSR должен быть самоподписан");
@@ -88,7 +90,7 @@ class GostCsrParserTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         KeyPair otherKp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=WrongKey");
+        byte[] csrDer = GostCsrBuilder.create("CN=WrongKey", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser parsed = GostCsrParser.fromDer(csrDer);
 
         assertFalse(
@@ -105,7 +107,7 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=PemTest");
+        byte[] csrDer = GostCsrBuilder.create("CN=PemTest", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser original = GostCsrParser.fromDer(csrDer);
 
         String pem = original.toPem();
@@ -128,7 +130,7 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=CertLabel");
+        byte[] csrDer = GostCsrBuilder.create("CN=CertLabel", kp.getPublic()).sign(kp.getPrivate());
         // Кодируем как CERTIFICATE (устойчивость: pemToDer игнорирует заголовок)
         String pem = GostPemUtils.toPem(csrDer, "CERTIFICATE");
         GostCsrParser parsed =
@@ -150,10 +152,9 @@ class GostCsrParserTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
         byte[] csrDer =
-                GostCsrBuilder.buildCsr(
-                        kp.getPrivate(),
-                        kp.getPublic(),
-                        "CN=Server,O=MyOrg,OU=Dev,L=City,ST=Region,C=RU");
+                GostCsrBuilder.create(
+                                "CN=Server,O=MyOrg,OU=Dev,L=City,ST=Region,C=RU", kp.getPublic())
+                        .sign(kp.getPrivate());
         GostCsrParser parsed = GostCsrParser.fromDer(csrDer);
 
         String dn = parsed.getSubjectDn();
@@ -250,7 +251,7 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=FromDer");
+        byte[] csrDer = GostCsrBuilder.create("CN=FromDer", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser parsed = GostCsrParser.fromDer(csrDer);
 
         assertEquals("CN=FromDer", parsed.getSubjectDn());
@@ -263,7 +264,7 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=AutoDer");
+        byte[] csrDer = GostCsrBuilder.create("CN=AutoDer", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser parsed = GostCsrParser.fromPemOrDer(csrDer);
 
         assertEquals("CN=AutoDer", parsed.getSubjectDn());
@@ -279,7 +280,8 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=SecretTest");
+        byte[] csrDer =
+                GostCsrBuilder.create("CN=SecretTest", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser parsed = GostCsrParser.fromDer(csrDer);
 
         String s = parsed.toString();
@@ -296,7 +298,7 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=EqTest");
+        byte[] csrDer = GostCsrBuilder.create("CN=EqTest", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser a = GostCsrParser.fromDer(csrDer);
         GostCsrParser b = GostCsrParser.fromDer(csrDer);
 
@@ -310,11 +312,77 @@ class GostCsrParserTest {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=A");
-        byte[] csrDer2 = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(), "CN=B");
+        byte[] csrDer = GostCsrBuilder.create("CN=A", kp.getPublic()).sign(kp.getPrivate());
+        byte[] csrDer2 = GostCsrBuilder.create("CN=B", kp.getPublic()).sign(kp.getPrivate());
         GostCsrParser a = GostCsrParser.fromDer(csrDer);
         GostCsrParser b = GostCsrParser.fromDer(csrDer2);
 
         assertNotEquals(a, b);
+    }
+
+    // ========================================================================
+    // getSubjectDnDer
+    // ========================================================================
+
+    @Test
+    @DisplayName(
+            "getSubjectDnDer: базовый round-trip через parseDnString совпадает с getSubjectDn()")
+    void testGetSubjectDnDerRoundtrip() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+
+        byte[] csrDer =
+                GostCsrBuilder.create("CN=RoundTrip,O=Example", kp.getPublic())
+                        .sign(kp.getPrivate());
+        GostCsrParser csr = GostCsrParser.fromDer(csrDer);
+
+        byte[] dnDer = csr.getSubjectDnDer();
+        assertNotNull(dnDer);
+        assertTrue(dnDer.length > 0);
+
+        GostDnParser.DnParseResult reparsed = GostDnParser.parseDnString(dnDer, 0, dnDer.length);
+        assertEquals(
+                csr.getSubjectDn(),
+                reparsed.dnString,
+                "Перепарсенный из DER DN должен совпадать с getSubjectDn()");
+    }
+
+    @Test
+    @DisplayName("getSubjectDnDer: байтово-точное сохранение PrintableString")
+    void testGetSubjectDnDerPrintableString() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+
+        // Вручную собираем DER DN с PrintableString (тег 0x13) вместо UTF8String (0x0C)
+        byte[] cnAttr =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid("2.5.4.3"),
+                        DerCodec.encodeTlv(
+                                DerCodec.TAG_PRINTABLE_STRING,
+                                "TestCN".getBytes(StandardCharsets.US_ASCII)));
+        byte[] oAttr =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid("2.5.4.10"),
+                        DerCodec.encodeTlv(
+                                DerCodec.TAG_PRINTABLE_STRING,
+                                "TestOrg".getBytes(StandardCharsets.US_ASCII)));
+        byte[] handcraftedDn =
+                DerCodec.encodeSequence(DerCodec.encodeSet(cnAttr), DerCodec.encodeSet(oAttr));
+
+        byte[] csrDer = GostCsrBuilder.create(handcraftedDn, kp.getPublic()).sign(kp.getPrivate());
+        GostCsrParser csr = GostCsrParser.fromDer(csrDer);
+
+        byte[] dnDer = csr.getSubjectDnDer();
+        assertArrayEquals(
+                handcraftedDn,
+                dnDer,
+                "getSubjectDnDer должен вернуть байтово идентичный исходный DER с PrintableString");
+
+        // PrintableString поддерживается парсером — строка должна корректно читаться
+        String dn = csr.getSubjectDn();
+        assertNotNull(dn);
+        assertTrue(dn.contains("TestCN"));
+        assertTrue(dn.contains("TestOrg"));
+        assertTrue(csr.verifySelf());
     }
 }

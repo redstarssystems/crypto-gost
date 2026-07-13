@@ -3,8 +3,10 @@ package org.rssys.gost.tls13.examples;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.cert.ExtensionsAccumulator;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.GostDnParser;
@@ -15,7 +17,7 @@ import org.rssys.gost.signature.PublicKeyParameters;
 /**
  * Вспомогательные методы для примеров — тонкие делегаты в {@link GostCertificateBuilder}.
  *
- * <p>После плана 084: вся логика построения сертификатов и расширений
+ * <p>Вся логика построения сертификатов и расширений
  * вынесена в {@code pkix.cert}. Здесь остались только делегаты
  * для обратной совместимости примеров.</p>
  */
@@ -47,12 +49,13 @@ public final class ExampleUtils {
         byte[] tbs =
                 GostCertificateBuilder.create(params, subjectDn)
                         .publicKey(subjectPub)
-                        .notBefore("20250101120000Z")
-                        .notAfter("21060101120000Z")
+                        .randomSerial()
+                        .notBeforeNow()
+                        .validForYears(100)
                         .additionalExtensions(exts)
                         .issuerDn(issuerDn)
                         .buildTbs();
-        return GostCertificateBuilder.assembleCert(tbs, issuerPriv, params);
+        return GostCertificateBuilder.sign(tbs, GostSigner.of(issuerPriv));
     }
 
     public static CertBundle createRootCABundle() throws Exception {
@@ -130,8 +133,9 @@ public final class ExampleUtils {
             throws IOException {
         return GostCertificateBuilder.create(params, subjectDn)
                 .publicKey(pub)
-                .notBefore("20250101120000Z")
-                .notAfter("21060101120000Z")
+                .randomSerial()
+                .notBeforeNow()
+                .validForYears(100)
                 .additionalExtensions(additionalExtensions)
                 .issuerDn(issuerDn)
                 .buildTbs();
@@ -145,14 +149,15 @@ public final class ExampleUtils {
     }
 
     public static byte[] buildKeyUsageExt(byte[] kuBits) {
-        return GostCertificateBuilder.buildKeyUsageExtension(kuBits);
+        return ExtensionsAccumulator.buildKeyUsageExtension(kuBits, false);
     }
 
     public static byte[] buildEkuExt(String... oids) throws IOException {
-        return GostCertificateBuilder.buildEkuExtension(oids);
+        return ExtensionsAccumulator.buildEkuExtension(oids, false);
     }
 
     public static byte[] buildSanExt(String[] dnsNames, String[] ipAddresses) throws IOException {
-        return GostCertificateBuilder.buildSanExtension(dnsNames, ipAddresses);
+        return ExtensionsAccumulator.buildSanExtension(
+                dnsNames, ipAddresses, null, null, null, null);
     }
 }

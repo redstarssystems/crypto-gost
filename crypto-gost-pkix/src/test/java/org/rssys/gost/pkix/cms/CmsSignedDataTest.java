@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.Digest;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
@@ -132,6 +133,50 @@ class CmsSignedDataTest {
 
         assertEquals(GostOids.DIGEST_256, decoded.algorithmOid());
         assertNotNull(decoded.parameters());
+    }
+
+    @Test
+    @DisplayName("Регресс: digestAlgorithm в SignedData и SignerInfo несёт NULL-параметры")
+    void digestAlgorithmHasNullParams() throws PkixException {
+        // Форма digestAlgorithm (OID+NULL) обязательна по Р 1323565.1.025 §4.1/4.2
+        // и совпадает с эталоном openssl gost-engine. Этот ассерт защищает от
+        // молчаливого возврата к форме без параметров при будущем рефакторинге —
+        // такое расхождение невидимо собственному верификатору, но строгие
+        // ГОСТ-верификаторы (напр. КриптоПро) вправе его отвергнуть.
+        byte[] data = "digest null param regression".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .build();
+
+        CmsContentInfo ci = CmsContentInfo.decode(signedData);
+        byte[][] sdParts = DerCodec.parseSequenceContents(ci.content(), 0);
+
+        // SignedData.digestAlgorithms [1] — SET OF AlgorithmIdentifier
+        byte[][] digestAlgs = DerCodec.parseSetContents(sdParts[1], 0);
+        for (byte[] algId : digestAlgs) {
+            byte[][] algParts = DerCodec.parseSequenceContents(algId, 0);
+            assertEquals(
+                    2,
+                    algParts.length,
+                    "digestAlgorithms: AlgorithmIdentifier должен нести OID и NULL");
+            assertEquals(
+                    DerCodec.TAG_NULL,
+                    algParts[1][0] & 0xFF,
+                    "digestAlgorithms: параметры должны быть NULL");
+        }
+
+        // SignerInfo.digestAlgorithm — SignedData -> signerInfos [last] -> SET ->
+        // SignerInfo { version, sid, digestAlgorithm, ... }
+        byte[][] signerInfos = DerCodec.parseSetContents(sdParts[sdParts.length - 1], 0);
+        byte[][] siParts = DerCodec.parseSequenceContents(signerInfos[0], 0);
+        byte[][] siDigestAlg = DerCodec.parseSequenceContents(siParts[2], 0);
+        assertEquals(2, siDigestAlg.length, "SignerInfo.digestAlgorithm должен нести OID и NULL");
+        assertEquals(
+                DerCodec.TAG_NULL,
+                siDigestAlg[1][0] & 0xFF,
+                "SignerInfo.digestAlgorithm: параметры должны быть NULL");
     }
 
     @Test
@@ -340,6 +385,33 @@ class CmsSignedDataTest {
 
     @Test
     @DisplayName(
+            "addCrl(byte[]) round-trip: байты из GostCrlBuilder.sign() -> addCrl -> verifyAny -> CRL в embeddedCrls")
+    void addCrl_fromBytes() throws PkixException {
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+        byte[] crlDer =
+                GostCrlBuilder.create(issuerDn).nextUpdate("30990601120000Z").sign(privateKey);
+
+        byte[] data = "round-trip from bytes".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .addCrl(crlDer)
+                        .build();
+
+        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert);
+        assertArrayEquals(data, result.data());
+        assertNotNull(result.embeddedCrls());
+        assertEquals(1, result.embeddedCrls().size());
+
+        GostCrl roundTripped = result.embeddedCrls().get(0);
+        GostCrl expected = GostCrl.fromDer(crlDer);
+        assertEquals(expected.getIssuerDn(), roundTripped.getIssuerDn());
+        assertEquals(expected.getThisUpdate(), roundTripped.getThisUpdate());
+    }
+
+    @Test
+    @DisplayName(
             "addCrl preserved in CAdES: построить с CRL -> CAdESExtender.embedTimestamp не падает")
     void addCrl_preservedInCAdES() throws Exception {
         byte[] data = "CAdES with CRL".getBytes();
@@ -535,8 +607,7 @@ class CmsSignedDataTest {
 
     private static GostCrl createTestCrl(PrivateKeyParameters caKey) {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
-        byte[] crlDer =
-                GostCrlBuilder.create(caKey, issuerDn).nextUpdate("30990601120000Z").build();
+        byte[] crlDer = GostCrlBuilder.create(issuerDn).nextUpdate("30990601120000Z").sign(caKey);
         return GostCrl.fromDer(crlDer);
     }
 
@@ -805,7 +876,8 @@ class CmsSignedDataTest {
 
         // Алгоритмы
         byte[] digestAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.DIGEST_256));
-        byte[] signAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_ALG_256));
+        byte[] signAlgId =
+                DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_WITH_DIGEST_256));
 
         byte[] sigOctet = DerCodec.encodeOctetString(signatureValue);
 
@@ -954,7 +1026,7 @@ class CmsSignedDataTest {
                         .serial(BigInteger.ONE)
                         .buildTbs();
         GostCertificate caCert =
-                GostCertificateBuilder.assembleCert(caTbs, caKp.getPrivate(), PARAMS);
+                GostCertificateBuilder.sign(caTbs, GostSigner.of(caKp.getPrivate()));
 
         var leafKp = KeyGenerator.generateKeyPair(PARAMS);
         byte[] leafDn = GostDnParser.encodeDn("CN=Leaf");
@@ -973,7 +1045,7 @@ class CmsSignedDataTest {
                         .serial(BigInteger.TWO)
                         .buildTbs();
         GostCertificate leafCert =
-                GostCertificateBuilder.assembleCert(leafTbs, caKp.getPrivate(), PARAMS);
+                GostCertificateBuilder.sign(leafTbs, GostSigner.of(caKp.getPrivate()));
 
         return new CaLeafChain(
                 caKp.getPrivate(), caKp.getPublic(), caCert, caDn, leafKp.getPrivate(), leafCert);
@@ -995,20 +1067,20 @@ class CmsSignedDataTest {
     private static GostCrl createCrlWithRevokedCert(
             PrivateKeyParameters caKey, byte[] issuerDn, byte[] revokedSerial) {
         byte[] crlDer =
-                GostCrlBuilder.create(caKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(1)
                         .nextUpdate("30990601120000Z")
                         .addRevoked(revokedSerial, "20250101000000Z")
-                        .build();
+                        .sign(caKey);
         return GostCrl.fromDer(crlDer);
     }
 
     private static GostCrl createCleanCrl(PrivateKeyParameters caKey, byte[] issuerDn) {
         byte[] crlDer =
-                GostCrlBuilder.create(caKey, issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(1)
                         .nextUpdate("30990601120000Z")
-                        .build();
+                        .sign(caKey);
         return GostCrl.fromDer(crlDer);
     }
 
@@ -1143,10 +1215,10 @@ class CmsSignedDataTest {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "expired crl".getBytes();
         byte[] crlDer =
-                GostCrlBuilder.create(chain.caPriv, chain.caDn)
+                GostCrlBuilder.create(chain.caDn)
                         .withCrlNumber(1)
                         .nextUpdate("20000101000000Z")
-                        .build();
+                        .sign(chain.caPriv);
         GostCrl expiredCrl = GostCrl.fromDer(crlDer);
 
         byte[] signedData =
@@ -1221,7 +1293,7 @@ class CmsSignedDataTest {
                         .notAfter("360101000000Z")
                         .issuerDn(caDn2)
                         .serial(BigInteger.valueOf(10))
-                        .assembleCert(kp3.getPrivate());
+                        .sign(kp3.getPrivate());
 
         byte[] data = "multi-valid".getBytes();
         GostCrl crl1 = createCleanCrl(chain1.caPriv, chain1.caDn);
@@ -1255,7 +1327,7 @@ class CmsSignedDataTest {
                         .notAfter("360101000000Z")
                         .issuerDn(caDn2)
                         .serial(BigInteger.valueOf(20))
-                        .assembleCert(kp3.getPrivate());
+                        .sign(kp3.getPrivate());
 
         byte[] data = "one-revoked".getBytes();
         GostCrl crl1 =
@@ -1329,7 +1401,7 @@ class CmsSignedDataTest {
                         .notAfter("360101000000Z")
                         .issuerDn(GostDnParser.encodeDn("CN=Signer2"))
                         .serial(BigInteger.valueOf(30))
-                        .assembleCert(kp2.getPrivate());
+                        .sign(kp2.getPrivate());
 
         byte[] data = "or-first-revoked".getBytes();
 
@@ -1370,11 +1442,11 @@ class CmsSignedDataTest {
                         chain.caPriv, chain.caDn, chain.leafCert.getSerialNumber());
 
         byte[] deltaCrlDer =
-                GostCrlBuilder.create(chain.caPriv, chain.caDn)
+                GostCrlBuilder.create(chain.caDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(BigInteger.ONE)
                         .nextUpdate("30990601120000Z")
-                        .build();
+                        .sign(chain.caPriv);
         GostCrl deltaCrl = GostCrl.fromDer(deltaCrlDer);
 
         byte[] signedData =
@@ -1394,5 +1466,175 @@ class CmsSignedDataTest {
                                         signedData, chain.caCert),
                         "Отозванный сертификат должен отклониться (delta пропущена, base проверяет)");
         assertEquals(PkixException.Reason.REVOKED, ex.reason());
+    }
+
+    @Test
+    @DisplayName(
+            "verifyAnyWithRevocationCheck: delta CRL среди кандидатов пропускается, "
+                    + "перебор продолжается по валидному CRL — верификация проходит")
+    void withRevocationCheck_deltaCrlSkipped_continuesToValidCrl() throws PkixException {
+        CaLeafChain chain = createCaLeafChain();
+        byte[] data = "delta skip".getBytes();
+
+        // delta CRL стоит первым в списке кандидатов: если бы DELTA_CRL_NOT_SUPPORTED
+        // не попадал в skip-ветку, перебор бы прервался пробросом до валидного CRL.
+        byte[] deltaCrlDer =
+                GostCrlBuilder.create(chain.caDn)
+                        .withCrlNumber(2)
+                        .withDeltaCrlIndicator(BigInteger.ONE)
+                        .nextUpdate("30990601120000Z")
+                        .sign(chain.caPriv);
+        GostCrl deltaCrl = GostCrl.fromDer(deltaCrlDer);
+        GostCrl cleanCrl = createCleanCrl(chain.caPriv, chain.caDn);
+
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(chain.leafPriv, chain.leafCert)
+                        .addCertificate(chain.caCert)
+                        .addCrl(deltaCrl)
+                        .addCrl(cleanCrl)
+                        .build();
+
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(signedData, chain.caCert);
+        assertNotNull(result, "delta должна быть пропущена, валидный CRL — обработан");
+        assertArrayEquals(data, result.data());
+    }
+
+    @Test
+    @DisplayName(
+            "verifyAnyWithRevocationCheck: indirect CRL среди кандидатов пропускается, "
+                    + "перебор продолжается по валидному CRL — верификация проходит")
+    void withRevocationCheck_indirectCrlSkipped_continuesToValidCrl() throws PkixException {
+        CaLeafChain chain = createCaLeafChain();
+        byte[] data = "indirect skip".getBytes();
+
+        // indirect CRL строится только тестовым assembleCrl: обычный builder
+        // не разрешает генерацию indirectCRL (это осознанно вне scope).
+        byte[] indirectCrlDer =
+                GostCrlBuilder.assembleCrl(
+                        null,
+                        chain.caPriv,
+                        chain.caDn,
+                        "20250101000000Z",
+                        "30990601120000Z",
+                        false,
+                        BigInteger.valueOf(2),
+                        null,
+                        null,
+                        true,
+                        false,
+                        false,
+                        true,
+                        null);
+        GostCrl indirectCrl = GostCrl.fromDer(indirectCrlDer);
+        GostCrl cleanCrl = createCleanCrl(chain.caPriv, chain.caDn);
+
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(chain.leafPriv, chain.leafCert)
+                        .addCertificate(chain.caCert)
+                        .addCrl(indirectCrl)
+                        .addCrl(cleanCrl)
+                        .build();
+
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(signedData, chain.caCert);
+        assertNotNull(result, "indirect должна быть пропущена, валидный CRL — обработан");
+        assertArrayEquals(data, result.data());
+    }
+
+    // ========================================================================
+    // Тесты: fail-closed валидация SignerInfo.signatureAlgorithm
+    // ========================================================================
+
+    @Test
+    @DisplayName("signatureAlgorithm: signWithDigest-OID (.3.2, стиль BouncyCastle) принимается")
+    void signatureAlgorithmSignWithDigestAccepted() throws PkixException {
+        byte[] data = "sigalg signwithdigest".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .build();
+
+        // Подменяем OID открытого ключа (.1.1.1.1) на signWithDigest (.1.1.3.2) — другой
+        // легитимный продюсер (BC) кодирует именно так. Битность (256) совпадает с ключом,
+        // подпись покрывает только signedAttrs, поэтому контейнер обязан остаться валидным.
+        byte[] patched = patchSignerSignatureAlg(signedData, GostOids.SIGN_WITH_DIGEST_256);
+
+        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(patched, selfSignedCert);
+        assertArrayEquals(data, result.data(), "signWithDigest-OID должен приниматься");
+    }
+
+    @Test
+    @DisplayName("signatureAlgorithm: посторонний OID отклоняется (algorithm-confusion)")
+    void signatureAlgorithmUnexpectedOidRejected() throws PkixException {
+        byte[] data = "sigalg bogus".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .build();
+
+        // sha256WithRSAEncryption — валидный, но чужой алгоритму подписи OID.
+        byte[] patched = patchSignerSignatureAlg(signedData, "1.2.840.113549.1.1.11");
+
+        // verifyAll (strict) пробрасывает конкретную причину; verifyAny заворачивает её.
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () -> CmsSignedDataVerifier.verifyAll(patched, selfSignedCert),
+                        "Посторонний signatureAlgorithm OID должен отклоняться");
+        assertTrue(
+                ex.getMessage().contains("signatureAlgorithm"),
+                "Сообщение должно указывать на signatureAlgorithm, было: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("signatureAlgorithm: несоответствие битности OID и ключа отклоняется")
+    void signatureAlgorithmBitLengthMismatchRejected() throws PkixException {
+        byte[] data = "sigalg bitmismatch".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .build();
+
+        // Ключ сертификата 256-битный, но заявляем 512-битный OID открытого ключа.
+        byte[] patched = patchSignerSignatureAlg(signedData, GostOids.PUBLIC_KEY_512);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () -> CmsSignedDataVerifier.verifyAll(patched, selfSignedCert),
+                        "Рассогласование битности signatureAlgorithm и ключа должно отклоняться");
+        assertTrue(
+                ex.getMessage().contains("key size"),
+                "Сообщение должно указывать на несоответствие размера ключа, было: "
+                        + ex.getMessage());
+    }
+
+    /**
+     * Заменяет OID в {@code SignerInfo.signatureAlgorithm} первого подписанта на заданный,
+     * сохраняя остальную структуру SignedData. Используется для проверки fail-closed-логики:
+     * поле не покрыто подписью, поэтому крипто-проверка остаётся валидной, а отклонение (если
+     * оно есть) вызвано именно валидацией алгоритма.
+     */
+    private static byte[] patchSignerSignatureAlg(byte[] signedData, String newSignatureOid)
+            throws PkixException {
+        CmsContentInfo ci = CmsContentInfo.decode(signedData);
+        byte[][] sdParts = DerCodec.parseSequenceContents(ci.content(), 0);
+        int signerInfosIdx = sdParts.length - 1;
+        byte[][] signerInfos = DerCodec.parseSetContents(sdParts[signerInfosIdx], 0);
+        byte[][] si = DerCodec.parseSequenceContents(signerInfos[0], 0);
+        // Порядок SignerInfo: version, sid, digestAlgorithm, signedAttrs, signatureAlgorithm, ...
+        si[4] = CmsAlgorithmIdentifier.encode(newSignatureOid);
+        signerInfos[0] = DerCodec.encodeSequence(si);
+        sdParts[signerInfosIdx] = DerCodec.encodeSetOf(signerInfos);
+        byte[] newSd = DerCodec.encodeSequence(sdParts);
+        return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, newSd);
     }
 }

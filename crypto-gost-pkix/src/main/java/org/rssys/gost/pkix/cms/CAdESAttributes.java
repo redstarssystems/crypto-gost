@@ -1,9 +1,8 @@
 package org.rssys.gost.pkix.cms;
 
 import java.util.Objects;
-import org.rssys.gost.api.Digest;
-import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostSignatureHelper;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.util.DerCodec;
 
@@ -43,14 +42,17 @@ public final class CAdESAttributes {
         byte[] certDer = signerCert.getEncoded();
 
         int keySize = signerCert.getKeySize();
-        boolean is512 = (keySize == 512);
-        String digestOid = is512 ? GostOids.DIGEST_512 : GostOids.DIGEST_256;
+        String digestOid = GostSignatureHelper.keySizeToDigestOid(keySize);
 
-        // hashAlgorithm: AlgorithmIdentifier БЕЗ параметров (RFC 9215 §4.2)
-        byte[] hashAlgId = CmsAlgorithmIdentifier.encodeOnlyOid(digestOid);
+        // hashAlgorithm: AlgorithmIdentifier с NULL-параметрами.
+        // Правило NULL присуще самому OID id-tc26-gost3411-2012-256/512
+        // (Р 1323565.1.025 §4). Эмпирика: эталонный openssl gost-engine кодирует
+        // ESSCertIDv2.hashAlgorithm с NULL (asn1parse: NULL сразу за OID Стрибога);
+        // КриптоПро -cadesbes принимает эту форму. Единообразно с digestAlgorithm.
+        byte[] hashAlgId = CmsAlgorithmIdentifier.encode(digestOid);
 
         // certHash: hash(certificate DER)
-        byte[] certHash = is512 ? Digest.digest512(certDer) : Digest.digest256(certDer);
+        byte[] certHash = GostSignatureHelper.digestByOid(digestOid, certDer);
         byte[] certHashOctet = DerCodec.encodeOctetString(certHash);
 
         // issuerSerial
@@ -125,11 +127,9 @@ public final class CAdESAttributes {
         // Вычисляем фактический хэш по OID из атрибута
         byte[] certDer = signerCert.getEncoded();
         byte[] actualHash;
-        if (GostOids.DIGEST_512.equals(hashAlgOid)) {
-            actualHash = Digest.digest512(certDer);
-        } else if (GostOids.DIGEST_256.equals(hashAlgOid)) {
-            actualHash = Digest.digest256(certDer);
-        } else {
+        try {
+            actualHash = GostSignatureHelper.digestByOid(hashAlgOid, certDer);
+        } catch (IllegalArgumentException e) {
             throw new PkixException(
                     PkixException.Reason.OTHER,
                     "signingCertificateV2: unsupported hashAlgorithm OID: " + hashAlgOid);

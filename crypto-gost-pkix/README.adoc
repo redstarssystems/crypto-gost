@@ -11,6 +11,7 @@ toc::[]
 * *GostOids* — единый реестр объектных идентификаторов (ГОСТ-алгоритмы, PKCS#7/9/12, CAdES, TSP, OCSP, сертификатные расширения).
 * *CMS SignedData (RFC 5652 §5 + RFC 4490)* — построение и верификация подписи с signed- и unsigned-атрибутами.
 * *CAdES-BES/T (ETSI EN 319 122)* — долговременная электронная подпись: `signingCertificateV2`, метки времени от TSA.
+* *CAdES-C (RFC 5126 §6.2)* — полные ссылки на сертификаты и данные отзыва: `complete-certificate-references`, `complete-revocation-references`.
 * *CMS Countersignature (RFC 5652 §11.4)* — контрподпись: отдельная подпись поверх подписи автора (нотариус, УЦ).
 * *TSP (RFC 3161)* — клиент и сервер службы штампов времени: `TimeStampReq`, `TimeStampResp`, транспорт HTTP,
   разбор запросов (`TspRequest`), построение ответов (`TspResponseBuilder`).
@@ -19,7 +20,7 @@ toc::[]
 * *GostCertificate* — парсинг и верификация X.509-сертификатов (ГОСТ Р 34.10-2012): подпись, срок, расширения (KeyUsage, EKU, BasicConstraints, SAN, CDP, FreshestCRL, AIA), hostname verification.
 * *ChainValidator* — валидация цепочки сертификатов: подписи, DN-связность, KU/EKU, BasicConstraints, pathLen, опционально — CertificatePolicies leaf-сертификата.
 * *OCSP/CRL* — верификация OCSP-ответов (RFC 6960) и CRL (RFC 5280 §6.3), разбор OCSP (`GostOcspResponse`, `SingleOcspResponse`), встроенный DER-парсер (`GostDerParser`), хеширование идентификатора сертификата (`CertIdHasher`).
-* *X.509-строители:* `GostCertificateBuilder` — сборка сертификатов (TBS + подпись, расширения SAN/KeyUsage/EKU/CDP/AIA/NameConstraints); `GostCrlBuilder` — построение CRL (RFC 5280); `GostCsrBuilder` — построение CSR (RFC 2986 §4.1); `GostCsrParser` — разбор и верификация CSR (proof-of-possession, DN, SPKI, extensionRequest); `GostOcspResponseBuilder` — OCSP-ответы с делегированными сертификатами; `TspResponseBuilder` — TSP-ответы (TimeStampResp), включая rejection и grantedWithMods.
+* *X.509-строители:* `GostCertificateBuilder` — сборка сертификатов (TBS + подпись, расширения SAN/KeyUsage/EKU/CDP/AIA/NameConstraints); `GostCrlBuilder` — построение CRL (RFC 5280); `GostCsrBuilder` — построение CSR (RFC 2986 §4.1); `GostCsrParser` — разбор и верификация CSR (proof-of-possession, DN, SPKI, extensionRequest); `GostOcspResponseBuilder` — OCSP-ответы с делегированными сертификатами; `TspResponseBuilder` — TSP-ответы (TimeStampResp), включая rejection и grantedWithMods; `ExtensionsAccumulator` — накопитель общих расширений и канонические статические строители (SAN, KeyUsage, EKU, BasicConstraints, SKI, CertificatePolicies).
 * *`GostDnParser.encodeDn()`* — сборка DER Distinguished Name по атрибутам (CN, O, OU, L, ST, C).
 * *PKCS#12 (RFC 7292)* — загрузка (`GostPkcs12Loader`/`Pkcs12Loader`), построение (`GostPkcs12Builder`), парсинг (`GostPkcs12Parser`) PFX-контейнеров с нативной поддержкой ГОСТ PBE (PBKDF2-HMAC-Streebog + Кузнечик CTR-ACPKM).
 * *DER-кодеки* — базовые CMS-структуры (ContentInfo, AlgorithmIdentifier, IssuerAndSerialNumber, Attribute). Вспомогательные классы расширяют `DerCodec` (core) поддержкой BER indefinite-length.
@@ -45,11 +46,21 @@ var kp = KeyGenerator.generateKeyPair(params);
 byte[] subjectDn = GostDnParser.encodeDn("CN=Demo Cert,O=MyOrg,C=RU");
 GostCertificate cert = GostCertificateBuilder.create(params, subjectDn)
         .publicKey(kp.getPublic())
-        .notBefore("20260101120000Z")
-        .notAfter("21060101120000Z")
+        // Удобный способ: срок 365 дней от текущего момента
+        .notBeforeNow()
+        .validForDays(365)
+        // Альтернатива для воспроизводимости (явные даты):
+        // .notBefore("20260101120000Z").notAfter("21060101120000Z")
         .sanDns("gost.example.com")
         .issuerDn(subjectDn)
-        .assembleCert(kp.getPrivate());
+        .randomSerial()
+        // CertificatePolicies (RFC 5280 §4.2.1.4) — опционально:
+        .certificatePolicies(GostOids.POLICY_KC1, GostOids.POLICY_KC2)
+        // С CPS-квалификатором (ссылка на регламент УЦ):
+        // .certificatePolicyInfos(
+        //     new CertificatePolicy(GostOids.POLICY_KC1, "https://ca.example.com/cps/russian-ca.html"),
+        //     new CertificatePolicy(GostOids.POLICY_KC2))
+        .sign(kp.getPrivate());
 
 // Для самоподписанных сертификатов .issuerDn() опционален —
 // библиотека автоматически подставит subjectDn.
@@ -60,9 +71,16 @@ String certPem = cert.toPem();
 // Двухшаговый вариант (TBS-сборка отдельно, для кросс-валидации):
 // byte[] tbs = GostCertificateBuilder.create(params, subjectDn)
 //         .publicKey(kp.getPublic())
-//         .notBefore("20260101120000Z").notAfter("21060101120000Z")
+//         .notBeforeNow().validForDays(365)
+//         // или явно: .notBefore("20260101120000Z").notAfter("21060101120000Z")
+//         .randomSerial()
 //         .buildTbs();
-// GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), params);
+// GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate()));
+
+// Чтение политик из сертификата:
+CertificatePolicy[] infos = cert.getCertificatePolicyInfos();
+// infos[0].policyOid() == "1.2.643.100.113.1"
+// infos[0].cpsUri()  == "https://ca.example.com/cps/russian-ca.html" (или null)
 ----
 
 В production загружайте сертификат и ключ из PKCS#12 через `GostPkcs12Loader`
@@ -132,6 +150,10 @@ String sigAlg = cert.getSignatureAlgorithmOid();
 
 ==== Hostname verification — сверка SAN (Subject Alternative Name)
 
+Поддерживаются все типы GeneralName (RFC 5280 §4.2.1.6): dNSName, iPAddress,
+rfc822Name, URI, directoryName, otherName (включая UPN). Hostname-верификация
+по RFC 6125 использует только dNSName и iPAddress — остальные типы информационные.
+
 [source,java]
 ----
 // Сверка с DNS-именем из SAN
@@ -139,6 +161,12 @@ boolean hostMatch = cert.verifyHostname("gost.example.com");
 
 // Сверка с IP-адресом из SAN
 boolean ipMatch = cert.verifyAddress("192.168.1.1");
+
+// Чтение всех типов имён
+String[] emails = cert.getSanRfc822Names();     // rfc822Name (email)
+String[] uris = cert.getSanUris();               // URI
+byte[][] dirNames = cert.getSanDirectoryNames(); // directoryName (raw DER DN)
+OtherNameEntry[] otherNames = cert.getSanOtherNames();  // otherName (OID + DER-значение)
 ----
 
 ==== Экспорт
@@ -151,6 +179,103 @@ byte[] der = cert.getEncoded();
 // Экспорт цепочки в PEM
 String chainPem = GostCertificate.chainToPem(chain);
 ----
+
+==== Расширения — bulk-доступ
+
+`getExtensions()` возвращает структурированный результат парсинга всех расширений
+X.509v3 одним объектом `GostExtensionParser.ExtensionsResult` — зеркало
+`GostCsrParser.getExtensions()`. Позволяет оператору УЦ прочитать расширения
+существующего сертификата одним вызовом и осознанно решить, какие переносить
+при перевыпуске.
+
+[source,java]
+----
+if (cert.hasExtensions()) {
+    GostExtensionParser.ExtensionsResult ext = cert.getExtensions();
+
+    String[] san = ext.sanDnsNames;          // SubjectAltName dNSName
+    String[] ian = ext.ianDnsNames;          // IssuerAltName dNSName
+    String[] ocspUris = ext.ocspUris;        // AIA OCSP URI
+    int kuBits = ext.keyUsageBits;           // KeyUsage битовая маска
+    boolean isCa  = ext.isCA;                // BasicConstraints CA
+    int pathLen   = ext.pathLen;             // BasicConstraints pathLen
+
+    // Множество OID всех присутствующих расширений
+    Set<String> presentOids = ext.presentExtensionOids;
+}
+----
+
+=== Подпись через внешний модуль — `GostSigner` (HSM/PKCS#11)
+
+Все X.509-строители (`GostCertificateBuilder`, `GostCrlBuilder`, `GostCsrBuilder`)
+принимают абстракцию подписанта `GostSigner` (модуль `crypto-gost-core`, пакет
+`org.rssys.gost.api`). Это позволяет подписывать корневым или промежуточным ключом УЦ
+внутри аппаратного модуля (HSM, PKCS#11, внешний CSP), не извлекая закрытый ключ в
+память JVM — обязательное требование для аккредитованных УЦ.
+
+Строитель вычисляет хэш TBS-структуры и передаёт его в `signHash(hash)`; наружу
+возвращается только готовая подпись. Полное описание интерфейса — в README модуля
+`crypto-gost-core` (раздел «Абстракция подписанта»).
+
+.Сборка сертификата подписантом (HSM или ключ в памяти)
+[source,java]
+----
+import org.rssys.gost.api.GostSigner;
+
+// Ключ в памяти — тонкий мост GostSigner.of(priv):
+GostSigner signer = GostSigner.of(caKey);
+
+// Либо собственная реализация поверх HSM/PKCS#11 (см. crypto-gost-core).
+byte[] tbs = GostCertificateBuilder.create(params, subjectDn)
+        .publicKey(subjectPub)
+        // Удобный способ: .notBeforeNow().validForDays(365)
+        .notBefore("20260101120000Z").notAfter("21060101120000Z")
+        .issuerDn(issuerDn)
+        .randomSerial()
+        .buildTbs();
+GostCertificate cert = GostCertificateBuilder.sign(tbs, signer);
+
+// CRL и CSR — тот же паттерн:
+byte[] crl = GostCrlBuilder.create(issuerDn).nextUpdate("20990101000000Z").sign(signer);
+byte[] csr = GostCsrBuilder.create("CN=demo.example.com", subjectPub).sign(signer);
+----
+
+Этот же подход работает для CMS SignedData и OCSP — все строители,
+работающие с подписью, принимают `GostSigner`. Паттерн один и тот же:
+билдер вычисляет хэш, отдаёт в `signHash(hash)`, получает готовую подпись —
+закрытый ключ остаётся в аппаратном модуле (HSM/PKCS#11/внешний CSP) и
+никогда не попадает в кучу JVM.
+
+.CMS SignedData и OCSP-ответ через GostSigner (HSM-совместимый путь)
+[source,java]
+----
+// CMS SignedData: addSigner(GostSigner, cert) — закрытый ключ не попадает в JVM
+byte[] signedData = CmsSignedDataBuilder.create()
+        .data(payload)
+        .addSigner(signer, cert)    // GostSigner вместо PrivateKeyParameters
+        .build();
+VerifiedSignedData verified = CmsSignedDataVerifier.verifyAny(signedData, cert);
+
+// OCSP-ответ: sign(GostSigner) — ключ остаётся в HSM, params берутся из signer
+byte[] ocsp = GostOcspResponseBuilder.create(serial)
+        .issuerDn(issuerDn)
+        .good()
+        .sign(signer);
+OcspVerifier.verify(ocsp, serial, issuerCert);
+
+// Транзитивные строители пробрасывают GostSigner прозрачно:
+TspResponseBuilder.create(request).signer(signer, tsaCert).buildGranted();
+CountersignatureBuilder.buildCountersignature(parentSig, signer, cert, digestOid);
+CAdESExtender.embedCountersignature(cadesDer, signer, cert);
+----
+
+Существующие перегрузки, принимающие `PrivateKeyParameters` напрямую, сохранены и
+делегируют через `GostSigner.of(priv)` — обратная совместимость полная.
+
+NOTE: После подписи строитель выполняет *fail-closed*-проверку результата (длина +
+self-verify открытым ключом подписанта). Неисправный HSM-адаптер, вернувший подпись
+неверной длины или не тем ключом, приводит к немедленному исключению, а не к молчаливому
+выпуску сертификата или CRL с невалидной подписью.
 
 === PKCS#12 — хранение ключей и сертификатов
 
@@ -221,11 +346,13 @@ GostCertificate leaf = chain.get(0);
 ==== Построение CSR
 
 CSR содержит открытый ключ заявителя, DN и подпись (proof-of-possession).
-Атрибуты пока не поддерживаются — запрос всегда с пустым SET.
+Атрибутный блок по умолчанию пустой — без расширений.
 
 CSR не содержит закрытого ключа — его можно свободно передавать по сети.
 Подпись (proof-of-possession) доказывает владение закрытым ключом,
 не раскрывая его.
+
+*Базовый CSR (без расширений)* — fluent API:
 
 [source,java]
 ----
@@ -234,10 +361,33 @@ import org.rssys.gost.pkix.cert.GostCsrBuilder;
 ECParameters params = ECParameters.tc26a256();
 var kp = KeyGenerator.generateKeyPair(params);
 
-byte[] csrDer = GostCsrBuilder.buildCsr(
-        kp.getPrivate(), kp.getPublic(),
-        "CN=myserver.example.com,O=MyOrg,C=RU");
+byte[] csrDer = GostCsrBuilder.create(
+        "CN=myserver.example.com,O=MyOrg,C=RU", kp.getPublic())
+        .sign(kp.getPrivate());
 ----
+
+*CSR с запрошенными расширениями* — fluent API и атрибут extensionRequest (PKCS#9 §5.4.1):
+
+[source,java]
+----
+byte[] csrDer = GostCsrBuilder.create("CN=myserver.example.com,O=MyOrg,C=RU", pubKey)
+        .sanDns("myserver.example.com", "www.myserver.example.com")   // SubjectAltName
+        .sanIp("192.168.1.1")                                         // SAN IP
+        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)  // KeyUsage
+        .extendedKeyUsage(GostOids.EXT_SERVER_AUTH)                   // EKU
+        .basicConstraints(false, null)                                 // не CA
+        .certificatePolicies(GostOids.POLICY_KC1)                       // CertificatePolicies
+        .ski()                                                         // SubjectKeyIdentifier
+        .sign(privKey);
+----
+
+[CAUTION]
+====
+`extensionRequest` — *просьба* подписчика, не полномочие.
+Оператор УЦ обязан валидировать запрошенные расширения перед копированием
+в сертификат: проверка владения доменом для SAN, никогда не выдавать CA=TRUE
+по запросу подписчика без процесса выпуска подчинённого УЦ.
+====
 
 ==== Разбор и верификация CSR
 
@@ -267,8 +417,108 @@ if (csr.hasExtensions()) {
     String[] san = ext.sanDnsNames;  // запрошенные SAN
 }
 
+// Байтово-точный DER subject DN
+byte[] subjectDnDer = csr.getSubjectDnDer();  // не теряет тип строки при перекодировке
+
 // PEM-сериализация
 String pem = csr.toPem();  // ----BEGIN CERTIFICATE REQUEST-----
+----
+
+==== Выпуск сертификата из CSR
+
+`GostCertificateBuilder.fromCsrIdentity` — статическая фабрика, принимает
+распарсенный CSR и возвращает предзаполненный билдер: subject DN (байтово-точно
+через `getSubjectDnDer()`) и открытый ключ заявителя. Proof-of-possession
+проверяется внутри метода — при провале выбрасывается `PkixException`.
+
+Расширения из CSR не копируются автоматически — УЦ обязан явно проверить
+и перенести нужные расширения через `csr.getExtensions()`:
+
+[source,java]
+----
+GostCsrParser csr = GostCsrParser.fromPemOrDer(csrBytes);
+ECParameters caParams = ECParameters.tc26a256();  // кривая УЦ
+
+// fromCsrIdentity проверяет proof-of-possession и копирует DN + ключ
+GostCertificateBuilder certBuilder = GostCertificateBuilder.fromCsrIdentity(csr, caParams);
+
+// Оператор УЦ явно валидирует расширения из CSR
+GostExtensionParser.ExtensionsResult ext = csr.getExtensions();
+if (ext.sanDnsNames != null) {
+    // УЦ проверил владение доменом — переносим SAN
+    certBuilder.sanDns(ext.sanDnsNames);
+}
+if (ext.ekuOids != null) {
+    // УЦ проверил полномочия на EKU — переносим
+    // byte[][] -> String[] ручная конвертация или через GostDerParser
+}
+
+// УЦ задаёт issuer-поля, срок действия и подписывает
+GostCertificate cert = certBuilder
+        .issuerDn(caSubjectDnDer)
+        // Удобный способ: .notBeforeNow().validForDays(365)
+        .notBefore("20250101000000Z")
+        .notAfter("20260101000000Z")
+        .randomSerial()
+        .sign(caSigner);
+----
+
+[NOTE]
+====
+`fromCsrIdentity` — единственный метод в `GostCertificateBuilder`, бросающий
+checked-исключение `PkixException` (с `Reason.SIGNATURE_INVALID`),
+поскольку выполняет криптографическую верификацию proof-of-possession,
+а не строительный шаг билдера. Остальные проверки в классе
+(`IllegalStateException`, `IllegalArgumentException`) — unchecked.
+====
+
+==== Перевыпуск из существующего сертификата — `fromCertificate`
+
+`GostCertificateBuilder.fromCertificate` — зеркало `fromCsrIdentity` для сценария
+перевыпуска (renewal). Копирует subject DN (байтово-точно) и публичный ключ
+из существующего сертификата в новый билдер. Расширения не копируются
+автоматически — оператор обязан явно прочитать их через `cert.getExtensions()`
+и валидировать перед переносом.
+
+[CAUTION]
+====
+Короткий срок действия сертификатов (≈1 год по CA/Browser Forum) введён для
+принудительной периодической переаттестации: проверка владения доменом (SAN),
+полномочий на EKU, статуса CA для BasicConstraints. Автоматическое копирование
+всех расширений при перевыпуске подрывает эту политику — используйте
+`getExtensions()` для осознанного выборочного переноса.
+====
+
+[source,java]
+----
+GostCertificate original = GostCertificate.fromDer(derBytes);
+ECParameters caParams = ECParameters.tc26a256();
+
+// Identity-мост: DN и ключ из старого сертификата
+GostCertificateBuilder renewedBuilder =
+        GostCertificateBuilder.fromCertificate(original, caParams);
+
+// Оператор явно читает и валидирует расширения
+GostExtensionParser.ExtensionsResult ext = original.getExtensions();
+if (ext.sanDnsNames != null) {
+    renewedBuilder.sanDns(ext.sanDnsNames);  // владение доменом перепроверено
+}
+if (ext.keyUsageBits != 0) {
+    if (GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE.isSetIn(ext.keyUsageBits)) {
+        renewedBuilder.keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+    }
+}
+if (ext.isCA) {
+    renewedBuilder.basicConstraints(true, ext.pathLen);
+}
+
+// Новые сроки, новый serial
+GostCertificate renewed = renewedBuilder
+        .issuerDn(caSubjectDnDer)
+        .notBeforeNow()
+        .validForDays(365)
+        .randomSerial()
+        .sign(caSigner);
 ----
 
 === Цепочки сертификатов — ChainValidator
@@ -283,7 +533,7 @@ import org.rssys.gost.pkix.cert.ChainValidator;
 import org.rssys.gost.signature.PublicKeyParameters;
 import java.util.List;
 
-// Цепочка leaf-first: конечный сертификат → промежуточный CA
+// Цепочка leaf-first: конечный сертификат -> промежуточный CA
 // В production цепочка загружается из PKCS#12 или собирается из PEM
 List<GostCertificate> chain = List.of(leafCert, intermediateCaCert);
 
@@ -330,9 +580,9 @@ import org.rssys.gost.pkix.cert.ChainValidator;
 import java.util.Arrays;
 
 // CRL: leaf не отозван
-byte[] crlDer = GostCrlBuilder.create(caKey, issuerDn)
+byte[] crlDer = GostCrlBuilder.create(issuerDn)
         .nextUpdate("270801120000Z")
-        .build();
+        .sign(caKey);
 
 ChainValidator.validateChainWithRevocation(
         chain, trustedKeys,
@@ -340,10 +590,9 @@ ChainValidator.validateChainWithRevocation(
 
 // OCSP: leaf имеет статус good
 byte[] ocspResp = GostOcspResponseBuilder.create(serial)
-        .signer(caKey, caPubKey)
         .issuerDn(issuerDn)
         .good()
-        .build();
+        .sign(caKey);
 
 ChainValidator.validateChainWithRevocation(
         chain, trustedKeys,
@@ -386,30 +635,31 @@ RevokedEntry entry = new RevokedEntry(
 );
 
 // Строим CRL с одним отозванным сертификатом
-byte[] crlDer = GostCrlBuilder.create(caPrivateKey, issuerDn)
+byte[] crlDer = GostCrlBuilder.create(issuerDn)
         .withCrlNumber(1)          // монотонный номер CRL (RFC 5280 §5.2.3)
+        // Удобный способ: .thisUpdateNow().nextUpdateDays(30) вместо явных дат
         .nextUpdate("270601120000Z")
         .addRevoked(entry)
-        .build();
+        .sign(caPrivateKey);
 
 // CRL с IssuingDistributionPoint (флаги onlyContainsUserCerts/onlyContainsCACerts)
-byte[] crlWithIdp = GostCrlBuilder.create(caPrivateKey, issuerDn)
+byte[] crlWithIdp = GostCrlBuilder.create(issuerDn)
         .withCrlNumber(2)
         .withIdpExtension(true, false)  // onlyContainsUserCerts=true
-        .build();
+        .sign(caPrivateKey);
 
 // CRL с AuthorityKeyIdentifier (RFC 5280 §5.2.1) — keyIdentifier подписанта
 byte[] caPubPoint = GostDerCodec.subjectPublicKeyPointBytes(caPublicKey);
 byte[] caSki = Digest.digest256(caPubPoint);
 
-byte[] crlWithAki = GostCrlBuilder.create(caPrivateKey, issuerDn)
+byte[] crlWithAki = GostCrlBuilder.create(issuerDn)
         .withAki(caSki)               // байты SKI сертификата подписанта
-        .build();
+        .sign(caPrivateKey);
 
 // Удобная перегрузка: вычисляет SKI из открытого ключа подписанта
-byte[] crlWithAki2 = GostCrlBuilder.create(signerPrivateKey, issuerDn)
+byte[] crlWithAki2 = GostCrlBuilder.create(issuerDn)
         .withAki(signerPublicKey)     // Delegated CRL signer: ключ делегирован, issuer — CA
-        .build();
+        .sign(signerPrivateKey);
 ----
 
 ==== Проверка CRL — `CrlVerifier`
@@ -449,10 +699,10 @@ import org.rssys.gost.pkix.cert.GostCertificate;
 GostCertificate crlSignerCert = new GostCertificate(crlSignerCertDerDer);
 
 // CRL подписывается ключом подписанта (не ключом CA)
-byte[] crlDer = GostCrlBuilder.create(crlSignerPrivateKey, caIssuerDn)
+byte[] crlDer = GostCrlBuilder.create(caIssuerDn)
         .withCrlNumber(7)
         .nextUpdate("270701120000Z")
-        .build();
+        .sign(crlSignerPrivateKey);
 
 // Проверка: передаём список сертификатов подписантов
 CrlVerifier.verifyDelegated(
@@ -489,20 +739,20 @@ Delta CRL содержит только изменения относитель�
 import org.rssys.gost.pkix.cert.CrlVerifier;
 
 // 1. Базовый CRL (полный список отозванных)
-byte[] baseCrl = GostCrlBuilder.create(caPrivateKey, issuerDn)
+byte[] baseCrl = GostCrlBuilder.create(issuerDn)
         .withCrlNumber(1)
         .nextUpdate("270601120000Z")
         .addRevoked(entry)
-        .build();
+        .sign(caPrivateKey);
 
 // 2. Delta CRL — только изменения. Ссылается на cRLNumber базового.
 //    deltaCRLIndicator — CRITICAL-расширение, требуемое по RFC 5280.
-byte[] deltaCrl = GostCrlBuilder.create(caPrivateKey, issuerDn)
+byte[] deltaCrl = GostCrlBuilder.create(issuerDn)
         .withCrlNumber(2)
         .withDeltaCrlIndicator(1)   // ссылается на base cRLNumber = 1
         .addRevoked(removedSerial, "260801120000Z",
                 ReasonCode.REMOVE_FROM_CRL)  // удалить из base
-        .build();
+        .sign(caPrivateKey);
 
 // 3. Проверка через base + delta
 //    crlNumber base и deltaCRLIndicator delta должны совпадать.
@@ -512,11 +762,11 @@ CrlVerifier.verify(baseCrl, deltaCrl,
 
 // 4. Base CRL может указывать URI для получения delta CRL
 //    через расширение freshestCRL (структура = CDP, RFC 5280 §5.2.6)
-byte[] baseWithFreshest = GostCrlBuilder.create(caPrivateKey, issuerDn)
+byte[] baseWithFreshest = GostCrlBuilder.create(issuerDn)
         .withCrlNumber(3)
         .withFreshestCrl("http://ca.example/delta.crl")
         .nextUpdate("270601120000Z")
-        .build();
+        .sign(caPrivateKey);
 ----
 
 Delta CRL нельзя верифицировать изолированно. При попытке `crl.verify(caKey)` на delta CRL
@@ -596,6 +846,36 @@ OCSP-ответ — публичный документ, подписанный 
 сертификат CA (OcspVerifier автоматически вычисляет CertID по issuer и проверяет
 EKU OCSP-подписанта). Допустима передача по незащищённому каналу.
 
+==== Выпуск сертификата делегированного OCSP-респондера — `.ocspNoCheck()`
+
+Если OCSP-ответы подписывает не сам CA, а отдельный делегированный респондер,
+его сертификат должен нести EKU `id-kp-OCSPSigning` и расширение
+`id-pkix-ocsp-nocheck` (RFC 6960 §4.2.2.2.1). Последнее сообщает проверяющей
+стороне не проверять рекурсивно отзыв самого сертификата респондера — иначе
+возникла бы циклическая зависимость (для проверки OCSP-ответа понадобился бы
+ещё один OCSP-запрос про подписанта).
+
+[source,java]
+----
+GostCertificate responder = GostCertificateBuilder.create(params, "CN=OCSP Responder,O=MyOrg,C=RU")
+        .publicKey(responderPublicKey)
+        .issuerDn(caSubjectDer)
+        .notBefore("20250101000000Z")
+        .notAfter("20250103000000Z")                       // короткий срок жизни
+        .extendedKeyUsage(GostOids.EXT_OCSP_SIGNING)        // обязательно
+        .ocspNoCheck()                                      // id-pkix-ocsp-nocheck
+        .randomSerial()
+        .sign(caPrivateKey);
+
+boolean marked = responder.hasOcspNoCheck();               // true
+----
+
+WARNING: Сертификат с `id-pkix-ocsp-nocheck` фактически невозможно эффективно
+отозвать (клиенты по определению не проверяют его отзыв), поэтому его выдают
+только короткоживущим (сутки-двое). Расширение допустимо лишь вместе с EKU
+`id-kp-OCSPSigning` — иначе `buildTbs()`/`sign()` бросает
+`IllegalStateException` (защита от постановки на обычный сертификат).
+
 ==== Построение OCSP-ответа — `GostOcspResponseBuilder`
 
 [source,java]
@@ -605,35 +885,35 @@ import org.rssys.gost.pkix.cert.GostDnParser;
 
 byte[] caSubjectDer = GostDnParser.encodeDn("CN=My CA,O=MyOrg,C=RU");
 byte[] ocspResp = GostOcspResponseBuilder.create(cert.getSerialNumberBigInt().toByteArray())
-        .signer(caPrivateKey, caPublicKey)
         .issuerDn(caSubjectDer)
-        .build();
+        .good()
+        .sign(caPrivateKey);
 
 // nextUpdate по умолчанию — now + 3 года.
 // noNextUpdate() убирает поле (RFC 6960 §2.4 — опционально).
 // В этом случае relying party применяет локальную политику свежести
 // через maxOcspAgeMs в OcspVerifier.
 byte[] noNuOcsp = GostOcspResponseBuilder.create(cert.getSerialNumberBigInt().toByteArray())
-        .signer(caPrivateKey, caPublicKey)
         .issuerDn(caSubjectDer)
+        .good()
         .noNextUpdate()
-        .build();
+        .sign(caPrivateKey);
 
 // byKey responder ID — хэш Streebog-256 от публичного ключа подписанта.
 // Рекомендовано RFC 5019bis для высоконагруженных сред; компактнее byName.
 // Распознаётся только ГОСТ-клиентами; для универсальной совместимости — byName.
 byte[] byKeyOcsp = GostOcspResponseBuilder.create(cert.getSerialNumberBigInt().toByteArray())
-        .signer(caPrivateKey, caPublicKey)
         .issuerDn(caSubjectDer)
         .withResponderByKey()
-        .build();
+        .good()
+        .sign(caPrivateKey);
 
 // byKey со Streebog-512 — для 512-битных кривых
 byte[] byKey512Ocsp = GostOcspResponseBuilder.create(cert.getSerialNumberBigInt().toByteArray())
-        .signer(ca512PrivateKey, ca512PublicKey)
         .issuerDn(ca512SubjectDer)
         .withResponderByKey(GostOids.STREEBOG_512_HASH_LEN)
-        .build();
+        .good()
+        .sign(ca512PrivateKey);
 ----
 
 ==== Проверка OCSP-ответа — `OcspVerifier`
@@ -870,7 +1150,7 @@ VerifiedSignedData result =
         CmsSignedDataVerifier.verifyAny(signedData, cert);
 List<GostCrl> embeddedCrls = result.embeddedCrls(); // <2>
 ----
-<1> CRL должны быть в DER-кодировке (`GostCrl.fromDer()` или результат `GostCrlBuilder.build()`).
+<1> CRL должны быть в DER-кодировке (`GostCrl.fromDer()` или результат `GostCrlBuilder.sign()`).
     Верификатор проверяет размер поля и число CRL (защита от DoS: лимиты
     `MAX_EMBEDDED_CRLS_TOTAL_SIZE` и `MAX_EMBEDDED_CRLS` в `CmsConstants`).
     Поддерживается только выбор `crl` из `RevocationInfoChoice` (RFC 5652 §10.2.1),
@@ -980,6 +1260,34 @@ List<GostCertificate> back = GostPkcs7.extractCertificates(p7b);
 NOTE: порядок сертификатов в контейнере не сохраняется — поле `certificates` есть
 `SET OF` и кодируется в DER лексикографически отсортированным (X.690 §11.6).
 
+==== Человекочитаемый вывод сертификата и .p7b
+
+`CertificateTextFormatter.format(GostCertificate)` формирует подробный многострочный
+отчёт по одному сертификату: полный DN, сроки, алгоритм ключа, расшифровка всех
+расширений (KeyUsage, EKU, SAN, AIA, CDP, BasicConstraints, NameConstraints и др.)
+на русском языке.
+
+`GostPkcs7.formatText(byte[])` выводит отчёт по контейнеру `.p7b` целиком:
+заголовок с числом сертификатов и CRL, детальный дамп каждого сертификата
+(через `CertificateTextFormatter`) и метаданные встроенных CRL (issuer, thisUpdate,
+nextUpdate). CRL-данные об отозванных сертификатах доступны только после
+криптографической проверки — первая строка вывода явно предупреждает об этом.
+
+В отличие от компактного, безопасного для журналов `toString()` (DN усечён до 256,
+OCSP исключён), этот вывод предназначен для показа человеку на экране.
+
+[source,java]
+----
+import org.rssys.gost.pkix.cert.CertificateTextFormatter;
+import org.rssys.gost.pkix.cms.GostPkcs7;
+
+// по одному сертификату
+System.out.println(CertificateTextFormatter.format(cert));
+
+// дамп .p7b-контейнера (автоопределение DER/PEM)
+System.out.println(GostPkcs7.formatText(p7bDer));
+----
+
 ==== Пользовательские signed-атрибуты
 
 К стандартным атрибутам (contentType, messageDigest) можно добавить свои —
@@ -1019,6 +1327,7 @@ byte[] signedData = CmsSignedDataBuilder.create()
 
 - *CAdES-BES* — базовая подпись: SignedData + `signingCertificateV2` (связка подписи с сертификатом).
 - *CAdES-T* — BES + метка времени `signature-time-stamp` в unsigned-атрибутах.
+- *CAdES-C* — BES/T + `complete-certificate-references` и `complete-revocation-references` — ссылки на все сертификаты и данные отзыва, необходимые для полной проверки (см. раздел CAdES-C ниже).
 
 ==== CAdES-BES — базовая электронная подпись
 
@@ -1200,7 +1509,7 @@ byte[] responseDer = TspResponseBuilder.create(request)
 <3> `accuracy` — точность часов TSA: 1 секунда ± 500 миллисекунд. Опционально.
 
 Алгоритм хэширования определяется автоматически по размеру ключа TSA:
-256-битный → Streebog-256, 512-битный → Streebog-512.
+256-битный -> Streebog-256, 512-битный -> Streebog-512.
 
 ===== Отклонение, grantedWithMods и расширенные атрибуты
 
@@ -1424,6 +1733,217 @@ GostCertificate notaryCert = notary.signerCertificate();
 List<CmsAttribute> notaryAttrs = notary.signedAttributes();
 ----
 
+==== CAdES-C — полные ссылки на сертификаты и данные отзыва
+
+CAdES-C (RFC 5126 §6.2) расширяет CAdES-BES/T двумя unsigned-атрибутами,
+фиксирующими хэши и идентификаторы всех сертификатов и данных отзыва,
+необходимых для полной проверки подписи.
+
+*Проблема.* CAdES-BES/T содержит только сертификат подписанта и метку времени.
+Верификатору нужно самостоятельно найти и проверить промежуточные CA-сертификаты
+и CRL/OCSP-ответы `—` без них подпись невалидна. CAdES-C фиксирует *что именно*
+нужно иметь для верификации (ссылки на сертификаты и отзыв).
+
+*Атрибуты CAdES-C:*
+
+- `complete-certificate-references` `—` SEQUENCE OF OtherCertID:
+хэш DER-кодирования каждого CA-сертификата цепочки + IssuerSerial.
+Сертификат подписанта не включается (он уже в `signingCertificateV2`).
+Доверенный корень не включается (известен верификатору заранее).
+- `complete-revocation-references` `—` SEQUENCE OF CrlOcspRef:
+для каждого сертификата цепочки (включая подписанта) `—` хэш CRL или
+OCSP-ответа + идентификатор (issuer, время, номер CRL / responderID).
+
+*Что НЕ делает CAdES-C:*
+
+- Не встраивает сами значения сертификатов/CRL в конверт (это CAdES-X Long).
+- Не проверяет фактический статус отзыва сертификатов (только ссылки).
+- crlHash не сверяется с актуальными CRL `—` CRL не эмбеддятся.
+
+===== Создание CAdES-C
+
+Метод `embedCompleteRefs()` встраивает C-атрибуты в CAdES-BES/T:
+принимает CAdES-BES/T DER, цепочку сертификатов и данные отзыва (CRL и OCSP).
+Сертификаты цепочки автоматически добавляются в поле `certificates` SignedData.
+
+[source,java]
+----
+import org.rssys.gost.pkix.cms.CAdESExtender;
+import org.rssys.gost.pkix.cms.CertChainBuilder;
+import org.rssys.gost.pkix.cert.GostCrl;
+import org.rssys.gost.pkix.cert.GostCrlBuilder;
+import java.util.Arrays;
+import java.util.List;
+
+// 1. Строим CAdES-BES
+byte[] cadesBes = CmsSignedDataBuilder.create()
+        .data(data)
+        .addSigner(signerKey, signerCert)
+        .addCertificate(caCert)
+        .withCAdES()
+        .build();
+
+// 2. Строим цепочку и данные отзыва
+List<GostCertificate> chain = CertChainBuilder.buildChain(
+        signerCert, Arrays.asList(caCert), rootCert);
+
+byte[] crlDer = GostCrlBuilder.create(caCert.getSubjectDnBytes())
+        .thisUpdateNow().nextUpdateDays(30).withCrlNumber(1)
+        .sign(caKey);
+GostCrl crl = new GostCrl(crlDer);
+
+// 3. Встраиваем CAdES-C атрибуты
+byte[] cadesC = CAdESExtender.embedCompleteRefs(
+        cadesBes, chain,
+        Arrays.asList(crl, null),    // CRL для signer и CA
+        Arrays.asList(null, null));  // OCSP-ответы (нет)
+----
+
+===== Convenience-перегрузка через CertRevocationData
+
+Удобная перегрузка принимает данные отзыва через `CertRevocationData` —
+тот же формат, что и `ChainValidator.validateChainWithRevocation()`:
+
+[source,java]
+----
+import org.rssys.gost.pkix.cert.CertRevocationData;
+
+List<CertRevocationData> revData = Arrays.asList(
+        new CertRevocationData(null, crlDer),   // CRL для подписанта
+        null);                                   // для CA — пропускаем
+
+byte[] cadesC = CAdESExtender.embedCompleteRefs(cadesBes, chain, revData);
+----
+
+===== Верификация CAdES-C
+
+`verifyCAdESC()` проверяет: CMS-подпись (AND-семантика), `signingCertificateV2`,
+метки времени, certHash каждого OtherCertID против embedded сертификатов
+(dispatch строго по OID из OtherHash `—` whitelist Стрибог-256/512,
+PkixException на незнакомом OID), структурную целостность CrlOcspRef.
+
+[source,java]
+----
+VerifiedCAdESData result = CAdESExtender.verifyCAdESC(cadesC, rootCert);
+
+for (CAdESSignerResult sr : result.signers()) {
+    // C-атрибуты доступны через результат верификации
+    List<CAdESCompleteData.OtherCertID> certRefs = sr.completeCertRefs();
+    List<CAdESCompleteData.CrlOcspRef> revocRefs = sr.completeRevocRefs();
+
+    System.out.println("Ссылок на сертификаты: " + certRefs.size());
+    System.out.println("Ссылок на отзыв: " + revocRefs.size());
+}
+----
+
+[CAUTION]
+.C-уровень не проверяет отзыв
+====
+`verifyCAdESC` проверяет только структурную целостность атрибутов и
+certHash против embedded сертификатов. Фактический статус отзыва
+сертификатов (CRL revocation status, OCSP certStatus) не проверяется
+`—` отложено до CAdES-X Long, где CRL/OCSP-ответы встраиваются
+в конверт и доступны для проверки. Revoked-сертификат успешно
+проходит `verifyCAdESC`.
+====
+
+===== CAdES-X Long Type 1 — долгосрочная подпись с проверкой отзыва
+
+*Атрибуты CAdES-X Long Type 1 (добавляются поверх CAdES-C):*
+
+- `certificate-values` (OID `1.2.840.113549.1.9.16.2.23`): SEQUENCE OF Certificate —
+  встроенные значения всех сертификатов цепочки (signer + intermediate CA).
+  Сертификат подписанта уже в `signingCertificateV2`, корень известен верификатору отдельно.
+- `revocation-values` (OID `1.2.840.113549.1.9.16.2.24`): SEQUENCE { [0] CRL, [1] OCSP } —
+  встроенные значения CRL и OCSP-ответов для каждого сертификата цепочки.
+- `content-time-stamp` (OID `1.2.840.113549.1.9.16.2.20`): опциональная метка времени
+  на содержимое документа (ES-C, RFC 5126 §5.11.1). Добавляется как signed-атрибут
+  через `CmsSignedDataBuilder.contentTimestamp()`.
+
+*Ключевое отличие от CAdES-C:*
+CAdES-X Long Type 1 не только ссылается на сертификаты и данные отзыва (как C-уровень),
+но и встраивает их значения в конверт. Это позволяет проверить статус отзыва
+каждого сертификата цепочки непосредственно при верификации — без обращения
+к внешним источникам. Отозванный сертификат → `PkixException` (fail-closed).
+
+*Что НЕ делает CAdES-X Long Type 1:*
+- Не добавляет архивные метки времени (это CAdES-A).
+- Не добавляет вторую метку времени на сами certificate/revocation-values
+  (это CAdES-X Long Type 2 по ETSI TS 101 733 — не реализован).
+
+===== Создание CAdES-X Long Type 1
+
+Метод `embedXLongType1()` выполняет авто-апгрейд: CAdES-BES → T → C → X-Long Type 1.
+Если на входе уже CAdES-T или CAdES-C, соответствующие шаги пропускаются.
+
+[source,java]
+----
+import org.rssys.gost.pkix.cms.CAdESExtender;
+import org.rssys.gost.pkix.cms.CAdESCompleteData;
+import org.rssys.gost.pkix.cms.CertChainBuilder;
+import org.rssys.gost.pkix.tsp.InMemoryTspTransport;
+
+// 1. Строим CAdES-BES (можно с content-time-stamp)
+byte[] cadesBes = CmsSignedDataBuilder.create()
+        .data(data)
+        .addSigner(signerKey, signerCert)
+        .addCertificate(caCert)
+        .withCAdES()
+        .contentTimestamp(tsaUrl, transport, tsaCert)  // опционально
+        .build();
+
+// 2. Строим цепочку и данные отзыва
+List<GostCertificate> chain = CertChainBuilder.buildChain(
+        signerCert, Arrays.asList(caCert), rootCert);
+
+byte[] crlDer = GostCrlBuilder.create(caCert.getSubjectDnBytes())
+        .thisUpdateNow().nextUpdateDays(30).withCrlNumber(1)
+        .sign(caKey);
+GostCrl crl = new GostCrl(crlDer);
+
+// 3. Строим CAdES-X Long Type 1 (авто-апгрейд: T + C + X-Long)
+//    crlsForChain — parallel list к chain: [signerCrl, caCrl]
+//    без корневого CRL (revocRefs = chain-1 позиций)
+byte[] cadesXLong = CAdESExtender.embedXLongType1(
+        cadesBes, chain,
+        Arrays.asList(crl, null),      // CRL для signer и CA (без корня)
+        Arrays.asList(null, null),     // OCSP-ответы
+        tspUrl, tsaTransport, tsaCert);
+----
+
+===== Верификация CAdES-X Long Type 1
+
+`verifyCAdESXLong()` проверяет: CMS-подпись (AND-семантика), `signingCertificateV2`,
+метки времени, complete-certificate-references, complete-revocation-references,
+certificate-values (certHash + IssuerSerial ↔ embedded сертификат),
+revocation-values (crlHash ↔ embedded CRL, ocspRepHash ↔ embedded OCSP),
+валидность цепочки сертификатов и **фактический статус отзыва** каждого сертификата.
+
+[source,java]
+----
+VerifiedCAdESData result = CAdESExtender.verifyCAdESXLong(cadesXLong, rootCert);
+
+for (CAdESSignerResult sr : result.signers()) {
+    // X-Long атрибуты доступны через результат верификации
+    List<GostCertificate> certValues = sr.certificateValues();
+    CAdESXLongData.RevocationValuesDecoded revocValues = sr.revocationValues();
+
+    System.out.println("Встроенных сертификатов: " + certValues.size());
+    System.out.println("CRL для цепочки: " + revocValues.crls().size());
+    System.out.println("OCSP-ответов: " + revocValues.ocspResponses().size());
+}
+----
+
+[IMPORTANT]
+.X-Long проверяет статус отзыва
+======
+В отличие от `verifyCAdESC`, который не проверяет crlHash (CRL не встроены),
+`verifyCAdESXLong` получает CRL и OCSP-ответы из `revocation-values` и
+проверяет статус отзыва каждого сертификата цепочки через
+`ChainValidator.validateChainWithRevocation()`. Отозванный сертификат
+приводит к `PkixException`. Это основное семантическое отличие X-Long от C.
+======
+
 === CMS EnvelopedData — шифрование
 
 .CmsEnvelopedDataBuilder — шифрует данные по RFC 5652 §6:
@@ -1432,14 +1952,23 @@ List<CmsAttribute> notaryAttrs = notary.signedAttributes();
 - Для каждого получателя вычисляет KEK через VKO ГОСТ Р 34.10-2012,
   оборачивает CEK через KExp15 (RFC 9189 §8.2.1).
 - CEK и IV затираются сразу после использования.
+- По умолчанию используется KeyTransRecipientInfo (ktri, тег `0x30`) —
+  обязательный формат по ТК26 §8.2.1, совместим с КриптоПРО 5.0.
+  Для KeyAgreeRecipientInfo (kari, тег `0xA1`, ТК26 §8.2.2) —
+  фабрика `.createKari()`.
+- `.withOmac()` включает имитовставку (Encrypt-then-MAC, OID
+  `id-gostr3412-2015-kuznyechik-ctracpkm-omac`) по ТК26 §8.3.1 —
+  помимо конфиденциальности обеспечивает целостность данных.
 
 +
 Результат `build()` — DER-байты, содержащие зашифрованные данные и
 обёрнутый CEK. Можно свободно передавать по сети: без закрытого ключа
 получателя расшифровать невозможно. CEK не попадает в результат в открытом виде.
 
-`CmsEnvelopedDataDecryptor` расшифровывает: находит свой RecipientEncryptedKey,
+`CmsEnvelopedDataDecryptor` расшифровывает: определяет тип RecipientInfo
+(ktri или kari) по тегу, находит свой идентификатор получателя,
 вычисляет KEK через VKO, разворачивает CEK через KImp15, расшифровывает данные.
+При наличии OMAC проверка MAC происходит автоматически.
 
 `CmsKeyWrap` (пакет `org.rssys.gost.pkix.cms`) — stateless-абстракция алгоритма
 обёртывания ключа: содержит только методы `wrap()` / `unwrap()` и `algorithmOid()`.
@@ -1472,6 +2001,48 @@ byte[] decrypted = CmsEnvelopedDataDecryptor.decrypt(
 
 assert Arrays.equals(data, decrypted);
 ----
+
+==== Шифрование с имитовставкой (OMAC)
+
+При вызове `.withOmac()` контент шифруется в режиме Encrypt-then-MAC
+(Кузнечик CTR-ACPKM-OMAC). Расшифрование автоматически проверяет MAC —
+любая подделка данных приводит к `PkixException` (fail-closed).
+
+[source,java]
+----
+byte[] data = "Конфиденциальный документ".getBytes(StandardCharsets.UTF_8);
+CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
+
+// Шифрование с имитовставкой
+byte[] envelopedData = CmsEnvelopedDataBuilder.create()
+        .data(data)
+        .addRecipient(recipientCert)
+        .keyWrap(keyWrap)
+        .withOmac()
+        .build();
+
+// Расшифрование — MAC проверяется автоматически
+byte[] decrypted = CmsEnvelopedDataDecryptor.decrypt(
+        envelopedData, recipientPrivateKey, recipientCert, keyWrap);
+assert Arrays.equals(data, decrypted);
+
+// Подделка зашифрованных данных → PkixException (fail-closed)
+byte[] tampered = Arrays.copyOf(envelopedData, envelopedData.length);
+tampered[envelopedData.length / 2] ^= 0xFF;
+try {
+    CmsEnvelopedDataDecryptor.decrypt(tampered,
+            recipientPrivateKey, recipientCert, keyWrap);
+    // Не должно дойти сюда
+} catch (PkixException e) {
+    // MAC проверка отклонила поддельные данные — корректно
+}
+----
+
+==== KeyAgreeRecipientInfo (kari)
+
+Для формата KeyAgreeRecipientInfo (RFC 5652 §6.2.2, ТК26 §8.2.2)
+используйте фабрику `.createKari()`:
+`CmsEnvelopedDataBuilder.createKari()`. Все флюент-методы идентичны.
 
 ==== Несколько получателей
 
@@ -1616,7 +2187,7 @@ String wrapKexp15 = GostOids.WRAP_KUZNYECHIK_KEXP15; // 1.2.643.7.1.1.7.2.1
 
 ==== Построение цепочки из неупорядоченного пула — `CertChainBuilder`
 
-`CertChainBuilder` собирает цепочку leaf→root по совпадению subject/issuer DN
+`CertChainBuilder` собирает цепочку leaf->root по совпадению subject/issuer DN
 и проверяет подписи на каждом шаге. Используется в `CmsSignedDataVerifier`
 для построения цепочки из сертификатов внутри CMS.
 
@@ -1660,7 +2231,8 @@ byte[] keyHash2  = CertIdHasher.hashIssuerPublicKey(caCert, hlen);
 
 ==== Кодирование GeneralNames — `GeneralNameCodec`
 
-Кодирует DNS-имена, IP-адреса и DN в DER GeneralName (RFC 5280 §4.2.1.6).
+Кодирует все типы GeneralName (RFC 5280 §4.2.1.6) в DER: dNSName, iPAddress,
+rfc822Name, URI, directoryName, otherName (включая UPN).
 Используется в `GostCertificateBuilder` (SAN) и `GostCrlBuilder` (certificateIssuer).
 
 [source,java]
@@ -1677,8 +2249,16 @@ byte[] ipAddr = GeneralNameCodec.encodeIpAddress("192.168.1.1");
 byte[] issuerDn = GostDnParser.encodeDn("CN=My CA,O=MyOrg,C=RU");
 byte[] dirName = GeneralNameCodec.encodeDirectoryName(issuerDn);
 
+// rfc822Name (email), URI
+byte[] rfc822 = GeneralNameCodec.encodeRfc822Name("admin@example.com");
+byte[] uri = GeneralNameCodec.encodeUri("https://example.com");
+
+// otherName с UPN (User Principal Name)
+byte[] upn = GeneralNameCodec.encodeOtherNameUpn("user@domain.ru");
+
 // Собрать SEQUENCE OF GeneralName (например, для certificateIssuer в CRL)
-byte[] generalNames = GeneralNameCodec.encodeGeneralNames(dnsName, ipAddr, dirName);
+byte[] generalNames = GeneralNameCodec.encodeGeneralNames(
+        dnsName, ipAddr, dirName, rfc822, uri, upn);
 ----
 
 ==== Типизированные причины ошибок — `PkixException.Reason`
@@ -1697,11 +2277,13 @@ TLS-слой преобразует `Reason` в alert-код без разбор
 | `MISSING_KEY_CERT_SIGN`    | Отсутствует флаг keyCertSign
 | `PATH_LEN_EXCEEDED`        | Превышена длина пути pathLenConstraint
 | `ALG_MISMATCH`             | Несовместимость алгоритмов
+| `POLICY_VIOLATION`         | Нарушение политики сертификата (CertificatePolicies)
 | `UNKNOWN_CRITICAL_EXTENSION` | Неизвестное критическое расширение
 | `SIGNATURE_INVALID`        | Недействительная подпись
 | `PARSE_ERROR`              | Ошибка разбора DER / ASN.1
 | `THIS_UPDATE_FUTURE`       | thisUpdate в будущем (CRL/OCSP)
 | `IDP_NOT_SUPPORTED`        | Неподдерживаемый issuingDistributionPoint
+| `DELTA_CRL_NOT_SUPPORTED`  | Delta CRL без базового CRL
 | `REVOKED`                  | Сертификат отозван
 | `INCOMPLETE_CHAIN`         | Не найден issuer в пуле сертификатов
 | `CHAIN_LOOP`               | Зацикливание DN в цепочке
@@ -1719,7 +2301,7 @@ TLS-слой преобразует `Reason` в alert-код без разбор
 
 ==== Создание инфраструктуры CA
 
-Полный цикл: root CA → промежуточный CA → конечный сертификат.
+Полный цикл: root CA -> промежуточный CA -> конечный сертификат.
 
 [source,java]
 ----
@@ -1736,13 +2318,14 @@ ECParameters params = ECParameters.tc26a256();
 var rootKp = KeyGenerator.generateKeyPair(params);
 GostCertificate rootCert = GostCertificateBuilder.create(params, "CN=Root CA,O=MyOrg,C=RU")
         .publicKey(rootKp.getPublic())
+        // Удобный способ: .notBeforeNow().validForYears(20)
         .notBefore("20260101000000Z")
         .notAfter("20460101000000Z")
         .basicConstraints(true, null)          // CA без ограничения pathLen
         .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
                   GostCertificateBuilder.KeyUsage.CRL_SIGN)
-        .serial(BigInteger.ONE)
-        .assembleCert(rootKp.getPrivate());
+        .randomSerial()
+        .sign(rootKp.getPrivate());
 
 // 2. Промежуточный CA
 var interKp = KeyGenerator.generateKeyPair(params);
@@ -1754,8 +2337,8 @@ GostCertificate interCert = GostCertificateBuilder.create(params, "CN=Intermedia
         .basicConstraints(true, 0)             // CA, pathLen=0
         .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
                   GostCertificateBuilder.KeyUsage.CRL_SIGN)
-        .serial(BigInteger.valueOf(2))
-        .assembleCert(rootKp.getPrivate());     // подписан корневым CA
+        .randomSerial()
+        .sign(rootKp.getPrivate());     // подписан корневым CA
 
 // 3. Конечный сертификат (end-entity)
 var leafKp = KeyGenerator.generateKeyPair(params);
@@ -1768,14 +2351,19 @@ GostCertificate leafCert = GostCertificateBuilder.create(params, "CN=server.exam
         .basicConstraints(false, null)         // не CA
         .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
         .extendedKeyUsage(GostOids.EXT_SERVER_AUTH)
-        .serial(BigInteger.valueOf(3))
-        .assembleCert(interKp.getPrivate());    // подписан промежуточным CA
+        .randomSerial()
+        .sign(interKp.getPrivate());    // подписан промежуточным CA
 
 // 4. Валидация цепочки
 List<GostCertificate> chain = List.of(leafCert, interCert);
 ChainValidator.validateChain(chain, List.of(rootCert.getPublicKey()));
 ----
 <1> `issuerDn(String)` — String-перегрузка, не требует `GostDnParser.encodeDn()`.
++
+`.randomSerial()` задаёт криптографически случайный серийный номер (128 бит) —
+рекомендуемый способ для продакшена. Серийный номер обязателен: без явного
+`.serial(...)` или `.randomSerial()` сборка отвергается (RFC 5280 §4.1.2.2,
+CA/Browser Forum BR §7.1).
 
 ==== AIA-расширение в сертификате
 
@@ -1792,11 +2380,12 @@ GostCertificate leafCert = GostCertificateBuilder.create(params, "CN=server.exam
         .notAfter("20270101000000Z")
         .sanDns("server.example.com")
         .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+        .randomSerial()
         .ocspResponder("http://ocsp.example.com")          // id-ad-ocsp
         .caIssuer("http://ca.example.com/cert.p7c")        // id-ad-caIssuers
         .crlDistributionPoints("http://crl.example.com/crl.crl")
         .freshestCrl("http://ca.example/delta.crl")   // delta CRL (FreshestCRL)
-        .assembleCert(interKp.getPrivate());
+        .sign(interKp.getPrivate());
 ----
 
 URI из AIA-расширения доступны через `GostCertificate`:
@@ -1828,11 +2417,10 @@ byte[] expectedNonce = reqBuilder.getNonce();
 
 // 3. Строим OCSP-ответ (на стороне CA)
 byte[] ocspDer = GostOcspResponseBuilder.create(leafCert.getSerialNumber())
-        .signer(caPrivateKey, caPublicKey)
         .issuerDn("CN=Intermediate CA,O=MyOrg,C=RU")
         .nonce(expectedNonce)                    // вернём nonce из запроса
         .good()
-        .build();
+        .sign(caPrivateKey);
 
 // 4. Проверяем ответ (nonce проверяется внутри OcspVerifier)
 OcspVerifier.verify(ocspDer, leafCert.getSerialNumber(), interCert, expectedNonce);

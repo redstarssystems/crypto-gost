@@ -244,7 +244,7 @@ class TlsCertificateTest {
 
         byte[] version = derContextExpl(0, derInteger(2));
         byte[] serial = derInteger(1);
-        byte[] sigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] sigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] cn = derSequence(derOid("2.5.4.3"), derUtf8String("Test"));
         byte[] dn = derSequence(derSet(cn));
         byte[] validity = derSequence(derTime("250101000000Z"), derTime("21060101120000Z"));
@@ -252,7 +252,7 @@ class TlsCertificateTest {
 
         byte[] tbs = derSequence(version, serial, sigAlg, dn, validity, dn, spki, extensions);
         byte[] sig = signTbs(tbs, kp.getPrivate());
-        byte[] sigAlgCert = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] sigAlgCert = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] certDer = derSequence(tbs, sigAlgCert, derBitString(sig));
 
         GostCertificate cert = new GostCertificate(certDer);
@@ -462,38 +462,14 @@ class TlsCertificateTest {
     }
 
     @Test
-    @DisplayName("verifyHostname: malformed iPAddress (3 байта) игнорируется")
-    void testSanMalformedLength() throws Exception {
-        byte[] garbageIp = TlsTestHelper.derTlv(0x87, new byte[] {0x01, 0x02, 0x03});
-        byte[] validIp =
-                TlsTestHelper.derTlv(0x87, java.net.InetAddress.getByName("10.0.0.1").getAddress());
-        byte[] gnSeq = TlsTestHelper.derSequence(garbageIp, validIp);
-        byte[] sanOid = TlsTestHelper.derOid("2.5.29.17");
-        byte[] sanExt = TlsTestHelper.derSequence(sanOid, TlsTestHelper.derOctetString(gnSeq));
-
-        ECParameters params = ECParameters.tc26a256();
-        org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
-        byte[] dn = TlsTestHelper.buildDN("Test Cert");
-        byte[] tbs =
-                TlsTestHelper.buildTbs(
-                        kp.getPublic(),
-                        params,
-                        "20240501120000Z",
-                        "21060101120000Z",
-                        null,
-                        null,
-                        sanExt,
-                        dn,
-                        dn);
-        byte[] hash = TlsTestHelper.doHash(tbs, params.hlen);
-        byte[] sig = Signature.signHash(hash, kp.getPrivate());
-        byte[] algId = TlsTestHelper.buildAlgId(params);
-        byte[] sigBs = TlsTestHelper.derBitString(sig);
-        byte[] certDer = TlsTestHelper.derSequence(tbs, algId, sigBs);
-        GostCertificate cert = new GostCertificate(certDer);
-
-        assertTrue(cert.verifyHostname("10.0.0.1"));
-        assertFalse(cert.verifyHostname("0.0.0.0"));
+    @DisplayName("verifyHostname: malformed iPAddress (3 байта) отвергается (fail-closed)")
+    void testSanMalformedLengthRejected() {
+        // Fail-closed контракт: GostExtensionParser.parseSanGeneralNames() бросает
+        // IllegalArgumentException на iPAddress невалидной длины вместо тихого пропуска.
+        // Раньше мусорная запись молча игнорировалась и verifyHostname срабатывал по валидной —
+        // теперь до объекта дело не доходит, парсинг DER падает целиком.
+        byte[] certDer = TlsTestHelper.malformedSanIpCertDer();
+        assertThrows(IllegalArgumentException.class, () -> new GostCertificate(certDer));
     }
 
     @Test
@@ -663,7 +639,7 @@ class TlsCertificateTest {
         byte[] sig = signTbs(tbs, privKey);
 
         // SignatureAlgorithm: 1.2.643.7.1.1.1.1 для 256-бит
-        String sigOid = GostOids.SIG_WITH_DIGEST_256;
+        String sigOid = GostOids.PUBLIC_KEY_256;
         byte[] sigAlg = derSequence(derOid(sigOid));
 
         // SignatureValue: BIT STRING
@@ -990,14 +966,14 @@ class TlsCertificateTest {
 
         byte[] version = derContextExpl(0, derInteger(2));
         byte[] serial = derInteger(1);
-        byte[] tbsSigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] tbsSigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] cn = derSequence(derOid("2.5.4.3"), derUtf8String("Test"));
         byte[] dn = derSequence(derSet(cn));
         byte[] validity = derSequence(derTime("250101000000Z"), derTime("21060101120000Z"));
         byte[] tbs = derSequence(version, serial, tbsSigAlg, dn, validity, dn, spki);
 
         byte[] sig = signTbs(tbs, kp.getPrivate());
-        byte[] outerSigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_512));
+        byte[] outerSigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_512));
         byte[] certDer = derSequence(tbs, outerSigAlg, derBitString(sig));
 
         GostCertificate cert = new GostCertificate(certDer);
@@ -1013,7 +989,7 @@ class TlsCertificateTest {
 
         byte[] version = derContextExpl(0, derInteger(2));
         byte[] serial = derInteger(1);
-        byte[] sigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] sigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] cn = derSequence(derOid("2.5.4.3"), derUtf8String("Test"));
         byte[] dn = derSequence(derSet(cn));
         byte[] validity = derSequence(derTime("250101000000Z"), derTime("21060101120000Z"));
@@ -1026,7 +1002,7 @@ class TlsCertificateTest {
 
         byte[] tbs = derSequence(version, serial, sigAlg, dn, validity, dn, spki, extensions);
         byte[] sig = signTbs(tbs, kp.getPrivate());
-        byte[] outerSigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] outerSigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] certDer = derSequence(tbs, outerSigAlg, derBitString(sig));
 
         GostCertificate cert = new GostCertificate(certDer);
@@ -1092,14 +1068,14 @@ class TlsCertificateTest {
 
         // TBSCertificate без поля version (по умолчанию v1)
         byte[] serial = derInteger(1);
-        byte[] sigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] sigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] cn = derSequence(derOid("2.5.4.3"), derUtf8String("Test"));
         byte[] dn = derSequence(derSet(cn));
         byte[] validity = derSequence(derTime("250101000000Z"), derTime("21060101120000Z"));
         byte[] tbs = derSequence(serial, sigAlg, dn, validity, dn, spki);
 
         byte[] sig = signTbs(tbs, kp.getPrivate());
-        byte[] outerSigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] outerSigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] certDer = derSequence(tbs, outerSigAlg, derBitString(sig));
 
         GostCertificate cert = new GostCertificate(certDer);
@@ -1352,7 +1328,7 @@ class TlsCertificateTest {
     @DisplayName("getSignatureAlgorithmOid: OID совпадает с GostCurves.OID_SIGN_256")
     void testSignatureAlgorithmOid() throws Exception {
         GostCertificate cert = new GostCertificate(createSelfSignedCert());
-        // createSelfSignedCert использует sigOid = GostOids.SIG_WITH_DIGEST_256 (256-бит)
+        // createSelfSignedCert использует sigOid = GostOids.PUBLIC_KEY_256 (256-бит)
         assertEquals(GostCurves.OID_SIGN_256, cert.getSignatureAlgorithmOid());
     }
 
@@ -1504,7 +1480,7 @@ class TlsCertificateTest {
         // TBS с extensions после SPKI
         byte[] version = derContextExpl(0, derInteger(2));
         byte[] serial = derInteger(1);
-        byte[] sigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] sigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] cn = derSequence(derOid("2.5.4.3"), derUtf8String("Test"));
         byte[] dn = derSequence(derSet(cn));
         byte[] validity = derSequence(derTime("250101000000Z"), derTime("21060101120000Z"));
@@ -1512,7 +1488,7 @@ class TlsCertificateTest {
 
         // Подпись
         byte[] sig = signTbs(tbs, privKey);
-        byte[] sigAlgEncoded = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] sigAlgEncoded = derSequence(derOid(GostOids.PUBLIC_KEY_256));
         byte[] certDer = derSequence(tbs, sigAlgEncoded, derBitString(sig));
 
         return new GostCertificate(certDer);
@@ -1535,7 +1511,7 @@ class TlsCertificateTest {
 
         byte[] serial = derInteger(1);
 
-        byte[] sigAlg = derSequence(derOid(GostOids.SIG_WITH_DIGEST_256));
+        byte[] sigAlg = derSequence(derOid(GostOids.PUBLIC_KEY_256));
 
         byte[] cn = derSequence(derOid("2.5.4.3"), derUtf8String("Test"));
         byte[] dn = derSequence(derSet(cn));

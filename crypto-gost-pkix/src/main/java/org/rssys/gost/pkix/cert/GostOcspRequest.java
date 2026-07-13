@@ -8,7 +8,6 @@ import java.util.Collections;
 import java.util.List;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
-import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -27,6 +26,7 @@ public final class GostOcspRequest {
     private final boolean signed;
     private final byte[] tbsRaw;
     private final byte[] sigValue;
+    private final byte[] encoded;
     private volatile boolean signatureVerified;
 
     /**
@@ -46,6 +46,8 @@ public final class GostOcspRequest {
                             + ", got "
                             + der.length);
         }
+
+        this.encoded = der.clone();
 
         try {
             // OCSPRequest ::= SEQUENCE { TBSRequest, optionalSignature [0] EXPLICIT OPTIONAL }
@@ -214,6 +216,39 @@ public final class GostOcspRequest {
     }
 
     /**
+     * Создаёт OCSP-запрос из PEM или DER-байтов с автоопределением формата.
+     *
+     * <p>Определяет формат по первому байту: {@code 0x30} = DER,
+     * {@code 0x2D} = PEM (строка начинается с '-').
+     *
+     * @param data PEM или DER-байты OCSP-запроса
+     * @return распарсенный OCSP-запрос
+     * @throws PkixException при структурной ошибке DER
+     */
+    public static GostOcspRequest fromPemOrDer(byte[] data) throws PkixException {
+        if (GostPemUtils.isPem(data)) {
+            return new GostOcspRequest(GostPemUtils.pemToDer(data));
+        }
+        return new GostOcspRequest(data);
+    }
+
+    /**
+     * @return полный DER-кодированный OCSPRequest (defensive copy)
+     */
+    public byte[] getEncoded() {
+        return encoded.clone();
+    }
+
+    /**
+     * Кодирует OCSP-запрос в PEM-формат (Base64 с заголовками).
+     *
+     * @return PEM-строка с заголовком {@code -----BEGIN OCSP REQUEST-----}
+     */
+    public String toPem() {
+        return GostPemUtils.toPem(encoded, "OCSP REQUEST");
+    }
+
+    /**
      * @return список CertID из запроса (неизменяемый)
      */
     public List<CertId> getCertIds() {
@@ -252,10 +287,7 @@ public final class GostOcspRequest {
         }
 
         int hlen = pubKey.getParams().hlen;
-        Digest.Algorithm hashAlg =
-                hlen == GostOids.STREEBOG_512_HASH_LEN
-                        ? Digest.Algorithm.STREEBOG_512
-                        : Digest.Algorithm.STREEBOG_256;
+        Digest.Algorithm hashAlg = GostSignatureHelper.digestAlgByHlen(hlen);
         Digest digest = new Digest(hashAlg);
         digest.update(tbsRaw, 0, tbsRaw.length);
         byte[] hash = digest.digest();

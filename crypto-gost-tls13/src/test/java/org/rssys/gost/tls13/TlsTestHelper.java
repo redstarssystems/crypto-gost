@@ -7,6 +7,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import org.rssys.gost.api.Digest;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
@@ -24,7 +25,7 @@ import org.rssys.gost.util.DerCodec;
 /**
  * Вспомогательные методы для тестов TLS 1.3 — DER-построители и сертификаты.
  *
- * <p>После плана 084: все методы — тонкие делегаты в builder'ы pkix.
+ * <p>Все методы — тонкие делегаты в builder'ы pkix.
  * Единственное исключение — {@link #createCertWithForcedIssuer} (тестовый хак,
  * issuer != signer). DER-обёртки оставлены для обратной совместимости.</p>
  */
@@ -130,6 +131,7 @@ public class TlsTestHelper {
         byte[] tbs =
                 GostCertificateBuilder.create(params, subjectDn)
                         .publicKey(pub)
+                        .randomSerial()
                         .notBefore(notBefore)
                         .notAfter(notAfter)
                         .sanDns(sanDnsNames)
@@ -137,7 +139,7 @@ public class TlsTestHelper {
                         .additionalExtensions(additionalExt)
                         .issuerDn(subjectDn)
                         .buildTbs();
-        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, priv, params);
+        GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(priv));
         return new CertBundle(cert, priv, subjectDn);
     }
 
@@ -152,19 +154,21 @@ public class TlsTestHelper {
         byte[] kuExt =
                 GostCertificateBuilder.buildKeyUsageExtension(
                         GostCertificateBuilder.keyUsageFlags(
-                                GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN));
+                                GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN),
+                        false);
         ByteArrayOutputStream extBuf = new ByteArrayOutputStream();
         extBuf.write(bcExt);
         extBuf.write(kuExt);
         byte[] tbs =
                 GostCertificateBuilder.create(params, subjectDn)
                         .publicKey(pub)
+                        .randomSerial()
                         .notBefore("20250101000000Z")
                         .notAfter("21010101000000Z")
                         .additionalExtensions(extBuf.toByteArray())
                         .issuerDn(subjectDn)
                         .buildTbs();
-        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, priv, params);
+        GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(priv));
         return new CertBundle(cert, priv, subjectDn);
     }
 
@@ -288,10 +292,10 @@ public class TlsTestHelper {
             extBuf.write(GostCertificateBuilder.buildBasicConstraintsExtension(isCA, pathLen));
         }
         if (kuFlags != null) {
-            extBuf.write(GostCertificateBuilder.buildKeyUsageExtension(kuFlags));
+            extBuf.write(GostCertificateBuilder.buildKeyUsageExtension(kuFlags, false));
         }
         if (ekuOids != null) {
-            extBuf.write(GostCertificateBuilder.buildEkuExtension(ekuOids));
+            extBuf.write(GostCertificateBuilder.buildEkuExtension(ekuOids, false));
         }
         if (policyOids != null) {
             extBuf.write(GostCertificateBuilder.buildCertificatePoliciesExtension(policyOids));
@@ -303,6 +307,7 @@ public class TlsTestHelper {
         byte[] tbs =
                 GostCertificateBuilder.create(params, subjectDn)
                         .publicKey(leafPub)
+                        .randomSerial()
                         .notBefore(notBefore)
                         .notAfter(notAfter)
                         .sanDns(sanDnsNames)
@@ -310,7 +315,7 @@ public class TlsTestHelper {
                         .additionalExtensions(additionalExt)
                         .issuerDn(parentSubjectDn)
                         .buildTbs();
-        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, issuerPriv, params);
+        GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(issuerPriv));
         return new CertBundle(cert, leafPriv, subjectDn);
     }
 
@@ -363,7 +368,7 @@ public class TlsTestHelper {
             byte[] issuerDn,
             byte[] subjectDn) {
         GostCertificateBuilder builder =
-                GostCertificateBuilder.create(params, subjectDn).publicKey(pub);
+                GostCertificateBuilder.create(params, subjectDn).publicKey(pub).randomSerial();
         if (notBefore != null) {
             builder.notBefore(notBefore);
         }
@@ -412,7 +417,7 @@ public class TlsTestHelper {
                                 ZonedDateTime.now(ZoneOffset.UTC).format(GEN_TIME));
             }
         }
-        GostCrlBuilder builder = GostCrlBuilder.create(caPriv, issuerDnDer);
+        GostCrlBuilder builder = GostCrlBuilder.create(issuerDnDer);
         if (nextUpdateGeneralizedTime != null) {
             builder = builder.nextUpdate(nextUpdateGeneralizedTime);
         }
@@ -422,7 +427,7 @@ public class TlsTestHelper {
         if (entries != null) {
             builder = builder.addRevoked(Arrays.asList(entries));
         }
-        return builder.build();
+        return builder.sign(caPriv);
     }
 
     public static byte[] buildCrlLegacyVersion(
@@ -478,15 +483,14 @@ public class TlsTestHelper {
                                 ZonedDateTime.now(ZoneOffset.UTC).format(GEN_TIME));
             }
         }
-        GostCrlBuilder builder =
-                GostCrlBuilder.create(caPriv, issuerDnDer).withCrlNumber(crlNumber);
+        GostCrlBuilder builder = GostCrlBuilder.create(issuerDnDer).withCrlNumber(crlNumber);
         if (nextUpdateGeneralizedTime != null) {
             builder = builder.nextUpdate(nextUpdateGeneralizedTime);
         }
         if (entries != null) {
             builder = builder.addRevoked(Arrays.asList(entries));
         }
-        return builder.build();
+        return builder.sign(caPriv);
     }
 
     /**
@@ -511,13 +515,13 @@ public class TlsTestHelper {
             }
         }
         GostCrlBuilder builder =
-                GostCrlBuilder.create(caPriv, issuerDnDer)
+                GostCrlBuilder.create(issuerDnDer)
                         .withCrlNumber(crlNumber)
                         .withDeltaCrlIndicator(baseCrlNumber);
         if (entries != null) {
             builder = builder.addRevoked(Arrays.asList(entries));
         }
-        return builder.build();
+        return builder.sign(caPriv);
     }
 
     /**
@@ -543,7 +547,7 @@ public class TlsTestHelper {
             }
         }
         GostCrlBuilder builder =
-                GostCrlBuilder.create(caPriv, issuerDnDer)
+                GostCrlBuilder.create(issuerDnDer)
                         .withCrlNumber(crlNumber)
                         .withFreshestCrl(freshestUris);
         if (nextUpdateGeneralizedTime != null) {
@@ -552,7 +556,7 @@ public class TlsTestHelper {
         if (entries != null) {
             builder = builder.addRevoked(Arrays.asList(entries));
         }
-        return builder.build();
+        return builder.sign(caPriv);
     }
 
     // ========================================================================
@@ -565,10 +569,7 @@ public class TlsTestHelper {
             PublicKeyParameters caPub,
             byte[] caSubjectDer)
             throws Exception {
-        return GostOcspResponseBuilder.create(serialNumber)
-                .signer(caPriv, caPub)
-                .issuerDn(caSubjectDer)
-                .build();
+        return GostOcspResponseBuilder.create(serialNumber).issuerDn(caSubjectDer).sign(caPriv);
     }
 
     public static byte[] buildOcspResponse(
@@ -579,19 +580,17 @@ public class TlsTestHelper {
             String nextUpdateGeneralizedTime)
             throws Exception {
         GostOcspResponseBuilder builder =
-                GostOcspResponseBuilder.create(serialNumber)
-                        .signer(caPriv, caPub)
-                        .issuerDn(caSubjectDer);
+                GostOcspResponseBuilder.create(serialNumber).issuerDn(caSubjectDer);
         if (nextUpdateGeneralizedTime != null) {
             builder.nextUpdate(nextUpdateGeneralizedTime);
         }
-        return builder.build();
+        return builder.sign(caPriv);
     }
 
     /**
      * OCSP-ответ с эхо-возвратом nonce из запроса (RFC 8954). Нужен для моков,
      * имитирующих реальный responder: при наличии nonce в запросе ответ обязан его
-     * эхировать, иначе fail-closed верификатор (после плана 185) отклонит ответ.
+     * эхировать, иначе fail-closed верификатор отклонит ответ.
      *
      * @param nonce nonce из запроса (или null — не добавлять расширение)
      */
@@ -603,13 +602,11 @@ public class TlsTestHelper {
             byte[] nonce)
             throws Exception {
         GostOcspResponseBuilder builder =
-                GostOcspResponseBuilder.create(serialNumber)
-                        .signer(caPriv, caPub)
-                        .issuerDn(caSubjectDer);
+                GostOcspResponseBuilder.create(serialNumber).issuerDn(caSubjectDer);
         if (nonce != null) {
             builder.nonce(nonce);
         }
-        return builder.build();
+        return builder.sign(caPriv);
     }
 
     /**
@@ -657,17 +654,16 @@ public class TlsTestHelper {
             byte[][] delegatedCertsDer)
             throws Exception {
         return GostOcspResponseBuilder.create(serialNumber)
-                .signer(signerPriv, signerPub)
                 .caPublicKey(caPub)
                 .issuerDn(caSubjectDer)
                 .nextUpdate(nextUpdateGeneralizedTime)
                 .withDelegatedCerts(delegatedCertsDer)
-                .build();
+                .sign(signerPriv);
     }
 
     public static byte[] buildDummyOcspResponse() throws Exception {
         byte[] tbs = new byte[] {0x30, 0x03, 0x02, 0x01, 0x00};
-        byte[] sigAlg = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_ALG_256));
+        byte[] sigAlg = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.SIGN_WITH_DIGEST_256));
         byte[] sig = DerCodec.encodeBitString(new byte[64]);
         byte[] basicOcsp = DerCodec.encodeSequence(tbs, sigAlg, sig);
         // wrapOcspResponse
@@ -692,13 +688,50 @@ public class TlsTestHelper {
         int hlen = params.hlen;
         String signOid =
                 (hlen == GostOids.STREEBOG_512_HASH_LEN)
-                        ? GostOids.SIGN_ALG_512
-                        : GostOids.SIGN_ALG_256;
+                        ? GostOids.SIGN_WITH_DIGEST_512
+                        : GostOids.SIGN_WITH_DIGEST_256;
         return derSequence(derOid(signOid));
     }
 
     public static byte[] buildDN(String cn) {
         return GostDnParser.encodeDn("CN=" + cn);
+    }
+
+    /**
+     * Строит DER самоподписанного сертификата с намеренно битой записью iPAddress в SAN
+     * (тег 0x87, 3 байта вместо 4/16) рядом с валидной записью 10.0.0.1.
+     *
+     * <p>Возвращает именно сырой DER ({@code byte[]}), а не {@link GostCertificate}: по
+     * fail-closed контракту {@code new GostCertificate(der)} обязан бросить
+     * {@code IllegalArgumentException}, поэтому готовый объект здесь построить нельзя — он упал
+     * бы внутри хелпера. Битый SAN подаётся через additionalExtensions в обход валидации
+     * {@code builder.sanIp()}, иначе некорректную запись не собрать.
+     *
+     * @return DER сертификата с малформед iPAddress в SAN
+     */
+    public static byte[] malformedSanIpCertDer() {
+        byte[] garbageIp = derTlv(0x87, new byte[] {0x01, 0x02, 0x03});
+        byte[] validIp = derTlv(0x87, new byte[] {10, 0, 0, 1});
+        byte[] gnSeq = derSequence(garbageIp, validIp);
+        byte[] sanExt = derSequence(derOid("2.5.29.17"), derOctetString(gnSeq));
+
+        ECParameters params = ECParameters.tc26a256();
+        org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] dn = buildDN("Test Cert");
+        byte[] tbs =
+                buildTbs(
+                        kp.getPublic(),
+                        params,
+                        "20240501120000Z",
+                        "21060101120000Z",
+                        null,
+                        null,
+                        sanExt,
+                        dn,
+                        dn);
+        byte[] hash = doHash(tbs, params.hlen);
+        byte[] sig = Signature.signHash(hash, kp.getPrivate());
+        return derSequence(tbs, buildAlgId(params), derBitString(sig));
     }
 
     // ========================================================================
@@ -742,10 +775,10 @@ public class TlsTestHelper {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try {
             if (kuFlags != null) {
-                out.write(GostCertificateBuilder.buildKeyUsageExtension(kuFlags));
+                out.write(GostCertificateBuilder.buildKeyUsageExtension(kuFlags, false));
             }
             if (ekuOids != null) {
-                out.write(GostCertificateBuilder.buildEkuExtension(ekuOids));
+                out.write(GostCertificateBuilder.buildEkuExtension(ekuOids, false));
             }
             if (policyOids != null) {
                 out.write(GostCertificateBuilder.buildCertificatePoliciesExtension(policyOids));

@@ -16,6 +16,7 @@ import java.util.Set;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostDerCodec;
+import org.rssys.gost.pkix.CheckReturnValue;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PublicKeyParameters;
 
@@ -49,8 +50,16 @@ public final class GostCertificate {
     private final Instant notAfter;
     private final String[] sanDnsNames;
     private final byte[][] sanIpAddresses;
+    private final String[] sanRfc822Names;
+    private final String[] sanUris;
+    private final byte[][] sanDirectoryNames;
+    private final OtherNameEntry[] sanOtherNames;
     private final String[] ianDnsNames;
     private final byte[][] ianIpAddresses;
+    private final String[] ianRfc822Names;
+    private final String[] ianUris;
+    private final byte[][] ianDirectoryNames;
+    private final OtherNameEntry[] ianOtherNames;
     private final boolean keyUsageValid;
     private final boolean crlSignValid;
     private final boolean ekuValid;
@@ -77,6 +86,8 @@ public final class GostCertificate {
     private final int subjectDnLen;
     private final int spkiKeyValueOff;
     private final int spkiKeyValueLen;
+    private final int spkiAlgIdOff;
+    private final int spkiAlgIdLen;
 
     // OID алгоритма подписи (из signatureAlgorithm SEQUENCE) — для getSignatureAlgorithmOid()
     private final byte[] sigAlgOidBytes;
@@ -102,10 +113,14 @@ public final class GostCertificate {
     private final byte[][] ekuOids;
     // OID политик CertificatePolicies (2.5.29.32) в DER-байтах — для oid_filters matching
     private final byte[][] cpOids;
+    // Политики сертификата с опциональными CPS-квалификаторами (2.5.29.32)
+    private final CertificatePolicy[] certPolicyInfos;
     // Множество всех OID расширений, присутствующих в сертификате (dot-нотация)
     private final Set<String> presentExtensionOids;
     // Name Constraints (RFC 5280 §4.2.1.10)
     private final NameConstraintsData nameConstraints;
+    // Результат парсинга расширений — для bulk-доступа через getExtensions()
+    private final GostExtensionParser.ExtensionsResult extResult;
 
     /**
      * Парсит DER-закодированный X.509 сертификат.
@@ -238,36 +253,47 @@ public final class GostCertificate {
         this.publicKey = spki.publicKey;
         this.spkiKeyValueOff = spki.spkiKeyValueOff;
         this.spkiKeyValueLen = spki.spkiKeyValueLen;
+        this.spkiAlgIdOff = spki.spkiAlgIdOff;
+        this.spkiAlgIdLen = spki.spkiAlgIdLen;
 
         // Парсим SubjectAltName, KeyUsage, ExtendedKeyUsage, BasicConstraints из extensions
-        GostExtensionParser.ExtensionsResult ext = parseExtensions(derEncoded, tbsTlv);
-        this.sanDnsNames = ext.sanDnsNames;
-        this.sanIpAddresses = ext.sanIpAddresses;
-        this.ianDnsNames = ext.ianDnsNames;
-        this.ianIpAddresses = ext.ianIpAddresses;
-        this.keyUsageValid = ext.keyUsageValid;
-        this.crlSignValid = ext.crlSignValid;
-        this.ekuValid = ext.ekuValid;
-        this.ekuClientAuth = ext.ekuClientAuth;
-        this.ekuOcspSigning = ext.ekuOcspSigning;
-        this.ekuTimeStamping = ext.ekuTimeStamping;
-        this.isCA = ext.isCA;
-        this.pathLen = ext.pathLen;
-        this.keyCertSign = ext.keyCertSign;
-        this.hasUnknownCritical = ext.hasUnknownCritical;
-        this.skiBytes = ext.skiBytes;
-        this.akiBytes = ext.akiBytes;
-        this.aiaUris = ext.aiaUris;
-        this.ocspUris = ext.ocspUris;
-        this.caIssuersUris = ext.caIssuersUris;
-        this.cdpUris = ext.cdpUris;
-        this.freshestCrlUris = ext.freshestCrlUris;
-        this.certPolicyOids = ext.certPolicyOids;
-        this.keyUsageBits = ext.keyUsageBits;
-        this.ekuOids = ext.ekuOids;
-        this.cpOids = ext.cpOids;
-        this.presentExtensionOids = ext.presentExtensionOids;
-        this.nameConstraints = ext.nameConstraints;
+        this.extResult = parseExtensions(derEncoded, tbsTlv);
+        this.sanDnsNames = extResult.sanDnsNames;
+        this.sanIpAddresses = extResult.sanIpAddresses;
+        this.sanRfc822Names = extResult.sanRfc822Names;
+        this.sanUris = extResult.sanUris;
+        this.sanDirectoryNames = extResult.sanDirectoryNames;
+        this.sanOtherNames = extResult.sanOtherNames;
+        this.ianDnsNames = extResult.ianDnsNames;
+        this.ianIpAddresses = extResult.ianIpAddresses;
+        this.ianRfc822Names = extResult.ianRfc822Names;
+        this.ianUris = extResult.ianUris;
+        this.ianDirectoryNames = extResult.ianDirectoryNames;
+        this.ianOtherNames = extResult.ianOtherNames;
+        this.keyUsageValid = extResult.keyUsageValid;
+        this.crlSignValid = extResult.crlSignValid;
+        this.ekuValid = extResult.ekuValid;
+        this.ekuClientAuth = extResult.ekuClientAuth;
+        this.ekuOcspSigning = extResult.ekuOcspSigning;
+        this.ekuTimeStamping = extResult.ekuTimeStamping;
+        this.isCA = extResult.isCA;
+        this.pathLen = extResult.pathLen;
+        this.keyCertSign = extResult.keyCertSign;
+        this.hasUnknownCritical = extResult.hasUnknownCritical;
+        this.skiBytes = extResult.skiBytes;
+        this.akiBytes = extResult.akiBytes;
+        this.aiaUris = extResult.aiaUris;
+        this.ocspUris = extResult.ocspUris;
+        this.caIssuersUris = extResult.caIssuersUris;
+        this.cdpUris = extResult.cdpUris;
+        this.freshestCrlUris = extResult.freshestCrlUris;
+        this.certPolicyOids = extResult.certPolicyOids;
+        this.keyUsageBits = extResult.keyUsageBits;
+        this.ekuOids = extResult.ekuOids;
+        this.cpOids = extResult.cpOids;
+        this.certPolicyInfos = extResult.certPolicies;
+        this.presentExtensionOids = extResult.presentExtensionOids;
+        this.nameConstraints = extResult.nameConstraints;
 
         // Проверка согласованности алгоритма (RFC 5280 §4.1.1.2):
         // signatureAlgorithm (вне TBS) должен совпадать с TBSCertificate.signature
@@ -314,6 +340,7 @@ public final class GostCertificate {
      * @param caPublicKey открытый ключ издателя сертификата
      * @return true если подпись действительна
      */
+    @CheckReturnValue
     public boolean verifySignature(PublicKeyParameters caPublicKey) {
         // Whitelist допустимых OID алгоритма подписи (defense-in-depth)
         if (!matchesOid(sigAlgOidBytes, 0, sigAlgOidBytes.length, GOST_SIGN_256_OID_BYTES)
@@ -325,10 +352,7 @@ public final class GostCertificate {
             return false;
         }
         int hlen = caPublicKey.getParams().hlen;
-        Digest.Algorithm hashAlg =
-                hlen == GostOids.STREEBOG_512_HASH_LEN
-                        ? Digest.Algorithm.STREEBOG_512
-                        : Digest.Algorithm.STREEBOG_256;
+        Digest.Algorithm hashAlg = GostSignatureHelper.digestAlgByHlen(hlen);
         Digest digest = new Digest(hashAlg);
         digest.update(certData, tbsCertOff, tbsCertLen);
         byte[] hash = digest.digest();
@@ -341,6 +365,7 @@ public final class GostCertificate {
     /**
      * @return true если срок действия сертификата истёк (с учётом clock skew)
      */
+    @CheckReturnValue
     public boolean isExpired() {
         Instant now = Instant.now();
         return now.isBefore(notBefore.minusMillis(GostOids.CLOCK_SKEW_MS))
@@ -371,6 +396,7 @@ public final class GostCertificate {
      *         или hostname == {@code null} (проверка пропущена);
      *         {@code false} в остальных случаях
      */
+    @CheckReturnValue
     public boolean verifyHostname(String hostname) {
         if (hostname == null) return true;
         if (hostname.isEmpty()) return false;
@@ -444,10 +470,13 @@ public final class GostCertificate {
      * Проверяет, является ли строка IP-адресом (IPv4 или IPv6).
      * IPv6 детектится по наличию двоеточия, IPv4 — 4 десятичных октета.
      *
+     * <p>Видимость package-private для переиспользования из ChainValidator
+     * (проверка URI-хоста на IP-адрес в NameConstraints).</p>
+     *
      * @param hostname строка для проверки
      * @return true если строка является IP-адресом
      */
-    private static boolean isIpAddress(String hostname) {
+    static boolean isIpAddress(String hostname) {
         if (hostname.indexOf(':') >= 0) return true;
         // Проверка на IPv4: 4 числа, разделённых точками
         String[] parts = hostname.split("\\.");
@@ -469,6 +498,7 @@ public final class GostCertificate {
      * @param ipAddress IP-адрес (IPv4 или IPv6)
      * @return true если адрес найден в SAN iPAddress entries
      */
+    @CheckReturnValue
     public boolean verifyAddress(String ipAddress) {
         if (sanIpAddresses == null) return false;
         try {
@@ -486,6 +516,7 @@ public final class GostCertificate {
      * @param rawAddress raw IP-адрес (4 или 16 байт)
      * @return true если адрес найден в SAN iPAddress entries
      */
+    @CheckReturnValue
     public boolean verifyAddress(byte[] rawAddress) {
         if (sanIpAddresses == null || rawAddress == null) return false;
         for (byte[] ip : sanIpAddresses) {
@@ -553,6 +584,15 @@ public final class GostCertificate {
     public boolean isOcspSigning() {
         // EKU не задан -> без ограничений (RFC 5280 §4.2.1.12)
         return ekuOcspSigning;
+    }
+
+    /**
+     * @return true если сертификат несёт расширение id-pkix-ocsp-nocheck
+     *     (RFC 6960 §4.2.2.2.1). Значение расширения пустое (DER NULL), поэтому важен
+     *     только факт присутствия.
+     */
+    public boolean hasOcspNoCheck() {
+        return presentExtensionOids.contains(GostOids.EXT_OCSP_NOCHECK);
     }
 
     /** @return true если сертификат имеет EKU id-kp-timeStamping (RFC 3161 §2.3) */
@@ -623,6 +663,56 @@ public final class GostCertificate {
      */
     public String[] getIssuerAltNameDnsNames() {
         return ianDnsNames == null ? null : ianDnsNames.clone();
+    }
+
+    /** @return массив rfc822Name из SubjectAltName или null. Defensive copy. */
+    public String[] getSanRfc822Names() {
+        return sanRfc822Names == null ? null : sanRfc822Names.clone();
+    }
+
+    /** @return массив rfc822Name из IssuerAltName или null. Defensive copy. */
+    public String[] getIssuerAltNameRfc822Names() {
+        return ianRfc822Names == null ? null : ianRfc822Names.clone();
+    }
+
+    /** @return массив URI из SubjectAltName или null. Defensive copy. */
+    public String[] getSanUris() {
+        return sanUris == null ? null : sanUris.clone();
+    }
+
+    /** @return массив URI из IssuerAltName или null. Defensive copy. */
+    public String[] getIssuerAltNameUris() {
+        return ianUris == null ? null : ianUris.clone();
+    }
+
+    /** @return массив raw DER DN из SAN directoryName или null. Defensive copy. */
+    public byte[][] getSanDirectoryNames() {
+        if (sanDirectoryNames == null) return null;
+        byte[][] copy = new byte[sanDirectoryNames.length][];
+        for (int i = 0; i < sanDirectoryNames.length; i++) {
+            copy[i] = sanDirectoryNames[i].clone();
+        }
+        return copy;
+    }
+
+    /** @return массив raw DER DN из IAN directoryName или null. Defensive copy. */
+    public byte[][] getIssuerAltNameDirectoryNames() {
+        if (ianDirectoryNames == null) return null;
+        byte[][] copy = new byte[ianDirectoryNames.length][];
+        for (int i = 0; i < ianDirectoryNames.length; i++) {
+            copy[i] = ianDirectoryNames[i].clone();
+        }
+        return copy;
+    }
+
+    /** @return массив otherName из SubjectAltName или null. Defensive copy. */
+    public OtherNameEntry[] getSanOtherNames() {
+        return sanOtherNames == null ? null : sanOtherNames.clone();
+    }
+
+    /** @return массив otherName из IssuerAltName или null. Defensive copy. */
+    public OtherNameEntry[] getIssuerAltNameOtherNames() {
+        return ianOtherNames == null ? null : ianOtherNames.clone();
     }
 
     /**
@@ -723,6 +813,23 @@ public final class GostCertificate {
     }
 
     /**
+     * Возвращает AlgorithmIdentifier из SubjectPublicKeyInfo сертификата — DER-элемент
+     * SEQUENCE с OID открытого ключа и параметрами (включая {@code publicKeyParamSet}
+     * и {@code digestParamSet}).
+     * <p>
+     * Нужен для точного воспроизведения представления ключа получателя в эфемерном
+     * ключе CMS EnvelopedData: Р 1323565.1.025-2019 §8.4.2.2 требует, чтобы ASN.1-идентификаторы
+     * и параметры эфемерного ключа в точности совпадали с представлением в сертификате.
+     *
+     * @return DER AlgorithmIdentifier из SPKI
+     */
+    public byte[] getSpkiAlgorithmId() {
+        byte[] result = new byte[spkiAlgIdLen];
+        System.arraycopy(certData, spkiAlgIdOff, result, 0, spkiAlgIdLen);
+        return result;
+    }
+
+    /**
      * Побайтовое сравнение subjectDN двух сертификатов без копирования — security-grade.
      * <p>
      * В отличие от {@link #isSelfIssued()} (помечен «НЕ security check», сравнивает issuer==subject
@@ -736,7 +843,7 @@ public final class GostCertificate {
      * два семантически эквивалентных DN обязаны иметь идентичное DER-представление.
      * Единственное реалистичное последствие — false positive: легитимный self-issued
      * сертификат с неканоничным DER-кодированием DN посчитается как не-self-issued
-     * → более строгий pathLen (fail-closed, не security bypass). Обратная ситуация
+     * -> более строгий pathLen (fail-closed, не security bypass). Обратная ситуация
      * (обход pathLen) нереалистична — DN контролируется CA.
      * Исторически «умная» нормализация DN (X500Name, LdapName) сама была источником
      * реальных уязвимостей в PKI-реализациях: Unicode confusables, whitespace-нормализация.
@@ -1224,10 +1331,43 @@ public final class GostCertificate {
     }
 
     /**
+     * @return политики сертификата с опциональными CPS-квалификаторами,
+     *         или {@code null} если расширение отсутствует. Defensive copy.
+     */
+    public CertificatePolicy[] getCertificatePolicyInfos() {
+        if (certPolicyInfos == null) return null;
+        return certPolicyInfos.clone();
+    }
+
+    /**
      * @return множество OID всех присутствующих расширений (dot-notation). Defensive copy.
      */
     public Set<String> getPresentExtensionOids() {
         return new HashSet<>(presentExtensionOids);
+    }
+
+    /**
+     * Возвращает результат парсинга расширений X.509v3.
+     *
+     * <p><b>Граница доверия:</b> расширения в сертификате подтверждены УЦ,
+     * но это не освобождает оператора от обязанности валидировать их
+     * при перевыпуске. Автоматическое копирование расширений
+     * в {@link GostCertificateBuilder} без проверки актуальности
+     * (владение доменом для SAN, полномочия на EKU, статус CA для
+     * BasicConstraints) небезопасно — короткий срок действия
+     * сертификатов в CA/Browser Forum введён для принудительной
+     * периодической переаттестации.</p>
+     *
+     * @return структурированный результат парсинга расширений.
+     *         {@link GostExtensionParser.ExtensionsResult#empty()} если расширения отсутствуют.
+     */
+    public GostExtensionParser.ExtensionsResult getExtensions() {
+        return extResult;
+    }
+
+    /** @return true если сертификат содержит хотя бы одно распознанное расширение */
+    public boolean hasExtensions() {
+        return !extResult.presentExtensionOids.isEmpty();
     }
 
     /**
@@ -1237,11 +1377,20 @@ public final class GostCertificate {
         final PublicKeyParameters publicKey;
         final int spkiKeyValueOff;
         final int spkiKeyValueLen;
+        final int spkiAlgIdOff;
+        final int spkiAlgIdLen;
 
-        SpkiExtractResult(PublicKeyParameters publicKey, int spkiKeyValueOff, int spkiKeyValueLen) {
+        SpkiExtractResult(
+                PublicKeyParameters publicKey,
+                int spkiKeyValueOff,
+                int spkiKeyValueLen,
+                int spkiAlgIdOff,
+                int spkiAlgIdLen) {
             this.publicKey = publicKey;
             this.spkiKeyValueOff = spkiKeyValueOff;
             this.spkiKeyValueLen = spkiKeyValueLen;
+            this.spkiAlgIdOff = spkiAlgIdOff;
+            this.spkiAlgIdLen = spkiAlgIdLen;
         }
     }
 
@@ -1289,7 +1438,12 @@ public final class GostCertificate {
                     // bsTlv[1] — конец BIT STRING value
                     int keyValueOff = bsTlv[0];
                     int keyValueLen = bsTlv[1] - bsTlv[0];
-                    return new SpkiExtractResult(key, keyValueOff, keyValueLen);
+                    // AlgorithmIdentifier-элемент целиком: от тега SEQUENCE (spkiValueStart)
+                    // до начала BIT STRING (bsPos). Нужен для точного воспроизведения
+                    // paramSet получателя в эфемерном ключе CMS (Р 1323565.1.025-2019 §8.4.2.2).
+                    int algIdOff = spkiValueStart;
+                    int algIdLen = bsPos - spkiValueStart;
+                    return new SpkiExtractResult(key, keyValueOff, keyValueLen, algIdOff, algIdLen);
                 }
             }
             pos = tlv[1];

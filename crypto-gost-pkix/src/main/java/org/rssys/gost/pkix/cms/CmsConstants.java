@@ -14,8 +14,11 @@ public final class CmsConstants {
     /** SignerInfo version при использовании IssuerAndSerialNumber (RFC 5652 §5.3) */
     public static final int SIGNER_INFO_V1 = 1;
 
-    /** EnvelopedData version при наличии KeyAgreeRecipientInfo (RFC 5652 §6.1) */
-    public static final int ENVELOPED_DATA_V3 = 3;
+    /** EnvelopedData version, когда все RecipientInfo имеют version 0, например ktri (RFC 5652 §6.1). */
+    public static final int ENVELOPED_DATA_V0 = 0;
+
+    /** EnvelopedData version при наличии не-version-0 RecipientInfo, например kari (RFC 5652 §6.1). */
+    public static final int ENVELOPED_DATA_V2 = 2;
 
     /** KeyAgreeRecipientInfo version (RFC 5652 §6.2.2) */
     public static final int KEY_AGREE_V3 = 3;
@@ -68,6 +71,51 @@ public final class CmsConstants {
     // дубликат — O(n) по числу существующих, парсинг — O(n). Потолок ограничивает.
     /** Максимум сертификатов в поле certificates на входе embedCountersignature. Защита от DoS. */
     public static final int MAX_CERTS_IN_EMBED_CS = 256;
+
+    // ========================================================================
+    // CAdES-C (RFC 5126 §6.2) — Complete validation data references
+    // ========================================================================
+
+    /**
+     * Максимум OtherCertID в CompleteCertificateRefs.
+     * Синхронизировать вручную с {@code ChainValidator.MAX_CERT_CHAIN_LENGTH} (private).
+     * Обе константы должны иметь одинаковое значение — изменение одной требует проверки другой.
+     */
+    public static final int MAX_CERT_REFS = MAX_CERT_CHAIN_LENGTH;
+
+    /** Максимум CrlOcspRef в CompleteRevocationRefs. = MAX_CERT_REFS + 1 (signer). */
+    public static final int MAX_CRL_REFS = MAX_CERT_REFS + 1;
+
+    /** Максимум CrlValidatedID внутри одного CrlOcspRef.crlList. */
+    public static final int MAX_CRL_VALIDATED_IDS = 4;
+
+    /** Максимум OcspResponsesID внутри одного CrlOcspRef.ocspList. */
+    public static final int MAX_OCSP_IDS = 4;
+
+    /** Максимальный размер complete-certificate-references в байтах. Защита от аллокации. */
+    public static final int MAX_CERT_REFS_SIZE = 65536;
+
+    /** Максимальный размер complete-revocation-references в байтах. Защита от аллокации. */
+    public static final int MAX_REVOC_REFS_SIZE = 131072;
+
+    // ========================================================================
+    // CAdES-X Long (RFC 5126 §6.3) — certificate-values / revocation-values
+    // ========================================================================
+
+    // Счётчики элементов переиспользуют MAX_EMBEDDED_CERTS / MAX_EMBEDDED_CRLS
+    // (семантически те же объекты, что и certificates[0] / crls[1] SignedData).
+    // Байтовые размеры — новые, для защиты от одной гигантской CRL/сертификата
+    // внутри self-contained X-Long конверта.
+
+    /** Максимальный размер certificate-values в байтах. Защита от аллокации. */
+    public static final int MAX_CERT_VALUES_SIZE = 1_048_576; // 1 MiB
+
+    /** Максимальный размер revocation-values в байтах. Защита от аллокации. */
+    public static final int MAX_REVOC_VALUES_SIZE =
+            33_554_432; // 32 MB = MAX_EMBEDDED_CRLS_TOTAL_SIZE
+
+    /** Максимум OCSP-ответов в revocation-values. Симметрично MAX_EMBEDDED_CRLS. */
+    public static final int MAX_OCSP_VALUES = 8;
 
     private CmsConstants() {}
 }

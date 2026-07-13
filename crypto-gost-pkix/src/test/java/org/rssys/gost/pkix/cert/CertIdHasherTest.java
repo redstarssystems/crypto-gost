@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
@@ -31,8 +32,9 @@ class CertIdHasherTest {
                         .notBefore("20240501120000Z")
                         .notAfter("21060101120000Z")
                         .issuerDn(subjectDn)
+                        .randomSerial()
                         .buildTbs();
-        return GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), params);
+        return GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate()));
     }
 
     // ---------------------------------------------------------------

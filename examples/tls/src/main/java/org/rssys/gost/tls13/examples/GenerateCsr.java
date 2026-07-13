@@ -28,7 +28,7 @@ public final class GenerateCsr {
         PrivateKeyParameters privKey = kp.getPrivate();
         PublicKeyParameters pubKey = kp.getPublic();
 
-        byte[] csrDer = GostCsrBuilder.buildCsr(privKey, pubKey, subjectDn);
+        byte[] csrDer = GostCsrBuilder.create(subjectDn, pubKey).sign(privKey);
 
         String pem = toPem(csrDer);
         System.out.println(pem);

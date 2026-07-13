@@ -104,7 +104,7 @@ public final class GostTestCerts {
 
     // AlgorithmIdentifier для ГОСТ: SEQUENCE { signOid, SEQUENCE { curveOid, digestOid } }
     private static byte[] buildAlgId(ECParameters params) {
-        String signOid = GostOids.SIG_WITH_DIGEST_256;
+        String signOid = GostOids.PUBLIC_KEY_256;
         String curveOid = GostOids.CURVE_256A;
         String digestOid = GostOids.DIGEST_256;
         return TlsTestHelper.derSequence(

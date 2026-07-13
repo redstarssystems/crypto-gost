@@ -1,3 +1,693 @@
+# \[0.6.4\] - 14-07-2026
+
+Данный релиз завершает работу над модулем pkix. Выравнивает и
+стабилизирует API, устраняет последние найденные проблемы совместимости
+и безопасности, предоставляет набор функций для построения полноценной
+PKI инфраструктуры на базе ГОСТ-криптографии. Это первый релиз, где CMS
+и CAdES совместимы с Крипто-Про 5. До этого их реализация в crypto-gost
+была не рабочей, с нарушениями стандарта. Теперь работосопособность
+точно подтверждена тестами кросс-валидации Крипто-ПРО 5 и openssl 3.3.3.
+
+## Модуль crypto-gost-core
+
+### Добавлено
+
+- **Абстракция подписанта `GostSigner` — подпись X.509-объектов без
+  извлечения закрытого ключа в память JVM (HSM/PKCS#11/внешний CSP).**
+
+  Ранее единственной точкой подписи был
+  `Signature.signHash(hash, PrivateKeyParameters)`, жёстко привязанный к
+  сырому ключу в куче приложения. Теперь интерфейс `GostSigner` (пакет
+  `org.rssys.gost.api`) отделяет операцию подписи от материала ключа:
+  методы `signHash(byte[])`, `getParams()` и `getPublicKey()`.
+  Реализация может подписывать внутри аппаратного модуля, а наружу
+  возвращать только готовую подпись. Для сценариев без HSM —
+  `GostSigner.of(PrivateKeyParameters)`: тонкая реализация поверх ключа
+  в памяти, выводящая открытый ключ немедленно (Q = d·G), что сохраняет
+  `getPublicKey()` корректным даже после `destroy()`.
+
+- **512-битный VKO ГОСТ Р 34.10-2012 —
+  `KeyAgreement.vkoGostR3410_2012_512` (RFC 7836 §4.3.2).**
+
+  Ранее существовал только `vkoGostR3410_2012_256` (KEK на Стрибог-256),
+  из-за чего согласование ключа для 512-битных ключей вычислялось
+  неверно. Теперь добавлен 512-битный вариант (KEK на Стрибог-512, 64
+  байта); общая математика точки вынесена в приватный `computeVko`.
+  Нужен для CMS EnvelopedData с 512-битными ключами
+  (`id-tc26-agreement-gost-3410-2012-512`, `1.2.643.7.1.1.6.2`).
+
+## Модуль crypto-gost-pkix
+
+### Добавлено
+
+- **X.509-строители принимают `GostSigner` — `GostCertificateBuilder`,
+  `GostCrlBuilder`, `GostCsrBuilder`.**
+
+  Ранее билдеры принимали только `PrivateKeyParameters` и
+  материализовали ключ издателя в памяти в момент подписи. Теперь
+  терминальный `sign(GostSigner)` (и удобная обёртка
+  `sign(PrivateKeyParameters)` через `GostSigner.of(priv)`) позволяет
+  подписывать внутри HSM/PKCS#11 без извлечения ключа в память JVM.
+  Момент связывания подписанта унифицирован (см. раздел «Изменено»).
+
+- **Расширение абстракции `GostSigner` на
+  CMS/OCSP/countersignature-строители — `CmsSignedDataBuilder`,
+  `GostOcspResponseBuilder`, `CountersignatureBuilder`,
+  `GostOcspRequestBuilder`.**
+
+  Ранее эти строители принимали только `PrivateKeyParameters` и вызывали
+  `Signature.signHash()` напрямую, без fail-closed self-verify защиты.
+  Теперь все они поддерживают `GostSigner` (с сохранением обратной
+  совместимости через `GostSigner.of(priv)`), используют
+  `signHashChecked()` для мгновенной проверки подписи после сборки, а
+  транзитивные строители (`TspResponseBuilder`,
+  `CmsSignedAndEnvelopedData`, `CAdESExtender`, `OcspRequestBuilder` из
+  jsse) пробрасывают `GostSigner` прозрачно. Теперь вся цепочка
+  PKIX-строителей готова к работе с HSM/PKCS#11 без извлечения ключа в
+  память JVM.
+
+- **`GostCsrBuilder` — поддержка атрибута `extensionRequest` (PKCS#9
+  §5.4.1) и fluent API для запроса расширений X.509v3 в CSR.**
+
+  Ранее `GostCsrBuilder` был чисто статической утилитой, жёстко
+  формировавшей пустой атрибутный блок `[0] IMPLICIT SET`. Подписчик не
+  мог указать желаемые расширения (SAN, KeyUsage, EKU, BasicConstraints,
+  SKI) в генерируемом CSR — эта информация передавалась вне протокола.
+  Теперь `GostCsrBuilder` переведён на builder-паттерн с фабричным
+  методом `create(String|byte[], PublicKeyParameters)`, консистентно с
+  `GostCertificateBuilder` и `GostCrlBuilder`. Fluent-сеттеры
+  `.sanDns()`, `.sanIp()`, `.keyUsage()`, `.extendedKeyUsage()`,
+  `.basicConstraints()`, `.ski()` и `.additionalExtensions()` позволяют
+  подписчику запросить конкретные расширения; при сборке они кодируются
+  в атрибут `extensionRequest` (OID 1.2.840.113549.1.9.14) с корректным
+  IMPLICIT-тегированием `[0]` (X.690 §8.14). Статические методы
+  `buildCsr(priv, pub, dn)` сохранены для обратной совместимости —
+  формируют CSR без расширений, побайтово идентично предыдущим версиям.
+  `GostOids` пополнен константой `ATTR_EXTENSION_REQUEST`.
+
+  В `GostCsrParser.getExtensions()` добавлен NOTE о границе доверия:
+  `extensionRequest` — просьба подписчика, не полномочие; CA обязан
+  валидировать запрошенные расширения перед копированием в сертификат
+  (проверка владения доменом, контроль `isCA`, полномочия на EKU).
+
+- **Человекочитаемый вывод сертификата и `.p7b` —
+  `CertificateTextFormatter.format()` и `GostPkcs7.formatText()`.**
+
+  Ранее для сертификата был только компактный log-safe `toString()` (DN
+  усечён до 256 символов, OCSP исключён), а подробного дампа расширений
+  не было вовсе. Теперь
+  `CertificateTextFormatter.format(GostCertificate)` даёт многострочный
+  отчёт с полным DN, сроками, алгоритмом ключа и расшифровкой расширений
+  (KeyUsage, EKU, SAN, IAN, AIA, CDP, SKI/AKI, BasicConstraints,
+  CertificatePolicies, NameConstraints) на русском языке.
+  `GostPkcs7.formatText(byte[])` печатает дамп контейнера `.p7b`
+  целиком: сертификаты и метаданные встроенных CRL. Вывод — только
+  структурный разбор без криптографической проверки, о чём предупреждает
+  первая строка; список отозванных сертификатов CRL показывается лишь
+  после `verify()` (fail-closed инвариант `GostCrl`).
+
+  В `GostOids` добавлен метод `displayName(String oid)` — расшифровка
+  OID в человекочитаемое имя (неизвестные OID возвращаются в точечной
+  нотации). Метод `CmsSignedDataVerifier.parseEmbeddedCrls()` стал
+  package-private для переиспользования из `GostPkcs7` без дублирования
+  логики разбора `crls [1]`.
+
+- **Поддержка rfc822Name, URI, directoryName, otherName (UPN) в SAN/IAN
+  — `GeneralNameCodec`, `GostCertificateBuilder`, `GostCsrBuilder`.**
+
+  Ранее `GostCertificateBuilder` и `GostCsrBuilder` поддерживали только
+  dNSName и iPAddress в SubjectAlternativeName и IssuerAlternativeName.
+  Парсер `GostExtensionParser` игнорировал остальные типы GeneralName
+  (RFC 5280 §4.2.1.6). Теперь добавлены fluent-методы
+  `.sanRfc822Name()`, `.sanUri()`, `.sanDirectoryName()`,
+  `.sanOtherName()`, `.sanUpn()` (и зеркальные `ian*`) в оба строителя.
+  `GeneralNameCodec` дополнен методами `encodeRfc822Name()`,
+  `encodeUri()`, `encodeOtherName()` (с корректным
+  IMPLICIT-тегированием) и `encodeOtherNameUpn()`. `GostOids` пополнен
+  константой `ID_MS_UPN`. Единый record
+  `OtherNameEntry(String oid, byte[] valueDer)` используется в write- и
+  read-путях.
+
+  Парсер `GostExtensionParser.parseSanGeneralNames()` извлекает все
+  шесть типов GeneralName; `parseNameConstraints()` и
+  `parseGeneralSubtrees()` обрабатывают rfc822Name, URI и directoryName
+  (ограничения otherName по-прежнему дают флаг
+  `hasUnsupportedNameType`). `GostCertificate` экспонирует getter’ы для
+  всех новых типов: `getSanRfc822Names()`, `getSanUris()`,
+  `getSanDirectoryNames()`, `getSanOtherNames()` и зеркальные
+  IAN-геттеры. `CertificateTextFormatter` отображает новые типы (EMAIL:,
+  URI:, DIRNAME:, OTHERNAME:{oid}).
+
+  `ChainValidator` пересмотрен: для rfc822Name/URI/directoryName
+  добавлен полноценный enforcement в `checkCertAgainstConstraints()`;
+  для otherName — fail-closed: если NameConstraints содержат
+  неподдерживаемый тип (otherName), а лист сертификата имеет otherName в
+  SAN, цепочка reject-ится; если лист не имеет otherName — только
+  WARNING (ограничения не применимы).
+
+- **Расширение `id-pkix-ocsp-nocheck` (RFC 6960 §4.2.2.2.1) при выпуске
+  сертификатов — `GostCertificateBuilder.ocspNoCheck()`.**
+
+  Ранее пометить сертификат делегированного OCSP-респондера расширением
+  `id-pkix-ocsp-nocheck` можно было только вручную через
+  `additionalExtensions(byte[])`, самостоятельно кодируя DER. Теперь
+  доступен типизированный fluent-метод `.ocspNoCheck()` (extnValue —
+  `OCTET STRING` с вложенным `NULL`, non-critical), чтение через
+  `GostCertificate.hasOcspNoCheck()` и отображение строки «OCSP No
+  Check» в `CertificateTextFormatter`. Метод `buildTbs()` выполняет
+  fail-closed-проверку: без EKU `id-kp-OCSPSigning` вызов отвергается
+  (`IllegalStateException`) — защита от постановки расширения на
+  сертификат, не являющийся OCSP-респондером. `OcspVerifier` при
+  принятии делегированного responder-сертификата пишет WARNING, если у
+  делегата есть точка проверки отзыва (CDP или AIA-OCSP), но отсутствует
+  `id-pkix-ocsp-nocheck` (аномалия RFC 6960 §4.2.2.2.1); решение
+  доверять при этом не меняется. `GostOids` пополнен константой
+  `EXT_OCSP_NOCHECK`.
+
+- **`GostCertificateBuilder.generateSerial()` и `.randomSerial()` —
+  хелперы генерации случайного серийного номера сертификата.**
+
+  Ранее умолчание `serial = BigInteger.ONE` порождало сертификаты с
+  постоянным serial=1, если разработчик забывал вызвать явный
+  `.serial(...)` — нарушение уникальности пары (issuer, serial) и
+  требование CA/Browser Forum BR §7.1 (≥64 бит энтропии). Статический
+  `generateSerial()` возвращает положительный `BigInteger` со 128 битами
+  CSPRNG-вывода (127 бит эффективной энтропии, bitLength == 128
+  детерминированно), пригодный для прямой передачи в `.serial()`.
+  Fluent-метод `.randomSerial()` — тонкий делегат, сокращающий типовой
+  вызов до одного звена цепочки. Явная установка серийного номера
+  обязательна (см. раздел «Изменено»).
+
+- **CertificatePolicies — fluent-сеттеры и поддержка CPS-квалификатора в
+  `GostCertificateBuilder` и `GostCsrBuilder`.**
+
+  Ранее расширение CertificatePolicies (RFC 5280 §4.2.1.4) можно было
+  задать только через статический метод
+  `buildCertificatePoliciesExtension(String[])` с последующей передачей
+  сырых DER-байтов в `additionalExtensions()` — единственное расширение
+  в билдере, не имевшее типизированного fluent-сеттера. CPS-квалификатор
+  `id-qt-cps` (1.3.6.1.5.5.7.2.1) не кодировался и не читался — парсер
+  `GostExtensionParser` извлекал только `policyIdentifier` OID,
+  игнорируя `policyQualifiers`. Теперь доступны fluent-методы
+  `.certificatePolicies(String... policyOids)` (только OID) и
+  `.certificatePolicyInfos(CertificatePolicy... policies)` (OID +
+  опциональный CPS-URI) в `GostCertificateBuilder` и `GostCsrBuilder`.
+  Новый record `CertificatePolicy(String policyOid, String cpsUri)` —
+  единообразный write/read тип по образцу `OtherNameEntry`. Парсер
+  `GostExtensionParser` извлекает CPS-квалификатор из `policyQualifiers`
+  и заполняет новое поле `certPolicies` в `ExtensionsResult`;
+  `GostCertificate` экспонирует getter `getCertificatePolicyInfos()`.
+  `CertificateTextFormatter` отображает CPS-URI. Старый API
+  `buildCertificatePoliciesExtension(String[])` и
+  `additionalExtensions()` сохранены для обратной совместимости.
+  `ChainValidator` не затронут — CPS-квалификатор чисто информационный
+  (RFC 5280 §4.2.1.4).
+
+- **`GostCertificateBuilder.fromCsrIdentity(GostCsrParser, ECParameters)`
+  — безопасный выпуск сертификата из CSR: копирование DN и ключа с
+  обязательной проверкой proof-of-possession.**
+
+  Ранее мост между разбором CSR (`GostCsrParser`) и построением
+  сертификата (`GostCertificateBuilder`) отсутствовал. Разработчик УЦ
+  был вынужден вручную (~30 строк) перекладывать subject DN и открытый
+  ключ из CSR в билдер, рискуя потерять байтовую точность DN при
+  перекодировке через строку (смена типа ASN.1-строки с
+  PrintableString/BMPString на UTF8String, потеря multi-valued RDN) или
+  пропустить proof-of-possession (`verifySelf()`). Теперь статическая
+  фабрика `fromCsrIdentity` принимает распарсенный CSR и возвращает
+  предзаполненный `GostCertificateBuilder`: байтово-точно копирует
+  subject DN (через новый `GostCsrParser.getSubjectDnDer()`) и открытый
+  ключ заявителя, fail-closed проверяет `verifySelf()` с типизированной
+  ошибкой `PkixException.Reason.SIGNATURE_INVALID`. Расширения CSR не
+  копируются — решение об их переносе остаётся за УЦ.
+
+- **`GostCsrParser.getSubjectDnDer()` — доступ к сырым DER-байтам
+  subject DN из CSR для байтово-точного переноса в сертификат.**
+
+  Ранее `GostCsrParser` сохранял только строковое представление DN после
+  парсинга (`getSubjectDn()`), а сырые DER-байты терялись в
+  конструкторе. Пересборка DN через
+  `GostDnParser.encodeDn(getSubjectDn())` меняла тип ASN.1-строки
+  (PrintableString/BMPString → всегда UTF8String), теряла multi-valued
+  RDN и падала на неизвестных OID. Теперь геттер `getSubjectDnDer()`
+  возвращает
+  `Arrays.copyOfRange(certData, subjectDnOff, subjectDnOff + subjectDnLen)`
+  — байтово-идентичный исходному DER.
+
+- **Удобные методы срока действия в `GostCertificateBuilder` и
+  `GostCrlBuilder` — `notBeforeNow()`, `validForDays/Months/Years(int)`,
+  `thisUpdateNow()`, `nextUpdateDays/Months/Years(int)`.**
+
+  Ранее для задания срока действия сертификата требовалось вручную
+  форматировать строку в формате GeneralizedTime (`"YYYYMMDDHHMMSSZ"`)
+  или использовать `Instant`-арифметику:
+  `.notBefore(Instant.now()).notAfter(Instant.now().plusSeconds(3600L * 24 * 365))`.
+  Теперь доступны удобные fluent-методы:
+  `.notBeforeNow().validForDays(365)` — строитель сам вычисляет
+  `notBefore` с буфером clock skew 5 мин (`GostOids.CLOCK_SKEW_MS`) и
+  `notAfter` через указанный срок. `validForMonths`/`validForYears`
+  используют календарную арифметику UTC (31 января + 1 месяц → 28/29
+  февраля). Симметрично для CRL: `.thisUpdateNow().nextUpdateDays(30)`.
+  Вспомогательный парсер `parseAsn1Time()` и форматтер
+  `UTC_TIME_FORMATTER` вынесены из `GostCertificateBuilder` в
+  `GostSignatureHelper` для переиспользования между сертификатным и
+  CRL-строителями, устранения дублирующего форматтера
+  `GENERALIZED_TIME_FORMATTER` и унификации форматирования
+  `notBefore(Instant)`/`notAfter(Instant)` с
+  `thisUpdate(Instant)`/`nextUpdate(Instant)`.
+
+- **`GostOcspRequest` и `GostOcspResponse` — `fromPemOrDer()`,
+  `toPem()`, `getEncoded()` для симметрии PEM-API с сертификатами, CRL и
+  CSR.**
+
+  Ранее оба класса поддерживали только DER: `fromDer(byte[])`, а
+  конструкторы не сохраняли исходный массив — не было ни `getEncoded()`,
+  ни PEM-методов. Прикладной код был вынужден обходить это через прямые
+  вызовы `GostPemUtils.pemToDer()` / `GostPemUtils.toPem()`. Стало:
+  `fromPemOrDer(byte[])` (автоопределение PEM/DER по первому байту) и
+  `toPem()` с заголовками `OCSP REQUEST` / `OCSP RESPONSE` (конвенция
+  OpenSSL), а также `getEncoded()` для получения исходного DER.
+  Defensive copy на входе и выходе — единообразно с `GostCertificate`,
+  `GostCrl`, `GostCsrParser`.
+
+- **CMS EnvelopedData: поддержка KeyTransRecipientInfo (ktri) —
+  расшифровка и сборка.**
+
+  Реализован обязательный по ТК26 §8.2.1 формат KeyTransRecipientInfo
+  (тег `0x30`, первый элемент CHOICE без номера). keyEncryptionAlgorithm
+  = kuznyechik-kexp15 с параметром VKO-256. Вложенный
+  GostR3410-KeyTransport содержит sessionEncryptedKey (KExp15 output, 48
+  байт), ephemeralPublicKey (SubjectPublicKeyInfo) и ukm (32 байта).
+  Алгоритмический стек — VKO + KExp15 + Кузнечик CTR-ACPKM. Двусторонний
+  интероп с КриптоПРО 5.0 и gost-engine подтверждён кросс-валидацией.
+
+- **CMS EnvelopedData: ktri — основной формат, kari — через
+  `createKari()`.**
+
+  `CmsEnvelopedDataBuilder.create()` теперь создаёт ktri-сообщения. Для
+  KeyAgreeRecipientInfo (RFC 5652 §6.2.2, тег `0xA1`) — явный фабричный
+  метод `createKari()`. Расшифровщик автоматически определяет тип по
+  тегу.
+
+- **CMS EnvelopedData: имитовставка (OMAC) —
+  `CmsEnvelopedDataBuilder.withOmac()`.**
+
+  Включает CMS-профильный режим `kuznyechik-ctr-acpkm-omac` (OID
+  `1.2.643.7.1.1.5.2.2`, Mac-and-Encrypt по Р 1323565.1.025-2019
+  §8.3.2). CEK разделяется через KDF\_TREE (label="kdf tree",
+  seed=ukm\[8..15\]) на ключ шифрования K(1) и ключ имитовставки K(2).
+  CMAC(K(2)) вычисляется по открытому тексту; зашифрованная имитовставка
+  — 16 байт на продолжении CTR-потока после контента — выносится в
+  `unprotectedAttrs [1]` как атрибут `content-mac` (`id-cms-mac-attr` =
+  `1.2.643.7.1.0.6.1.1`). UKM контентного шифра — 16 байт (IV\[0..8) |
+  kdf\_seed\[8..16). `EnvelopedData.version = 2` (присутствуют
+  unprotectedAttrs, RFC 5652 §6.1). При размере данных &gt; 256 КБ —
+  `IllegalArgumentException` (ACPKM-рекейинг в данной версии не
+  реализован, fail-closed). Расшифровка — `CmsOmacHelper.decrypt()`:
+  парсинг `content-mac` из `unprotectedAttrs`, constant-time сравнение
+  имитовставки, `AuthenticationException` при несовпадении. Двусторонний
+  интероп с КриптоПро 5.0 и gost-engine подтверждён кросс-валидацией.
+
+- **Новый `CmsOmacHelper` — CMS-профильный OMAC (Mac-and-Encrypt, Р
+  1323565.1.025-2019 §8.3.2).**
+
+  Реализует сквозной процесс шифрования и проверки: KDF\_TREE-выработка
+  ключей, CMAC по открытому тексту, единый CTR-поток для контента и
+  имитовставки (continuation, как `gost2015_final_call` в gost-engine),
+  constant-time сравнение, wipe ключей. Атрибут `content-mac` кодируется
+  через `CmsAttribute.encode()`.
+
+### Изменено
+
+- **BREAKING: OID-константы `GostOids` приведены к RFC 9215 — имена
+  теперь соответствуют значениям.**
+
+  Ранее имена вводили в заблуждение: `SIG_WITH_DIGEST_256/512` хранили
+  OID открытого ключа (`1.2.643.7.1.1.1.1/.2`), а `SIGN_ALG_256/512` —
+  комбинированный signWithDigest (`1.2.643.7.1.1.3.2/.3`), то есть метки
+  были перепутаны; значение открытого ключа дублировалось ещё и в
+  `CMS_SIGNER_INFO_ALG_256/512`. Теперь единый набор:
+  `PUBLIC_KEY_256/512` (OID открытого ключа: SPKI и CMS
+  `SignerInfo.signatureAlgorithm`) и `SIGN_WITH_DIGEST_256/512` (X.509
+  `signatureAlgorithm`). Значения OID на проводе не изменились;
+  исправлены Javadoc и человекочитаемые метки. Требуется правка кода
+  потребителей, ссылавшихся на старые имена.
+
+- **`CmsSignedDataVerifier` валидирует `SignerInfo.signatureAlgorithm`
+  (fail-closed, защита от algorithm-confusion).**
+
+  Ранее поле `signatureAlgorithm` подписанта не читалось вообще —
+  подпись проверялась ключом сертификата независимо от заявленного
+  алгоритма. Теперь OID проверяется: допускаются оба легитимных
+  семейства (OID открытого ключа `1.2.643.7.1.1.1.1/.2`, как у
+  КриптоПро/openssl/данной библиотеки, и signWithDigest
+  `1.2.643.7.1.1.3.2/.3`, как у BouncyCastle), а объявленная битность
+  (256/512) обязана совпадать с кривой ключа сертификата — иначе отказ.
+  Форма параметров (NULL или отсутствие) не проверяется строго, чтобы не
+  ломать совместимость.
+
+\+ Ранее `CtrAcpkmMode` выполнял чистый CTR без переразвёртывания ключа,
+что приводило к расхождению гаммы с gost-engine и КриптоПро для данных
+больше размера секции. Теперь ключ переразвёртывается каждые N байт:
+4096 по умолчанию (ГОСТ-дефолт, PBES2/PKCS12/JCA) и 256×1024 для CMS
+EnvelopedData (как в gost-engine). Для PBES2-сценария (данные &lt; 4 КБ)
+поведение идентично предыдущим версиям — рекейинг не срабатывает.
+
+\+ Добавлен реестр констант `AcpkmSectionSize` (`DEFAULT = 4096`,
+`CMS = 256 * 1024`) с Javadoc-обоснованием каждого значения. Статические
+методы `encryptOnly`/`decryptOnly`/`encryptWithMac`/`decryptWithMac`
+получили перегрузки с параметром `sectionSize`; существующие сигнатуры
+делегируют с дефолтом 4096 и сохраняют обратную совместимость. Валидация
+`sectionSize` — обязан быть кратен 16 (размер блока Кузнечика, RFC 8645
+§6.2.1). В
+`CmsOmacHelper`/`CmsEnvelopedDataBuilder`/`CmsEnvelopedDataDecryptor`
+CMS-путь использует `AcpkmSectionSize.CMS`. `GostCtrAcpkmCipherSpi`
+включает рекейинг с дефолтным размером секции 4096 (ранее был warning
+без рекейинга).
+
+- **Добавлены публичные статические `deriveContentKeys` и `computeCmac`
+  в `CtrAcpkmMode`.**
+
+  KDF\_TREE-деривация ключей K(1)/K(2) из CEK (label="kdf tree",
+  seed=ukm\[8..15\]) и чистый CMAC Кузнечика (ГОСТ Р 34.13-2015 §5.1)
+  вынесены для переиспользования в CMS-OMAC хелпере (`CmsOmacHelper`) и
+  других подсистемах. Методы `encryptWithMac`/`decryptWithMac` (inline
+  Encrypt-then-MAC для PKCS12) не затронуты.
+
+- **`CmsKeyWrap` — интерфейс принимает явный IV параметр.**
+
+  Методы `wrap(cek, kek, ukm, iv)` и `unwrap(wrappedCek, kek, ukm, iv)`
+  теперь принимают IV отдельно от UKM. IV вычисляется по формуле ТК26:
+  `UKM[25..24+n/2]` (последние 8 байт 32-байтного UKM). Ранее IV был
+  первыми 8 байтами UKM — ошибка для 32-байтного UKM. KDF\_TREE (KEG)
+  seed = `UKM[16..24]`, label = "kdf tree" (R 1323565.1.020-2018);
+  VKO-множитель = `BE(UKM[0..16])`.
+
+- **`CmsEnvelopedDataBuilder` — UKM = 32 байта в kari (было 8).**
+
+  Приведение KeyAgreeRecipientInfo к ТК26: ukm — 32 байта, IV —
+  последние 8. Байтовое представление kari-сообщений меняется (breaking
+  change).
+
+- **`GostCertificateBuilder` требует явный серийный номер — устранён
+  insecure-by-default.**
+
+  Ранее забытый `.serial(...)` молча давал сертификат с серийным номером
+  1 (умолчание `BigInteger.ONE`), что нарушало уникальность пары
+  (issuer, serial) и делало отзыв через CRL/OCSP неоднозначным. Стало:
+  серийный номер — обязательное поле наравне с `publicKey`, `notBefore`,
+  `notAfter`; `buildTbs()` бросает `IllegalStateException`, если не
+  вызван `.serial(...)` или `.randomSerial()` (RFC 5280 §4.1.2.2 —
+  уникальность, CA/Browser Forum BR §7.1 — ≥64 бит энтропии для
+  случайных значений). Попутно примеры цепочки сертификатов в README
+  модулей переведены с устаревшего `.assembleCert(...)` на актуальный
+  `.sign(...)`.
+
+- **X.509-строители выполняют fail-closed-проверку подписи после
+  сборки.**
+
+  Ранее возвращённая подпись помещалась в DER без проверки — неисправный
+  внешний подписант мог молча выпустить объект с невалидной подписью.
+  Теперь после подписи проверяются длина подписи и её соответствие
+  открытому ключу подписанта (self-verify); несоответствие приводит к
+  немедленному исключению. Поскольку старые перегрузки с
+  `PrivateKeyParameters` делегируют через `GostSigner.of(priv)`,
+  проверка распространяется и на них — это усиление гарантий, не
+  нарушающее совместимость.
+
+- **Дедупликация расширений X.509v3 — `ExtensionsAccumulator`, обрезка
+  избыточных overload’ов.**
+
+  Ранее `GostCertificateBuilder` и `GostCsrBuilder` независимо хранили
+  13+ одинаковых полей расширений (SAN, KeyUsage, EKU, BasicConstraints,
+  CertificatePolicies, SubjectKeyIdentifier, дополнительные расширения)
+  и 12 идентичных fluent-сеттеров. Статические строители расширений
+  (`buildKeyUsageExtension`, `buildSanExtension` и др.) жили
+  исключительно в `GostCertificateBuilder`, и `GostCsrBuilder` вызывал
+  их через полное имя класса.
+
+  Теперь общие поля и fluent-сеттеры вынесены в новый публичный класс
+  `ExtensionsAccumulator` (пакет `org.rssys.gost.pkix.cert`), который
+  используется как делегат в обоих строителях. Все статические строители
+  расширений перенесены в `ExtensionsAccumulator`; в
+  `GostCertificateBuilder` оставлены прямые делегаты (не дубли, а
+  перевызов через ExtensionsAccumulator). SKI вычисляется немедленно в
+  обоих строителях через `Digest.digest256` (ранее `GostCsrBuilder`
+  использовал boolean-флаг). Добавлена статическая фабрика
+  `CertificatePolicy.fromOids(String...)` — устраняет дублирующийся цикл
+  создания политик из строковых OID.
+
+  Порядок расширений в DER сертификата изменился: accumulator-расширения
+  (SAN, KU, EKU, BC, CP, SKI) теперь идут единым блоком перед
+  сертификат-специфичными (IAN, AIA, CDP, FreshestCRL, AKI,
+  NameConstraints, ocspNoCheck), а не вперемежку.
+
+  **BREAKING:** четыре избыточные перегрузки статических строителей
+  удалены: `buildKeyUsageExtension(byte[])`,
+  `buildEkuExtension(String[])`,
+  `buildSanExtension(String[], String[])`,
+  `buildIssuerAltNameExtension(String[], String[])`. Вызывающий код
+  должен добавить явный параметр critical (`false`) или расширить список
+  аргументов до полной сигнатуры.
+  `buildCertificatePoliciesExtension(String[])` сохранён как удобная
+  обёртка над `CertificatePolicy.fromOids(...)`. Обновите код, если
+  использовали удалённые перегрузки (затрагивает около 15 точек вызова в
+  примерах и тестах).
+
+- **Унифицирован момент связывания подписанта в X.509-строителях —
+  единый терминальный `sign(...)` у `GostCertificateBuilder`,
+  `GostCrlBuilder`, `GostCsrBuilder`, `GostOcspResponseBuilder`.**
+
+  Ранее подписант связывался по-разному:
+  `GostCrlBuilder.create(signer, dn)` требовал его в конструкторе,
+  `GostOcspResponseBuilder` — через сеттер `.signer(priv, pub)` перед
+  `build()`, а сертификат и CSR — в терминальных `assembleCert(signer)`
+  / `buildCsr(signer)`. Стало: у всех четырёх строителей подписант
+  передаётся в единый терминальный метод `sign(GostSigner)` /
+  `sign(PrivateKeyParameters)`, а `create(...)` несёт только структурные
+  данные. Конкретно: `GostCrlBuilder.create(issuerDn)....sign(signer)`;
+  `GostOcspResponseBuilder.create(serial)....sign(signer)` (открытый
+  ключ подписанта выводится из `signer.getPublicKey()` — отдельный
+  аргумент `pub` больше не нужен, что исключает несогласованную пару
+  priv/pub); `GostCertificateBuilder....sign(signer)` (двухшаговый путь
+  — `buildTbs()` + статический `sign(tbs, signer)` — сохранён);
+  `GostCsrBuilder....sign(signer)`.
+
+  **BREAKING:** удалены старые сигнатуры без делегатов —
+  `GostCrlBuilder.create(GostSigner|PrivateKeyParameters, dn)`,
+  `GostCertificateBuilder.assembleCert(...)` (все перегрузки, включая
+  статический `assembleCert(tbs, priv, params)` с задокументированным
+  риском рассинхрона `params`/ключа), `GostCsrBuilder.buildCsr(...)`
+  (инстансные и статические), `GostOcspResponseBuilder.signer(...)`. Это
+  **разовый рефакторинг** , а не смена общей политики проекта.
+
+  Добавлены fail-closed hardening-проверки в момент `sign(...)`:
+  `GostCertificateBuilder` сверяет AlgorithmIdentifier из `params`
+  (create-time) с `signer.getParams()` — ловит рассинхрон размера
+  подписи (256↔512) между TBS и фактическим алгоритмом; `GostCsrBuilder`
+  проверяет proof-of-possession — `signer.getPublicKey()` обязан
+  совпадать с открытым ключом из `create(...)`, иначе CSR не является
+  доказательством владения ключом. Оба несоответствия приводят к
+  немедленному `IllegalStateException`.
+
+- **`GostCrlBuilder`: `thisUpdate` по умолчанию фиксируется в момент
+  `sign()`, а не создания строителя.**
+
+  Ранее при `create(...)` дефолтный `thisUpdate` вычислялся в
+  конструкторе. Стало: при отсутствии явного `.thisUpdate(...)` время
+  берётся в момент вызова `sign()`. Между `create()` и `sign()` может
+  пройти время (отложенная подпись через HSM-воркер, очередь), и
+  `thisUpdate` теперь корректно отражает момент выпуска CRL. Явный
+  `.thisUpdate(...)` по-прежнему имеет приоритет.
+
+- **Дайджест messageImprint метки времени выбирается по заявленному
+  алгоритму подписанта.**
+
+  Ранее `CAdESExtender` выбирал алгоритм хэширования для messageImprint
+  TSP-запроса по длине подписи. Стало: по объявленному `digestAlgorithm`
+  из `SignerInfo` (при сборке метки) и по размеру ключа сертификата
+  подписанта (при проверке) — критичный параметр берётся из объявленного
+  значения, а не выводится из косвенного признака. Неизвестный алгоритм
+  в чужом `SignerInfo` даёт `PkixException`.
+
+- **Диспетчеризация Streebog-256/512 сведена к единым fail-closed
+  хелперам `GostSignatureHelper`.**
+
+  Ранее выбор дайджеста по OID, размеру ключа или длине хэша был
+  продублирован более чем в 15 местах модуля с молчаливым дефолтом на
+  Streebog-256 при неизвестном значении. Стало: единые
+  `keySizeToDigestOid`, `digestByOid`, `digestAlgByHlen` (и обновлённый
+  `doHash`) с явной ошибкой на неподдерживаемый дискриминатор; там, где
+  развилка была тавтологичной (`OcspVerifier`), она упрощена до прямого
+  значения. Поведение на валидном входе не изменилось (подтверждено
+  кросс-валидацией).
+
+### Исправлено
+
+- **KARI (`KeyAgreeRecipientInfo`) в CMS EnvelopedData приведён к RFC
+  5652 / ТК26 — kari теперь совместим с эталонными реализациями.**
+
+  Ранее kari не был interoperable и не поддерживал 512-битные ключи
+  (проверялся только самосогласованными тестами, маскировавшими баги).
+  Исправлено сразу несколько дефектов кодирования: `kari [1]` и
+  `originatorKey [1]` кодировались как EXPLICIT вместо IMPLICIT (RFC
+  5652 §6.2 объявлен `DEFINITIONS IMPLICIT TAGS`);
+  `keyEncryptionAlgorithm` имел обратную вложенность (правильно: внешний
+  OID — алгоритм key wrap `kexp15`, параметры —
+  `SEQUENCE { agreement-OID }`); поддерживался только 256-битный VKO;
+  KEG применял KDF\_TREE безусловно, тогда как для 512-бит VKO-выход (64
+  байта) используется напрямую как K\_MAC‖K\_ENC, а KDF\_TREE
+  применяется только для 256-бит. Выбор варианта 256/512 — по кривой
+  ключа получателя. Расшифровка официального эталонного вектора
+  TC26/gost-engine (kari + Кузнечик CTR-ACPKM-OMAC, 512-бит)
+  подтверждена побайтово.
+
+  Направление «наш encrypt → наш/OpenSSL decrypt» для `ktri` на
+  256-битных ключах подтверждено (self-roundtrip + OpenSSL
+  3.3.3/gost-engine). Обратное направление — расшифровка нами внешних
+  `ktri` 256-битных контейнеров — также подтверждено: исправлен кофактор
+  TC26\_A\_256 с 1 на 4 (ECParameters.cofactor), что устранило
+  расхождение VKO с gost-engine/CryptoPro в `computeVko`. Эталонный
+  вектор TC26 a231 (ktri-256 Kuznyechik CTR-ACPKM) расшифровывается
+  побайтово, тест убран из `@Disabled`. Внешние контейнеры КриптоПро CSP
+  5 расшифровываются корректно.
+
+  Обратное направление — шифрование crypto-gost → расшифрование
+  КриптоПро CSP 5 — подтверждено на реальном токене для матрицы: ktri и
+  kari, с OMAC и без, на данных 1 КБ и 18 МБ (ACPKM-рекейинг, 72 секции
+  Kuznyechik CTR-ACPKM). Открытый текст побайтово совпадает с исходным
+  во всех 8 комбинациях.
+
+\+ Ранее AlgorithmIdentifier эфемерного ключа в
+`GostR3410-KeyTransport`/originator кодировался с каноничным OID кривой
+(`GostCurves`), из-за чего `publicKeyParamSet` получателя XchA
+(`1.2.643.2.2.36.0`) подменялся на CryptoPro-A (`1.2.643.2.2.35.1`). Это
+нарушало Р 1323565.1.025-2019 §8.4.2.2 (представление эфемерного ключа
+обязано в точности совпадать с сертификатом) и приводило к отказу
+расшифрования в КриптоПро CSP (`0x80090019`). Стало: AlgorithmIdentifier
+берётся из сертификата получателя дословно (новый
+`GostCertificate.getSpkiAlgorithmId()`), меняется только точка ключа.
+Проверено на реальном токене КриптоПро и двусторонней кросс-валидацией с
+gost-engine.
+
+- **`CmsEnvelopedDataBuilder` — корректная `EnvelopedData.version` по
+  RFC 5652 §6.1 (совместимость с КриптоПро CSP).**
+
+  Ранее `version` жёстко кодировалась как 3 для обоих форматов (ktri и
+  kari), что нарушает RFC 5652 §6.1 (значение 3 зарезервировано под
+  `pwri`/`ori`) и приводило к отклонению контейнера КриптоПро CSP.
+  Стало: `version = 0` для ktri (все RecipientInfo version 0,
+  issuerAndSerialNumber), `version = 2` для kari (KeyAgreeRecipientInfo
+  не version 0, без `pwri`/`ori`) и для ktri+OMAC (присутствуют
+  `unprotectedAttrs`).
+
+- **`CmsEnvelopedDataDecryptor` — приём BER indefinite-length в
+  `encryptedContent` (совместимость с КриптоПРО CMS 5.0).**
+
+  Ранее `decryptContent` требовал строго primitive `[0]` с
+  definite-length (`0x80`) и не расшифровывал контейнеры КриптоПРО, где
+  `encryptedContent` закодирован как constructed `[0]` с
+  indefinite-length (`A0 80 ... 00 00`), в том числе с сегментированным
+  OCTET STRING. Стало: ветвь `0x80` (DER crypto-gost) сохранена без
+  изменений, добавлена ветвь `0xA0` со сбором и склейкой октетов через
+  новый `DerCodec.collectImplicitOctets` (принимает
+  `0x04`/`0x24`/`0xA0`, definite и indefinite, с рекурсией по вложенным
+  сегментам); прочие теги — fail-closed `PARSE_ERROR`. Кодирование не
+  менялось — crypto-gost по-прежнему выпускает DER definite-length.
+
+- **`Kexp15CmsKeyWrap` — IV для KExp15/KImp15: последние 8 байт UKM
+  (было первые 8).**
+
+  Ранее метод `Arrays.copyOf(ukm, 8)` использовал первые 8 байт UKM как
+  IV, что несовместимо с ТК26 (формула UKM\[25..24+n/2\]) для
+  32-байтного UKM. При 8-байтном UKM разницы не было (bug was masked).
+
+- **`TspRequestBuilder` больше не переиспользует nonce между вызовами
+  `build()`.**
+
+  Ранее `getNonce()` лениво генерировал nonce и кэшировал его в поле —
+  повторный `build()` на том же строителе выпускал два TSP-запроса с
+  одинаковым nonce, ослабляя защиту от replay (RFC 3161). Стало: в
+  авто-режиме nonce генерируется заново на каждый `build()`;
+  `getNonce()` до `build()` бросает `IllegalStateException` —
+  симметрично `GostOcspRequestBuilder`. Явно заданный через `nonce(...)`
+  (и opt-out `nonce(null)`) сохраняется между сборками намеренно.
+
+- **`CertChainBuilder` — корректное построение цепочки при ротации
+  ключей CA.**
+
+  Ранее issuer искался только по Subject DN и брался первый попавшийся:
+  при наличии двух CA с одинаковым DN, но разными ключами (перевыпуск с
+  новым ключом) выбор мог пасть на неверный сертификат, и легитимная
+  цепочка не строилась (`SIGNATURE_INVALID`). Стало: среди всех
+  кандидатов одного Subject DN приоритет отдаётся тому, чей SKI
+  совпадает с AKI подписываемого сертификата (RFC 5280 §4.2.1.1), затем
+  перебираются остальные — до первого с верной подписью. Обнаружение
+  петель вынесено на уровень глубины, чтобы перебор кандидатов не
+  подменял `SIGNATURE_INVALID` ложным `CHAIN_LOOP`. Полный backtracking
+  по нескольким путям в область изменения не входит.
+
+- **`ChainValidator.validateChainWithRevocation` — правдивый лог
+  проверки отзыва.**
+
+  Ранее финальная запись «validation with revocation passed» выводилась
+  безусловно, даже когда все элементы `revocationData` были `null` и ни
+  одна проверка отзыва фактически не выполнялась, — это вводило в
+  заблуждение при аудите логов. Стало: лог отражает число реально
+  выполненных и пропущенных проверок (`checked`/`skipped`). Поведение
+  (fail-closed при обнаружении отзыва) не изменилось.
+
+- **`GostPkcs12Builder` — согласованный учёт длины `friendlyName`.**
+
+  Ранее длина проверялась в байтах UTF-8 (лимит 64), тогда как атрибут
+  кодируется в BMPString (UTF-16BE), вдвое длиннее для ASCII, — проверка
+  не соответствовала фактическому размеру. Стало: лимит меряется в
+  байтах UTF-16BE (128 байт = 64 символа), совпадая с реальным
+  кодированием; прежний бюджет для ASCII-имён сохранён.
+
+- **CMS `SignerInfo.signatureAlgorithm` — корректный OID алгоритма
+  подписи с NULL-параметрами (совместимость с КриптоПро/OpenSSL).**
+
+  Ранее `CmsSignedDataBuilder` и `CountersignatureBuilder` записывали в
+  `SignerInfo.signatureAlgorithm` комбинированный signWithDigest-OID
+  (`1.2.643.7.1.1.3.2/.3.3`) без параметров — как в X.509-сертификате.
+  Собственный верификатор и BouncyCastle/OpenSSL это поле не проверяют
+  строго, поэтому дефект не проявлялся, но КриптоПро отвергал подпись с
+  `0x80090008` «Invalid algorithm specified». Стало: в CMS
+  `SignerInfo.signatureAlgorithm` пишется OID открытого ключа
+  (`1.2.643.7.1.1.1.1` для 256, `1.2.643.7.1.1.1.2` для 512) с
+  параметрами `NULL` — согласно RFC 4490 §3.2 и де-факто эталонным
+  реализациям. Подписи CMS/CAdES-BES/CAdES-T теперь семантически
+  принимаются КриптоПро (проверено кросс-валидацией
+  `cryptcp -verify`/`-cadesbes`/`-cadest`). X.509-путь
+  (`GostSignatureHelper`) не затронут — там signWithDigest-OID без
+  параметров корректен по RFC 9215.
+
+- **CMS `digestAlgorithm` — обязательные NULL-параметры у алгоритма
+  хэширования.**  
+  Ранее `CmsSignedDataBuilder`, `CountersignatureBuilder`,
+  `CAdESAttributes` (signingCertificateV2) и `CAdESCompleteData`
+  (complete-refs) кодировали `AlgorithmIdentifier` дайджеста как
+  `SEQUENCE { OID }` без поля параметров. Стало:
+  `SEQUENCE { OID, NULL }` — поле параметров присутствует и содержит
+  `NULL`, как требует Р 1323565.1.025 §4.1/4.2 для OID
+  `id-tc26-gost3411-2012-256/512` и как формирует эталонный openssl
+  gost-engine. Затрагивает `SignedData.digestAlgorithms`,
+  `SignerInfo.digestAlgorithm`, `ESSCertIDv2.hashAlgorithm` и
+  `OtherHashAlgAndValue`. Форма закреплена структурным регресс-тестом.
+
+- **Исправлен кофактор кривой TC26\_A\_256 с 1 на 4 — расшифровка
+  внешних ktri-256 контейнеров.**  
+  Ранее `ECParameters.TC26_A_256.cofactor` был равен 1, из-за чего
+  `computeVko` вычислял `scalar = d * 1 * ukm mod n`.
+  `gost_ec_point_mul` в gost-engine/CryptoPro применяет кофактор 4 для
+  этой кривой, поэтому shared-точка и, как следствие, KEK расходились с
+  эталоном. Расшифровка внешних `ktri`-256 контейнеров от КриптоПро и
+  OpenSSL завершалась ошибкой `Invalid MAC during CEK unwrap`. Стало:
+  cofactor = 4, VKO выдаёт KEK, совпадающий с gost-engine побайтово.
+  Двусторонний интероп `ktri`-256 подтверждён на контейнерах КриптоПро
+  CSP 5 и OpenSSL 3.3.3.
+
 # \[0.6.3\] - 08-07-2026
 
 Данный релиз заполняет пробелы в API и делает доработки необходимые для
@@ -215,7 +905,65 @@
   (проверяется только SAN по RFC 6125) и от построения/валидации цепочек
   (только DN-матчинг по RFC 5280 §6.1).
 
+- **`GostCertificate.getExtensions()` и `hasExtensions()` — bulk-доступ
+  к расширениям X.509v3 через единый объект
+  `GostExtensionParser.ExtensionsResult`.**
+
+  Ранее конструктор парсил расширения в `ExtensionsResult` и
+  распаковывал в ~30 индивидуальных полей, но структурированный
+  результат выбрасывался как локальная переменная. Для чтения расширений
+  требовалось вызывать 64+ именованных геттера (`getSanDnsNames()`,
+  `getKeyUsageBits()`, `getEkuOids()`, …) — каждый по отдельности. В
+  отличие от `GostCsrParser.getExtensions()`, возвращающего весь набор
+  расширений одним вызовом — асимметрия API. Стало: парсенный
+  `ExtensionsResult` сохраняется в поле; публичные методы
+  `getExtensions()` и `hasExtensions()` — зеркало CSR-паттерна. Javadoc
+  предупреждает о границе доверия: автокопирование расширений при
+  перевыпуске небезопасно — короткий срок сертификатов в CA/Browser
+  Forum введён для периодической переаттестации (владение доменом,
+  полномочия на EKU, статус CA).
+
+- **`GostCertificateBuilder.fromCertificate(GostCertificate, ECParameters)`
+  — identity-мост из существующего сертификата для перевыпуска
+  (renewal).**
+
+  Ранее зеркало `fromCsrIdentity` для готового сертификата
+  отсутствовало: разработчик был вынужден вручную создавать билдер и
+  перекладывать subject DN и публичный ключ из `GostCertificate` через
+  `getSubjectDnBytes()` и `getPublicKey()`. Стало: статическая фабрика
+  `fromCertificate` копирует identity (DN + ключ) в новый билдер.
+  Расширения не копируются — оператор обязан явно прочитать их через
+  `getExtensions()` и принять решение по каждому типу. Javadoc
+  документирует: метод не выполняет криптографическую верификацию
+  существующего сертификата — ответственность за доверенный источник на
+  вызывающем коде.
+
+- **`GostCertificateBuilder.KeyUsage.isSetIn(int bits)` — проверка флага
+  KeyUsage в битовой маске без ручной битовой арифметики.**
+
+  Ранее единственным способом проверить наличие флага в сырой маске
+  `keyUsageBits` было ручное выписывание
+  `(bits & KeyUsage.X.mask) != 0`, требующее знать точное значение бита.
+  Стало: `KeyUsage.DIGITAL_SIGNATURE.isSetIn(ext.keyUsageBits)` —
+  инкапсуляция битовой проверки, скрывающая внутреннее `mask`-поле от
+  публичного API.
+
 ### Исправлено
+
+- **`GostExtensionParser.ExtensionsResult.presentExtensionOids` —
+  мутабельный `HashSet` расшарен наружу через
+  `GostCsrParser.getExtensions()`.**
+
+  Ранее поле `presentExtensionOids` передавалось в конструктор
+  `ExtensionsResult` как `new HashSet<>()` без обёртки — вызывающий код
+  через `csr.getExtensions().presentExtensionOids.add(...)` мог
+  испортить внутреннее состояние парсера для всех последующих читателей.
+  Стало: `Collections.unmodifiableSet()` при конструировании
+  `ExtensionsResult` — изменяемая коллекция остаётся внутри
+  `GostExtensionParser` для накопления OID, наружу отдаётся неизменяемая
+  обёртка. Исправление в одной точке покрывает и
+  `GostCsrParser.getExtensions()` (уже отгружен), и новый
+  `GostCertificate.getExtensions()`.
 
 - **`verifyAll` пробрасывает оригинальный `Reason` ошибки вместо жёстко
   зашитого `SIGNATURE_INVALID`.**
@@ -278,6 +1026,18 @@
   проверена кросс-валидацией с OpenSSL (`asn1parse`, `dgst -verify`).
   OID `id-countersignature` (1.2.840.113549.1.9.6) зарегистрирован в
   `GostOids`.
+
+- **CAdES-C — атрибуты `complete-certificate-references` /
+  `complete-revocation-references` (RFC 5126 §6.2).**
+
+  Ранее библиотека поддерживала уровни CAdES-BES (базовая подпись),
+  CAdES-T (с меткой времени) и countersignature, но не имела атрибутов
+  полных ссылок на сертификаты и отзыв (CAdES-C). Теперь
+  `CAdESExtender.embedCompleteRefs()` встраивает в `unsignedAttrs`
+  подписанта два атрибута: `complete-certificate-references` (хэши
+  CA-сертификатов цепочки до доверенного корня, SEQUENCE OF OtherCertID)
+  и `complete-revocation-references` (хэши CRL и/или OCSP-ответов с
+  идентификаторами, SEQUENCE OF CrlOcspRef).
 
 ### Изменено
 
@@ -647,7 +1407,7 @@
   только предупреждением в Javadoc, без enforcement на уровне модуля.**
   `SsrfGuard` перенесён из `crypto-gost-jsse` в `crypto-gost-pkix`
   (`org.rssys.gost.pkix.util`) — устраняет обратную зависимость
-  `pkix→jsse` и даёт единую реализацию классификации private/reserved
+  `pkix->jsse` и даёт единую реализацию классификации private/reserved
   адресов для fetcher’ов и любого прямого потребителя `pkix`-API.
 
 - **`GostDerParser.oidBytesToDottedString()` молча принимал OID короче 2
@@ -2805,8 +3565,8 @@ TC26 (см. Исправлено).
   `localKeyId` (CA) всегда включаются; если ключ не имеет `localKeyId` —
   все сертификаты проходят.  
   Цепочка упорядочивается leaf-first: leaf (`isCA == false`) на позиции
-  0, CA отсортированы топологически по `issuer→subject` DER-совпадению —
-  корректно для `TlsCertificateValidator` и любого порядка bags в
+  0, CA отсортированы топологически по `issuer->subject` DER-совпадению
+  — корректно для `TlsCertificateValidator` и любого порядка bags в
   исходном PFX.
 
 - **Проверка целостности PFX (GostPkcs12Mac.java)** — RFC 9548 §7.  
@@ -4609,6 +5369,21 @@ handshake 3→0. Для сессии с 1000 записей/с нагрузка 
 смены ключа).  
 
 Суффикс `_S` (Strong): SNMAX = 2^42 − 1 (более частая смена ключа).
+
+### Модуль crypto-gost-pkix
+
+- **CAdES-X Long Type 1** — построение и верификация долгосрочной
+  подписи по RFC 5126 + ETSI TS 101 733. **Breaking:**
+  `CAdESSignerResult` расширен с 6 до 9 параметров — код, напрямую
+  создающий record или деструктурирующий его через pattern-matching,
+  потребует обновления. Было: только CAdES-BES, T, C без проверки отзыва
+  (crlHash deferred). Стало: проверка статуса отзыва каждого сертификата
+  цепочки через встроенные certificate-values (SEQUENCE OF Certificate)
+  и revocation-values (SEQUENCE { \[0\] CRL, \[1\] OCSP }) в
+  unsignedAttrs. Методы embedXLongType1 и verifyCAdESXLong в
+  CAdESExtender, content-time-stamp (ES-C) верификация в
+  verifyCAdESXLong, +3 OID в GostOids (.20, .23, .24), +новый класс
+  CAdESXLongData (кодеки CertificateValues/RevocationValues).
 
 ### Детали реализации (crypto-gost-tls 0.2.0)
 

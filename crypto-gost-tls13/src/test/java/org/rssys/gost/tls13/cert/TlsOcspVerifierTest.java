@@ -7,6 +7,7 @@ import java.util.Arrays;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
@@ -53,12 +54,11 @@ class TlsOcspVerifierTest {
         // в случайных данных хэшей (issuerNameHash/issuerKeyHash).
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(root.priv, root.cert.getPublicKey())
                         .issuerDn(root.subjectDn)
                         .nextUpdate("21010101000000Z")
                         .producedAt("20250101000000Z")
                         .thisUpdate("21010101000000Z")
-                        .build();
+                        .sign(root.priv);
 
         PkixException ex =
                 assertThrows(
@@ -84,8 +84,7 @@ class TlsOcspVerifierTest {
                         .issuerDn(root.subjectDn)
                         .serial(BigInteger.TWO)
                         .buildTbs();
-        GostCertificate otherGost =
-                GostCertificateBuilder.assembleCert(otherTbs, root.priv, params);
+        GostCertificate otherGost = GostCertificateBuilder.sign(otherTbs, GostSigner.of(root.priv));
         byte[] ocspOther =
                 TlsTestHelper.buildOcspResponse(
                         otherGost.getSerialNumber(), root.priv,
@@ -139,8 +138,7 @@ class TlsOcspVerifierTest {
                         .issuerDn(root.subjectDn)
                         .serial(BigInteger.valueOf(42))
                         .buildTbs();
-        GostCertificate otherGost =
-                GostCertificateBuilder.assembleCert(otherTbs, root.priv, params);
+        GostCertificate otherGost = GostCertificateBuilder.sign(otherTbs, GostSigner.of(root.priv));
         byte[] ocspOther =
                 TlsTestHelper.buildOcspResponse(
                         otherGost.getSerialNumber(), root.priv,
@@ -177,8 +175,7 @@ class TlsOcspVerifierTest {
                         .issuerDn(root.subjectDn)
                         .serial(BigInteger.valueOf(99))
                         .buildTbs();
-        GostCertificate otherGost =
-                GostCertificateBuilder.assembleCert(otherTbs, root.priv, params);
+        GostCertificate otherGost = GostCertificateBuilder.sign(otherTbs, GostSigner.of(root.priv));
         byte[] ocspOther =
                 TlsTestHelper.buildOcspResponse(
                         otherGost.getSerialNumber(), root.priv,

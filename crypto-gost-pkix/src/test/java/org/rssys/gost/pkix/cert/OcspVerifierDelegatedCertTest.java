@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
@@ -47,9 +48,8 @@ class OcspVerifierDelegatedCertTest {
     void directCaSigning_success() throws Exception {
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(ca.priv, ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
-                        .build();
+                        .sign(ca.priv);
 
         OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert);
     }
@@ -77,11 +77,10 @@ class OcspVerifierDelegatedCertTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(responder.priv, responder.cert.getPublicKey())
                         .caPublicKey(ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
                         .withDelegatedCerts(responder.cert.getEncoded())
-                        .build();
+                        .sign(responder.priv);
 
         OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert);
     }
@@ -109,11 +108,10 @@ class OcspVerifierDelegatedCertTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(responder.priv, responder.cert.getPublicKey())
                         .caPublicKey(ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
                         .withDelegatedCerts(responder.cert.getEncoded())
-                        .build();
+                        .sign(responder.priv);
 
         PkixException ex =
                 assertThrows(
@@ -151,11 +149,10 @@ class OcspVerifierDelegatedCertTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(responder.priv, responder.cert.getPublicKey())
                         .caPublicKey(ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
                         .withDelegatedCerts(responder.cert.getEncoded())
-                        .build();
+                        .sign(responder.priv);
 
         PkixException ex =
                 assertThrows(
@@ -190,11 +187,10 @@ class OcspVerifierDelegatedCertTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(responder.priv, responder.cert.getPublicKey())
                         .caPublicKey(ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
                         .withDelegatedCerts(responder.cert.getEncoded())
-                        .build();
+                        .sign(responder.priv);
 
         PkixException ex =
                 assertThrows(
@@ -227,8 +223,9 @@ class OcspVerifierDelegatedCertTest {
                         .notAfter("21010101000000Z")
                         .additionalExtensions(ca1Ext.toByteArray())
                         .issuerDn(dn1)
+                        .randomSerial()
                         .buildTbs();
-        GostCertificate ca1 = GostCertificateBuilder.assembleCert(tbs1, samePriv, PARAMS);
+        GostCertificate ca1 = GostCertificateBuilder.sign(tbs1, GostSigner.of(samePriv));
 
         byte[] dn2 = GostDnParser.encodeDn("CN=CA Two");
         byte[] tbs2 =
@@ -238,14 +235,14 @@ class OcspVerifierDelegatedCertTest {
                         .notAfter("21010101000000Z")
                         .additionalExtensions(ca1Ext.toByteArray())
                         .issuerDn(dn2)
+                        .randomSerial()
                         .buildTbs();
-        GostCertificate ca2 = GostCertificateBuilder.assembleCert(tbs2, samePriv, PARAMS);
+        GostCertificate ca2 = GostCertificateBuilder.sign(tbs2, GostSigner.of(samePriv));
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(samePriv, samePub)
                         .issuerDn(dn1)
-                        .build();
+                        .sign(samePriv);
 
         PkixException ex =
                 assertThrows(
@@ -267,10 +264,9 @@ class OcspVerifierDelegatedCertTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(ca.priv, ca.cert.getPublicKey())
                         .caPublicKey(dummyKp.getPublic())
                         .issuerDn(ca.subjectDn)
-                        .build();
+                        .sign(ca.priv);
 
         PkixException ex =
                 assertThrows(
@@ -287,9 +283,8 @@ class OcspVerifierDelegatedCertTest {
     void certIdHashAlgorithmMismatch_throws() throws Exception {
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(ca.priv, ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
-                        .build();
+                        .sign(ca.priv);
 
         // Подменяем OID Streebog-256 в CertID на SHA-1
         byte[] streebog256Oid = {0x06, 0x08, 0x2A, (byte) 0x85, 0x03, 0x07, 0x01, 0x01, 0x02, 0x02};
@@ -318,7 +313,7 @@ class OcspVerifierDelegatedCertTest {
     }
 
     // ========================================================================
-    // Раздельные роли RFC 6960: certIdIssuer vs responderAuthority (план 205)
+    // Раздельные роли RFC 6960: certIdIssuer vs responderAuthority
     // ========================================================================
 
     @Test
@@ -331,10 +326,9 @@ class OcspVerifierDelegatedCertTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(authority.priv, authority.cert.getPublicKey())
                         .caPublicKey(ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
-                        .build();
+                        .sign(authority.priv);
 
         OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert, authority.cert, null);
     }
@@ -346,10 +340,9 @@ class OcspVerifierDelegatedCertTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(authority.priv, authority.cert.getPublicKey())
                         .caPublicKey(ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
-                        .build();
+                        .sign(authority.priv);
 
         // authority правильный по CertID (ca), но как authority подписи передан сам ca,
         // чьим ключом ответ не подписан -> fail-closed по подписи.
@@ -372,10 +365,9 @@ class OcspVerifierDelegatedCertTest {
 
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(authority.priv, authority.cert.getPublicKey())
                         .caPublicKey(ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
-                        .build();
+                        .sign(authority.priv);
 
         // Подпись валидна (authority), но CertID считается не от того издателя.
         PkixException ex =
@@ -399,9 +391,8 @@ class OcspVerifierDelegatedCertTest {
     void splitRoles_bothSameAsSingleArg_equivalent() throws Exception {
         byte[] ocsp =
                 GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                        .signer(ca.priv, ca.cert.getPublicKey())
                         .issuerDn(ca.subjectDn)
-                        .build();
+                        .sign(ca.priv);
 
         // Не должно бросать: поведение совпадает с verify(ocsp, serial, ca).
         OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert, ca.cert, null);

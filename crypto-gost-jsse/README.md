@@ -47,7 +47,8 @@
 
     - **Session resumption**: PSK через `NewSessionTicket`.
 
-    - **Cipher suites**: `TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`.
+    - **Cipher suites**: `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L/S`
+      (RFC 9367 §3.1.2).
 
     - **Защита записей**: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446
       §5.3, per-record TLSTREE re-keying.
@@ -101,9 +102,11 @@ PKCS12 (см. ниже).
     byte[] caDn = GostDnParser.encodeDn("CN=Test CA");
     GostCertificate ca = GostCertificateBuilder.create(params, caDn)
         .publicKey(caKp.getPublic())
+        // Удобный способ: .notBeforeNow().validForYears(100)
         .notBefore("20250101120000Z").notAfter("21250101120000Z")
         .basicConstraints(true, null)   // 
-        .assembleCert(caKp.getPrivate());
+        .randomSerial()
+        .sign(caKp.getPrivate());
 
     // Серверный сертификат (подписан CA, SAN=localhost)
     var srvKp = KeyGenerator.generateKeyPair(params);
@@ -111,9 +114,11 @@ PKCS12 (см. ниже).
     GostCertificate server = GostCertificateBuilder.create(params, srvDn)
         .publicKey(srvKp.getPublic())
         .issuerDn(caDn)                  // 
+        // Удобный способ: .notBeforeNow().validForYears(100)
         .notBefore("20250101120000Z").notAfter("21250101120000Z")
         .sanDns("localhost")             // 
-        .assembleCert(caKp.getPrivate());
+        .randomSerial()
+        .sign(caKp.getPrivate());
 
 - `isCA=true, pathLen=null` — CA без ограничения длины цепочки.
 
@@ -210,8 +215,10 @@ CA. Переменные `params`, `caDn`, `caKp` — из раздела «Ге
             GostDnParser.encodeDn("CN=Test Client"))
         .publicKey(clientKp.getPublic())
         .issuerDn(caDn)
+        // Удобный способ: .notBeforeNow().validForYears(100)
         .notBefore("20250101120000Z").notAfter("21250101120000Z")
-        .assembleCert(caKp.getPrivate());
+        .randomSerial()
+        .sign(caKp.getPrivate());
 
     SSLContext cli = GostSsl.builder()
         .certificate(clientCert.getEncoded(),       // DER-байты сертификата
@@ -656,12 +663,19 @@ Fluent-построитель DER-закодированного OCSP-запро
     byte[] ocspRequestDer = req.der();   // DER-байты OCSPRequest для отправки на респондер
     byte[] nonce = req.nonce();          // nonce для сверки с ответом
 
-    // Запрос с подписью
+    // Запрос с подписью (PrivateKeyParameters)
     OcspRequest signedReq = OcspRequestBuilder.create()
         .targetCert(certDer)
         .issuerCert(issuerDer)
         .signKey(privateKey)            // ключ для подписи (опционально)
         .params(ECParameters.tc26a256())// параметры кривой (обязательно с signKey)
+        .build();
+
+    // Запрос с подписью через GostSigner (HSM-адаптер)
+    OcspRequest hsmReq = OcspRequestBuilder.create()
+        .targetCert(certDer)
+        .issuerCert(issuerDer)
+        .signKey(gostSigner)            // GostSigner (параметры кривой берутся из signer)
         .build();
 
 ### OcspPolicy
@@ -1052,13 +1066,10 @@ ALPN для HTTP/2 требует модуль `jetty-alpn-java-server` на cla
     scf.setSslContext(sslContext);
     scf.setIncludeProtocols("TLSv1.3");
 
-    HttpConfiguration httpsConfig = new HttpConfiguration();
-    httpsConfig.addCustomizer(new SecureRequestCustomizer());
-
     Server server = new Server();
     ServerConnector connector = new ServerConnector(server,
             new SslConnectionFactory(scf, "http/1.1"),
-            new HttpConnectionFactory(httpsConfig));
+            new HttpConnectionFactory(new HttpConfiguration()));
     connector.setPort(8443);
     server.addConnector(connector);
 
@@ -1440,8 +1451,8 @@ read/write).
 `CopyOnWriteArrayList` (read-heavy, lock-free reads, редкие writes).
 
 `GostSSLSessionContext` thread-safe — PSK-хранилище использует
-`InMemoryPskStore` (thread-safe), карта сессий — `synchronizedMap` с
-LRU-эвiction.
+`InMemoryPskStore` (thread-safe), карта сессий — `LinkedHashMap` с
+LRU-эвiction под `ReentrantLock`.
 
 ## Загрузка сертификата
 
@@ -1474,7 +1485,7 @@ LRU-эвiction.
 
 - Только TLS 1.3 (TLS 1.2 и ниже не поддерживаются).
 
-- Только ГОСТ-наборы (`TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`).
+- Только ГОСТ-наборы (`TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L/S`).
 
 - PSK-тикеты одноразовые (RFC 8446 §8.1).
 

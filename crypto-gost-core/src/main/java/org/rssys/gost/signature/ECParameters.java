@@ -45,7 +45,7 @@ public final class ECParameters {
                     "32879423AB1A0375895786C4BB46E9565FDE0B5344766740AF268ADB32322E5C",
                     "400000000000000000000000000000000FD8CDDFC87B6635C115AF556C360C67",
                     32,
-                    1);
+                    4);
     private static final ECParameters TC26_A_512 =
             new ECParameters(
                     "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFDC7",
@@ -117,7 +117,7 @@ public final class ECParameters {
      * @param gyHex y-координата базовой точки G (hex)
      * @param nHex    порядок подгруппы q (hex)
      * @param hlen    длина хэша в байтах (32 для 256-bit, 64 для 512-bit)
-     * @param cofactor кофактор h = m/q (1 для всех стандартных ГОСТ-кривых, кроме TC26-C-512 где h=4)
+     * @param cofactor кофактор h = m/q (1 для большинства GOST-кривых; 4 для TC26-A-256 и TC26-C-512)
      */
     public ECParameters(
             String pHex,

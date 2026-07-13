@@ -222,7 +222,7 @@ public class GostSslBuilder {
         LOG.log(
                 Level.WARNING,
                 "trustAll() enabled — server certificate validation DISABLED. "
-                        + "For production use .trustedCaDer(byte[]) instead.");
+                        + "For production use .trustCa(byte[]) instead.");
         this.trustAll = true;
         return this;
     }

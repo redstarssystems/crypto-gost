@@ -2,6 +2,8 @@ package org.rssys.gost.pkix.cert;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.function.Consumer;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -69,36 +71,44 @@ public final class PkixCertTestHelper {
 
     private static int certCounter = 0;
 
-    /**
-     * Создаёт самоподписанный сертификат.
-     * Срок: 2025-01-01 — 2101-01-01.
-     */
-    public static CertBundle createCertWithKey(ECParameters params) {
-        return createCertWithKey(params, "20250101000000Z", "21010101000000Z");
-    }
+    private static final Consumer<GostCertificateBuilder> LONG_LIVED =
+            b -> b.notBeforeNow().validForYears(100);
 
-    /** Создаёт самоподписанный сертификат с заданным сроком. */
-    public static CertBundle createCertWithKey(
-            ECParameters params, String notBefore, String notAfter) {
+    private static CertBundle createCertWithKey(
+            ECParameters params, Consumer<GostCertificateBuilder> dates) {
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
         PrivateKeyParameters priv = kp.getPrivate();
         PublicKeyParameters pub = kp.getPublic();
 
         byte[] subjectDn = buildDN("Test Cert " + (++certCounter));
-        byte[] tbs =
+        GostCertificateBuilder builder =
                 GostCertificateBuilder.create(params, subjectDn)
                         .publicKey(pub)
-                        .notBefore(notBefore)
-                        .notAfter(notAfter)
                         .issuerDn(subjectDn)
-                        .buildTbs();
-        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, priv, params);
+                        .randomSerial();
+        dates.accept(builder);
+        byte[] tbs = builder.buildTbs();
+        GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(priv));
         return new CertBundle(cert, priv, subjectDn);
     }
 
     /**
+     * Создаёт самоподписанный сертификат со сроком 100 лет от текущего момента
+     * (чтобы не протухал при долгосрочном хранении тестовых данных).
+     */
+    public static CertBundle createCertWithKey(ECParameters params) {
+        return createCertWithKey(params, LONG_LIVED);
+    }
+
+    /** Создаёт самоподписанный сертификат с заданным сроком (явные даты). */
+    public static CertBundle createCertWithKey(
+            ECParameters params, String notBefore, String notAfter) {
+        return createCertWithKey(params, b -> b.notBefore(notBefore).notAfter(notAfter));
+    }
+
+    /**
      * Создаёт корневой CA (самоподписанный, BC: cA=TRUE, KU: keyCertSign).
-     * Срок: 2025-01-01 — 2101-01-01.
+     * Срок 100 лет от текущего момента.
      */
     public static CertBundle createRootCA(ECParameters params) throws Exception {
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
@@ -110,19 +120,21 @@ public final class PkixCertTestHelper {
         byte[] kuExt =
                 GostCertificateBuilder.buildKeyUsageExtension(
                         GostCertificateBuilder.keyUsageFlags(
-                                GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN));
+                                GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN),
+                        false);
         ByteArrayOutputStream extBuf = new ByteArrayOutputStream();
         extBuf.write(bcExt);
         extBuf.write(kuExt);
         byte[] tbs =
                 GostCertificateBuilder.create(params, subjectDn)
                         .publicKey(pub)
-                        .notBefore("20250101000000Z")
-                        .notAfter("21010101000000Z")
+                        .notBeforeNow()
+                        .validForYears(100)
                         .additionalExtensions(extBuf.toByteArray())
                         .issuerDn(subjectDn)
+                        .randomSerial()
                         .buildTbs();
-        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, priv, params);
+        GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(priv));
         return new CertBundle(cert, priv, subjectDn);
     }
 
@@ -157,10 +169,10 @@ public final class PkixCertTestHelper {
             extBuf.write(GostCertificateBuilder.buildBasicConstraintsExtension(isCA, pathLen));
         }
         if (kuFlags != null) {
-            extBuf.write(GostCertificateBuilder.buildKeyUsageExtension(kuFlags));
+            extBuf.write(GostCertificateBuilder.buildKeyUsageExtension(kuFlags, false));
         }
         if (ekuOids != null) {
-            extBuf.write(GostCertificateBuilder.buildEkuExtension(ekuOids));
+            extBuf.write(GostCertificateBuilder.buildEkuExtension(ekuOids, false));
         }
         byte[] additionalExt = extBuf.size() == 0 ? null : extBuf.toByteArray();
         byte[] tbs =
@@ -172,8 +184,9 @@ public final class PkixCertTestHelper {
                         .sanIp(sanIps)
                         .additionalExtensions(additionalExt)
                         .issuerDn(parentSubjectDn)
+                        .randomSerial()
                         .buildTbs();
-        GostCertificate cert = GostCertificateBuilder.assembleCert(tbs, issuerPriv, params);
+        GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(issuerPriv));
         return new CertBundle(cert, leafPriv, subjectDn);
     }
 

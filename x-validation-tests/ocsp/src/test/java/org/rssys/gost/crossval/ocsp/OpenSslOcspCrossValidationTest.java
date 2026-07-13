@@ -1,5 +1,6 @@
 package org.rssys.gost.crossval.ocsp;
 
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.stream.Stream;
@@ -12,6 +13,7 @@ import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.crossval.util.CrossValUtils;
 import org.rssys.gost.crossval.util.OpenSslChecker;
 import org.rssys.gost.crossval.util.TempDirUtils;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.*;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder.KeyUsage;
 import org.rssys.gost.signature.ECParameters;
@@ -60,7 +62,8 @@ class OpenSslOcspCrossValidationTest {
                 .notAfter("20351231235959Z")
                 .basicConstraints(true, null)
                 .keyUsage(KeyUsage.KEY_CERT_SIGN)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(1))
+                .sign(caKp.getPrivate());
     }
 
     private static GostCertificate buildLeaf(
@@ -72,7 +75,8 @@ class OpenSslOcspCrossValidationTest {
                 .notBefore("20250101000000Z")
                 .notAfter("20261231235959Z")
                 .keyUsage(KeyUsage.DIGITAL_SIGNATURE)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(2))
+                .sign(caKp.getPrivate());
     }
 
     // ========================================================================
@@ -90,14 +94,13 @@ class OpenSslOcspCrossValidationTest {
             GostCertificate leaf = buildLeaf(PARAMS_256, leafKp, caKp, ca, "CN=leaf,O=Test");
 
             byte[] ocspDer = GostOcspResponseBuilder.create(leaf.getSerialNumber())
-                    .signer(caKp.getPrivate(), caKp.getPublic())
                     .issuerDn(ca.getSubjectDnBytes())
                     .caPublicKey(caKp.getPublic())
                     .producedAt("20260601000000Z")
                     .thisUpdate("20260601000000Z")
                     .nextUpdate("20260608000000Z")
                     .good()
-                    .build();
+                    .sign(caKp.getPrivate());
             Path ocspPath = dir.resolve("ocsp.der");
             Files.write(ocspPath, ocspDer);
 
@@ -127,14 +130,13 @@ class OpenSslOcspCrossValidationTest {
             GostCertificate leaf = buildLeaf(PARAMS_256, leafKp, caKp, ca, "CN=leaf,O=Test");
 
             byte[] ocspDer = GostOcspResponseBuilder.create(leaf.getSerialNumber())
-                    .signer(caKp.getPrivate(), caKp.getPublic())
                     .issuerDn(ca.getSubjectDnBytes())
                     .caPublicKey(caKp.getPublic())
                     .producedAt("20260601000000Z")
                     .thisUpdate("20260601000000Z")
                     .nextUpdate("20260608000000Z")
                     .revoked("20260515120000Z", ReasonCode.KEY_COMPROMISE)
-                    .build();
+                    .sign(caKp.getPrivate());
             Path ocspPath = dir.resolve("ocsp.der");
             Files.write(ocspPath, ocspDer);
 
@@ -164,14 +166,13 @@ class OpenSslOcspCrossValidationTest {
             GostCertificate leaf = buildLeaf(PARAMS_256, leafKp, caKp, ca, "CN=leaf,O=Test");
 
             byte[] ocspDer = GostOcspResponseBuilder.create(leaf.getSerialNumber())
-                    .signer(caKp.getPrivate(), caKp.getPublic())
                     .issuerDn(ca.getSubjectDnBytes())
                     .caPublicKey(caKp.getPublic())
                     .producedAt("20260601000000Z")
                     .thisUpdate("20260601000000Z")
                     .nextUpdate("20260608000000Z")
                     .unknown()
-                    .build();
+                    .sign(caKp.getPrivate());
             Path ocspPath = dir.resolve("ocsp.der");
             Files.write(ocspPath, ocspDer);
 
@@ -201,14 +202,13 @@ class OpenSslOcspCrossValidationTest {
             GostCertificate leaf = buildLeaf(PARAMS_256, leafKp, caKp, ca, "CN=leaf,O=Test");
 
             byte[] ocspDer = GostOcspResponseBuilder.create(leaf.getSerialNumber())
-                    .signer(caKp.getPrivate(), caKp.getPublic())
                     .issuerDn(ca.getSubjectDnBytes())
                     .caPublicKey(caKp.getPublic())
                     .producedAt("20260601000000Z")
                     .thisUpdate("20260601000000Z")
                     .nextUpdate("20260608000000Z")
                     .good()
-                    .build();
+                    .sign(caKp.getPrivate());
             Path ocspPath = dir.resolve("ocsp.der");
             Files.write(ocspPath, ocspDer);
             Path caPath = dir.resolve("ca.der");
@@ -247,14 +247,13 @@ class OpenSslOcspCrossValidationTest {
             GostCertificate leaf = buildLeaf(params, leafKp, caKp, ca, "CN=leaf,O=Test");
 
             byte[] ocspDer = GostOcspResponseBuilder.create(leaf.getSerialNumber())
-                    .signer(caKp.getPrivate(), caKp.getPublic())
                     .issuerDn(ca.getSubjectDnBytes())
                     .caPublicKey(caKp.getPublic())
                     .producedAt("20260601000000Z")
                     .thisUpdate("20260601000000Z")
                     .nextUpdate("20260608000000Z")
                     .good()
-                    .build();
+                    .sign(caKp.getPrivate());
             Path ocspPath = dir.resolve("ocsp.der");
             Files.write(ocspPath, ocspDer);
 
@@ -371,5 +370,45 @@ class OpenSslOcspCrossValidationTest {
 
     static Stream<ECParameters> curves() {
         return Stream.of(PARAMS_256, PARAMS_512);
+    }
+
+    // ========================================================================
+    // Сценарий 8: responder-сертификат с id-pkix-ocsp-nocheck -> openssl x509 -text
+    // ========================================================================
+
+    @ParameterizedTest
+    @MethodSource("curves")
+    @EnabledIf("opensslAvailable")
+    @DisplayName("Сценарий 8: cert с ocspNoCheck -> openssl x509 -text показывает OCSP No Check")
+    void testOcspNoCheckShownByOpenSsl(ECParameters params) throws Exception {
+        TempDirUtils.withTempDir("ocsp-nocheck-", dir -> {
+            KeyPair caKp = genKey(params);
+            GostCertificate ca = buildCa(params, caKp, "CN=Test CA,O=Test");
+            KeyPair respKp = genKey(params);
+            GostCertificate responder =
+                    GostCertificateBuilder.create(params, "CN=responder,O=Test")
+                            .publicKey(respKp.getPublic())
+                            .issuerDn(ca.getSubjectDnBytes())
+                            .notBefore("20250101000000Z")
+                            .notAfter("20260101000000Z")
+                            .extendedKeyUsage(GostOids.EXT_OCSP_SIGNING)
+                            .ocspNoCheck()
+                            .serial(BigInteger.valueOf(3))
+                            .sign(caKp.getPrivate());
+
+            Path certPath = dir.resolve("responder.der");
+            Files.write(certPath, responder.getEncoded());
+
+            String[] cmd = CrossValUtils.concat(
+                    new String[] {opensslBinary(), "x509", "-in", certPath.toString(),
+                            "-inform", "DER", "-text", "-noout"},
+                    OpenSslChecker.resolveEngineFlag());
+            String out = OpenSslChecker.runAndCapture(cmd);
+
+            assertTrue(
+                    out.contains("OCSP No Check"),
+                    "openssl x509 -text должен показать 'OCSP No Check', вывод:\n" + out);
+            return null;
+        });
     }
 }

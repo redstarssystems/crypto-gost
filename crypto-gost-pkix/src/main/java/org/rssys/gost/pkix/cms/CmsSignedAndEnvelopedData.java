@@ -1,5 +1,6 @@
 package org.rssys.gost.pkix.cms;
 
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
@@ -37,7 +38,7 @@ public final class CmsSignedAndEnvelopedData {
      * Наружу торчит EnvelopedData — подпись не видна без расшифрования.
      *
      * @param data       исходные данные
-     * @param signerKey  закрытый ключ подписанта
+     * @param signer     подписант (может быть HSM-адаптером)
      * @param signerCert сертификат подписанта
      * @param recipients сертификаты получателей (один и более)
      * @return DER-байты ContentInfo(id-envelopedData), содержащего
@@ -45,13 +46,13 @@ public final class CmsSignedAndEnvelopedData {
      */
     public static byte[] signThenEncrypt(
             byte[] data,
-            PrivateKeyParameters signerKey,
+            GostSigner signer,
             GostCertificate signerCert,
             GostCertificate... recipients) {
 
         // Шаг 1: SignedData
         byte[] signedDer =
-                CmsSignedDataBuilder.create().data(data).addSigner(signerKey, signerCert).build();
+                CmsSignedDataBuilder.create().data(data).addSigner(signer, signerCert).build();
 
         // Шаг 2: EnvelopedData(SignedData)
         CmsEnvelopedDataBuilder envBuilder =
@@ -65,6 +66,23 @@ public final class CmsSignedAndEnvelopedData {
     }
 
     /**
+     * Подписать, затем зашифровать для получателей (удобная перегрузка с ключом в памяти).
+     *
+     * @param data       исходные данные
+     * @param signerKey  закрытый ключ подписанта
+     * @param signerCert сертификат подписанта
+     * @param recipients сертификаты получателей (один и более)
+     * @return DER-байты ContentInfo(id-envelopedData)
+     */
+    public static byte[] signThenEncrypt(
+            byte[] data,
+            PrivateKeyParameters signerKey,
+            GostCertificate signerCert,
+            GostCertificate... recipients) {
+        return signThenEncrypt(data, GostSigner.of(signerKey), signerCert, recipients);
+    }
+
+    /**
      * Зашифровать для получателей, затем подписать.
      *
      * <p>Порядок: EnvelopedData(данные) -> SignedData(EnvelopedData).
@@ -72,7 +90,7 @@ public final class CmsSignedAndEnvelopedData {
      * Используйте, когда нужна аудируемость.
      *
      * @param data       исходные данные
-     * @param signerKey  закрытый ключ подписанта
+     * @param signer     подписант (может быть HSM-адаптером)
      * @param signerCert сертификат подписанта
      * @param recipients сертификаты получателей (один и более)
      * @return DER-байты ContentInfo(id-signedData), содержащего
@@ -80,7 +98,7 @@ public final class CmsSignedAndEnvelopedData {
      */
     public static byte[] encryptThenSign(
             byte[] data,
-            PrivateKeyParameters signerKey,
+            GostSigner signer,
             GostCertificate signerCert,
             GostCertificate... recipients) {
 
@@ -95,8 +113,25 @@ public final class CmsSignedAndEnvelopedData {
         return CmsSignedDataBuilder.create()
                 .data(envelopedDer)
                 .contentType(GostOids.CMS_ENVELOPED_DATA)
-                .addSigner(signerKey, signerCert)
+                .addSigner(signer, signerCert)
                 .build();
+    }
+
+    /**
+     * Зашифровать для получателей, затем подписать (удобная перегрузка с ключом в памяти).
+     *
+     * @param data       исходные данные
+     * @param signerKey  закрытый ключ подписанта
+     * @param signerCert сертификат подписанта
+     * @param recipients сертификаты получателей (один и более)
+     * @return DER-байты ContentInfo(id-signedData)
+     */
+    public static byte[] encryptThenSign(
+            byte[] data,
+            PrivateKeyParameters signerKey,
+            GostCertificate signerCert,
+            GostCertificate... recipients) {
+        return encryptThenSign(data, GostSigner.of(signerKey), signerCert, recipients);
     }
 
     /**

@@ -34,7 +34,8 @@ class CAdESAttributesTest {
                         .notBefore("250101000000Z")
                         .notAfter("260101000000Z")
                         .publicKey(kp256.getPublic())
-                        .assembleCert(kp256.getPrivate());
+                        .randomSerial()
+                        .sign(kp256.getPrivate());
 
         KeyPair kp512 = KeyGenerator.generateKeyPair(PARAMS_512);
         signerCert512 =
@@ -43,7 +44,8 @@ class CAdESAttributesTest {
                         .notBefore("250101000000Z")
                         .notAfter("260101000000Z")
                         .publicKey(kp512.getPublic())
-                        .assembleCert(kp512.getPrivate());
+                        .randomSerial()
+                        .sign(kp512.getPrivate());
     }
 
     @Test
@@ -95,23 +97,27 @@ class CAdESAttributesTest {
     }
 
     // ========================================================================
-    // hashAlgorithm без NULL-параметров (RFC 9215 §4.2)
+    // hashAlgorithm с NULL-параметрами (Р 1323565.1.025 §4; эталон openssl gost)
     // ========================================================================
 
     @Test
-    @DisplayName("signingCertificateV2 кодирует hashAlgorithm без NULL-параметров для ГОСТ")
-    void signingCertificateV2HashAlgorithmNoNullParam() throws Exception {
+    @DisplayName("signingCertificateV2 кодирует hashAlgorithm с NULL-параметрами для ГОСТ")
+    void signingCertificateV2HashAlgorithmHasNullParam() throws Exception {
         byte[] attr = CAdESAttributes.signingCertificateV2(signerCert256);
         // SigningCertificateV2 -> certs -> ESSCertIDv2 -> hashAlgorithm
         byte[][] signingCertV2Parts = DerCodec.parseSequenceContents(attr, 0);
         byte[][] certsParts = DerCodec.parseSequenceContents(signingCertV2Parts[0], 0);
         byte[][] essParts = DerCodec.parseSequenceContents(certsParts[0], 0);
-        // hashAlgorithm: AlgorithmIdentifier = SEQUENCE { OID } (без NULL)
+        // hashAlgorithm: AlgorithmIdentifier = SEQUENCE { OID, NULL }.
+        // NULL присущ OID id-tc26-gost3411-2012-256/512; эталонный openssl
+        // gost-engine кодирует именно так. Регресс-защита: форма не должна
+        // молча вернуться к отсутствию параметров.
         byte[][] hashAlgParts = DerCodec.parseSequenceContents(essParts[0], 0);
+        assertEquals(2, hashAlgParts.length, "hashAlgorithm должен содержать OID и NULL-параметры");
         assertEquals(
-                1,
-                hashAlgParts.length,
-                "hashAlgorithm должен содержать только OID, без NULL-параметров");
+                DerCodec.TAG_NULL,
+                hashAlgParts[1][0] & 0xFF,
+                "второй элемент AlgorithmIdentifier должен быть NULL");
     }
 
     // ========================================================================

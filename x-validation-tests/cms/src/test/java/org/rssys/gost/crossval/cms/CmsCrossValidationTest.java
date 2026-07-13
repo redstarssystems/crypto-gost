@@ -205,9 +205,9 @@ class CmsCrossValidationTest {
             // Строим тестовый CRL
             byte[] crlIssuerDn = buildDn("CRL Issuer");
             byte[] crlDer =
-                    GostCrlBuilder.create(pair.leafKey(), crlIssuerDn)
+                    GostCrlBuilder.create(crlIssuerDn)
                             .nextUpdate("270601120000Z")
-                            .build();
+                            .sign(pair.leafKey());
             GostCrl crl = GostCrl.fromDer(crlDer);
 
             byte[] signedDer = CmsSignedDataBuilder.create()
@@ -250,7 +250,8 @@ class CmsCrossValidationTest {
                 .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
                         GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
                 .basicConstraints(true, null)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(1))
+                .sign(caKp.getPrivate());
 
         var leafKp = KeyGenerator.generateKeyPair(PARAMS);
         GostCertificate leafCert = GostCertificateBuilder.create(PARAMS, "CN=Test Leaf,O=Test Org,C=RU")
@@ -259,7 +260,8 @@ class CmsCrossValidationTest {
                 .notBefore("20250101000000Z")
                 .notAfter("20300101000000Z")
                 .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(2))
+                .sign(caKp.getPrivate());
 
         return new CertPair(caCert, leafKp.getPrivate(), leafCert);
     }
@@ -286,7 +288,7 @@ class CmsCrossValidationTest {
         byte[] dn = buildDn("Test");
         byte[] ver = DerCodec.encodeContextConstructed(0, DerCodec.encodeInteger(2));
         byte[] sn = DerCodec.encodeInteger(BigInteger.valueOf(System.currentTimeMillis()));
-        byte[] alg = CmsAlgorithmIdentifier.encode(GostOids.SIGN_ALG_256);
+        byte[] alg = CmsAlgorithmIdentifier.encode(GostOids.SIGN_WITH_DIGEST_256);
         byte[] nb = DerCodec.encodeTlv(DerCodec.TAG_UTC_TIME, "260101000000Z".getBytes());
         byte[] na = DerCodec.encodeTlv(DerCodec.TAG_UTC_TIME, "360101000000Z".getBytes());
         byte[] tbs = DerCodec.encodeSequence(ver, sn, alg, dn, DerCodec.encodeSequence(nb, na), dn.clone(), spki);

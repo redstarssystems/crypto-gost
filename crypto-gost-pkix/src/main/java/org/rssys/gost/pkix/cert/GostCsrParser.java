@@ -5,6 +5,7 @@ import static org.rssys.gost.pkix.cert.GostDerParser.*;
 import java.util.Arrays;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostDerCodec;
+import org.rssys.gost.pkix.CheckReturnValue;
 import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
@@ -39,6 +40,8 @@ public final class GostCsrParser {
 
     // Поля, извлечённые из TBS
     private final int version;
+    private final int subjectDnOff;
+    private final int subjectDnLen;
     private final String subjectDnStr;
     private final GostDnParser.DnField[] subjectDnFields;
     private final PublicKeyParameters publicKey;
@@ -119,11 +122,12 @@ public final class GostCsrParser {
             throw new IllegalArgumentException("Expected subject DN SEQUENCE in CSR");
         }
         int[] dnTlv = readTlv(certData, tbsPos);
-        int dnOff = tbsPos;
-        int dnLen = dnTlv[1] - tbsPos;
+        this.subjectDnOff = tbsPos;
+        this.subjectDnLen = dnTlv[1] - tbsPos;
         tbsPos = dnTlv[1];
 
-        GostDnParser.DnParseResult dnResult = GostDnParser.parseDnString(certData, dnOff, dnLen);
+        GostDnParser.DnParseResult dnResult =
+                GostDnParser.parseDnString(certData, subjectDnOff, subjectDnLen);
         this.subjectDnStr = dnResult.dnString;
         this.subjectDnFields =
                 dnResult.fields.isEmpty()
@@ -242,6 +246,18 @@ public final class GostCsrParser {
     }
 
     /**
+     * Возвращает сырые DER-байты subject DN из CSR.
+     * Используется для байтово-точного переноса DN в сертификат
+     * без потерь при перекодировке через строку
+     * (смена типа ASN.1-строки, потеря multi-valued RDN, исключение на неизвестном OID).
+     *
+     * @return DER-кодированный DN (SEQUENCE OF RDN), не null
+     */
+    public byte[] getSubjectDnDer() {
+        return Arrays.copyOfRange(certData, subjectDnOff, subjectDnOff + subjectDnLen);
+    }
+
+    /**
      * Возвращает все значения указанного OID-атрибута из Subject DN.
      *
      * @param oidDot OID в точечной нотации, например "2.5.4.3" для CN
@@ -294,6 +310,16 @@ public final class GostCsrParser {
     // ========================================================================
 
     /**
+     * Возвращает результат парсинга расширений из атрибута extensionRequest.
+     *
+     * <p><b>Граница доверия:</b> {@code extensionRequest} — просьба подписчика, не полномочие.
+     * Оператор УЦ обязан валидировать запрошенные расширения перед копированием в
+     * выпускаемый сертификат: проверка владения доменом для SAN, никогда не выдавать
+     * {@code CA=TRUE} по запросу подписчика без осознанного процесса выпуска
+     * подчинённого УЦ, проверка полномочий на запрошенные EKU. Автоматическое
+     * копирование {@code getExtensions()} в {@link GostCertificateBuilder} без
+     * валидации небезопасно.</p>
+     *
      * @return результат парсинга расширений из extensionRequest атрибута.
      *         {@link GostExtensionParser.ExtensionsResult#empty()} если атрибут отсутствует.
      */
@@ -320,6 +346,7 @@ public final class GostCsrParser {
      * @param key открытый ключ для проверки подписи
      * @return true если подпись действительна
      */
+    @CheckReturnValue
     public boolean verify(PublicKeyParameters key) {
         int hlen = key.getParams().hlen;
         byte[] hash = GostSignatureHelper.doHash(certData, tbsOff, tbsLen, hlen);
@@ -335,6 +362,7 @@ public final class GostCsrParser {
      *
      * @return true если CSR подписан ключом из SPKI
      */
+    @CheckReturnValue
     public boolean verifySelf() {
         return verify(publicKey);
     }

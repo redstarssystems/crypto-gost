@@ -11,7 +11,9 @@ import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.cert.ChainValidator;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
@@ -106,7 +108,7 @@ class CertChainBuilderTest {
                         .issuerDn(dnB)
                         .serial(BigInteger.ONE)
                         .buildTbs();
-        GostCertificate certA = GostCertificateBuilder.assembleCert(tbsA, kpB.getPrivate(), PARAMS);
+        GostCertificate certA = GostCertificateBuilder.sign(tbsA, GostSigner.of(kpB.getPrivate()));
 
         // Сертификат B: subject=B, issuer=A, подписан ключом A
         byte[] tbsB =
@@ -118,7 +120,7 @@ class CertChainBuilderTest {
                         .issuerDn(dnA)
                         .serial(BigInteger.TWO)
                         .buildTbs();
-        GostCertificate certB = GostCertificateBuilder.assembleCert(tbsB, kpA.getPrivate(), PARAMS);
+        GostCertificate certB = GostCertificateBuilder.sign(tbsB, GostSigner.of(kpA.getPrivate()));
 
         // Посторонний доверенный корень — любой самоподписанный
         CertBundle trustedRoot = createRootCa();
@@ -189,6 +191,54 @@ class CertChainBuilderTest {
     }
 
     // ========================================================================
+    // Ротация ключей CA: коллизия Subject DN среди кандидатов одного уровня
+    // ========================================================================
+
+    @Test
+    @DisplayName("Ротация ключей CA: коллизия Subject DN, issuer выбран по AKI/SKI")
+    void testCaKeyRotationSelectByAkiSki() throws Exception {
+        var kpOld = KeyGenerator.generateKeyPair(PARAMS);
+        var kpNew = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] caDn = GostDnParser.encodeDn("CN=Rotating CA");
+
+        GostCertificate rootOld = selfSignedRoot(caDn, kpOld, BigInteger.ONE);
+        GostCertificate rootNew = selfSignedRoot(caDn, kpNew, BigInteger.TWO);
+
+        // leaf подписан новым ключом CA, AKI ссылается на SKI нового ключа
+        GostCertificate leaf = leafSignedBy(caDn, kpNew.getPrivate(), kpNew.getPublic());
+
+        // Старый корень стоит первым — правильный кандидат не первый в списке.
+        List<GostCertificate> chain =
+                CertChainBuilder.buildChain(leaf, List.of(), List.of(rootOld, rootNew));
+
+        assertEquals(2, chain.size(), "Цепочка: leaf + актуальный корень");
+        assertEquals(rootNew, chain.get(1), "Выбран корень с новым ключом (по AKI/SKI)");
+    }
+
+    @Test
+    @DisplayName("Коллизия Subject DN без совпадения AKI: перебор кандидатов, не CHAIN_LOOP")
+    void testCaKeyRotationFallbackNoLoop() throws Exception {
+        var kpOld = KeyGenerator.generateKeyPair(PARAMS);
+        var kpNew = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] caDn = GostDnParser.encodeDn("CN=Rotating CA");
+
+        GostCertificate rootOld = selfSignedRoot(caDn, kpOld, BigInteger.ONE);
+        GostCertificate rootNew = selfSignedRoot(caDn, kpNew, BigInteger.TWO);
+
+        // leaf подписан новым ключом, но БЕЗ AKI — приоритизации нет, идёт перебор.
+        GostCertificate leaf = leafSignedBy(caDn, kpNew.getPrivate(), null);
+
+        // Старый корень первым: его подпись не проходит -> перебор до нового.
+        // Без пер-уровневой дедупликации здесь был бы CHAIN_LOOP вместо успеха.
+        List<GostCertificate> chain =
+                CertChainBuilder.buildChain(leaf, List.of(), List.of(rootOld, rootNew));
+
+        assertEquals(2, chain.size(), "Fallback-перебор построил цепочку");
+        assertEquals(
+                rootNew, chain.get(1), "Перебор нашёл корень с верной подписью, без CHAIN_LOOP");
+    }
+
+    // ========================================================================
     // Дополнительная проверка: валидная цепочка проходит ChainValidator
     // ========================================================================
 
@@ -235,7 +285,7 @@ class CertChainBuilderTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, kp.getPrivate(), PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate())),
                 dn);
     }
 
@@ -268,7 +318,7 @@ class CertChainBuilderTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 subjectDn);
     }
 
@@ -297,8 +347,54 @@ class CertChainBuilderTest {
         return new CertBundle(
                 kp.getPrivate(),
                 kp.getPublic(),
-                GostCertificateBuilder.assembleCert(tbs, issuer.priv, PARAMS),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
                 subjectDn);
+    }
+
+    private static GostCertificate selfSignedRoot(byte[] dn, KeyPair kp, BigInteger serial)
+            throws Exception {
+        byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, dn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("260101000000Z")
+                        .notAfter("360101000000Z")
+                        .additionalExtensions(concatExtensions(bc, ku, ski))
+                        .issuerDn(dn)
+                        .serial(serial)
+                        .buildTbs();
+        return GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate()));
+    }
+
+    private static GostCertificate leafSignedBy(
+            byte[] issuerDn, PrivateKeyParameters signerKey, PublicKeyParameters akiKey)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Leaf");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] additional =
+                (akiKey != null)
+                        ? concatExtensions(
+                                ku, ski, GostCertificateBuilder.buildAkiExtension(akiKey))
+                        : concatExtensions(ku, ski);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("260101000000Z")
+                        .notAfter("360101000000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuerDn)
+                        .serial(BigInteger.valueOf(500))
+                        .buildTbs();
+        return GostCertificateBuilder.sign(tbs, GostSigner.of(signerKey));
     }
 
     private static byte[] concatExtensions(byte[]... exts) {

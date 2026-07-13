@@ -12,21 +12,35 @@ import org.rssys.gost.jca.spec.GostCurves;
 public final class GostOids {
 
     // ========================================================================
-    // Алгоритмы подписи ГОСТ (id_tc26_signwithdigest_gost3410_2012)
-    // RFC 4357, RFC 7836, ГОСТ Р 34.10-2012
+    // OID алгоритма открытого ключа ГОСТ Р 34.10-2012 (id-tc26-gost3410-2012)
+    // RFC 9215 §2, RFC 4491
+    //
+    // Значение id-tc26-gost3410-2012-256/512 (1.2.643.7.1.1.1.1 / .1.2). Несётся
+    // в SubjectPublicKeyInfo и в CMS SignerInfo.signatureAlgorithm (RFC 4490 §3.2,
+    // RFC 9215) — именно OID открытого ключа, а НЕ комбинированный signWithDigest,
+    // как в поле signatureAlgorithm X.509-сертификата. Так делают эталонные
+    // реализации (КриптоПро, openssl gost-engine, BouncyCastle принимает).
     // ========================================================================
 
-    /** id_tc26_signwithdigest_gost3410_2012_256 */
-    public static final String SIG_WITH_DIGEST_256 = GostCurves.OID_SIGN_256;
+    /** id-tc26-gost3410-2012-256 — OID открытого ключа (SPKI, CMS SignerInfo.signatureAlgorithm) */
+    public static final String PUBLIC_KEY_256 = GostCurves.OID_SIGN_256;
 
-    /** id_tc26_signwithdigest_gost3410_2012_512 */
-    public static final String SIG_WITH_DIGEST_512 = GostCurves.OID_SIGN_512;
+    /** id-tc26-gost3410-2012-512 — OID открытого ключа (SPKI, CMS SignerInfo.signatureAlgorithm) */
+    public static final String PUBLIC_KEY_512 = GostCurves.OID_SIGN_512;
 
-    /** id_tc26_gost3410_2012_256 — алгоритм подписи (без дайджеста) */
-    public static final String SIGN_ALG_256 = "1.2.643.7.1.1.3.2";
+    // ========================================================================
+    // OID «подпись с дайджестом» ГОСТ (id-tc26-signwithdigest-gost3410-2012)
+    // RFC 9215 §2, ГОСТ Р 34.10-2012
+    //
+    // Комбинированный OID подпись+Стрибог (1.2.643.7.1.1.3.2 / .3.3). Несётся
+    // в поле signatureAlgorithm X.509-сертификата (и tbsCertificate.signature).
+    // ========================================================================
 
-    /** id_tc26_gost3410_2012_512 — алгоритм подписи 512 (без дайджеста) */
-    public static final String SIGN_ALG_512 = "1.2.643.7.1.1.3.3";
+    /** id-tc26-signwithdigest-gost3410-2012-256 — X.509 signatureAlgorithm (подпись+Стрибог-256) */
+    public static final String SIGN_WITH_DIGEST_256 = "1.2.643.7.1.1.3.2";
+
+    /** id-tc26-signwithdigest-gost3410-2012-512 — X.509 signatureAlgorithm (подпись+Стрибог-512) */
+    public static final String SIGN_WITH_DIGEST_512 = "1.2.643.7.1.1.3.3";
 
     // ========================================================================
     // Параметры эллиптических кривых (ГОСТ Р 34.10-2012)
@@ -150,6 +164,9 @@ public final class GostOids {
     /** anyPolicy (RFC 5280 §4.2.1.4) — 2.5.29.32.0; семантически подходит под любую политику */
     public static final String ANY_POLICY = "2.5.29.32.0";
 
+    /** id-qt-cps (RFC 5280 §4.2.1.4) — CPS pointer qualifier */
+    public static final String POLICY_QT_CPS = "1.3.6.1.5.5.7.2.1";
+
     // ========================================================================
     // Атрибуты Distinguished Name (RFC 4519)
     // ========================================================================
@@ -221,6 +238,13 @@ public final class GostOids {
     public static final String ATTR_INNLE = "1.2.643.100.4";
 
     // ========================================================================
+    // OID для otherName type-id
+    // ========================================================================
+
+    /** id-ms-upn — 1.3.6.1.4.1.311.20.2.3 (User Principal Name) */
+    public static final String ID_MS_UPN = "1.3.6.1.4.1.311.20.2.3";
+
+    // ========================================================================
     // OCSP (RFC 6960)
     // ========================================================================
 
@@ -235,6 +259,9 @@ public final class GostOids {
 
     /** id-pkix-ocsp-nonce (RFC 8954) */
     public static final String OCSP_NONCE = "1.3.6.1.5.5.7.48.1.2";
+
+    /** id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1) */
+    public static final String EXT_OCSP_NOCHECK = "1.3.6.1.5.5.7.48.1.5";
 
     // ========================================================================
     // TSP (RFC 3161) — Time-Stamp Protocol
@@ -318,6 +345,9 @@ public final class GostOids {
     /** id-tc26-agreement-gost-3410-2012-256 — VKO ГОСТ Р 34.10-2012 256 */
     public static final String AGREEMENT_VKO_256 = "1.2.643.7.1.1.6.1";
 
+    /** id-tc26-agreement-gost-3410-2012-512 — VKO ГОСТ Р 34.10-2012 512 */
+    public static final String AGREEMENT_VKO_512 = "1.2.643.7.1.1.6.2";
+
     // ========================================================================
     // TC26 Key Wrap на Кузнечике (id-tc26-wrap)
     // ========================================================================
@@ -367,6 +397,21 @@ public final class GostOids {
     /** id-aa-signatureTimeStampToken — 1.2.840.113549.1.9.16.2.14 */
     public static final String SIGNATURE_TIME_STAMP = "1.2.840.113549.1.9.16.2.14";
 
+    /** id-aa-ets-certificateRefs — 1.2.840.113549.1.9.16.2.21 (RFC 5126 §6.2.1) */
+    public static final String COMPLETE_CERTIFICATE_REFS = "1.2.840.113549.1.9.16.2.21";
+
+    /** id-aa-ets-revocationRefs — 1.2.840.113549.1.9.16.2.22 (RFC 5126 §6.2.2) */
+    public static final String COMPLETE_REVOCATION_REFS = "1.2.840.113549.1.9.16.2.22";
+
+    /** id-aa-ets-certValues — 1.2.840.113549.1.9.16.2.23 (RFC 5126 §6.3.3) */
+    public static final String CERTIFICATE_VALUES = "1.2.840.113549.1.9.16.2.23";
+
+    /** id-aa-ets-revocationValues — 1.2.840.113549.1.9.16.2.24 (RFC 5126 §6.3.3) */
+    public static final String REVOCATION_VALUES = "1.2.840.113549.1.9.16.2.24";
+
+    /** id-aa-ets-contentTimestamp — 1.2.840.113549.1.9.16.2.20 (RFC 5126 §5.11.1) */
+    public static final String CONTENT_TIME_STAMP = "1.2.840.113549.1.9.16.2.20";
+
     // ========================================================================
     // PKCS#9 (RFC 2985) — Атрибуты подписи (signed attributes)
     // ========================================================================
@@ -382,6 +427,16 @@ public final class GostOids {
 
     /** id-countersignature — 1.2.840.113549.1.9.6 (RFC 5652 §11.4) */
     public static final String ATTR_COUNTERSIGNATURE = "1.2.840.113549.1.9.6";
+
+    // ========================================================================
+    // ГОСТ CMS unprotected-атрибуты (Р 1323565.1.025-2019 §13.4)
+    // ========================================================================
+
+    /** id-cms-mac-attr — 1.2.643.7.1.0.6.1.1 (content-mac в unprotectedAttrs) */
+    public static final String ID_CMS_MAC_ATTR = "1.2.643.7.1.0.6.1.1";
+
+    /** id-extensionRequest — 1.2.840.113549.1.9.14 (PKCS#9 §5.4.1) */
+    public static final String ATTR_EXTENSION_REQUEST = "1.2.840.113549.1.9.14";
 
     // ========================================================================
     // PKCS#9 (RFC 2985) — Attribute types
@@ -443,6 +498,168 @@ public final class GostOids {
 
     /** Максимальная длина серийного номера сертификата в октетах (RFC 5280 §4.1.2.2) */
     public static final int MAX_SERIAL_OCTETS = 20;
+
+    // ========================================================================
+    // Отображаемые имена OID для человекочитаемого вывода
+    // ========================================================================
+
+    private static final java.util.Map<String, String> OID_TO_DISPLAY_NAME;
+
+    static {
+        var m = new java.util.LinkedHashMap<String, String>();
+
+        // Алгоритмы подписи
+        m.put(PUBLIC_KEY_256, "GOST R 34.10-2012 (256)");
+        m.put(PUBLIC_KEY_512, "GOST R 34.10-2012 (512)");
+        m.put(SIGN_WITH_DIGEST_256, "GOST R 34.10-2012 (256) + Streebog-256");
+        m.put(SIGN_WITH_DIGEST_512, "GOST R 34.10-2012 (512) + Streebog-512");
+
+        // Параметры эллиптических кривых
+        m.put(CURVE_256A, "id-tc26-gost-3410-2012-256-paramSetA");
+        m.put(CURVE_CP_A, "id-GostR3410-2001-CryptoPro-A-ParamSet");
+        m.put(CURVE_CP_B, "id-GostR3410-2001-CryptoPro-B-ParamSet");
+        m.put(CURVE_512A, "id-tc26-gost-3410-12-512-paramSetA");
+        m.put(CURVE_512B, "id-tc26-gost-3410-12-512-paramSetB");
+        m.put(CURVE_512C, "id-tc26-gost-3410-2012-512-paramSetC");
+
+        // Дайджесты
+        m.put(DIGEST_256, "Streebog-256");
+        m.put(DIGEST_512, "Streebog-512");
+
+        // Расширения X.509v3
+        m.put(EXT_SKI, "Subject Key Identifier (id-ce 2.5.29.14)");
+        m.put(EXT_KU, "Key Usage (id-ce 2.5.29.15)");
+        m.put(EXT_SAN, "Subject Alternative Name (id-ce 2.5.29.17)");
+        m.put(EXT_IAN, "Issuer Alternative Name (id-ce 2.5.29.18)");
+        m.put(EXT_BC, "Basic Constraints (id-ce 2.5.29.19)");
+        m.put(EXT_CRL_REASON, "CRL Reason Code (id-ce 2.5.29.21)");
+        m.put(EXT_INVALIDITY_DATE, "Invalidity Date (id-ce 2.5.29.24)");
+        m.put(EXT_IDP, "Issuing Distribution Point (id-ce 2.5.29.28)");
+        m.put(EXT_CERTIFICATE_ISSUER, "Certificate Issuer (id-ce 2.5.29.29)");
+        m.put(EXT_CRL_NUMBER, "CRL Number (id-ce 2.5.29.20)");
+        m.put(EXT_DELTA_CRL_INDICATOR, "Delta CRL Indicator (id-ce 2.5.29.27)");
+        m.put(EXT_FRESHEST_CRL, "Freshest CRL (id-ce 2.5.29.46)");
+        m.put(EXT_CDP, "CRL Distribution Points (id-ce 2.5.29.31)");
+        m.put(EXT_CP, "Certificate Policies (id-ce 2.5.29.32)");
+        m.put(POLICY_QT_CPS, "CPS Pointer Qualifier (id-qt-cps 1.3.6.1.5.5.7.2.1)");
+        m.put(EXT_AKI, "Authority Key Identifier (id-ce 2.5.29.35)");
+        m.put(EXT_EKU, "Extended Key Usage (id-ce 2.5.29.37)");
+        m.put(EXT_NAME_CONSTRAINTS, "Name Constraints (id-ce 2.5.29.30)");
+        m.put(EXT_AIA, "Authority Info Access (id-pe 1.3.6.1.5.5.7.1.1)");
+
+        // Extended Key Usage
+        m.put(EXT_SERVER_AUTH, "serverAuth");
+        m.put(EXT_CLIENT_AUTH, "clientAuth");
+        m.put(EXT_CODE_SIGNING, "codeSigning");
+        m.put(EXT_EMAIL_PROTECTION, "emailProtection");
+        m.put(EXT_TIME_STAMPING, "timeStamping");
+        m.put(EXT_OCSP_SIGNING, "OCSPSigning");
+        m.put(EXT_OCSP_NOCHECK, "OCSP No Check");
+
+        // Certificate Policies
+        m.put(POLICY_KC1, "class-kc1");
+        m.put(POLICY_KC2, "class-kc2");
+        m.put(ANY_POLICY, "anyPolicy");
+
+        // Атрибуты DN
+        m.put(ATTR_CN, "commonName");
+        m.put(ATTR_O, "organizationName");
+        m.put(ATTR_OU, "organizationalUnitName");
+        m.put(ATTR_L, "localityName");
+        m.put(ATTR_ST, "stateOrProvinceName");
+        m.put(ATTR_C, "countryName");
+        m.put(ATTR_STREET, "streetAddress");
+        m.put(ATTR_T, "title");
+        m.put(ATTR_SN, "surname");
+        m.put(ATTR_GN, "givenName");
+        m.put(ATTR_SERIALNUMBER, "serialNumber");
+        m.put(ATTR_POSTAL_CODE, "postalCode");
+        m.put(ATTR_UNIQUE_ID, "uniqueIdentifier");
+        m.put(ATTR_PSEUDONYM, "pseudonym");
+        m.put(ATTR_EMAIL, "emailAddress");
+        m.put(ATTR_UID, "uid");
+        m.put(ATTR_ORG_ID, "organizationIdentifier");
+        m.put(ATTR_INN, "ИНН");
+        m.put(ATTR_OGRNIP, "ОГРНИП");
+        m.put(ATTR_OGRN, "ОГРН");
+        m.put(ATTR_SNILS, "СНИЛС");
+        m.put(ATTR_INNLE, "ИНН ЮЛ");
+
+        // otherName type-id
+        m.put(ID_MS_UPN, "User Principal Name (id-ms-upn 1.3.6.1.4.1.311.20.2.3)");
+
+        // OCSP
+        m.put(OCSP_AD, "OCSP (id-ad 1.3.6.1.5.5.7.48.1)");
+        m.put(CA_ISSUERS_AD, "caIssuers (id-ad 1.3.6.1.5.5.7.48.2)");
+        m.put(OCSP_BASIC, "OCSP Basic Response");
+        m.put(OCSP_NONCE, "OCSP Nonce");
+
+        // TSP
+        m.put(AD_TIME_STAMPING, "Time-Stamping (id-ad 1.3.6.1.5.5.7.48.3)");
+        m.put(TST_INFO, "TSTInfo (id-ct 1.2.840.113549.1.9.16.1.4)");
+
+        // CMS
+        m.put(CMS_SIGNED_DATA, "SignedData (id-signedData)");
+        m.put(CMS_ENVELOPED_DATA, "EnvelopedData (id-envelopedData)");
+        m.put(CMS_DIGESTED_DATA, "DigestedData (id-digestedData)");
+        m.put(PKCS7_DATA, "Data (id-data)");
+        m.put(PKCS7_ENCRYPTED_DATA, "EncryptedData (id-encryptedData)");
+
+        // CAdES
+        m.put(SIGNING_CERTIFICATE_V2, "Signing Certificate V2 (ESS)");
+        m.put(SIGNATURE_POLICY_ID, "Signature Policy Identifier");
+        m.put(SIGNATURE_TIME_STAMP, "Signature Time-Stamp Token");
+        m.put(COMPLETE_CERTIFICATE_REFS, "Complete Certificate References (CAdES-C)");
+        m.put(COMPLETE_REVOCATION_REFS, "Complete Revocation References (CAdES-C)");
+        m.put(CERTIFICATE_VALUES, "Certificate Values (CAdES-X Long)");
+        m.put(REVOCATION_VALUES, "Revocation Values (CAdES-X Long)");
+        m.put(CONTENT_TIME_STAMP, "Content Time-Stamp (ES-C)");
+
+        // PKCS#9 signed attributes
+        m.put(ATTR_CONTENT_TYPE, "Content Type");
+        m.put(ATTR_MESSAGE_DIGEST, "Message Digest");
+        m.put(ATTR_SIGNING_TIME, "Signing Time");
+        m.put(ATTR_COUNTERSIGNATURE, "Countersignature");
+        m.put(ATTR_EXTENSION_REQUEST, "Extension Request");
+        m.put(ID_CMS_MAC_ATTR, "CMS Content MAC Attribute (1.2.643.7.1.0.6.1.1)");
+
+        // Key agreement / key wrap
+        m.put(AGREEMENT_VKO_256, "VKO GOST R 34.10-2012 (256)");
+        m.put(AGREEMENT_VKO_512, "VKO GOST R 34.10-2012 (512)");
+        m.put(WRAP_KUZNYECHIK, "Kuznyechik Key Wrap");
+        m.put(WRAP_KUZNYECHIK_KEXP15, "Kuznyechik KExp15 Key Wrap");
+        m.put(KUZ_CTR_ACPKM, "Kuznyechik CTR-ACPKM");
+        m.put(KUZ_CTR_ACPKM_OMAC, "Kuznyechik CTR-ACPKM-OMAC");
+
+        // HMAC
+        m.put(HMAC_STREEBOG_256, "HMAC-Streebog-256");
+        m.put(HMAC_STREEBOG_512, "HMAC-Streebog-512");
+
+        // PKCS#12
+        m.put(BAG_PKCS8_SHROUDED_KEY, "PKCS#8 Shrouded Key Bag");
+        m.put(BAG_CERT, "Certificate Bag");
+        m.put(ATTR_FRIENDLY_NAME, "Friendly Name");
+        m.put(ATTR_LOCAL_KEY_ID, "Local Key ID");
+        m.put(PBES2, "PBES2");
+        m.put(PBKDF2, "PBKDF2");
+        m.put(PKCS9_X509_CERT, "X.509 Certificate");
+
+        OID_TO_DISPLAY_NAME = java.util.Collections.unmodifiableMap(m);
+    }
+
+    /**
+     * Возвращает человекочитаемое имя для OID, или сам OID если имя неизвестно.
+     *
+     * @param oid идентификатор OID в точечной нотации (например "1.2.643.7.1.1.3.2")
+     * @return отображаемое имя или исходная строка OID
+     */
+    public static String displayName(String oid) {
+        if (oid == null) {
+            return "null";
+        }
+        String name = OID_TO_DISPLAY_NAME.get(oid);
+        return name != null ? name : oid;
+    }
 
     private GostOids() {}
 }

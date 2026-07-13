@@ -6,8 +6,6 @@ import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -405,10 +403,7 @@ public final class GostCrl {
 
         // Верификация подписи
         int hlen = caKey.getParams().hlen;
-        Digest.Algorithm hashAlg =
-                hlen == GostOids.STREEBOG_512_HASH_LEN
-                        ? Digest.Algorithm.STREEBOG_512
-                        : Digest.Algorithm.STREEBOG_256;
+        Digest.Algorithm hashAlg = GostSignatureHelper.digestAlgByHlen(hlen);
         Digest digest = new Digest(hashAlg);
         digest.update(crlData, tbsStart, tbsLen);
         byte[] hash = digest.digest();
@@ -497,7 +492,7 @@ public final class GostCrl {
                 if (tag == TAG_UTC_TIME || tag == TAG_GENERALIZED_TIME) {
                     int[] revTimeTlv = readTlv(crlData, rcPos);
                     Instant d = parseTime(crlData, rcPos);
-                    revDate = formatGeneralizedTime(d);
+                    revDate = GostSignatureHelper.formatGeneralizedTime(d);
                     rcPos = revTimeTlv[1];
                 }
             }
@@ -714,7 +709,7 @@ public final class GostCrl {
                     this.baseCrlNumber = parseExtensionInteger(der, afterOid, oce);
                     if (!allowDelta) {
                         throw new PkixException(
-                                PkixException.Reason.IDP_NOT_SUPPORTED,
+                                PkixException.Reason.DELTA_CRL_NOT_SUPPORTED,
                                 "CRL: delta CRL not supported (deltaCRLIndicator present)");
                     }
                 }
@@ -907,13 +902,6 @@ public final class GostCrl {
             }
         }
         return null;
-    }
-
-    private static final DateTimeFormatter GEN_TIME =
-            DateTimeFormatter.ofPattern("yyyyMMddHHmmss'Z'").withZone(ZoneOffset.UTC);
-
-    private static String formatGeneralizedTime(Instant d) {
-        return GEN_TIME.format(d);
     }
 
     // ========================================================================

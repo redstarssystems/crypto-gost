@@ -29,16 +29,16 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         CrlVerifier.verify(baseCrl, deltaCrl, UNUSED_SERIAL, kp.getPublic(), issuerDn);
     }
@@ -51,17 +51,17 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
                         .addRevoked(TEST_SERIAL, "20250601120000Z")
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -77,17 +77,17 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
                         .addRevoked(TEST_SERIAL, "20250601120000Z")
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -106,21 +106,21 @@ class CrlVerifierTest {
                 new RevokedEntry(
                         TEST_SERIAL, "20250601120000Z", ReasonCode.KEY_COMPROMISE, null, null);
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
                         .addRevoked(List.of(baseEntry))
-                        .build();
+                        .sign(kp.getPrivate());
 
         RevokedEntry deltaEntry =
                 new RevokedEntry(
                         TEST_SERIAL, "20250602120000Z", ReasonCode.REMOVE_FROM_CRL, null, null);
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
                         .addRevoked(List.of(deltaEntry))
-                        .build();
+                        .sign(kp.getPrivate());
 
         // REMOVE_FROM_CRL — сертификат удалён из base, не отозван
         CrlVerifier.verify(baseCrl, deltaCrl, TEST_SERIAL, kp.getPublic(), issuerDn);
@@ -137,20 +137,20 @@ class CrlVerifierTest {
                 new RevokedEntry(
                         TEST_SERIAL, "20250601120000Z", ReasonCode.KEY_COMPROMISE, null, null);
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
                         .addRevoked(List.of(baseEntry))
-                        .build();
+                        .sign(kp.getPrivate());
 
         RevokedEntry deltaEntry =
                 new RevokedEntry(TEST_SERIAL, "20250602120000Z", ReasonCode.SUPERSEDED, null, null);
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
                         .addRevoked(List.of(deltaEntry))
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -166,13 +166,12 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
-        byte[] notDeltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn).withCrlNumber(2).build();
+        byte[] notDeltaCrl = GostCrlBuilder.create(issuerDn).withCrlNumber(2).sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -190,16 +189,16 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(99)
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -215,15 +214,13 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
-                        .nextUpdate("20990601120000Z")
-                        .build();
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -239,18 +236,18 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .thisUpdate("20900101000000Z")
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .thisUpdate("20890101000000Z")
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -267,16 +264,16 @@ class CrlVerifierTest {
         byte[] issuerDn2 = GostDnParser.encodeDn("CN=Test CA 2");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn1)
+                GostCrlBuilder.create(issuerDn1)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn2)
+                GostCrlBuilder.create(issuerDn2)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -292,17 +289,17 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
                         .addRevoked(TEST_SERIAL, "20250601120000Z")
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         // Пустой delta CRL — сертификат всё ещё отозван в base
         assertThrows(
@@ -322,11 +319,11 @@ class CrlVerifierTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(3)
                         .addRevoked(OTHER_SERIAL, "20250601120000Z")
-                        .build();
+                        .sign(kp.getPrivate());
         CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn, BigInteger.valueOf(3));
     }
 
@@ -337,11 +334,11 @@ class CrlVerifierTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(2)
                         .addRevoked(OTHER_SERIAL, "20250601120000Z")
-                        .build();
+                        .sign(kp.getPrivate());
         assertThrows(
                 PkixException.class,
                 () ->
@@ -361,11 +358,11 @@ class CrlVerifierTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(5)
                         .addRevoked(OTHER_SERIAL, "20250601120000Z")
-                        .build();
+                        .sign(kp.getPrivate());
         CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn, BigInteger.valueOf(2));
     }
 
@@ -376,9 +373,7 @@ class CrlVerifierTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
-                        .nextUpdate("20990601120000Z")
-                        .build();
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
         assertThrows(
                 PkixException.class,
                 () ->
@@ -394,9 +389,7 @@ class CrlVerifierTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
-                        .nextUpdate("20990601120000Z")
-                        .build();
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
         CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn, (BigInteger) null);
     }
 
@@ -407,9 +400,7 @@ class CrlVerifierTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
-                        .nextUpdate("20990601120000Z")
-                        .build();
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
         assertThrows(
                 PkixException.class,
                 () -> CrlVerifier.verify(crlDer, (byte[]) null, kp.getPublic(), issuerDn),
@@ -423,15 +414,15 @@ class CrlVerifierTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
         assertThrows(
                 PkixException.class,
                 () ->
@@ -459,10 +450,10 @@ class CrlVerifierTest {
         byte[] canonicalSerial = new byte[] {0x01};
 
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .addRevoked(nonCanonicalSerial, "20250601120000Z")
-                        .build();
+                        .sign(kp.getPrivate());
 
         GostCrl crl = new GostCrl(crlDer);
         crl.verify(kp.getPublic());
@@ -473,7 +464,7 @@ class CrlVerifierTest {
     }
 
     // ========================================================================
-    // certIssuerDn обязателен (plan 182)
+    // certIssuerDn обязателен
     // ========================================================================
 
     @Test
@@ -483,9 +474,7 @@ class CrlVerifierTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
-                        .nextUpdate("20990601120000Z")
-                        .build();
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
         assertThrows(
                 PkixException.class,
                 () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), (byte[]) null),
@@ -500,9 +489,7 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] wrongDn = GostDnParser.encodeDn("CN=Wrong CA");
         byte[] crlDer =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
-                        .nextUpdate("20990601120000Z")
-                        .build();
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
         assertThrows(
                 PkixException.class,
                 () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), wrongDn),
@@ -518,16 +505,16 @@ class CrlVerifierTest {
         byte[] wrongDn = GostDnParser.encodeDn("CN=Wrong CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
@@ -543,16 +530,16 @@ class CrlVerifierTest {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
         byte[] baseCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
                         .withCrlNumber(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         byte[] deltaCrl =
-                GostCrlBuilder.create(kp.getPrivate(), issuerDn)
+                GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(2)
                         .withDeltaCrlIndicator(1)
-                        .build();
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,

@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.util.DerCodec;
 
 /**
@@ -194,16 +195,16 @@ class GostExtensionParserTest {
     }
 
     @Test
-    @DisplayName("SAN: iPAddress невалидной длины игнорируется")
-    void testSanMalformedIpIgnored() {
+    @DisplayName("SAN: iPAddress невалидной длины — IllegalArgumentException (fail-closed)")
+    void testSanMalformedIpRejected() {
         byte[] sanValue = DerCodec.encodeSequence(ipAddress((byte) 1, (byte) 2, (byte) 3));
         byte[] ext = extension(SAN_OID_BYTES, sanValue);
         byte[] seq = extensionsSeq(ext);
 
-        GostExtensionParser.ExtensionsResult r =
-                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
-
-        assertNull(r.sanIpAddresses, "iPAddress 3 байта — невалидная длина, игнорируется");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "iPAddress 3 байта — невалидная длина, fail-closed");
     }
 
     @Test
@@ -988,11 +989,10 @@ class GostExtensionParserTest {
     }
 
     @Test
-    @DisplayName("NameConstraints: неподдерживаемый тип rfc822Name — hasUnsupportedNameType")
+    @DisplayName("NameConstraints: rfc822Name поддерживается — извлекается в permittedRfc822Names")
     void testParseNameConstraintsUnsupportedType() {
-        // rfc822Name [1] (0x81)
-        byte[] rfc822 =
-                DerCodec.encodeTlv(0x81, "user@example.com".getBytes(StandardCharsets.US_ASCII));
+        // rfc822Name [1] (0x81) — теперь поддерживается
+        byte[] rfc822 = DerCodec.encodeTlv(0x81, "example.com".getBytes(StandardCharsets.US_ASCII));
         byte[] st = generalSubtree(rfc822);
         byte[] gs = generalSubtrees(st);
         byte[] ps = permittedSubtrees(gs);
@@ -1003,9 +1003,21 @@ class GostExtensionParserTest {
         GostExtensionParser.ExtensionsResult r =
                 GostExtensionParser.parseExtensionsFromSequence(seq, 0);
         assertNotNull(r.nameConstraints);
-        assertTrue(
+        assertNotNull(
+                r.nameConstraints.permittedRfc822Names,
+                "rfc822Name должен извлекаться в permittedRfc822Names");
+        assertEquals(
+                1, r.nameConstraints.permittedRfc822Names.length, "должен быть один rfc822Name");
+        assertEquals(
+                "example.com",
+                r.nameConstraints.permittedRfc822Names[0],
+                "rfc822Name должен совпадать");
+        assertFalse(
                 r.nameConstraints.hasUnsupportedNameType,
-                "rfc822Name должен давать hasUnsupportedNameType=true");
+                "rfc822Name теперь поддерживается — hasUnsupportedNameType должен быть false");
+        assertFalse(
+                r.nameConstraints.hasUnsupportedRfc822Form,
+                "доменная форма rfc822Name — hasUnsupportedRfc822Form должен быть false");
     }
 
     @Test
@@ -1061,5 +1073,170 @@ class GostExtensionParserTest {
         assertTrue(
                 r.nameConstraints.hasInvalidMinMax,
                 "maximum=5 — hasInvalidMinMax должно быть true");
+    }
+
+    // ========================================================================
+    // otherName юнит-тесты: валидный разбор и malformed -> IllegalArgumentException
+    // ========================================================================
+
+    private static byte[] otherNameGn(String oid, byte[] valueDer) {
+        java.io.ByteArrayOutputStream content = new java.io.ByteArrayOutputStream();
+        try {
+            content.write(DerCodec.encodeOid(oid));
+            content.write(DerCodec.encodeContextConstructed(0, valueDer));
+        } catch (java.io.IOException impossible) {
+            throw new RuntimeException(impossible);
+        }
+        return DerCodec.encodeTlv(0xA0, content.toByteArray());
+    }
+
+    @Test
+    @DisplayName("SAN: валидный otherName (UPN) — парсится в sanOtherNames")
+    void testSanOtherNameValid() {
+        byte[] upnValue =
+                DerCodec.encodeTlv(0x0C, "user@domain.ru".getBytes(StandardCharsets.UTF_8));
+        byte[] sanValue = DerCodec.encodeSequence(otherNameGn(GostOids.ID_MS_UPN, upnValue));
+        byte[] ext = extension(SAN_OID_BYTES, sanValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNotNull(r.sanOtherNames, "sanOtherNames должен быть не null");
+        assertEquals(1, r.sanOtherNames.length);
+        assertEquals(GostOids.ID_MS_UPN, r.sanOtherNames[0].oid());
+    }
+
+    @Test
+    @DisplayName("SAN: malformed otherName — нет OID -> IllegalArgumentException")
+    void testSanOtherNameNoOid() {
+        byte[] malformed = DerCodec.encodeTlv(0xA0, new byte[] {0x02, 0x01, 0x05});
+        byte[] sanValue = DerCodec.encodeSequence(malformed);
+        byte[] ext = extension(SAN_OID_BYTES, sanValue);
+        byte[] seq = extensionsSeq(ext);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "otherName без OID — fail-closed");
+    }
+
+    @Test
+    @DisplayName("SAN: malformed otherName — OID без [0] EXPLICIT -> IllegalArgumentException")
+    void testSanOtherNameNoExplicit() {
+        byte[] oidDer = DerCodec.encodeOid(GostOids.ID_MS_UPN);
+        byte[] malformed = DerCodec.encodeTlv(0xA0, oidDer);
+        byte[] sanValue = DerCodec.encodeSequence(malformed);
+        byte[] ext = extension(SAN_OID_BYTES, sanValue);
+        byte[] seq = extensionsSeq(ext);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "otherName с OID но без [0] EXPLICIT — fail-closed");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: rfc822Name mailbox-форма -> hasUnsupportedRfc822Form=true")
+    void testNcRfc822MailboxForm() {
+        byte[] mailbox =
+                DerCodec.encodeTlv(0x81, "admin@example.com".getBytes(StandardCharsets.US_ASCII));
+        byte[] st = generalSubtree(mailbox, null, null);
+        byte[] gs = generalSubtrees(st);
+        byte[] ps = permittedSubtrees(gs);
+        byte[] nc = ncSequence(ps, null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertNotNull(r.nameConstraints);
+        assertNull(
+                r.nameConstraints.permittedRfc822Names,
+                "mailbox-форма не должна попадать в permittedRfc822Names");
+        assertTrue(
+                r.nameConstraints.hasUnsupportedRfc822Form,
+                "hasUnsupportedRfc822Form должно быть true для mailbox-формы");
+    }
+
+    // ========================================================================
+    // CertificatePolicies — парсинг CPS-квалификаторов
+    // ========================================================================
+
+    @Test
+    @DisplayName("CertificatePolicies: один OID политики с CPS-квалификатором")
+    void testCpWithCpsQualifier() {
+        String cpsUri = "https://ca.example.com/cps/russian-ca.html";
+        // Строим через API CertificatePolicy — гарантирует правильный DER
+        byte[] ext =
+                GostCertificateBuilder.buildCertificatePoliciesExtension(
+                        new CertificatePolicy[] {
+                            new CertificatePolicy("1.2.643.100.113.1", cpsUri)
+                        });
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNotNull(r.certPolicies, "certPolicies не null");
+        assertEquals(1, r.certPolicies.length);
+        assertEquals("1.2.643.100.113.1", r.certPolicies[0].policyOid());
+        assertEquals(cpsUri, r.certPolicies[0].cpsUri());
+
+        // Обратная совместимость: старые поля тоже заполнены
+        assertNotNull(r.certPolicyOids);
+        assertEquals(1, r.certPolicyOids.length);
+        assertNotNull(r.cpOids);
+        assertEquals(1, r.cpOids.length);
+    }
+
+    @Test
+    @DisplayName("CertificatePolicies: mix политик с/без CPS")
+    void testCpMixedWithAndWithoutCps() {
+        String cpsUri = "https://ca.example.com/cps.html";
+        byte[] ext =
+                GostCertificateBuilder.buildCertificatePoliciesExtension(
+                        new CertificatePolicy[] {
+                            new CertificatePolicy("1.2.643.100.113.1"),
+                            new CertificatePolicy("1.2.643.100.113.2", cpsUri),
+                            new CertificatePolicy(GostOids.ANY_POLICY)
+                        });
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNotNull(r.certPolicies);
+        assertEquals(3, r.certPolicies.length);
+        assertNull(r.certPolicies[0].cpsUri());
+        assertEquals(cpsUri, r.certPolicies[1].cpsUri());
+        assertNull(r.certPolicies[2].cpsUri());
+
+        assertEquals(3, r.certPolicyOids.length);
+    }
+
+    @Test
+    @DisplayName("CertificatePolicies: без CPS — certPolicies заполнено с null cpsUri")
+    void testCpWithoutCps() {
+        byte[] cpValue =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeSequence(DerCodec.encodeTlv(TAG_OID, KC1_OID_BYTES)));
+        byte[] ext = extension(CP_OID_BYTES, cpValue);
+        byte[] seq = extensionsSeq(ext);
+
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+
+        assertNotNull(r.certPolicies, "certPolicies заполняется даже без квалификаторов");
+        assertEquals(1, r.certPolicies.length);
+        assertEquals(
+                GostOids.POLICY_KC1,
+                r.certPolicies[0].policyOid(),
+                "OID должен совпадать со старым полем");
+        assertNull(r.certPolicies[0].cpsUri());
+
+        // Старые поля работают как раньше
+        assertNotNull(r.certPolicyOids);
+        assertEquals(1, r.certPolicyOids.length);
     }
 }

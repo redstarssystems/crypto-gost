@@ -1,14 +1,19 @@
 package org.rssys.gost.pkix.cms;
 
+import java.io.IOException;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.ArrayList;
 import java.util.List;
-import org.rssys.gost.api.Digest;
-import org.rssys.gost.api.Signature;
+import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
+import org.rssys.gost.pkix.cert.GostSignatureHelper;
+import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.tsp.TspRequestBuilder;
+import org.rssys.gost.pkix.tsp.TspResponse;
+import org.rssys.gost.pkix.tsp.TspTransport;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -26,6 +31,7 @@ public final class CmsSignedDataBuilder {
     private byte[] data;
     private boolean encapsulated = true;
     private String digestOid = GostOids.DIGEST_256;
+    private boolean digestExplicitlySet;
     private String eContentTypeOid = GostOids.PKCS7_DATA;
     private final List<SignerEntry> signers = new ArrayList<>();
     private final List<GostCertificate> certificates = new ArrayList<>();
@@ -34,6 +40,9 @@ public final class CmsSignedDataBuilder {
     private final List<SignerAttribute> unsignedAttrs = new ArrayList<>();
     private boolean cadesAttributes;
     private boolean certsOnly;
+    private String contentTspUrl;
+    private TspTransport contentTspTransport;
+    private List<GostCertificate> contentTspTrustedCerts;
 
     private CmsSignedDataBuilder() {}
 
@@ -63,6 +72,7 @@ public final class CmsSignedDataBuilder {
      */
     public CmsSignedDataBuilder digestAlgorithm(String digestOid) {
         this.digestOid = digestOid;
+        this.digestExplicitlySet = true;
         return this;
     }
 
@@ -78,10 +88,33 @@ public final class CmsSignedDataBuilder {
         return this;
     }
 
-    /** Добавляет подписанта. */
-    public CmsSignedDataBuilder addSigner(PrivateKeyParameters privateKey, GostCertificate cert) {
-        signers.add(new SignerEntry(privateKey, cert));
+    /** Добавляет подписанта (может быть HSM-адаптером). */
+    public CmsSignedDataBuilder addSigner(GostSigner signer, GostCertificate cert) {
+        if (!digestExplicitlySet) {
+            int keySize = cert.getKeySize();
+            String autoOid = GostSignatureHelper.keySizeToDigestOid(keySize);
+            if (!signers.isEmpty() && !autoOid.equals(digestOid)) {
+                throw new IllegalStateException(
+                        "Mixed key sizes (256/512) require explicit digestAlgorithm() call. "
+                                + "Previous signers use "
+                                + digestOid
+                                + ", current signer requires "
+                                + autoOid);
+            }
+            digestOid = autoOid;
+        }
+        signers.add(new SignerEntry(signer, cert));
         return this;
+    }
+
+    /**
+     * Добавляет подписанта (удобная перегрузка с ключом в памяти).
+     *
+     * <p>Делегирует в {@link #addSigner(GostSigner, GostCertificate)}
+     * через {@link GostSigner#of(PrivateKeyParameters)}.
+     */
+    public CmsSignedDataBuilder addSigner(PrivateKeyParameters privateKey, GostCertificate cert) {
+        return addSigner(GostSigner.of(privateKey), cert);
     }
 
     /** Добавляет дополнительный сертификат (промежуточный CA и т.д.). */
@@ -97,6 +130,20 @@ public final class CmsSignedDataBuilder {
     public CmsSignedDataBuilder addCrl(GostCrl crl) {
         crls.add(crl);
         return this;
+    }
+
+    /**
+     * Добавляет CRL в SignedData из DER-кодированных байтов (RFC 5652 §5.1, поле crls [1] IMPLICIT).
+     *
+     * <p>Байты проходят структурный парсинг через конструктор {@link GostCrl} — невалидный DER
+     * отбрасывается сразу. Верификация подписи CRL (verify) не выполняется — это ответственность
+     * получателя CMS-сообщения.</p>
+     *
+     * @param crlDer DER-кодированный CertificateList (результат {@link GostCrlBuilder#sign})
+     * @return this
+     */
+    public CmsSignedDataBuilder addCrl(byte[] crlDer) {
+        return addCrl(new GostCrl(crlDer));
     }
 
     /** Добавляет пользовательский signed-атрибут. */
@@ -130,6 +177,25 @@ public final class CmsSignedDataBuilder {
      */
     public CmsSignedDataBuilder certsOnly() {
         this.certsOnly = true;
+        return this;
+    }
+
+    /**
+     * Добавляет content-time-stamp (ES-C time-mark, RFC 5126 §5.11.1) как signed-атрибут.
+     *
+     * <p>TSP-запрос делается на хэш контента (eContent), nonce обязателен.
+     * ContentTimestamp кодируется как SignedData с TSTInfo в EncapsulatedContentInfo.
+     *
+     * @param tspUrl          URL службы штампов времени
+     * @param tspTransport    HTTP-транспорт для TSP
+     * @param trustedTsaCerts доверенные сертификаты TSA (fail-closed)
+     * @return this
+     */
+    public CmsSignedDataBuilder contentTimestamp(
+            String tspUrl, TspTransport tspTransport, GostCertificate... trustedTsaCerts) {
+        this.contentTspUrl = tspUrl;
+        this.contentTspTransport = tspTransport;
+        this.contentTspTrustedCerts = List.of(trustedTsaCerts);
         return this;
     }
 
@@ -176,12 +242,25 @@ public final class CmsSignedDataBuilder {
         boolean is512 = GostOids.DIGEST_512.equals(digestOid);
 
         // 1. Вычисляем дайджест данных
-        byte[] dataDigest = is512 ? Digest.digest512(data) : Digest.digest256(data);
+        byte[] dataDigest = GostSignatureHelper.digestByOid(digestOid, data);
 
-        // Предвычисляем OID-кодирования для переиспользования
-        byte[] digestAlgIdDer = CmsAlgorithmIdentifier.encodeOnlyOid(digestOid);
-        String signAlgOid = is512 ? GostOids.SIGN_ALG_512 : GostOids.SIGN_ALG_256;
-        byte[] signAlgIdDer = CmsAlgorithmIdentifier.encodeOnlyOid(signAlgOid);
+        // 1a. Если задан content-time-stamp — делаем TSP-запрос и строим ContentTimestamp
+        byte[] contentTimestampDer = null;
+        if (contentTspUrl != null) {
+            contentTimestampDer = buildContentTimestamp(dataDigest);
+        }
+
+        // Предвычисляем OID-кодирования для переиспользования.
+        // digestAlgorithm (в SignedData.digestAlgorithms и SignerInfo.digestAlgorithm)
+        // несёт NULL-параметры: правило id-tc26-gost3411-2012-256/512 (Р 1323565.1.025
+        // §4.1/4.2), эталон openssl gost-engine кодирует NULL. Без NULL строгие
+        // ГОСТ-верификаторы вправе отвергнуть.
+        byte[] digestAlgIdDer = CmsAlgorithmIdentifier.encode(digestOid);
+        // SignerInfo.signatureAlgorithm несёт OID открытого ключа с NULL-параметрами
+        // (RFC 4490 §3.2), а не комбинированный signWithDigest-OID сертификата —
+        // иначе КриптоПро/openssl отвергают подпись (0x80090008 Invalid algorithm).
+        String signAlgOid = is512 ? GostOids.PUBLIC_KEY_512 : GostOids.PUBLIC_KEY_256;
+        byte[] signAlgIdDer = CmsAlgorithmIdentifier.encode(signAlgOid);
         byte[] eContentTypeOidDer = DerCodec.encodeOid(eContentTypeOid);
 
         // 2. Строим SignerInfo для каждого подписанта
@@ -196,7 +275,8 @@ public final class CmsSignedDataBuilder {
                             digestAlgIdDer,
                             signAlgIdDer,
                             eContentTypeOidDer,
-                            is512));
+                            digestOid,
+                            contentTimestampDer));
             digestAlgIds.add(digestAlgIdDer);
         }
 
@@ -228,7 +308,8 @@ public final class CmsSignedDataBuilder {
             byte[] digestAlgIdDer,
             byte[] signAlgIdDer,
             byte[] eContentTypeOidDer,
-            boolean is512) {
+            String digestOid,
+            byte[] contentTimestampDer) {
         // signedAttrs: contentType + messageDigest + пользовательские
         List<byte[]> attrList = new ArrayList<>();
 
@@ -252,6 +333,11 @@ public final class CmsSignedDataBuilder {
                             CAdESAttributes.signingCertificateV2(entry.certificate)));
         }
 
+        // ES-C: content-time-stamp (RFC 5126 §5.11.1)
+        if (contentTimestampDer != null) {
+            attrList.add(CmsAttribute.encode(GostOids.CONTENT_TIME_STAMP, contentTimestampDer));
+        }
+
         // SET OF signedAttrs (DER-сортировка) — для хэширования используется
         // кодирование с тегом SET (0x31), а не [0] IMPLICIT (RFC 5652 §5.4)
         byte[][] sortedAttrs = attrList.toArray(new byte[0][]);
@@ -263,9 +349,8 @@ public final class CmsSignedDataBuilder {
                 DerCodec.encodeContextConstructed(0, DerCodec.concat(sortedAttrs));
 
         // Вычисляем хэш SET-кодированных signedAttrs и подписываем
-        byte[] signedAttrsHash =
-                is512 ? Digest.digest512(signedAttrsForHash) : Digest.digest256(signedAttrsForHash);
-        byte[] signatureValue = Signature.signHash(signedAttrsHash, entry.privateKey);
+        byte[] signedAttrsHash = GostSignatureHelper.digestByOid(digestOid, signedAttrsForHash);
+        byte[] signatureValue = GostSignatureHelper.signHashChecked(signedAttrsHash, entry.signer);
 
         // sid
         byte[] sid =
@@ -391,12 +476,12 @@ public final class CmsSignedDataBuilder {
     // ========================================================================
 
     private static class SignerEntry {
-        final PrivateKeyParameters privateKey;
+        final GostSigner signer;
         final GostCertificate certificate;
         private byte[] certDer;
 
-        SignerEntry(PrivateKeyParameters privateKey, GostCertificate certificate) {
-            this.privateKey = privateKey;
+        SignerEntry(GostSigner signer, GostCertificate certificate) {
+            this.signer = signer;
             this.certificate = certificate;
         }
 
@@ -415,6 +500,40 @@ public final class CmsSignedDataBuilder {
         SignerAttribute(String oid, byte[] value) {
             this.oid = oid;
             this.value = value.clone();
+        }
+    }
+
+    /**
+     * Строит ContentTimestamp (SignedData с TSTInfo) через TSP-запрос на хэш контента.
+     *
+     * <p>ContentTimestamp = TimeStampToken, то есть SignedData с TSTInfo как eContent.
+     * Nonce обязателен, ответ проверяется: messageImprint, nonce, подпись TSA, цепочка
+     * TSA до доверенных сертификатов (fail-closed).
+     *
+     * @param dataDigest хэш контента (eContent)
+     * @return DER ContentTimestamp (TimeStampToken)
+     */
+    private byte[] buildContentTimestamp(byte[] dataDigest) {
+        if (contentTspTrustedCerts == null || contentTspTrustedCerts.isEmpty()) {
+            throw new IllegalStateException("contentTimestamp requires trusted TSA certificates");
+        }
+
+        try {
+            TspRequestBuilder reqBuilder =
+                    TspRequestBuilder.create().messageImprint(dataDigest, digestOid);
+            byte[] request = reqBuilder.build();
+            byte[] response = contentTspTransport.send(request, contentTspUrl);
+
+            TspResponse tspResponse = TspResponse.fromDer(response);
+            tspResponse.verify(
+                    dataDigest,
+                    digestOid,
+                    reqBuilder.getNonce(),
+                    contentTspTrustedCerts.toArray(GostCertificate[]::new));
+
+            return tspResponse.timeStampTokenDer();
+        } catch (IOException | PkixException e) {
+            throw new IllegalStateException("Content-time-stamp TSP request failed", e);
         }
     }
 }

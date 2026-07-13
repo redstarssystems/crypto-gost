@@ -320,10 +320,10 @@ class TlsCrlVerifierTest {
     @DisplayName("thisUpdate в будущем -> отказ")
     void testThisUpdateInFuture() throws Exception {
         byte[] crl =
-                GostCrlBuilder.create(root.priv, root.subjectDn)
+                GostCrlBuilder.create(root.subjectDn)
                         .thisUpdate("21000101120000Z") // thisUpdate = далёкое будущее
                         .nextUpdate("21000201120000Z") // nextUpdate = ещё дальше
-                        .build();
+                        .sign(root.priv);
         PkixException ex =
                 assertThrows(
                         PkixException.class,
@@ -350,10 +350,10 @@ class TlsCrlVerifierTest {
         String thisUpdate3minFuture = fmt.format(future);
 
         byte[] crl =
-                GostCrlBuilder.create(root.priv, root.subjectDn)
+                GostCrlBuilder.create(root.subjectDn)
                         .thisUpdate(thisUpdate3minFuture)
                         .nextUpdate("20300101120000Z")
-                        .build();
+                        .sign(root.priv);
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verify(
@@ -367,10 +367,10 @@ class TlsCrlVerifierTest {
     @DisplayName("thisUpdate в прошлом -> OK (нормальный CRL)")
     void testThisUpdateInPast() throws Exception {
         byte[] crl =
-                GostCrlBuilder.create(root.priv, root.subjectDn)
+                GostCrlBuilder.create(root.subjectDn)
                         .thisUpdate("20200101120000Z") // thisUpdate в прошлом
                         .nextUpdate("20300101120000Z") // nextUpdate в будущем
-                        .build();
+                        .sign(root.priv);
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verify(

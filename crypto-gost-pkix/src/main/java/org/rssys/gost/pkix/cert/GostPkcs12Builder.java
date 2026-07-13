@@ -40,6 +40,10 @@ public final class GostPkcs12Builder {
 
     public static final class Builder {
         private static final int LOCAL_KEY_ID_LEN = 20;
+        // friendlyName кодируется в BMPString (UTF-16BE). Лимит задаём в байтах UTF-16BE,
+        // чтобы проверка совпадала с фактическим размером атрибута; 128 байт = 64 BMP-символа
+        // (сохраняет прежний бюджет для ASCII-имён).
+        private static final int MAX_FRIENDLY_NAME_BMP_BYTES = 128;
 
         private PrivateKeyParameters key;
         private GostCertificate certificate;
@@ -118,10 +122,17 @@ public final class GostPkcs12Builder {
 
         public Builder friendlyName(String friendlyName) {
             if (friendlyName != null) {
-                byte[] utf8 = friendlyName.getBytes(StandardCharsets.UTF_8);
-                if (utf8.length > 64) {
+                // Измеряем в тех же байтах UTF-16BE, что и реальное кодирование в BMPString
+                // (buildFriendlyNameAttribute): иначе проверка UTF-8 не отражала бы фактический
+                // размер атрибута (BMPString вдвое длиннее для ASCII).
+                int bmpBytes = friendlyName.getBytes(StandardCharsets.UTF_16BE).length;
+                if (bmpBytes > MAX_FRIENDLY_NAME_BMP_BYTES) {
                     throw new IllegalArgumentException(
-                            "friendlyName too long: " + utf8.length + " UTF-8 bytes (max 64)");
+                            "friendlyName too long: "
+                                    + bmpBytes
+                                    + " UTF-16BE bytes (max "
+                                    + MAX_FRIENDLY_NAME_BMP_BYTES
+                                    + ")");
                 }
             }
             this.friendlyName = friendlyName;

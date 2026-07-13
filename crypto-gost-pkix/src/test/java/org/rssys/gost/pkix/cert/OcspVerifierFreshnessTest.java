@@ -43,11 +43,10 @@ class OcspVerifierFreshnessTest {
 
     private byte[] ocspNoNextUpdate(Instant thisUpdate) throws Exception {
         return GostOcspResponseBuilder.create(leaf.cert.getSerialNumber())
-                .signer(ca.priv, ca.cert.getPublicKey())
                 .issuerDn(ca.subjectDn)
                 .thisUpdate(thisUpdate)
                 .noNextUpdate()
-                .build();
+                .sign(ca.priv);
     }
 
     @Test

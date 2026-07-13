@@ -90,13 +90,12 @@ class BcOcspCrossValidationTest {
     @DisplayName("GOST-ответ good -> BC BasicOCSPResp парсинг")
     void gostRespGoodToBc() throws Exception {
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(caKp256.getPrivate(), caKp256.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .good()
-                .build();
+                .sign(caKp256.getPrivate());
 
         OCSPResp ocspResp = new OCSPResp(ocspDer);
         assertEquals(OCSPRespBuilder.SUCCESSFUL, ocspResp.getStatus());
@@ -113,13 +112,12 @@ class BcOcspCrossValidationTest {
     @DisplayName("GOST-ответ revoked -> BC RevokedStatus")
     void gostRespRevokedToBc() throws Exception {
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(caKp256.getPrivate(), caKp256.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .revoked("20260515120000Z")
-                .build();
+                .sign(caKp256.getPrivate());
 
         BasicOCSPResp basic = (BasicOCSPResp) new OCSPResp(ocspDer).getResponseObject();
         assertTrue(basic.getResponses()[0].getCertStatus() instanceof RevokedStatus);
@@ -129,13 +127,12 @@ class BcOcspCrossValidationTest {
     @DisplayName("GOST-ответ unknown -> BC UnknownStatus")
     void gostRespUnknownToBc() throws Exception {
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(caKp256.getPrivate(), caKp256.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .unknown()
-                .build();
+                .sign(caKp256.getPrivate());
 
         BasicOCSPResp basic = (BasicOCSPResp) new OCSPResp(ocspDer).getResponseObject();
         assertTrue(basic.getResponses()[0].getCertStatus() instanceof UnknownStatus);
@@ -147,14 +144,13 @@ class BcOcspCrossValidationTest {
         byte[] nonceVal = new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(caKp256.getPrivate(), caKp256.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .nonce(nonceVal)
                 .good()
-                .build();
+                .sign(caKp256.getPrivate());
 
         BasicOCSPResp basic = (BasicOCSPResp) new OCSPResp(ocspDer).getResponseObject();
         Extension nonceExt = basic.getExtension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce);
@@ -170,14 +166,13 @@ class BcOcspCrossValidationTest {
                 caKp256, caCert256, "CN=Responder");
 
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(responderKp.getPrivate(), responderKp.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .withDelegatedCerts(responderCert.getEncoded())
                 .good()
-                .build();
+                .sign(responderKp.getPrivate());
 
         BasicOCSPResp basic = (BasicOCSPResp) new OCSPResp(ocspDer).getResponseObject();
         assertNotNull(basic.getCerts());
@@ -188,13 +183,12 @@ class BcOcspCrossValidationTest {
     @DisplayName("GOST-ответ -> BC isSignatureValid")
     void gostRespSignatureVerifyByBc() throws Exception {
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(caKp256.getPrivate(), caKp256.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .good()
-                .build();
+                .sign(caKp256.getPrivate());
 
         X509Certificate bcCa = BcOcspHelper.gostCertToBcX509Cert(caCert256);
         JcaContentVerifierProviderBuilder verifierBuilder =
@@ -212,13 +206,12 @@ class BcOcspCrossValidationTest {
         GostCertificate leaf512 = buildLeaf(PARAMS_512, leaf512Kp, caKp512, caCert512, "CN=Leaf512");
 
         byte[] ocspDer = GostOcspResponseBuilder.create(leaf512.getSerialNumber())
-                .signer(caKp512.getPrivate(), caKp512.getPublic())
                 .issuerDn(caCert512.getSubjectDnBytes())
                 .caPublicKey(caKp512.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .good()
-                .build();
+                .sign(caKp512.getPrivate());
 
         BasicOCSPResp basic = (BasicOCSPResp) new OCSPResp(ocspDer).getResponseObject();
         assertEquals(1, basic.getResponses().length);
@@ -375,12 +368,11 @@ class BcOcspCrossValidationTest {
     @DisplayName("GOST byKey ответ -> BC BasicOCSPResp.readObject")
     void gostByKeyRespToBc() throws Exception {
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(caKp256.getPrivate(), caKp256.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .withResponderByKey()
                 .good()
-                .build();
+                .sign(caKp256.getPrivate());
 
         OCSPResp ocspResp = new OCSPResp(ocspDer);
         assertEquals(OCSPRespBuilder.SUCCESSFUL, ocspResp.getStatus());
@@ -495,13 +487,12 @@ class BcOcspCrossValidationTest {
     void certIdCrossCheck() throws Exception {
         // Строим OCSP-ответ через GOST
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(caKp256.getPrivate(), caKp256.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .good()
-                .build();
+                .sign(caKp256.getPrivate());
 
         // GOST парсит — извлекаем issuerNameHash/issuerKeyHash из SingleResponse
         GostOcspResponse gostResp = GostOcspResponse.fromDer(ocspDer);
@@ -527,13 +518,12 @@ class BcOcspCrossValidationTest {
     @DisplayName("Tampered подпись OCSP -> BC isSignatureValid = false")
     void tamperedOcspSigRejectedByBc() throws Exception {
         byte[] ocspDer = GostOcspResponseBuilder.create(leafCert256.getSerialNumber())
-                .signer(caKp256.getPrivate(), caKp256.getPublic())
                 .issuerDn(caCert256.getSubjectDnBytes())
                 .caPublicKey(caKp256.getPublic())
                 .producedAt("20260601000000Z")
                 .thisUpdate("20260601000000Z")
                 .good()
-                .build();
+                .sign(caKp256.getPrivate());
 
         byte[] tampered = ocspDer.clone();
         tampered[tampered.length - 1] ^= 0xFF;
@@ -585,9 +575,85 @@ class BcOcspCrossValidationTest {
     }
 
     // ========================================================================
-    // Хелперы
+    // id-pkix-ocsp-nocheck (RFC 6960 §4.2.2.2.1): кросс-валидация кодировки
     // ========================================================================
 
+    // Каноническая extnValue: OCTET STRING, оборачивающий DER NULL. Именно байты
+    // фиксируем, а не «команда не упала»: исторически часть реализаций кодирует
+    // пустой OCTET STRING (04 00), что несовместимо с 04 02 05 00.
+    private static final byte[] NOCHECK_EXTN_VALUE = {0x04, 0x02, 0x05, 0x00};
+
+    @Test
+    @DisplayName("GOST cert с ocspNoCheck -> BC парсит расширение, extnValue = 04 02 05 00")
+    void gostNoCheck_parsedByBc() throws Exception {
+        org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(PARAMS_256);
+        GostCertificate cert =
+                GostCertificateBuilder.create(PARAMS_256, "CN=GOST Responder")
+                        .publicKey(kp.getPublic())
+                        .issuerDn(caCert256.getSubjectDnBytes())
+                        .notBefore("20250101000000Z")
+                        .notAfter("20250103000000Z")
+                        .extendedKeyUsage(GostOids.EXT_OCSP_SIGNING)
+                        .ocspNoCheck()
+                        .serial(BigInteger.valueOf(1))
+                        .sign(caKp256.getPrivate());
+
+        X509CertificateHolder holder = new X509CertificateHolder(cert.getEncoded());
+        Extension ext = holder.getExtension(OCSPObjectIdentifiers.id_pkix_ocsp_nocheck);
+        assertNotNull(ext, "BC обязан увидеть расширение id-pkix-ocsp-nocheck");
+        assertFalse(ext.isCritical(), "nocheck обязано быть non-critical");
+        assertArrayEquals(
+                NOCHECK_EXTN_VALUE,
+                ext.getExtnValue().getEncoded(),
+                "extnValue должно быть OCTET STRING, оборачивающий DER NULL (04 02 05 00)");
+    }
+
+    @Test
+    @DisplayName("BC cert с ocsp-nocheck -> GOST hasOcspNoCheck() == true, кодировка совпадает")
+    void bcNoCheck_readByGost() throws Exception {
+        KeyPair kp = BcOcspHelper.generateBcKeyPair(PARAMS_256);
+        X500Name dn = new X500Name("CN=BC Responder NoCheck");
+        BigInteger serial = BigInteger.valueOf(System.currentTimeMillis());
+        Date nb = new Date(System.currentTimeMillis() - 86400000L);
+        Date na = new Date(System.currentTimeMillis() + 86400000L);
+        JcaX509v3CertificateBuilder cb =
+                new JcaX509v3CertificateBuilder(dn, serial, nb, na, dn, kp.getPublic());
+        cb.addExtension(
+                org.bouncycastle.asn1.x509.Extension.extendedKeyUsage,
+                false,
+                new org.bouncycastle.asn1.x509.ExtendedKeyUsage(
+                        org.bouncycastle.asn1.x509.KeyPurposeId.id_kp_OCSPSigning));
+        cb.addExtension(
+                OCSPObjectIdentifiers.id_pkix_ocsp_nocheck,
+                false,
+                org.bouncycastle.asn1.DERNull.INSTANCE);
+        ContentSigner signer =
+                new JcaContentSignerBuilder("GOST3411-2012-256WITHECGOST3410-2012-256")
+                        .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                        .build(kp.getPrivate());
+        X509CertificateHolder holder = cb.build(signer);
+        X509Certificate bcCert =
+                new JcaX509CertificateConverter()
+                        .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                        .getCertificate(holder);
+
+        GostCertificate gostCert = new GostCertificate(bcCert.getEncoded());
+        assertTrue(
+                gostCert.hasOcspNoCheck(),
+                "GOST обязан распознать nocheck в BC-построенном сертификате");
+        // BC независимо кодирует DERNull.INSTANCE как 04 02 05 00 — подтверждает,
+        // что наша каноническая кодировка совпадает с эталонной реализацией.
+        assertArrayEquals(
+                NOCHECK_EXTN_VALUE,
+                holder.getExtension(OCSPObjectIdentifiers.id_pkix_ocsp_nocheck)
+                        .getExtnValue()
+                        .getEncoded(),
+                "BC-кодировка nocheck должна совпадать с канонической (04 02 05 00)");
+    }
+
+    // ========================================================================
+    // Хелперы
+    // ========================================================================
     private static GostCertificate buildCa(ECParameters params,
                                            org.rssys.gost.api.KeyPair caKp, String dn) {
         return GostCertificateBuilder.create(params, dn)
@@ -596,7 +662,8 @@ class BcOcspCrossValidationTest {
                 .notAfter("20351231235959Z")
                 .basicConstraints(true, null)
                 .keyUsage(KeyUsage.KEY_CERT_SIGN)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(2))
+                .sign(caKp.getPrivate());
     }
 
     private static GostCertificate buildLeaf(ECParameters params,
@@ -609,6 +676,7 @@ class BcOcspCrossValidationTest {
                 .notBefore("20250101000000Z")
                 .notAfter("20261231235959Z")
                 .keyUsage(KeyUsage.DIGITAL_SIGNATURE)
-                .assembleCert(caKp.getPrivate());
+                .serial(BigInteger.valueOf(3))
+                .sign(caKp.getPrivate());
     }
 }

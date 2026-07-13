@@ -59,8 +59,8 @@ class OpenSslCsrCrossValidationTest {
             KeyPair kp = KeyGenerator.generateKeyPair(PARAMS_256);
 
             // Строим CSR библиотекой
-            byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(),
-                    "CN=OsslVerify,O=Test");
+            byte[] csrDer = GostCsrBuilder.create("CN=OsslVerify,O=Test", kp.getPublic())
+                    .sign(kp.getPrivate());
             Path csrPath = dir.resolve("csr.der");
             Files.write(csrPath, csrDer);
 
@@ -128,8 +128,8 @@ class OpenSslCsrCrossValidationTest {
         TempDirUtils.withTempDir("csr-tamper-", dir -> {
             KeyPair kp = KeyGenerator.generateKeyPair(PARAMS_256);
 
-            byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(),
-                    "CN=Tamper");
+            byte[] csrDer = GostCsrBuilder.create("CN=Tamper", kp.getPublic())
+                    .sign(kp.getPrivate());
             // Портим последний байт сигнатуры
             csrDer[csrDer.length - 1] ^= 0x01;
 
@@ -215,8 +215,8 @@ class OpenSslCsrCrossValidationTest {
             String curveName = params.hlen == 64 ? "512" : "256";
 
             // Библиотека -> DER -> openssl verify
-            byte[] csrDer = GostCsrBuilder.buildCsr(kp.getPrivate(), kp.getPublic(),
-                    "CN=Curve" + curveName);
+            byte[] csrDer = GostCsrBuilder.create("CN=Curve" + curveName, kp.getPublic())
+                    .sign(kp.getPrivate());
             Path csrPath = dir.resolve("csr.der");
             Files.write(csrPath, csrDer);
 
@@ -234,6 +234,40 @@ class OpenSslCsrCrossValidationTest {
             assertEquals("CN=Curve" + curveName, parsed.getSubjectDn());
             assertTrue(parsed.verifySelf());
             assertNotNull(parsed.getPublicKey());
+            return null;
+        });
+    }
+
+    // ========================================================================
+    // Сценарий 6: библиотека строит CSR с extensionRequest -> openssl req -text
+    // ========================================================================
+
+    @Test
+    @EnabledIf("opensslAvailable")
+    @DisplayName("Сценарий 6: библиотека CSR с extensionRequest -> openssl req -text")
+    void testLibraryCsrWithExtensionsVerifiedByOpensslText() throws Exception {
+        TempDirUtils.withTempDir("csr-libext-", dir -> {
+            KeyPair kp = KeyGenerator.generateKeyPair(PARAMS_256);
+
+            byte[] csrDer =
+                    GostCsrBuilder.create("CN=LibSanTest", kp.getPublic())
+                            .sanDns("libsan.example.com")
+                            .sign(kp.getPrivate());
+
+            Path csrPath = dir.resolve("libext.der");
+            Files.write(csrPath, csrDer);
+
+            // openssl req -verify -text — проверяет proof-of-possession и наличие Requested Extensions
+            String[] cmd = CrossValUtils.concat(
+                    new String[]{opensslBinary(), "req", "-verify", "-text", "-noout"},
+                    engineFlags(),
+                    new String[]{"-in", csrPath.toString(), "-inform", "DER"}
+            );
+            String output = OpenSslChecker.runAndCapture(cmd);
+            assertTrue(output.contains("Requested Extensions"),
+                    "Вывод openssl должен содержать 'Requested Extensions'");
+            assertTrue(output.contains("libsan.example.com"),
+                    "Вывод openssl должен содержать SAN dNSName 'libsan.example.com'");
             return null;
         });
     }

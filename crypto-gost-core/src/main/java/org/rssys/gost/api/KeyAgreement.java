@@ -158,6 +158,72 @@ public final class KeyAgreement {
     }
 
     /**
+     * VKO GOST R 34.10-2012 на 512-битной кривой (RFC 7836 §4.3.1).
+     *
+     * <p>Отличается от {@link #vkoGostR3410_2012_256} финальной хэш-функцией
+     * (Стрибог-512) и ожидаемой длиной выхода {@code hlen = 64}.
+     *
+     * @param myPriv   мой закрытый ключ
+     * @param peerPub  публичный ключ пира
+     * @param ukm      синхропосылка UKM (множитель, не raw-байты)
+     * @return KEK длиной 64 байта
+     * @throws IllegalArgumentException если ключи null, UKM невалидный, кривые не совпадают
+     * @throws IllegalStateException    если результат — точка на бесконечности
+     */
+    public static byte[] vkoGostR3410_2012_512(
+            PrivateKeyParameters myPriv, PublicKeyParameters peerPub, BigInteger ukm) {
+        if (myPriv == null || peerPub == null) {
+            throw new IllegalArgumentException("Keys must not be null");
+        }
+        if (ukm == null) {
+            throw new IllegalArgumentException("UKM must not be null");
+        }
+        if (ukm.signum() < 0) {
+            throw new IllegalArgumentException("UKM must be non-negative");
+        }
+        if (ukm.signum() == 0) {
+            throw new IllegalArgumentException("UKM must not be zero");
+        }
+
+        ECParameters myParams = myPriv.getParams();
+        ECParameters peerParams = peerPub.getParams();
+        if (!curvesMatch(myParams, peerParams)) {
+            throw new IllegalArgumentException("Key curve mismatch");
+        }
+        if (!peerPub.getQ().isValidPublicKey()) {
+            throw new IllegalArgumentException("peer public key point is not valid");
+        }
+
+        BigInteger scalar =
+                myPriv.getD()
+                        .multiply(BigInteger.valueOf(myParams.cofactor))
+                        .multiply(ukm)
+                        .mod(myParams.n);
+        ECPoint shared = peerPub.getQ().multiply(scalar);
+        shared = shared.normalize();
+        if (shared.isInfinity()) {
+            throw new IllegalStateException("ECDH shared secret is point at infinity");
+        }
+
+        BigInteger x = shared.getX();
+        BigInteger y = shared.getY();
+        byte[] xRawBe = toFixedLengthBytes(x, myParams.hlen);
+        byte[] yRawBe = toFixedLengthBytes(y, myParams.hlen);
+        byte[] xLe = Pack.reverseBytes(xRawBe);
+        byte[] yLe = Pack.reverseBytes(yRawBe);
+        byte[] pointLe = new byte[myParams.hlen * 2];
+        System.arraycopy(xLe, 0, pointLe, 0, myParams.hlen);
+        System.arraycopy(yLe, 0, pointLe, myParams.hlen, myParams.hlen);
+        try {
+            return Digest.digest512(pointLe);
+        } finally {
+            Arrays.fill(xLe, (byte) 0);
+            Arrays.fill(yLe, (byte) 0);
+            Arrays.fill(pointLe, (byte) 0);
+        }
+    }
+
+    /**
      * Разные кривые дают несвязанные shared secrets — fail-closed.
      * Сравнение по модулю {@code p}, порядку группы {@code n} и длине хэша {@code hlen}
      * однозначно идентифицирует кривую для всех стандартных ГОСТ-кривых.

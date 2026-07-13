@@ -10,7 +10,7 @@ import org.rssys.gost.jsse.crl.CrlPolicy;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
 
-@DisplayName("GostSslBuilder: конфигурация лимитов CRL/OCSP (план 200, часть B)")
+@DisplayName("GostSslBuilder: конфигурация лимитов CRL/OCSP")
 class GostSslBuilderCrlConfigTest {
 
     private static byte[] rootCaPem() throws Exception {

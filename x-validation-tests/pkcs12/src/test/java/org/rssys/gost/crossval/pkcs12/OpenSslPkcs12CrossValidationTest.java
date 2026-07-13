@@ -22,6 +22,7 @@ import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -252,7 +253,8 @@ class OpenSslPkcs12CrossValidationTest {
                     .notBefore("20250101000000Z")
                     .notAfter("21010101000000Z")
                     .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                    .assembleCert(privKey);
+                    .serial(BigInteger.valueOf(1))
+                    .sign(privKey);
 
             byte[] pfx = GostPkcs12Builder.create()
                     .key(privKey)
