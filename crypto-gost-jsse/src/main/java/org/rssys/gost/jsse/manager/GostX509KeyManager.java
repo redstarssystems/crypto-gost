@@ -77,7 +77,7 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
     public X509Certificate[] getCertificateChain(String alias) {
         for (KeyEntry entry : entries) {
             if (entry.alias.equals(alias)) {
-                return entry.chain.clone();
+                return entry.chain != null ? entry.chain.clone() : null;
             }
         }
         return null;
@@ -93,7 +93,7 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
     public List<GostCertificate> getCertificateChainTls(String alias) {
         for (KeyEntry entry : entries) {
             if (entry.alias.equals(alias)) {
-                return CertificateBridge.toGost(entry.chain);
+                return entry.getTlsChain();
             }
         }
         return null;
@@ -222,8 +222,7 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
         List<String> result = new ArrayList<>();
         for (KeyEntry entry : entries) {
             if (entry.chain == null || entry.chain.length == 0) continue;
-            GostCertificate gostCert = CertificateBridge.toGost(entry.chain[0]);
-            int hlen = gostCert.getPublicKey().getParams().hlen;
+            int hlen = entry.hlen;
             boolean is256 = hlen == TlsConstants.STREEBOG_256_HASH_LEN;
             if (want256 != is256) continue;
             if (issuers != null && issuers.length > 0 && !issuerMatches(entry.chain[0], issuers))
@@ -255,11 +254,35 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
         final String alias;
         final X509Certificate[] chain;
         final PrivateKeyParameters key;
+        final int hlen;
+        // volatile для safe publication через benign race:
+        // CertificateBridge.toGost — чистая функция (детерминирована, без побочных эффектов),
+        // поэтому double-compute между потоками безопасен — оба потока получат эквивалентный
+        // результат. volatile-запись в tlsChain гарантирует, что читающий поток видит полностью
+        // собранный список.
+        private volatile List<GostCertificate> tlsChain;
 
         KeyEntry(String alias, X509Certificate[] chain, PrivateKeyParameters key) {
             this.alias = alias;
-            this.chain = chain;
+            // defensive copy: цепочка теперь кэшируется (hlen/tlsChain), мутация
+            // входного массива вызывающим кодом привела бы к неисправимой рассинхронизации
+            this.chain = chain != null ? chain.clone() : null;
             this.key = key;
+            // sentinel -1: filterAliases() имеет guard (chain == null/empty -> continue)
+            // и доходит до сравнения hlen только на валидных записях
+            this.hlen =
+                    (chain != null && chain.length > 0 && chain[0] != null)
+                            ? CertificateBridge.toGost(chain[0]).getPublicKey().getParams().hlen
+                            : -1;
+        }
+
+        List<GostCertificate> getTlsChain() {
+            List<GostCertificate> result = tlsChain;
+            if (result == null && chain != null && chain.length > 0) {
+                result = CertificateBridge.toGost(chain);
+                tlsChain = result;
+            }
+            return result;
         }
     }
 }

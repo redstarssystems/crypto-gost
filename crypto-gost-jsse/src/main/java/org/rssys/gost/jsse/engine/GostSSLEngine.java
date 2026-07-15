@@ -398,8 +398,7 @@ public final class GostSSLEngine extends SSLEngine {
                 if (alias != null) {
                     localCertChain = keyManager.getCertificateChain(alias);
                     if (localCertChain != null && localCertChain.length > 0) {
-                        certChain =
-                                org.rssys.gost.jsse.bridge.CertificateBridge.toGost(localCertChain);
+                        certChain = keyManager.getCertificateChainTls(alias);
                     }
                     java.security.PrivateKey pk = keyManager.getPrivateKey(alias);
                     if (pk instanceof org.rssys.gost.jca.key.GostECPrivateKey gostKey) {
@@ -485,8 +484,7 @@ public final class GostSSLEngine extends SSLEngine {
                 if (alias != null) {
                     localCertChain = keyManager.getCertificateChain(alias);
                     if (localCertChain != null && localCertChain.length > 0) {
-                        certChain =
-                                org.rssys.gost.jsse.bridge.CertificateBridge.toGost(localCertChain);
+                        certChain = keyManager.getCertificateChainTls(alias);
                     }
                     java.security.PrivateKey pk = keyManager.getPrivateKey(alias);
                     if (pk instanceof org.rssys.gost.jca.key.GostECPrivateKey gostKey) {

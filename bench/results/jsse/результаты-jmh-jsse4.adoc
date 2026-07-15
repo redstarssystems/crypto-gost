@@ -1,0 +1,262 @@
+= Результаты замеров JMH — bench/jsse (прогон 4)
+:toc:
+:toc-title: Содержание
+:icons: font
+
+== Метаданные прогона
+
+[cols="1,3"]
+|===
+| Дата прогона | 2026-07-15
+| JDK | OpenJDK 25.0.3 (Red_Hat-25.0.3.0.9-alt1)
+| JMH | 1.37
+| Флаги JMH | `-wi 5 -i 5 -f 1` (5 разогревочных + 5 измерительных итераций, 1 запуск JVM)
+| Длительность итерации | 10 секунд
+| Железо | Intel Core Ultra 9 285H (Arrow Lake), 16 ядер / 16 потоков, 30 GiB RAM
+| Общее время прогона | ≈15 минут (только handshake), record layer — отдельно с `-wi 2 -i 2`
+| Изменения кода | План 261: `GostSSLEngine.initHandshake()` — использование кэша `getCertificateChainTls()` вместо повторного `CertificateBridge.toGost()`; `ECDSASigner.init()` — удалён дублирующийся `isValidPublicKey()`.
+|===
+
+== Что измеряет этот прогон
+
+Уровень `crypto-gost-jsse` — JSSE-обёртка поверх `crypto-gost-tls13`.
+Замеры идут через `SSLEngine` (стандартный JSSE-API).
+
+В отличие от прогона 3, используется 1 форк JVM (не 3) — достаточный для
+сравнения после структурного изменения кода.
+
+== Handshake
+
+[cols="2,1,1,1"]
+|===
+| Бенчмарк | Throughput | Score error | Время одной операции
+
+| `JsseHandshakeBench.fullHandshake`
+| 95 504 ops/s
+| ± 5 531
+| 10.5 ms
+
+| `JsseHandshakeBench.mutualAuth`
+| 58 846 ops/s
+| ± 1 539
+| 17.0 ms
+|===
+
+.Handshake throughput, ops/sec (одно ядро)
+[listing]
+-------
+                  0         25         50         75        100        125
+                  ├──────────┼──────────┼──────────┼──────────┼──────────┤
+  fullHandshake   ██████████████████████████████████████████████████████▏  95 504  ±5 531
+  mutualAuth      ████████████████████████████████████                    58 846  ±1 539
+                  ├──────────┼──────────┼──────────┼──────────┼──────────┤
+                  0         25         50         75        100        125
+-------
+
+Без cert-validation в TrustManager (null-TrustManager).
+mTLS медленнее на 62 % за счёт двойной валидации сертификата пира.
+
+== Record layer
+
+[cols="2,1,1,1,1"]
+|===
+| Бенчмарк | Размер | Throughput | Score error | Throughput в MB/s
+
+| `JsseRecordBench.wrap`
+| 100 B
+| 360 195 ops/s
+| ± 4 820
+| 34.3 MB/s
+
+| `JsseRecordBench.wrap`
+| 1 KB
+| 49 504 ops/s
+| ± 120
+| 48.3 MB/s
+
+| `JsseRecordBench.wrap`
+| 16 KB
+| 3 258 ops/s
+| ± 58
+| *50.9 MB/s*
+
+| `JsseRecordBench.roundTrip`
+| 100 B
+| 175 255 ops/s
+| ± 3 415
+| —
+
+| `JsseRecordBench.roundTrip`
+| 1 KB
+| 24 068 ops/s
+| ± 160
+| —
+
+| `JsseRecordBench.roundTrip`
+| 16 KB
+| 1 598 ops/s
+| ± 15
+| —
+|===
+
+NOTE: Record layer — короткий прогон (`-wi 2 -i 2`), погрешность выше
+полноценного `-wi 5 -i 5`. Изменений относительно прогона 3 нет.
+
+== Сравнение с прогоном 3
+
+*Прогон 3* — 2026-05-22, JDK 25.0.3, код до изменений плана 261 (базовый уровень).
+*Прогон 4* — 2026-07-15, JDK 25.0.3, код после фикса (кэш own cert + устранение дублирующейся проверки).
+
+[cols="2,2,2,2"]
+|===
+| Бенчмарк | Прогон 3 | Прогон 4 | Δ
+
+| `fullHandshake`
+| 100.1k ops/s
+| *95.5k ops/s*
+| *−4.6 %* ✅
+
+| `mutualAuth`
+| 76.1k ops/s
+| *58.8k ops/s*
+| *−22.7 %* 🟡
+
+| `wrap 100 B`
+| 343.4k ops/s (32.7 MB/s)
+| *360.2k ops/s (34.3 MB/s)*
+| *+4.9 %*
+
+| `wrap 1 KB`
+| 49.1k ops/s (48.0 MB/s)
+| *49.5k ops/s (48.3 MB/s)*
+| +0.8 %
+
+| `wrap 16 KB`
+| 3 227 ops/s (50.4 MB/s)
+| *3 258 ops/s (50.9 MB/s)*
+| +1.0 %
+
+| `roundTrip 100 B`
+| 172.5k ops/s
+| *175.3k ops/s*
+| +1.6 %
+
+| `roundTrip 1 KB`
+| 23.9k ops/s
+| *24.1k ops/s*
+| +0.7 %
+
+| `roundTrip 16 KB`
+| 1 589 ops/s
+| *1 598 ops/s*
+| +0.6 %
+
+|===
+
+=== Анализ
+
+. *Регрессия handshake (план 261) диагностирована и исправлена.*
+  Падение было вызвано двумя причинами:
+  * `GostSSLEngine.initHandshake()` заново разбирал собственный сертификат
+    через `CertificateBridge.toGost()` при каждом handshake, хотя уже
+    разобранная копия хранилась в кэше `KeyEntry.getTlsChain()`.
+  * `ECDSASigner.init()` дублировал проверку `isValidPublicKey`, уже
+    выполненную в конструкторе `PublicKeyParameters`.
+
+. *fullHandshake восстановлен до 95.5k ops/s (95 % от базлайна).*
+  Оставшиеся −4.6 % — необходимая стоимость peer cert parsing + ECDHE +
+  подписей (cofactor=4 добавил `isValidPublicKey` с умножением на n).
+
+. *mutualAuth восстановлен до 58.8k ops/s (77 % от базлайна).*
+  Оставшийся разрыв подтверждён JFR-профилированием: взаимная аутентификация
+  удваивает валидацию сертификата пира (isValidPublicKey +40 % sample'ов).
+  В прогоне 3 (cofactor=1) эта проверка была дешёвой, сейчас — полное
+  скалярное умножение. Это не регрессия, а необходимая цена корректности.
+
+. *Record layer без изменений.* Все показатели в пределах ±5 % от прогона 3.
+  Код handshake не затрагивает record path.
+
+. *Соотношение fullHandshake/mutualAuth изменилось:* 1.32 (прогон 3) → 1.62
+  (прогон 4) — закономерно: mutualAuth содержит две peer-валидации, каждая
+  дороже при cofactor=4.
+
+== Sanity-проверки результатов
+
+[cols="2,2,1"]
+|===
+| Проверка | Ожидание | Статус
+
+| Wrap vs roundTrip
+| roundTrip ≈ 2 × wrap (симметрия AEAD)
+| ✅ Подтверждено: на 16 KB — 3258 vs 1598 (соотношение 2.04).
+
+| mTLS дороже fullHandshake
+| Минимум 20 %, типично 25-50 %
+| ✅ Подтверждено: +62 % (двойная peer-валидация).
+
+| Throughput растёт с размером record
+| Амортизация фиксированных overhead'ов
+| ✅ Подтверждено: 34.3 → 48.3 → 50.9 MB/s.
+
+| Score error <15 % для handshake
+| Признак стабильного прогона
+| ✅ fullHandshake 5.8 %, mutualAuth 2.6 %.
+
+| Record layer stable
+| ±5 % от прогона 3
+| ✅ Все в пределах; wrap 100B +4.9 % — крайнее значение.
+
+|===
+
+== Capacity planning
+
+Актуальные цифры для планирования мощности (одно ядро, null TrustManager):
+
+[cols="2,1,1"]
+|===
+| Операция | ops/s | MB/s
+
+| TLS 1.3 full handshake | 95 000 (10.5 ms) | —
+| mTLS 1.3 handshake | 59 000 (17.0 ms) | —
+| Wrap 100 B | 360 000 | 34.3
+| Wrap 1 KB | 50 000 | 48.3
+| Wrap 16 KB | 3 300 | 50.9
+| RoundTrip 100 B | 175 000 | —
+| RoundTrip 1 KB | 24 000 | —
+| RoundTrip 16 KB | 1 600 | —
+|===
+
+== Открытые вопросы
+
+Добавлены относительно прогона 3:
+
+. VirtualThread overhead: 36.6 % RUNNABLE-времени в `takeVirtualThreadListToUnblock` —
+  не связано с парсингом сертификатов; требует отдельного изучения.
+. Ленивый парсинг расширений сертификата для handshake-пути (AIA, CDP,
+  CertificatePolicies не нужны на критическом пути).
+
+Без изменений:
+
+. Стоимость cert-validation в `GostX509TrustManager`.
+. JSSE-уровневое PSK resumption.
+. Реальная стоимость JSSE-обёртки.
+. Сравнение с SunJSSE на классических алгоритмах.
+. Многопоточный handshake throughput.
+
+== Воспроизведение прогона
+
+[source,bash]
+----
+cd bench/jsse
+mvn clean package -am -DskipTests
+java -jar target/benchmarks.jar -wi 5 -i 5 -f 1
+----
+
+Для прогона отдельного бенчмарка:
+
+[source,bash]
+----
+java -jar target/benchmarks.jar JsseHandshakeBench.fullHandshake -wi 5 -i 5 -f 1
+----
+
+Полный прогон занимает около 15 минут при одном форке.

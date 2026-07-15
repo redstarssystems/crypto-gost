@@ -106,10 +106,6 @@ public final class ECDSASigner implements Destroyable {
             this.q = pub.getQ();
             this.params = pub.getParams();
             this.dBytes = null;
-
-            if (!q.isValidPublicKey()) {
-                throw new IllegalArgumentException("public key point is not valid");
-            }
         }
         // Кешируем G и строим wNAF-таблицу один раз после инициализации параметров
         this.wnafW = (this.params.n.bitLength() > 256) ? WNAF_W_512 : WNAF_W_256;

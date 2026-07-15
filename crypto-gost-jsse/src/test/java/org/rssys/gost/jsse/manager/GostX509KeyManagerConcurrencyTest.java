@@ -1,7 +1,11 @@
 package org.rssys.gost.jsse.manager;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.security.cert.X509Certificate;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -174,6 +178,34 @@ class GostX509KeyManagerConcurrencyTest {
                 errorCount.get() == 0,
                 "Ошибок не ожидается (CopyOnWriteArrayList потокобезопасен), получено: "
                         + errorCount.get());
+    }
+
+    @Test
+    @DisplayName("null/пустой chain не вызывает NPE в методах чтения")
+    void nullAndEmptyChainHandling() throws Exception {
+        GostX509KeyManager km = createKeyManagerWithBothTypes(2);
+        CertChain cc = GostTestCerts.createServerCert();
+
+        // null chain и пустой chain
+        km.addKeyEntry("null_chain", null, cc.key());
+        km.addKeyEntry("empty_chain", new X509Certificate[0], cc.key());
+
+        // Существующие записи не затронуты
+        assertNotNull(km.chooseEngineServerAlias("ECGOST3410-2012-256", null, null));
+        assertNotNull(km.getCertificateChain("alias_0"));
+        assertNotNull(km.getPrivateKey("alias_0"));
+
+        // null chain: возврат цепочки null, ключ доступен (key и chain независимы)
+        assertNull(km.getCertificateChain("null_chain"));
+        assertNotNull(km.getPrivateKey("null_chain"));
+        assertNull(km.getCertificateChainTls("null_chain"));
+        assertNotNull(km.getPrivateKeyParams("null_chain"));
+        // пустой chain: цепочка пуста, ключ остаётся доступен
+        assertNotNull(km.getCertificateChain("empty_chain"));
+        assertEquals(0, km.getCertificateChain("empty_chain").length);
+        assertNotNull(km.getPrivateKey("empty_chain"));
+        assertNull(km.getCertificateChainTls("empty_chain"));
+        assertNotNull(km.getPrivateKeyParams("empty_chain"));
     }
 
     /**
