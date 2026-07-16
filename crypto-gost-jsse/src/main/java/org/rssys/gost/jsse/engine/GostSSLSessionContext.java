@@ -62,6 +62,31 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     private final int hashLen;
     private volatile int sessionTimeout = TlsConstants.DEFAULT_SESSION_TIMEOUT;
     private volatile int sessionCacheSize;
+    private boolean interopAcceptGostBaseSigScheme;
+
+    public void setInteropAcceptGostBaseSigScheme(boolean enabled) {
+        this.interopAcceptGostBaseSigScheme = enabled;
+    }
+
+    public boolean isInteropAcceptGostBaseSigScheme() {
+        return interopAcceptGostBaseSigScheme;
+    }
+
+    private boolean needClientAuth;
+
+    /**
+     * Включает обязательную аутентификацию клиента (mTLS).
+     * Аналог {@code SSLServerSocket.setNeedClientAuth(true)}.
+     * Флаг хранится на контексте сессии и применяется ко всем engine,
+     * созданным через этот контекст.
+     */
+    public void setNeedClientAuth(boolean need) {
+        this.needClientAuth = need;
+    }
+
+    public boolean isNeedClientAuth() {
+        return needClientAuth;
+    }
 
     /**
      * @param ciphersuite cipher suite для PSK-деривации

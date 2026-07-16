@@ -29,6 +29,15 @@ public final class TlsClientConfig {
     private ClientCertificateSelector clientCertificateSelector;
 
     /**
+     * Обход openssl-gost-provider v3.6.0: сервер всегда шлёт базовую
+     * схему (0x0709 для 256-bit, 0x070D для 512-bit) независимо от
+     * реальной кривой сертификата (GC256B/C/D, GC512B/C).
+     * По умолчанию выключено — RFC 9367 §5 определяет каждую схему как
+     * пару «алгоритм, кривая».
+     */
+    private boolean interopAcceptGostBaseSigScheme;
+
+    /**
      * Создаёт конфигурацию клиента с обязательной аутентификацией сервера.
      * Transport передаётся отдельно в {@code TlsSession.createClient(config, transport)}.
      *
@@ -143,6 +152,30 @@ public final class TlsClientConfig {
         TlsUtils.validateAlpnProtocols(protocols);
         this.alpnProtocols = protocols;
         return this;
+    }
+
+    /**
+     * Включает обход openssl-gost-provider v3.6.0: сервер всегда шлёт
+     * базовые схемы (0x0709 для 256-bit, 0x070D для 512-bit) независимо
+     * от реальной кривой сертификата (GC256B/C/D, GC512B/C).
+     * <p>
+     * По умолчанию выключено. Включение — осознанное решение разработчика
+     * для совместимости с openssl-gost-provider. RFC 9367 §5 формально
+     * требует точного соответствия схемы кривой сертификата.
+     *
+     * @param enabled true — принимать базовые схемы для любого ключа того же размера
+     * @return this
+     */
+    public TlsClientConfig withInteropAcceptGostBaseSigScheme(boolean enabled) {
+        this.interopAcceptGostBaseSigScheme = enabled;
+        return this;
+    }
+
+    /**
+     * @return true если включён обход openssl-gost-provider
+     */
+    public boolean isInteropAcceptGostBaseSigScheme() {
+        return interopAcceptGostBaseSigScheme;
     }
 
     public boolean isOcspRequired() {

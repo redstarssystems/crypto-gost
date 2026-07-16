@@ -3,6 +3,8 @@ package org.rssys.gost.pkix.tsp;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -27,6 +29,9 @@ import org.rssys.gost.pkix.util.SsrfGuard;
  * Подробнее — {@link org.rssys.gost.pkix.util.SsrfGuard}.
  */
 public final class JdkHttpTspTransport implements TspTransport {
+
+    private static final Logger LOG =
+            System.getLogger("org.rssys.gost.pkix.tsp.JdkHttpTspTransport");
 
     private static final String REQUEST_CONTENT_TYPE = "application/timestamp-query";
     private static final String RESPONSE_CONTENT_TYPE = "application/timestamp-reply";
@@ -69,6 +74,10 @@ public final class JdkHttpTspTransport implements TspTransport {
             throw new IOException("Unsupported TSP URL scheme: " + scheme);
         }
         if (SsrfGuard.isPrivateAddress(uri)) {
+            LOG.log(
+                    Level.WARNING,
+                    "TSP request skipped: private/reserved IP resolved from {0}",
+                    tsaUrl);
             throw new IOException("TSP URL resolves to private address: " + tsaUrl);
         }
         try {

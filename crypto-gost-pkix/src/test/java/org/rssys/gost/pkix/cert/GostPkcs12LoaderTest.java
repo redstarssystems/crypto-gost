@@ -2,9 +2,11 @@ package org.rssys.gost.pkix.cert;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.security.PrivateKey;
 import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -93,6 +95,42 @@ class GostPkcs12LoaderTest {
                 pwd,
                 "Оригинальный char[] пароль не должен затираться после decryptPrivateKey");
         Arrays.fill(pwd, '\0');
+    }
+
+    @Test
+    @DisplayName("adaptPrivateKey затирает jdkKey.getEncoded() после парсинга")
+    void testAdaptPrivateKeyWipesEncoded() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
+        byte[] encoded = GostDerCodec.encodePrivateKey(bundle.priv);
+
+        PrivateKey jdkKey =
+                new PrivateKey() {
+                    @Override
+                    public String getAlgorithm() {
+                        return "ECGOST3410";
+                    }
+
+                    @Override
+                    public String getFormat() {
+                        return "PKCS#8";
+                    }
+
+                    @Override
+                    public byte[] getEncoded() {
+                        return encoded;
+                    }
+                };
+
+        PrivateKeyParameters result = GostPkcs12Loader.adaptPrivateKey(jdkKey);
+
+        assertNotNull(result, "Ключ должен быть расшифрован");
+        assertArrayEquals(
+                bundle.priv.getDBytes(), result.getDBytes(), "d-компонента ключа совпадает");
+        // Затирание должно обнулить массив, возвращённый getEncoded()
+        for (byte b : encoded) {
+            assertEquals(0, b, "Каждый байт исходного массива должен быть затерт");
+        }
     }
 
     @Test

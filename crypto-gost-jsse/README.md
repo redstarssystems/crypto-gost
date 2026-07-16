@@ -338,6 +338,7 @@ KeyManagerFactory, TrustManagerFactory, JKS.
         .maxCrlSize(16 * 1024 * 1024)       // лимит размера CRL в байтах
         .maxRevokedEntries(500_000)         // лимит числа отозванных записей
         .sessionCacheSize(5000)             // размер кэша сессий (0=без ограничения)
+        .interopAcceptGostBaseSigScheme(true) // обход openssl-gost-provider v3.6.0
         .trustAll()                         // отключить проверку (только dev)
         .buildServerContext();              // или buildClientContext()
 
@@ -346,6 +347,15 @@ KeyManagerFactory, TrustManagerFactory, JKS.
 `crlPolicy(null)` CRL-проверка трактуется как `DISABLED`. Лимит
 `maxResponseSize` у `JdkHttpCrlFetcher` должен быть ≥ `maxCrlSize`,
 иначе CRL не дойдёт до парсера.
+
+`interopAcceptGostBaseSigScheme` (default=false) — обход
+openssl-gost-provider v3.6.0: он всегда шлёт базовые signature scheme
+(0x0709 для 256-bit, 0x070D для 512-bit) независимо от реальной кривой
+сертификата (GC256B/C/D, GC512B/C). RFC 9367 §5 формально требует
+точного соответствия, поэтому флаг выключен по умолчанию и включается
+только осознанно разработчиком. При срабатывании логирует warning с
+деталями несоответствия. В большинстве соединений с другими реализациями
+GOST TLS 1.3 флаг не требуется и должен оставаться выключенным.
 
 Примеры:
 

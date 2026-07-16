@@ -2,6 +2,8 @@ package org.rssys.gost.pkix.cert;
 
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.util.Arrays;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostDerCodec;
@@ -30,6 +32,8 @@ import org.rssys.gost.signature.PublicKeyParameters;
  * @see GostDerParser
  */
 public final class GostCsrParser {
+
+    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cert.GostCsrParser");
 
     private final byte[] certData;
     private final int tbsOff;
@@ -364,7 +368,14 @@ public final class GostCsrParser {
      */
     @CheckReturnValue
     public boolean verifySelf() {
-        return verify(publicKey);
+        boolean ok = verify(publicKey);
+        if (!ok) {
+            LOG.log(
+                    Level.WARNING,
+                    "CSR proof-of-possession verification failed: subject={0}",
+                    subjectDnStr != null ? GostDnParser.truncateForLog(subjectDnStr, 128) : "null");
+        }
+        return ok;
     }
 
     // ========================================================================

@@ -109,25 +109,25 @@
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-core</artifactId>
-        <version>0.6.5</version>
+        <version>0.7.0</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-tls13</artifactId>
-        <version>0.6.5</version>
+        <version>0.7.0</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-jsse</artifactId>
-        <version>0.6.5</version>
+        <version>0.7.0</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-pkix</artifactId>
-        <version>0.6.5</version>
+        <version>0.7.0</version>
     </dependency>
 
 - **Способ 2.** Клонируйте репозиторий и выполните сборку и установку в

@@ -1,5 +1,7 @@
 package org.rssys.gost.pkix.cms;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -17,6 +19,8 @@ import org.rssys.gost.pkix.cert.PkixException;
  * и доверенных корневых сертификатов.
  */
 public final class CertChainBuilder {
+
+    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cms.CertChainBuilder");
 
     private CertChainBuilder() {}
 
@@ -109,6 +113,11 @@ public final class CertChainBuilder {
 
             GostCertificate issuer = selectIssuer(current, candidates);
             if (issuer == null) {
+                LOG.log(
+                        Level.DEBUG,
+                        "No candidate issuer verified for subject={0} ({1} candidate(s) tried)",
+                        current.getSubjectDnForLog(128),
+                        candidates.size());
                 throw new PkixException(
                         PkixException.Reason.SIGNATURE_INVALID,
                         "Certificate chain: signature verification failed for issuer");

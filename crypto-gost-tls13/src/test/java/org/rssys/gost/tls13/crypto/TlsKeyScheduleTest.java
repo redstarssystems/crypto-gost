@@ -654,19 +654,28 @@ class TlsKeyScheduleTest {
                 new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         ks.deriveHandshakeSecret(new byte[32]);
         ks.deriveMasterSecret();
+        byte[] transcript = new byte[32];
+        transcript[0] = 0x01; // непустой транскрипт
 
-        byte[] resMaster1 = ks.getResumptionMasterSecret();
+        byte[] resMaster1 = ks.getResumptionMasterSecret(transcript);
         assertEquals(32, resMaster1.length);
         assertFalse(allZeros(resMaster1));
 
         // детерминированность
-        byte[] resMaster2 = ks.getResumptionMasterSecret();
+        byte[] resMaster2 = ks.getResumptionMasterSecret(transcript);
         assertArrayEquals(resMaster1, resMaster2);
+
+        // другой транскрипт -> другой RMS (регрессионная защита от computeEmptyHash)
+        byte[] transcript2 = new byte[32];
+        transcript2[0] = 0x02;
+        assertFalse(Arrays.equals(resMaster1, ks.getResumptionMasterSecret(transcript2)));
 
         // без master secret -> исключение
         TlsKeySchedule ksNoMaster =
                 new TlsKeySchedule(TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-        assertThrows(IllegalStateException.class, ksNoMaster::getResumptionMasterSecret);
+        assertThrows(
+                IllegalStateException.class,
+                () -> ksNoMaster.getResumptionMasterSecret(transcript));
     }
 
     private static boolean allZeros(byte[] data) {

@@ -1,0 +1,793 @@
+// asciidoc -b docbook -o - angie-reverse-proxy-gost-tls13.adoc | pandoc -f docbook -t markdown_strict --wrap=preserved -o angie-reverse-proxy-gost-tls13.md
+= Reverse Proxy Angie + GOST TLS 1.3 + crypto-gost
+:author: Red Stars Systems
+:revnumber: 0.7.0
+:lang: ru
+
+== Введение
+
+В этой инструкции разворачивается стенд, где Angie выступает reverse proxy,
+а соединение между Angie и FileReceiveServer (crypto-gost, JSSE) идёт по GOST
+TLS 1.3 (cipher suite `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L`).
+
+Стенд включает пять сценариев работы:
+
+* **HTTP-клиент** (браузер, curl) → Angie :80 → GOST TLS 1.3 → FileReceiveServer;
+* **gost-curl** (crypto-gost JSSE) → Angie :443 (GOST TLS 1.3) → GOST upstream;
+* **openssl s_client** для прямой верификации cipher suite;
+* **mTLS** — взаимная аутентификация между Angie и FileReceiveServer (Angie как
+  клиент предъявляет сертификат при соединении с бэкендом);
+* **gost-curl c mTLS** — gost-curl предъявляет клиентский сертификат
+  на порт 443 Angie (ssl_verify_client optional), Angie передаёт его
+  в upstream-соединение с FileReceiveServer.
+
+WARNING: Это тестовый стенд, не production-конфигурация. Все сертификаты —
+самоподписанные, пароль ключа — `changeit`. Не копировать конфиги
+в промышленную эксплуатацию без пересмотра.
+
+== Архитектура
+
+[source,text]
+----
+[браузер/curl] --(HTTP:80)---------+                     +--> [FileReceiveServer :8443]
+                                    |                     |     GOST TLS 1.3
+                                    v                     |
+                                 [Angie] -----------------+
+                                    ^
+[gost-curl] --(GOST TLS 1.3:443)----+
+----
+
+* Port 80: plain HTTP для обычных клиентов.
+* Port 443: GOST TLS 1.3 для gost-curl.
+* Upstream: Angie проксирует на FileReceiveServer через GOST TLS 1.3.
+
+Для cipher suite и групп key_share используется `openssl.cnf`, модифицированный
+для Angie (секция `system_default_sect`). Это единственный способ повлиять на
+TLS 1.3 cipher suites для proxy-контекста — директива `ssl_conf_command`
+работает только для server-блока.
+
+== Предварительные требования
+
+* ALT Linux P11 (Starterkit или аналогичный)
+* Java 21+ (OpenJDK)
+* Maven 3.8+
+* gcc, make, wget, git
+* libpcre2-devel (для сборки Angie)
+
+Установка:
+
+[source,bash]
+----
+sudo apt-get update
+sudo apt-get install -y libpcre2-devel wget gcc make git
+----
+
+== 1. Сборка OpenSSL 3.6 + gost-engine
+
+Скачиваем и собираем OpenSSL 3.6.0 с gost-provider.
+Установка в `/opt/openssl-3.6.0-gost/`.
+
+[source,bash]
+----
+wget https://github.com/openssl/openssl/releases/download/openssl-3.6.0/openssl-3.6.0.tar.gz
+tar -xzf openssl-3.6.0.tar.gz
+
+git clone https://github.com/gost-engine/engine.git gost-engine-src
+cd gost-engine-src
+git checkout 3dd0f0e4299489a537398cfa4d9daad260ac87a8
+cd ..
+
+# Патч OpenSSL для TLS 1.3
+cd openssl-3.6.0
+patch -p1 < ../gost-engine-src/patches/openssl-tls1.3.patch
+
+./config \
+    --prefix=/opt/openssl-3.6.0-gost \
+    --openssldir=/opt/openssl-3.6.0-gost/ssl \
+    enable-fips
+make -j$(nproc)
+sudo make install
+cd ..
+----
+
+Сборка gost-engine как провайдера:
+
+[source,bash]
+----
+cd gost-engine-src
+cmake -DCMAKE_BUILD_TYPE=Release \
+    -DOPENSSL_ROOT_DIR=/opt/openssl-3.6.0-gost \
+    -DCMAKE_INSTALL_PREFIX=/opt/openssl-3.6.0-gost
+make -j$(nproc)
+sudo make install
+cd ..
+----
+
+Настройка openssl.cnf для автоматической загрузки gost-provider:
+
+[source,bash]
+----
+sudo tee /opt/openssl-3.6.0-gost/ssl/openssl.cnf > /dev/null << 'CONF'
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_section
+
+[provider_section]
+gostprov = gostprov_section
+default = default_section
+
+[gostprov_section]
+identity = gostprov
+module = /opt/openssl-3.6.0-gost/lib/ossl-modules/gostprov.so
+activate = 1
+
+[default_section]
+activate = 1
+CONF
+----
+
+Проверка:
+
+[source,bash]
+----
+/opt/openssl-3.6.0-gost/bin/openssl version
+# Должен показать: OpenSSL 3.6.0 1 Oct 2025
+
+/opt/openssl-3.6.0-gost/bin/openssl ciphers -s -tls1_3 \
+    -ciphersuites TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L \
+    -provider gostprov -provider default
+# Должен показать: TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L
+----
+
+== 2. Сборка Angie с кастомным OpenSSL
+
+=== Скачивание
+
+[source,bash]
+----
+wget https://download.angie.software/files/angie-1.12.0.tar.gz
+tar -xzf angie-1.12.0.tar.gz
+cd angie-1.12.0
+----
+
+=== Configure
+
+[source,bash]
+----
+./configure \
+    --with-http_ssl_module \
+    --with-http_v2_module \
+    --with-cc-opt="-I/opt/openssl-3.6.0-gost/include" \
+    --with-ld-opt="-L/opt/openssl-3.6.0-gost/lib \
+        -Wl,-rpath,/opt/openssl-3.6.0-gost/lib" \
+    --prefix=/opt/angie-gost
+----
+
+Ключевые моменты:
+
+* `--with-cc-opt` добавляет заголовочные файлы OpenSSL 3.6.0 с gost-provider.
+* `--with-ld-opt` линкует с библиотеками из `/opt`.
+  `-Wl,-rpath` гарантирует, что динамический загрузчик найдёт `libssl.so.3`
+  и `libcrypto.so.3` при запуске.
+
+=== Сборка и установка
+
+[source,bash]
+----
+make -j$(nproc)
+sudo make install
+----
+
+Проверка:
+
+[source,bash]
+----
+/opt/angie-gost/sbin/angie -V
+# В выводе должно быть: built with OpenSSL 3.6.0
+
+ldd /opt/angie-gost/sbin/angie | grep -E 'ssl|crypto'
+# Должен показать libssl.so.3 -> /opt/openssl-3.6.0-gost/lib/libssl.so.3
+----
+
+== 3. Сборка crypto-gost
+
+[source,bash]
+----
+git clone https://gitflic.ru/project/red-stars-systems/crypto-gost.git \
+    ~/projects/crypto-gost
+cd ~/projects/crypto-gost
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+/usr/share/maven/bin/mvn \
+    -pl crypto-gost-core,crypto-gost-pkix,crypto-gost-tls13,crypto-gost-jsse,examples/jsse,examples/pkix \
+    -am package -DskipTests -Dexec.skip=true
+----
+
+== 4. Генерация тестового УЦ и сертификатов
+
+Для генерации используется утилита `GenerateTestCerts`. Исходный код:
+`examples/pkix/src/main/java/org/rssys/gost/pkix/examples/GenerateTestCerts.java`.
+
+Утилита создаёт:
+
+* **CA** — самоподписанный корневой сертификат (`CN=Test GOST CA`).
+* **Сертификат для Angie** — `CN=angie-gost-test`, SAN localhost/127.0.0.1,
+  экспорт в PEM (chain + key) для `ssl_certificate` / `ssl_certificate_key`.
+* **Сертификат для FileReceiveServer** — `CN=backend-gost-test`, SAN localhost,
+  экспорт в PFX для `--cert`.
+
+Оба серверных сертификата подписаны одним CA. Кривая — **CryptoPro-A
+(GC256B)**. Использовать GC256A (tc26a256) нельзя — gost-provider
+не поддерживает HelloRetryRequest, необходимый при расхождении кривых.
+
+=== Запуск GenerateTestCerts
+
+[source,bash]
+----
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+CDIR=~/projects/crypto-gost
+
+sudo mkdir -p /etc/angie
+
+sudo java -cp \
+    "$CDIR/examples/pkix/target/classes:$CDIR/crypto-gost-core/target/classes:$CDIR/crypto-gost-pkix/target/classes" \
+    org.rssys.gost.pkix.examples.GenerateTestCerts /etc/angie
+
+sudo chmod 600 /etc/angie/server-key.pem /etc/angie/backend.p12
+----
+
+Файлы сертификатов:
+
+[options="header"]
+|===
+| Файл | Формат | Для чего
+| `/etc/angie/ca.pem` | PEM | CA для trust store
+| `/etc/angie/server.pem` | PEM | Angie ssl_certificate (chain)
+| `/etc/angie/server-key.pem` | PEM | Angie ssl_certificate_key
+| `/etc/angie/backend.p12` | PFX | FileReceiveServer --cert
+| `/etc/angie/angie-client.pem` | PEM | Angie proxy_ssl_certificate (upstream mTLS)
+| `/etc/angie/angie-client-key.pem` | PEM | Angie proxy_ssl_certificate_key (upstream mTLS)
+| `/etc/angie/gost-curl-client.pem` | PEM | gost-curl --cert (client mTLS на порт 443)
+| `/etc/angie/gost-curl-client-key.pem` | PEM | gost-curl --key (client mTLS на порт 443)
+|===
+
+== 5. Запуск FileReceiveServer
+
+Сервер принимает файлы на скачивание и загрузку, работая через Undertow
+с ГОСТ TLS 1.3. Запускается через systemd.
+
+[IMPORTANT]
+====
+Параметры `--file` и `--upload-out` указывают на **одиночные файлы**,
+не директории. `--file /srv/files/test.txt` — файл для GET-отдачи;
+`--upload-out /tmp/uploaded-file.bin` — файл, в который сохраняется тело
+POST-запроса (X-Filename только для лога).
+====
+
+=== Wrapper-скрипт
+
+[source,bash]
+----
+cat > ~/start-fileserver.sh << 'SCRIPT'
+#!/bin/bash
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+export JAVA_HOME
+CDIR=$HOME/projects/crypto-gost
+
+JAR=$CDIR/examples/jsse/target/examples-jsse-0.7.0-SNAPSHOT.jar
+CLASSPATH=$JAR
+
+# Только 0.7.0+ — старые версии содержат ошибку
+for jar in $(find $HOME/.m2/repository/org/rssys -name "*-0.7.0-SNAPSHOT.jar" \
+    ! -name "*sources*" ! -name "*javadoc*" ! -name "*tests*"); do
+    CLASSPATH=$CLASSPATH:$jar
+done
+
+# Undertow, XNIO, WildFly
+for dir in io/undertow org/jboss org/wildfly org/xnio; do
+    for jar in $(find $HOME/.m2/repository/$dir -name "*.jar" \
+        ! -name "*sources*" ! -name "*javadoc*"); do
+        CLASSPATH=$CLASSPATH:$jar
+    done
+done
+
+exec java -cp "$CLASSPATH" \
+    org.rssys.gost.jsse.examples.undertow.FileReceiveServer \
+    --port 8443 --cert /etc/angie/backend.p12 --password changeit \
+    --file /srv/files/test.txt --upload-out /tmp/uploaded-file.bin \
+    --log /tmp/file-receive.log
+SCRIPT
+chmod +x ~/start-fileserver.sh
+----
+
+Для включения mTLS добавьте флаг `--client-auth need` (или `want` для
+опциональной аутентификации):
+
+[source,bash]
+----
+# Добавить к строке exec java ... в скрипте:
+    --client-auth need \
+----
+
+При `--client-auth need` или `want` автоматически включается
+`interopAcceptGostBaseSigScheme` — обход openssl-gost-provider v3.6.0.
+Angie (openssl-gost-provider) при подписи CertificateVerify всегда использует
+базовую схему (0x0709 для 256-битных ключей) независимо от реальной кривой
+сертификата (GC256B → ожидается 0x070A). Без этого флага mTLS-соединение
+падает с ошибкой `Certificate key type does not match signature scheme 1801`.
+
+=== Systemd unit
+
+[source,bash]
+----
+sudo tee /etc/systemd/system/gost-fileserver.service > /dev/null << 'UNIT'
+[Unit]
+Description=GOST FileReceiveServer (crypto-gost)
+After=network.target
+
+[Service]
+Type=simple
+User=mike
+ExecStart=%h/start-fileserver.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable gost-fileserver.service
+sudo systemctl start gost-fileserver.service
+----
+
+== 6. Настройка OpenSSL config для Angie
+
+Для работы proxy upstream необходимо задать cipher suite и группы
+key_share глобально через `openssl.cnf`. Настройки в секции
+`system_default_sect` применяются ко всем SSL-контекстам OpenSSL,
+включая proxy-контекст Angie.
+
+[source,bash]
+----
+sudo tee /opt/openssl-3.6.0-gost/ssl/openssl.cnf > /dev/null << 'CONF'
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = provider_section
+ssl_conf = ssl_section
+
+[provider_section]
+gostprov = gostprov_section
+default = default_section
+
+[gostprov_section]
+identity = gostprov
+module = /opt/openssl-3.6.0-gost/lib/ossl-modules/gostprov.so
+activate = 1
+
+[default_section]
+activate = 1
+
+[ssl_section]
+system_default = system_default_sect
+
+[system_default_sect]
+Ciphersuites = TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L
+MinProtocol = TLSv1.3
+Groups = GC256B
+CONF
+----
+
+[IMPORTANT]
+====
+Эта правка затрагивает только TLS-подсистему.
+Команды `openssl cms` / `req` / `asn1parse` не используют SSL-контекст
+и не задеваются настройкой.
+====
+
+Ключевые моменты:
+
+* `Ciphersuites` — принудительно используем только GOST cipher suite.
+* `MinProtocol = TLSv1.3` — только TLS 1.3.
+* `Groups = GC256B` — задаёт группу key_share. Без этой настройки
+  OpenSSL не включает GOST-кривую в key_share, и сервер (FileReceiveServer)
+  отвечает HelloRetryRequest, который gost-provider не поддерживает.
+
+== 7. Конфигурация Angie
+
+[source,bash]
+----
+sudo tee /opt/angie-gost/conf/angie.conf > /dev/null << 'NGX'
+worker_processes 1;
+error_log /var/log/angie-error.log info;
+
+events {
+    worker_connections 10;
+}
+
+http {
+    upstream gost_backend {
+        server 127.0.0.1:8443;
+    }
+
+    server {
+        listen 80;
+        server_name _;
+
+        location / {
+            proxy_pass https://gost_backend;
+            proxy_ssl_protocols TLSv1.3;
+            proxy_ssl_trusted_certificate /etc/angie/ca.pem;
+            proxy_ssl_verify on;
+            proxy_ssl_name localhost;
+        }
+    }
+
+    server {
+        listen 443 ssl;
+        server_name _;
+
+        ssl_protocols TLSv1.3;
+        ssl_certificate /etc/angie/server.pem;
+        ssl_certificate_key /etc/angie/server-key.pem;
+        ssl_conf_command Ciphersuites TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L;
+
+        location / {
+            proxy_pass https://gost_backend;
+            proxy_ssl_protocols TLSv1.3;
+            proxy_ssl_trusted_certificate /etc/angie/ca.pem;
+            proxy_ssl_verify on;
+            proxy_ssl_name localhost;
+        }
+    }
+}
+NGX
+----
+
+Для включения mTLS (взаимная аутентификация на upstream) добавьте в каждый
+location-блок директивы `proxy_ssl_certificate`:
+
+[source,bash]
+----
+    proxy_ssl_certificate /etc/angie/angie-client.pem;
+    proxy_ssl_certificate_key /etc/angie/angie-client-key.pem;
+----
+
+Эти сертификаты используются Angie как клиентом при соединении с
+FileReceiveServer. Самоподписанный CA должен быть одним и тем же для
+всех сертификатов стенда (сгенерирован GenerateTestCerts).
+
+=== mTLS для gost-curl (порт 443)
+
+Angie также может принимать клиентские сертификаты на порту 443 — для
+mTLS-подключений gost-curl. Добавьте в server-блок порта 443 директивы:
+
+[source,bash]
+----
+    ssl_client_certificate /etc/angie/ca.pem;
+    ssl_verify_client optional;
+----
+
+* `ssl_client_certificate` — CA, которым подписаны клиентские сертификаты.
+* `ssl_verify_client optional` — запрашивать, но не требовать сертификат.
+  Клиенты без сертификата (openssl s_client) продолжают работать.
+  Для обязательного mTLS замените на `ssl_verify_client on`.
+
+Клиентский сертификат для gost-curl (`/etc/angie/gost-curl-client.pem`)
+сгенерирован утилитой `GenerateTestCerts`.
+
+[NOTE]
+====
+`ssl_verify_client optional` позволяет одному порту (443) обслуживать
+как клиентов с сертификатом (gost-curl --cert), так и без него
+(openssl s_client). FileReceiveServer при этом видит mTLS только если
+Angie передал клиентский сертификат в upstream-соединение (через
+proxy_ssl_* директивы).
+====
+
+=== Запуск Angie через systemd (рекомендуется)
+
+[source,bash]
+----
+sudo tee /etc/systemd/system/angie-gost.service > /dev/null << 'UNIT'
+[Unit]
+Description=Angie reverse proxy with GOST TLS 1.3
+After=network.target gost-fileserver.service
+Requires=gost-fileserver.service
+
+[Service]
+Type=forking
+ExecStart=/opt/angie-gost/sbin/angie -c /opt/angie-gost/conf/angie.conf
+Environment=OPENSSL_CONF=/opt/openssl-3.6.0-gost/ssl/openssl.cnf
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable angie-gost.service
+sudo systemctl start angie-gost.service
+----
+
+== 8. Получение gost-curl
+
+gost-curl — отдельный проект.
+Репозиторий: https://gitflic.ru/project/red-stars-systems/gost-curl
+
+**Вариант A — fat JAR** (требуется Java 21+):
+
+[source,bash]
+----
+git clone https://gitflic.ru/project/red-stars-systems/gost-curl.git \
+    ~/projects/gost-curl
+cd ~/projects/gost-curl
+make gost-curl-jar
+# Fat JAR: target/gost-curl.jar
+----
+
+**Вариант B — готовый бинарник**
+(скачать с
+https://gitflic.ru/project/red-stars-systems/gost-curl/release
+[релизной страницы]):
+
+[source,bash]
+----
+# Для Linux x86-64:
+./gost-curl --help
+----
+
+== 9. Проверка
+
+=== Подготовка тестовых файлов
+
+[source,bash]
+----
+sudo mkdir -p /srv/files /srv/uploads
+sudo chown $USER:$USER /srv/files /srv/uploads
+echo "hello, gost world" > /srv/files/test.txt
+dd if=/dev/urandom of=/srv/files/test.bin bs=1M count=10
+----
+
+=== Проверка работы сервисов
+
+[source,bash]
+----
+netstat -tlnp | grep -E ":(80|443|8443) "
+# Должно показать три слушателя:
+# 0.0.0.0:443   — Angie (GOST TLS 1.3)
+# 0.0.0.0:80    — Angie (HTTP)
+# :::8443       — FileReceiveServer (GOST TLS 1.3)
+----
+
+=== Сценарий A: HTTP-клиент через Angie
+
+Базовый сценарий — любой HTTP-клиент (браузер, curl). Запрос идёт
+по HTTP на Angie :80, Angie проксирует на FileReceiveServer через
+GOST TLS 1.3.
+
+[source,bash]
+----
+# GET-запрос
+curl -s http://localhost:80/test.txt
+# Ожидаемый ответ: hello, gost world
+
+# POST-загрузка
+curl -s -X POST --data-binary "upload data" \
+    -H "X-Filename: test.txt" http://localhost:80/upload
+# Ожидаемый ответ: OK received=N bytes
+----
+
+=== Сценарий B: gost-curl через GOST TLS 1.3
+
+gost-curl использует crypto-gost JSSE и подключается к Angie :443
+по GOST TLS 1.3. Для совместимости с OpenSSL gost-provider необходим
+флаг `--interop-openssl`.
+
+[source,bash]
+----
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+
+# Fat JAR:
+java -jar ~/projects/gost-curl/target/gost-curl.jar \
+    --ca /etc/angie/ca.pem --interop-openssl \
+    https://localhost:443/test.txt
+
+# Native-бинарник (если собран):
+./gost-curl --ca /etc/angie/ca.pem --interop-openssl \
+    https://localhost:443/test.txt
+
+# Ожидаемый ответ: hello, gost world
+----
+
+Что делает `--interop-openssl`: активирует
+`GostSSLSessionContext.setInteropAcceptGostBaseSigScheme(true)`.
+OpenSSL gost-provider (версия 3.6.0) при сертификате на кривой CryptoPro-A
+(GC256B) отправляет в `CertificateVerify` базовую схему подписи 0x0709
+(`gostr34102012_256a` / GC256A), а не 0x070A (`gostr34102012_256b`) —
+формальное нарушение RFC 9367 §5. Без флага клиент crypto-gost-tls13
+отвергает соединение с ошибкой:
+
+[source,text]
+----
+Certificate key type does not match signature scheme 1801
+----
+
+Флаг включает «режим совместимости»: при 256-битных ключах принимает
+схему 0x0709 для любой кривой. При срабатывании логирует warning.
+
+=== Сценарий C: openssl s_client
+
+Прямая проверка cipher suite через OpenSSL.
+
+[source,bash]
+----
+# Порт 443 — сервер Angie
+echo | /opt/openssl-3.6.0-gost/bin/openssl s_client \
+    -connect localhost:443 \
+    -tls1_3 -ciphersuites TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L \
+    -CAfile /etc/angie/ca.pem 2>&1 | grep -iE "Cipher *:"
+# Ожидаемый вывод:
+# New, TLSv1.3, Cipher is TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L
+
+# Порт 8443 — прямой доступ к FileReceiveServer
+echo | /opt/openssl-3.6.0-gost/bin/openssl s_client \
+    -connect 127.0.0.1:8443 \
+    -tls1_3 -ciphersuites TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L \
+    -CAfile /etc/angie/ca.pem 2>&1 | grep -iE "Cipher *:"
+# Ожидаемый вывод: тот же cipher suite
+----
+
+=== Сценарий D: mTLS (Angie как клиент с сертификатом на upstream)
+
+Проверка взаимной аутентификации: Angie предъявляет клиентский сертификат
+при соединении с FileReceiveServer. Сервер требует обязательный сертификат
+клиента (`--client-auth need`) и автоматически включает
+`interopAcceptGostBaseSigScheme`. Не требует gost-curl — достаточно
+curl на порт 80.
+
+[source,bash]
+----
+# FileReceiveServer должен быть запущен с --client-auth need
+# и Angie должен быть сконфигурирован с proxy_ssl_certificate
+
+curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:80/test.txt
+# Ожидаемый вывод: HTTP 200
+
+# В логах FileReceiveServer (journalctl) появится:
+#   INFO  Client certificate accepted: subject=CN=angie-mtls-client
+#   FINE  Handshake completed: suite=..., peer=CN=angie-mtls-client
+----
+
+=== Сценарий E: gost-curl с клиентским сертификатом (mTLS на порт 443)
+
+Проверка mTLS между gost-curl и Angie: gost-curl предъявляет клиентский
+сертификат при соединении с портом 443. Angie принимает его (optional mTLS)
+и передаёт в upstream-соединение с FileReceiveServer, где сертификат клиента
+снова верифицируется.
+
+[source,bash]
+----
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+
+java -jar ~/projects/gost-curl/target/gost-curl.jar \
+    --ca /etc/angie/ca.pem --interop-openssl \
+    --cert /etc/angie/gost-curl-client.pem \
+    --key /etc/angie/gost-curl-client-key.pem \
+    https://localhost:443/test.txt
+
+# Ожидаемый ответ: hello, gost world
+#
+# В логах FileReceiveServer (journalctl) появится:
+#   INFO  Client certificate accepted: subject=CN=gost-curl-client
+#   FINE  Handshake completed: suite=..., peer=CN=gost-curl-client
+----
+
+[source,bash]
+----
+# FileReceiveServer должен быть запущен с --client-auth need
+# (см. раздел 5, wrapper-скрипт с добавленным флагом). Angie должен
+# быть сконфигурирован с proxy_ssl_certificate (раздел 7).
+
+curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:80/test.txt
+# Ожидаемый вывод: HTTP 200
+
+# В логах FileReceiveServer (journalctl) появится:
+#   WARNING: interopAcceptGostBaseSigScheme: server sent scheme 0x709
+#   (expected 0x70a) — known openssl-gost-provider incompatibility
+# Это штатное предупреждение — обход openssl-gost-provider сработал.
+----
+
+=== Стабильность
+
+Проверка 10 последовательных GET-запросов:
+
+[source,bash]
+----
+for i in $(seq 1 10); do
+    curl -s http://localhost:80/test.txt
+done | uniq
+# Должен показать одну строку: hello, gost world
+----
+
+=== Негативный тест верификации
+
+Если заменить сертификат бэкенда или отключить CA, Angie должен
+вернуть 502 Bad Gateway:
+
+[source,bash]
+----
+# Временно убрать CA
+sudo mv /etc/angie/ca.pem /etc/angie/ca.pem.bak
+
+curl -s http://localhost:80/test.txt
+# Ожидаемый ответ: 502 Bad Gateway
+
+sudo mv /etc/angie/ca.pem.bak /etc/angie/ca.pem
+----
+
+== Известные ограничения
+
+=== Кривая — только GC256B (CryptoPro-A)
+
+Использовать GC256A (tc26a256) для сертификатов нельзя.
+OpenSSL gost-provider формирует key_share для GC256B по умолчанию.
+При расхождении кривой сертификата (GC256A) и key_share (GC256B)
+требуется HelloRetryRequest, который ни одна из сторон не поддерживает
+(кто конкретно — не установлено). Симптом: `tls_parse_stoc_key_share:
+bad key share` в OpenSSL.
+
+Решение: генерировать сертификаты на CryptoPro-A (GC256B).
+`GenerateTestCerts` делает это по умолчанию.
+
+=== PSK session resumption
+
+PSK session resumption работает (`proxy_ssl_session_reuse`).
+
+=== Пароль сертификата
+
+`changeit` — пароль PFX, заданный в `GenerateTestCerts`.
+
+== Типичные проблемы
+
+=== 502 Bad Gateway на всех запросах
+
+Проверить:
+
+. Работает ли FileReceiveServer: `sudo systemctl status gost-fileserver`.
+. Доступен ли порт 8443: `curl -k https://localhost:8443/test.txt`.
+. Есть ли OPENSSL_CONF для Angie: `sudo cat /proc/$(cat /opt/angie-gost/logs/angie.pid)/environ | tr '\0' '\n' | grep OPENSSL`.
+. Корректен ли openssl.cnf: `cat /opt/openssl-3.6.0-gost/ssl/openssl.cnf`.
+
+=== gost-curl: certificate key type does not match signature scheme
+
+Добавить флаг `--interop-openssl` (gost-curl) или
+`.interopAcceptGostBaseSigScheme(true)` (GostSslBuilder).
+
+=== mTLS: upstream prematurely closed connection / 502 Bad Gateway
+
+Ошибка `upstream prematurely closed connection` в логах Angie при
+включённом mTLS. Причина: openssl-gost-provider отправляет в CertificateVerify
+базовую схему (0x0709 для 256-битных ключей) независимо от реальной кривой
+сертификата (GC256B → ожидается 0x070A). FileReceiveServer отклоняет
+соединение с `Certificate key type does not match signature scheme 1801`.
+
+Решение: запустить FileReceiveServer с `--client-auth need` (или `want`) —
+флаг автоматически включает `interopAcceptGostBaseSigScheme` для серверной
+роли, и сервер принимает базовую схему от openssl-gost-provider.
+
+=== openssl s_client: Cipher is (NONE)
+
+Проверить `Groups = GC256B` в openssl.cnf.
+Проверить `-ciphersuites TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L`.
+
+== Ссылки
+
+* crypto-gost: https://gitflic.ru/project/red-stars-systems/crypto-gost
+* gost-curl: https://gitflic.ru/project/red-stars-systems/gost-curl
+* gost-curl releases: https://gitflic.ru/project/red-stars-systems/gost-curl/release
+* Angie: https://angie.software
+* OpenSSL gost-engine: https://github.com/gost-engine/engine
+* RFC 8446 — The Transport Layer Security (TLS) Protocol Version 1.3
+* RFC 9367 — GOST Cipher Suites for TLS 1.3

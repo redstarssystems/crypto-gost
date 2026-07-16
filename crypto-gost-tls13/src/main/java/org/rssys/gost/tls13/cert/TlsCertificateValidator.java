@@ -10,6 +10,7 @@ import org.rssys.gost.pkix.cert.ChainValidator;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.tls13.crypto.HkdfStreebog;
@@ -105,7 +106,10 @@ public final class TlsCertificateValidator {
         if (serverHostname != null && !leaf.verifyHostname(serverHostname)) {
             throw new TlsException(
                     TlsConstants.ALERT_BAD_CERTIFICATE,
-                    "Certificate hostname mismatch: " + serverHostname);
+                    "Certificate hostname mismatch: expected="
+                            + serverHostname
+                            + ", certificate SAN="
+                            + Arrays.toString(leaf.getSanDnsNames()));
         }
         if (!leaf.isKeyUsageValid()) {
             throw new TlsException(
@@ -294,16 +298,45 @@ public final class TlsCertificateValidator {
     public static void verifyCertificateVerify(
             byte[] cvBody, GostCertificate cert, byte[] hsTranscript, boolean isServer)
             throws IOException {
+        verifyCertificateVerify(cvBody, cert, hsTranscript, isServer, false);
+    }
+
+    /**
+     * Перегрузка с флагом совместимости openssl-gost-provider.
+     *
+     * @see #verifyCertificateVerify(byte[], GostCertificate, byte[], boolean)
+     */
+    public static void verifyCertificateVerify(
+            byte[] cvBody,
+            GostCertificate cert,
+            byte[] hsTranscript,
+            boolean isServer,
+            boolean interopAcceptGostBaseSigScheme)
+            throws IOException {
         if (cvBody.length < 4) {
             throw new TlsException(
                     TlsConstants.ALERT_DECODE_ERROR,
                     "CertificateVerify body too short: " + cvBody.length);
         }
         int scheme = ((cvBody[0] & 0xFF) << 8) | (cvBody[1] & 0xFF);
-        if (!TlsCertUtils.hasSignatureScheme(cert.getPublicKey(), scheme)) {
+        if (!TlsCertUtils.hasSignatureScheme(
+                cert.getPublicKey(), scheme, interopAcceptGostBaseSigScheme)) {
             throw new TlsException(
                     TlsConstants.ALERT_BAD_CERTIFICATE,
                     "Certificate key type does not match signature scheme " + scheme);
+        }
+        if (interopAcceptGostBaseSigScheme) {
+            int certNamedGroup = TlsCiphersuite.paramsToNamedGroup(cert.getPublicKey().getParams());
+            int expectedScheme = TlsCiphersuite.namedGroupToSignatureScheme(certNamedGroup);
+            if (scheme != expectedScheme) {
+                LOG.log(
+                        Level.WARNING,
+                        "interopAcceptGostBaseSigScheme: server sent scheme 0x"
+                                + Integer.toHexString(scheme)
+                                + " (expected 0x"
+                                + Integer.toHexString(expectedScheme)
+                                + ") — known openssl-gost-provider incompatibility");
+            }
         }
         int sigLen = ((cvBody[2] & 0xFF) << 8) | (cvBody[3] & 0xFF);
         if (4 + sigLen > cvBody.length) {
@@ -326,6 +359,10 @@ public final class TlsCertificateValidator {
         d.doFinal(hash, 0);
         int rolen = sigHashLen;
         if (!TlsSignatureCodec.verify(hash, sig, cert.getPublicKey(), rolen)) {
+            LOG.log(
+                    Level.WARNING,
+                    "CertificateVerify signature verification failed: subject={0}",
+                    cert.getSubjectDnForLog(128));
             throw new TlsException(
                     TlsConstants.ALERT_BAD_CERTIFICATE,
                     "CertificateVerify signature verification failed");

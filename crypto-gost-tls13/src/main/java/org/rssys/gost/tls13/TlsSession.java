@@ -103,6 +103,10 @@ public final class TlsSession implements AutoCloseable {
     private List<OIDFilter> oidFilters;
     // Селектор сертификата клиента по oid_filters (клиент)
     private ClientCertificateSelector clientCertSelector;
+
+    /** Обход openssl-gost-provider: принимать базовые схемы (0x0709/0x070D). */
+    private boolean interopAcceptGostBaseSigScheme;
+
     private int ticketsToSend = 1;
 
     // Engine остается жив после handshake для post-handshake сообщений
@@ -145,6 +149,7 @@ public final class TlsSession implements AutoCloseable {
                         null);
         session.alpnProtocols = config.getAlpnProtocols();
         session.clientCertSelector = config.getClientCertificateSelector();
+        session.interopAcceptGostBaseSigScheme = config.isInteropAcceptGostBaseSigScheme();
         return session;
     }
 
@@ -194,6 +199,7 @@ public final class TlsSession implements AutoCloseable {
         session.oidFilters = config.getOidFilters();
         session.alpnProtocols = config.getAlpnProtocols();
         session.ticketsToSend = config.getTicketsToSend();
+        session.interopAcceptGostBaseSigScheme = config.isInteropAcceptGostBaseSigScheme();
         int configNamedGroup = config.getSelectedNamedGroup();
         if (configNamedGroup != 0 && configNamedGroup != session.selectedNamedGroup) {
             session.selectedNamedGroup = configNamedGroup;
@@ -342,6 +348,12 @@ public final class TlsSession implements AutoCloseable {
             // Селектор сертификата клиента по oid_filters (клиент)
             if (role == TlsHandshakeEngine.Role.CLIENT && clientCertSelector != null) {
                 engine.setClientCertificateSelector(clientCertSelector);
+            }
+
+            // Обход openssl-gost-provider (обе стороны — клиент для проверки подписи сервера,
+            // сервер для проверки подписи клиента при mTLS)
+            if (interopAcceptGostBaseSigScheme) {
+                engine.setInteropAcceptGostBaseSigScheme(true);
             }
 
             // Поиск PSK на стороне клиента

@@ -1,5 +1,7 @@
 package org.rssys.gost.pkix.cms;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import org.rssys.gost.cipher.Kuznyechik;
@@ -35,6 +37,8 @@ import org.rssys.gost.util.DerCodec;
  * ({@code gost2015_final_call}).
  */
 public final class CmsOmacHelper {
+
+    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cms.CmsOmacHelper");
 
     /** Атрибут content-mac для unprotectedAttrs, закодированный в DER. */
     public record ContentMacAttribute(byte[] encodedMac, byte[] derEncoded) {}
@@ -129,6 +133,7 @@ public final class CmsOmacHelper {
                         "CMS OMAC: content-mac mismatch — content integrity violation");
             }
 
+            LOG.log(Level.DEBUG, "CMS OMAC verification passed");
             return plaintext;
         } finally {
             stream.destroy();

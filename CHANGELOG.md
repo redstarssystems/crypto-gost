@@ -1,3 +1,255 @@
+# \[0.7.0\] - 16-07-2026
+
+Данная ветка релизов 0.7.хх целиком посвящена повышению уровня
+интероперабельности библиотеки при интеграции с различными провайдерами
+и продуктами. Производится тестирование с различными продуктами:
+Инфортекс, Контур, КриптоПро, angie и других, которые можно найти и
+протестировать хотя бы демо режиме.
+
+## Модуль crypto-gost-tls13
+
+### Добавлено
+
+- **Флаг `interopAcceptGostBaseSigScheme` (default=false) в
+  `TlsClientConfig` для совместимости с OpenSSL+gost-provider v3.6.0.**
+
+  Ранее клиент crypto-gost-tls13 отвергал соединение с сервером
+  Angie/OpenSSL+gost-provider при использовании сертификата на кривой
+  CryptoPro-A: openssl-gost-provider всегда отправляет базовую схему
+  подписи 0x0709 (gostr34102012\_256a / GC256A) для любого 256-битного
+  сертификата и 0x070D (GC512A) для 512-битного — формальное нарушение
+  RFC 9367 §5 (каждая схема — пара «алгоритм + кривая»). Клиент
+  crypto-gost выполняет строгую проверку соответствия схемы кривой
+  сертификата.
+
+  Теперь добавлен флаг `interopAcceptGostBaseSigScheme` (default=false)
+  в `TlsClientConfig`. При включении принимает 0x0709 для 256-битных и
+  0x070D для 512-битных ключей любой кривой, совместимых по размеру. При
+  срабатывании логирует warning с деталями (ожидаемая и фактическая
+  схемы). Флаг проброшен через весь стек валидации: TlsClientConfig →
+  TlsSession → TlsHandshakeEngine → TlsCertificateValidator →
+  TlsCertUtils.hasSignatureScheme().
+
+- **WARNING-логи при PSK binder verification failure и CertificateVerify
+  signature failure.**
+
+  Ранее `TlsHandshakeEngine` логировал только PSK ticket age mismatch
+  (тикет устарел — штатная ситуация), но более критичный PSK binder
+  verification failure (RFC 8446 §4.2.11.2) проходил молча — только
+  throw `TlsException`.\` логировал openssl-interop костыль, но не
+  основную проверку владения приватным ключом сертификата. Стало:
+  добавлены WARNING-логи в обе точки, симметрично уже существующему
+  паттерну логирования в этих же файлах (PSK ticket age mismatch,
+  interop scheme warning).
+
+### Исправлено
+
+- **Resumption Master Secret (RMS) вычислялся с пустым хэшем вместо
+  полного транскрипта handshake.**
+
+  Ранее `getResumptionMasterSecret()` в `TlsKeySchedule` использовал
+  `Hash("")` как контекст для `Derive-Secret(MS, "res master", ...)`,
+  что нарушает RFC 8446 §7.1 — транскрипт должен включать все
+  handshake-сообщения вплоть до Client Finished.
+
+  Исправлено: добавлен параметр `transcriptHash` в
+  `getResumptionMasterSecret()` и `finishHandshake()` /
+  `receiveClientFinished()` передают актуальный транскрипт. Баг
+  проявлялся только при нестандартном сценарии: сервер crypto-gost
+  выдавал NST клиенту (Angie/OpenSSL), и клиент при последующем
+  переподключении пытался вычислить PSK для resumption — RMS отличался
+  от серверного, что приводило к невалидному PSK и отказу
+  binder-верификации.
+
+  Дополнительно в процессе фикса обнаружена асимметрия между клиентским
+  (`finishHandshake`) и серверным (`receiveClientFinished`) путями
+  обработки `client Finished`: на клиенте `client Finished` добавлялся в
+  транскрипт позже точки вычисления RMS (после выработки app traffic
+  keys). При первой попытке фикса это дало расхождение границы
+  транскрипта между сторонами даже в self-interop сценарии — баг,
+  который оставался незамеченным, пока RMS вычислялся с `Hash("")` (обе
+  стороны были симметрично неверны).
+
+- **PSK binder вычислялся от тела ClientHello, а не от полного
+  handshake-фрейма.**
+
+  Ранее `TlsPskHelper.computeBinder()` и `verifyBinder()` принимали
+  только тело ClientHello (без 4-байтового заголовка Handshake: тип +
+  длина). При этом `TlsHandshakeEngine.startClient()` формировал
+  handshake-фрейм после вычисления binder, а `receiveClientHello()`
+  передавал в verifyBinder тело, выделенное через
+  `TlsHandshakeMessage.getBody()`. Расхождение соответствовало 4 байтам
+  заголовка: клиент (OpenSSL) считал транскрипт с заголовком, сервер
+  (crypto-gost) — без.
+
+  Исправлено: `computeBinder()` / `verifyBinder()` /
+  `computeBinderForHrr()` / `verifyBinderForHrr()` теперь принимают
+  полный handshake-фрейм. Клиентский путь (startClient, CH2 после HRR)
+  предварительно кодирует тело в фрейм, серверный (receiveClientHello)
+  передаёт входящий фрейм напрямую.
+
+- **PSK binder вычислялся напрямую от binder\_key, минуя
+  finished\_key.**
+
+  Ранее `computeBinder()` (и `computeBinderForHrr()`) подписывали
+  транскрипт непосредственно через `HMAC(binder_key, Transcript-Hash)`,
+  что нарушает RFC 8446 §4.2.11.2 + §4.4.4: обязательна двухшаговая
+  деривация — сначала
+  `finished_key = HKDF-Expand-Label(binder_key, "finished", "", Hash.length)`,
+  затем `HMAC(finished_key, Transcript-Hash)`. В self-interop баг
+  маскировался симметрией (обе стороны ошибались одинаково), но при
+  cross-interop с OpenSSL расхождение binder приводило к отказу
+  PSK-возобновления.
+
+  Исправлено: в `computeBinder()` и `computeBinderForHrr()` добавлен
+  промежуточный шаг
+  `expandLabel(binderKey, PREFIXED_FINISHED, EMPTY_CONTEXT)`. Константы
+  `PREFIXED_FINISHED` / `EMPTY_CONTEXT` переиспользованы из штатного
+  `TlsKeySchedule.computeVerifyData()` — устранено дублирование формулы
+  finished\_key.
+
+- **Проброс `interopAcceptGostBaseSigScheme` в `TlsServerConfig` для
+  совместимости с mTLS через OpenSSL+gost-provider v3.6.0.**
+
+  Ранее флаг существовал только для клиентской роли. При взаимной
+  аутентификации (mTLS) сервер отвергал клиентский сертификат от
+  Angie/OpenSSL+gost-provider с ошибкой
+  `Certificate key type does not match signature scheme 1801`, так как
+  openssl-gost-provider при подписи CertificateVerify использует базовую
+  схему (0x0709 для 256-битных, 0x070D для 512-битных) независимо от
+  кривой сертификата.
+
+  Теперь флаг `interopAcceptGostBaseSigScheme` (default=false) добавлен
+  в `TlsServerConfig`, проброшен через `TlsSession.createServer()` и
+  применяется для обеих ролей handshake. При включении сервер принимает
+  базовые схемы для ключей совместимого размера.
+
+## Модуль crypto-gost-jsse
+
+### Добавлено
+
+- **Проброс `interopAcceptGostBaseSigScheme` в JSSE-слой через
+  `GostSslBuilder.interopAcceptGostBaseSigScheme(boolean)`.**
+
+  Ранее флаг существовал только в `TlsClientConfig` (crypto-gost-tls13)
+  и был недоступен JSSE-клиентам (gost-curl, OkHttp). JSSE-слой не
+  использует `TlsClientConfig` — `GostSSLEngine.initHandshake()` создаёт
+  `TlsHandshakeEngine` напрямую.
+
+  Теперь флаг хранится на `GostSSLSessionContext` (публичный
+  SSLSessionContext). `GostSSLEngine.initHandshake()` читает флаг из
+  session context и передаёт в
+  `TlsHandshakeEngine.setInteropAcceptGostBaseSigScheme()`.
+  `GostSslBuilder` устанавливает флаг на session context кастом к
+  `GostSSLSessionContext`. Без вызова
+  `.interopAcceptGostBaseSigScheme(true)` — строгая проверка по
+  умолчанию.
+
+- **Поддержка `needClientAuth` в `GostSslBuilder` для серверного
+  контекста.**
+
+  Добавлен метод `GostSslBuilder.needClientAuth(boolean)`. Флаг хранится
+  на `GostSSLSessionContext`, читается в `GostSSLEngine.initHandshake()`
+  при создании handshake-движка.
+
+- **FileReceiveServer (examples/jsse): поддержка mTLS и обхода
+  openssl-gost-provider.**
+
+  Добавлены CLI-флаги `--client-auth none|want|need`. При
+  `--client-auth need` или `want` автоматически включается
+  `interopAcceptGostBaseSigScheme` — ошибка signature scheme (0x0709
+  вместо 0x070A) возникает при любой проверке клиентского сертификата,
+  не только при обязательной аутентификации. В Undertow/Xnio mTLS
+  включается через `setSocketOption( SSL_CLIENT_AUTH_MODE, REQUIRED)`.
+
+- **INFO audit-лог успешной mTLS-аутентификации клиента.**
+
+  Ранее `GostX509TrustManager.checkClientTrustedImpl()` логировал только
+  отказы проверки клиентского сертификата (WARNING/ERROR), успешная
+  mTLS-аутентификация проходила без следа — администратор не мог
+  отличить mTLS-соединение от PSK-возобновления в логах. Стало: добавлен
+  INFO-лог с subject DN и серийным номером принятого клиентского
+  сертификата в единственной точке accept’а.
+
+- **DEBUG-лог завершения handshake с SNI и DN сертификата пира.**
+
+  Ранее `GostSSLEngine.finishHandshake()` логировал только cipher suite
+  и ALPN-протокол; SNI (запрошенное имя сервера) и Distinguished Name
+  сертификата пира не выводились. Усечённая диагностика — SNI и DN не
+  являются ключевым материалом и безопасны для лога. Стало: в лог
+  `"Handshake completed"` добавлены поля sni= и peer=.
+
+## Модуль crypto-gost-pkix-examples
+
+### Добавлено
+
+- **GenerateTestCerts: сертификат для mTLS-клиента.**
+
+  Добавлен сертификат `CN=angie-mtls-client` (GC256B, EKU clientAuth) с
+  экспортом в PEM: `angie-client.pem` (цепочка leaf + CA) и
+  `angie-client-key.pem` (закрытый ключ).
+
+- **CAdESXLongRealServerDemo: CAdES-XL Type 1 с TSP-сервером СКБ
+  Контур.**
+
+  Новый демо-класс, показывающий полный цикл долгосрочной подписи:
+  генерация 3-уровневой цепочки (RootCA → IntermediateCA → Leaf),
+  CAdES-BES, TSP-метка от `pki.skbkontur.ru`, CRL от RootCA, OCSP от
+  IntermediateCA, CAdES-C (CompleteCertificateRefs +
+  CompleteRevocationRefs), CAdES-XL (certificate-values +
+  revocation-values) и верификация через
+  `CAdESExtender.verifyCAdESXLong`.
+
+## Модуль crypto-gost-pkix
+
+### Добавлено
+
+- **Логирование security-значимых событий в pkix-компонентах:
+  SSRF-блокировка, CSR proof-of-possession, MAC-верификация, TSP verify,
+  reject корней/issuer и self-verify подписи.**
+
+  Ранее `JdkHttpTspTransport` не логировал SSRF-блокировку TSP-запроса
+  (асимметрия с OCSP/CRL-фетчерами jsse); `GostCsrParser.verifySelf()`
+  молча возвращал `false` при несовпадении подписи CSR с заявленным SPKI
+  (forge-attempt); `CmsOmacHelper` не логировал успешную MAC-верификацию
+  (дефолт — `AuthenticationException` при отказе);
+  `TspResponse.verify()` бросал `PkixException` в шести точках отказа
+  без единого WARNING; `ChainValidator` не сообщал о reject всех
+  доверенных корней (только generic-исключение); `CertChainBuilder` не
+  фиксировал неудачу выбора issuer-кандидата (с числом попыток);
+  `GostSignatureHelper.signHashChecked()` молча кидал
+  `IllegalStateException` при self-verify failure неисправного
+  подписанта. Стало: в каждую точку добавлены WARNING/DEBUG-логи.
+
+### Исправлено
+
+- **CAdES-XL: `extractAndVerifyCertificateValues` сравнивал `BigInteger`
+  с `byte[]` через `equals()`, ломая verify для цепочек с промежуточными
+  CA.**
+
+  Ранее в `CAdESExtender.extractAndVerifyCertificateValues()`
+  (строка 1002) вызов `cv.getSerialNumber()` возвращал `byte[]`, а
+  `expectedSerial` (из `ref.issuerSerial().serial()`) — `BigInteger`.
+  Сравнение через `BigInteger.equals(byte[])` всегда возвращало `false`,
+  из-за чего верификация CAdES-XL падала с
+  `"certHash/IssuerSerial mismatch"`, если в цепочке был хотя бы один
+  промежуточный CA (certRefs непуст). Тест с 2-уровневой цепочкой
+  проходил, так как certRefs был пуст.
+
+  Стало: исправлено на `cv.getSerialNumberBigInt()`. Полный цикл
+  CAdES-XL с трёхуровневой цепочкой и TSP Контура подтверждён.
+
+- **Расшифрованный приватный ключ не затирался после парсинга в
+  GostPbes2 и GostPkcs12Loader.**
+
+  Ранее `GostPbes2.decryptKey()` расшифровывал приватный ключ в
+  `privateKeyInfoDer`, парсил его через
+  `GostDerCodec.decodePrivateKey()`, но не затирал — затирался только
+  производный ключ `dk`. `GostPkcs12Loader.adaptPrivateKey()` не затирал
+  результат `jdkKey.getEncoded()`. Асимметрия зачистки:
+  PKCS8-представление ключа оставалось в куче до GC. Стало: оба массива
+  затираются (`Arrays.fill`) в `finally`-блоке после использования.
+
 # \[0.6.5\] - 15-07-2026
 
 ## Модуль crypto-gost-jsse
@@ -33,11 +285,11 @@
   `PublicKeyParameters`.
 
   После исправления full-handshake throughput восстановлен с 57.8k до
-  95.5k ops/s (95% от майского базлайна). mutualAuth восстановлен с
-  41.5k до 58.8k ops/s (77% от майского базлайна); оставшийся разрыв
-  (двойная валидация сертификата пира при взаимной аутентификации)
-  подтверждён JFR-профилированием и является необходимым расходом
-  корректности.
+  95.5k ops/s (95% от прежнего уровня, майский замер). mutualAuth
+  восстановлен с 41.5k до 58.8k ops/s (77% от прежнего уровня, майский
+  замер); оставшийся разрыв (двойная валидация сертификата пира при
+  взаимной аутентификации) подтверждён JFR-профилированием и является
+  необходимым расходом корректности.
 
 # \[0.6.4\] - 14-07-2026
 

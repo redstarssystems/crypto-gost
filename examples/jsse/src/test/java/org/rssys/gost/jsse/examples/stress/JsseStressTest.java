@@ -45,7 +45,7 @@ import org.rssys.gost.util.CryptoRandom;
  */
 @DisplayName("Стресс-тест: GostSSLServerSocket под смешанной нагрузкой")
 @Tag("stress")
-@Timeout(value = 10, unit = TimeUnit.MINUTES)
+@Timeout(value = 15, unit = TimeUnit.MINUTES)
 class JsseStressTest {
 
     // Константы

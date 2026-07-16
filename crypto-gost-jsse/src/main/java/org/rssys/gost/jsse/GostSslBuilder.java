@@ -7,6 +7,7 @@ import java.util.stream.Collectors;
 import javax.net.ssl.SSLContext;
 import org.rssys.gost.jsse.crl.CrlFetcher;
 import org.rssys.gost.jsse.crl.CrlPolicy;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.ocsp.OcspFetcher;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
@@ -37,6 +38,8 @@ public class GostSslBuilder {
     private int maxRevokedEntries = GostCrl.DEFAULT_MAX_REVOKED_ENTRIES;
     private OcspFetcher ocspFetcher;
     private long maxOcspAgeMs = GostOids.MAX_OCSP_AGE_MS;
+    private boolean interopAcceptGostBaseSigScheme;
+    private boolean needClientAuth;
 
     GostSslBuilder() {}
 
@@ -228,46 +231,91 @@ public class GostSslBuilder {
     }
 
     /**
+     * Включает обход openssl-gost-provider v3.6.0: сервер всегда шлёт
+     * базовые signature scheme (0x0709 для 256-bit, 0x070D для 512-bit)
+     * независимо от реальной кривой сертификата.
+     * <p>
+     * По умолчанию выключено. Включение — осознанное решение разработчика
+     * для совместимости с openssl-gost-provider.
+     *
+     * @return this
+     */
+    public GostSslBuilder interopAcceptGostBaseSigScheme(boolean enabled) {
+        this.interopAcceptGostBaseSigScheme = enabled;
+        return this;
+    }
+
+    /**
+     * Включает обязательную аутентификацию клиента (mTLS).
+     * Аналог {@code SSLServerSocket.setNeedClientAuth(true)}.
+     * <p>
+     * Флаг устанавливается на {@code GostSSLSessionContext} и применяется
+     * ко всем серверным engine, созданным через этот контекст.
+     *
+     * @param need true — клиентский сертификат обязателен
+     * @return this
+     */
+    public GostSslBuilder needClientAuth(boolean need) {
+        this.needClientAuth = need;
+        return this;
+    }
+
+    /**
      * Строит серверный SSLContext.
      */
     public SSLContext buildServerContext() {
-        return GostSsl.buildContext(
-                certDer,
-                keyDer,
-                p12Data,
-                p12Password,
-                trustedCaDers,
-                ocspEnabled,
-                sessionCacheSize,
-                trustAll,
-                crlPolicy,
-                crlFetcher,
-                maxCrlSize,
-                maxRevokedEntries,
-                ocspFetcher,
-                maxOcspAgeMs,
-                true);
+        SSLContext ctx =
+                GostSsl.buildContext(
+                        certDer,
+                        keyDer,
+                        p12Data,
+                        p12Password,
+                        trustedCaDers,
+                        ocspEnabled,
+                        sessionCacheSize,
+                        trustAll,
+                        crlPolicy,
+                        crlFetcher,
+                        maxCrlSize,
+                        maxRevokedEntries,
+                        ocspFetcher,
+                        maxOcspAgeMs,
+                        true);
+        if (interopAcceptGostBaseSigScheme) {
+            ((GostSSLSessionContext) ctx.getServerSessionContext())
+                    .setInteropAcceptGostBaseSigScheme(true);
+        }
+        if (needClientAuth) {
+            ((GostSSLSessionContext) ctx.getServerSessionContext()).setNeedClientAuth(true);
+        }
+        return ctx;
     }
 
     /**
      * Строит клиентский SSLContext.
      */
     public SSLContext buildClientContext() {
-        return GostSsl.buildContext(
-                certDer,
-                keyDer,
-                p12Data,
-                p12Password,
-                trustedCaDers,
-                ocspEnabled,
-                sessionCacheSize,
-                trustAll,
-                crlPolicy,
-                crlFetcher,
-                maxCrlSize,
-                maxRevokedEntries,
-                ocspFetcher,
-                maxOcspAgeMs,
-                false);
+        SSLContext ctx =
+                GostSsl.buildContext(
+                        certDer,
+                        keyDer,
+                        p12Data,
+                        p12Password,
+                        trustedCaDers,
+                        ocspEnabled,
+                        sessionCacheSize,
+                        trustAll,
+                        crlPolicy,
+                        crlFetcher,
+                        maxCrlSize,
+                        maxRevokedEntries,
+                        ocspFetcher,
+                        maxOcspAgeMs,
+                        false);
+        if (interopAcceptGostBaseSigScheme) {
+            ((GostSSLSessionContext) ctx.getClientSessionContext())
+                    .setInteropAcceptGostBaseSigScheme(true);
+        }
+        return ctx;
     }
 }

@@ -1,5 +1,7 @@
 package org.rssys.gost.pkix.tsp;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -26,6 +28,8 @@ import org.rssys.gost.util.DerCodec;
  * выполняет криптографическую проверку и устанавливает флаг {@code signatureVerified}.
  */
 public final class TspResponse {
+
+    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.tsp.TspResponse");
 
     private final int status;
     private final String statusString;
@@ -376,12 +380,18 @@ public final class TspResponse {
 
         // 1. Сверка messageImprint
         if (!MessageDigest.isEqual(tstInfo.messageImprintHash(), expectedHash)) {
+            LOG.log(Level.WARNING, "TSP verification: messageImprint mismatch");
             throw new PkixException(
                     PkixException.Reason.OTHER, "TSP messageImprint does not match expected hash");
         }
 
         // 2. Сверка алгоритма хэширования
         if (!expectedHashAlgOid.equals(tstInfo.messageImprintAlgOid())) {
+            LOG.log(
+                    Level.WARNING,
+                    "TSP verification: hashAlgorithm mismatch, expected={0}, got={1}",
+                    expectedHashAlgOid,
+                    tstInfo.messageImprintAlgOid());
             throw new PkixException(
                     PkixException.Reason.OTHER,
                     "TSP messageImprint hashAlgorithm mismatch: expected "
@@ -394,6 +404,10 @@ public final class TspResponse {
         long genTimeMs = parseGeneralizedTimeToMs(tstInfo.genTime());
         long nowMs = System.currentTimeMillis();
         if (genTimeMs > nowMs + GostOids.CLOCK_SKEW_MS) {
+            LOG.log(
+                    Level.WARNING,
+                    "TSP verification: genTime in the future: {0}",
+                    tstInfo.genTime());
             throw new PkixException(
                     PkixException.Reason.OTHER,
                     "TSP genTime is in the future: " + tstInfo.genTime());
@@ -402,18 +416,21 @@ public final class TspResponse {
         // 4. Проверка nonce (если передан)
         if (expectedNonce != null) {
             if (tstInfo.nonce() == null) {
+                LOG.log(Level.WARNING, "TSP verification: nonce missing");
                 throw new PkixException(
                         PkixException.Reason.OTHER,
                         "TSP response missing nonce, but nonce was expected");
             }
             if (!MessageDigest.isEqual(
                     expectedNonce.toByteArray(), tstInfo.nonce().toByteArray())) {
+                LOG.log(Level.WARNING, "TSP verification: nonce mismatch");
                 throw new PkixException(PkixException.Reason.OTHER, "TSP nonce mismatch");
             }
         }
 
         // 5. Проверка подписи TimeStampToken (CMS SignedData)
         if (timeStampTokenDer == null) {
+            LOG.log(Level.WARNING, "TSP verification: no TimeStampToken");
             throw new PkixException(PkixException.Reason.OTHER, "No TimeStampToken to verify");
         }
         List<GostCertificate> trustedList = List.of(tsaTrustedCerts);
@@ -425,6 +442,10 @@ public final class TspResponse {
         // Проверяем EKU id-kp-timeStamping у каждого подписанта TimeStampToken
         for (SignerResult sr : tsResult.signers()) {
             if (!sr.signerCertificate().isTimeStamping()) {
+                LOG.log(
+                        Level.WARNING,
+                        "TSP verification: signer missing id-kp-timeStamping EKU, subject={0}",
+                        sr.signerCertificate().getSubjectDn());
                 throw new PkixException(
                         PkixException.Reason.OTHER,
                         "TSA certificate does not have id-kp-timeStamping EKU");

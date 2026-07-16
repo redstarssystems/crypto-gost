@@ -322,6 +322,7 @@ SSLContext ctx = GostSsl.builder()
     .maxCrlSize(16 * 1024 * 1024)       // лимит размера CRL в байтах
     .maxRevokedEntries(500_000)         // лимит числа отозванных записей
     .sessionCacheSize(5000)             // размер кэша сессий (0=без ограничения)
+    .interopAcceptGostBaseSigScheme(true) // обход openssl-gost-provider v3.6.0
     .trustAll()                         // отключить проверку (только dev)
     .buildServerContext();              // или buildClientContext()
 ----
@@ -330,6 +331,13 @@ NOTE: Лимиты `maxCrlSize`/`maxRevokedEntries`/`maxOcspAgeMs` имеют б
 только для тюнинга под конкретную PKI. При `crlPolicy(null)` CRL-проверка трактуется как
 `DISABLED`. Лимит `maxResponseSize` у `JdkHttpCrlFetcher` должен быть &ge; `maxCrlSize`, иначе
 CRL не дойдёт до парсера.
+
+NOTE: `interopAcceptGostBaseSigScheme` (default=false) — обход openssl-gost-provider v3.6.0:
+он всегда шлёт базовые signature scheme (0x0709 для 256-bit, 0x070D для 512-bit) независимо
+от реальной кривой сертификата (GC256B/C/D, GC512B/C). RFC 9367 §5 формально требует точного
+соответствия, поэтому флаг выключен по умолчанию и включается только осознанно разработчиком.
+При срабатывании логирует warning с деталями несоответствия. В большинстве соединений
+с другими реализациями GOST TLS 1.3 флаг не требуется и должен оставаться выключенным.
 
 Примеры:
 

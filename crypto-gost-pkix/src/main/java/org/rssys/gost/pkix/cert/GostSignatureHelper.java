@@ -1,5 +1,7 @@
 package org.rssys.gost.pkix.cert;
 
+import java.lang.System.Logger;
+import java.lang.System.Logger.Level;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -23,6 +25,9 @@ import org.rssys.gost.util.DerCodec;
  * Паттерн идентичен {@code GostCertificate.verifySignature()} и {@code CrlVerifier}.</p>
  */
 public final class GostSignatureHelper {
+
+    private static final Logger LOG =
+            System.getLogger("org.rssys.gost.pkix.cert.GostSignatureHelper");
 
     private GostSignatureHelper() {}
 
@@ -220,6 +225,12 @@ public final class GostSignatureHelper {
                     "GostSigner returned malformed signature: " + e.getMessage(), e);
         }
         if (!Signature.verifyHash(hash, sig, signer.getPublicKey())) {
+            LOG.log(
+                    Level.WARNING,
+                    "signHashChecked: self-verification failed (hlen={0})",
+                    signer.getParams() != null
+                            ? String.valueOf(signer.getParams().hlen)
+                            : "unknown");
             throw new IllegalStateException(
                     "GostSigner self-verification failed: signature does not match signer's"
                             + " declared public key");

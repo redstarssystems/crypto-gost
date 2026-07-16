@@ -999,7 +999,7 @@ public final class CAdESExtender {
                 if (!Arrays.equals(expectedIssuerDer, cv.getIssuerDnBytes())) {
                     continue;
                 }
-                if (!expectedSerial.equals(cv.getSerialNumber())) {
+                if (!expectedSerial.equals(cv.getSerialNumberBigInt())) {
                     continue;
                 }
                 matched = true;

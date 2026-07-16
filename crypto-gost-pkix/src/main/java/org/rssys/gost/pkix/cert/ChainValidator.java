@@ -182,6 +182,10 @@ public final class ChainValidator {
             }
         }
         if (!rootVerified) {
+            LOG.log(
+                    Level.DEBUG,
+                    "No trusted root matched: leaf serial=0x{0}",
+                    chain.get(0).getSerialNumberBigInt().toString(16));
             throw new PkixException(
                     PkixException.Reason.ROOT_NOT_SIGNED,
                     "Certificate chain: root not signed by any trusted CA");

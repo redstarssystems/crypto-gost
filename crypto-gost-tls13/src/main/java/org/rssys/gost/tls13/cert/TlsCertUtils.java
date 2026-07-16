@@ -41,16 +41,44 @@ public final class TlsCertUtils {
     private TlsCertUtils() {}
 
     /**
-     * Проверяет, относится ли схема подписи к ключу сертификата (RFC 9367 §3.2).
+     * Проверяет, относится ли схема подписи к ключу сертификата (RFC 9367 §5 / §6.3.4).
+     * <p>
+     * Строгое соответствие: схема обязана совпадать с той, что соответствует
+     * кривой сертификата (RFC 9367 §5: каждая схема — пара «алгоритм, кривая»).
+     * <p>
+     * {@code interopAcceptGostBaseSigScheme} — обход известного бага
+     * openssl-gost-provider (версия 3.6.0): сервер всегда шлёт базовую
+     * схему для каждого размера ключа: 0x0709 (gostr34102012_256a / GC256A)
+     * для 256-битных и 0x070D (gostr34102012_512a / GC512A) для 512-битных,
+     * независимо от фактической кривой сертификата (GC256B/C/D, GC512B/C).
+     * RFC 9367 формально требует точного соответствия (Section 5, Table 4),
+     * поэтому флаг по умолчанию выключен. Включение — осознанное решение
+     * разработчика для совместимости с конкретной версией openssl-gost.
      *
      * @param pubKey открытый ключ сертификата
      * @param scheme схема подписи из CertificateVerify
      * @return true если схема соответствует длине ключа
      */
     public static boolean hasSignatureScheme(PublicKeyParameters pubKey, int scheme) {
+        return hasSignatureScheme(pubKey, scheme, false);
+    }
+
+    /**
+     * Перегрузка с флагом совместимости openssl-gost-provider.
+     *
+     * @see #hasSignatureScheme(PublicKeyParameters, int)
+     */
+    public static boolean hasSignatureScheme(
+            PublicKeyParameters pubKey, int scheme, boolean interopAcceptGostBaseSigScheme) {
         int certNamedGroup = TlsCiphersuite.paramsToNamedGroup(pubKey.getParams());
         int expectedScheme = TlsCiphersuite.namedGroupToSignatureScheme(certNamedGroup);
-        return scheme == expectedScheme;
+        if (scheme == expectedScheme) return true;
+        if (interopAcceptGostBaseSigScheme) {
+            int hlen = pubKey.getParams().hlen;
+            if (hlen == 32 && scheme == TlsConstants.SIG_GOST_TC26_A_256) return true;
+            if (hlen == 64 && scheme == TlsConstants.SIG_GOST_TC26_512_A) return true;
+        }
+        return false;
     }
 
     /**

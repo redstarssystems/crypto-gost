@@ -28,6 +28,29 @@ public final class TlsServerConfig {
     private int ticketsToSend = 1;
     private int selectedNamedGroup;
     private List<OIDFilter> oidFilters;
+    private boolean interopAcceptGostBaseSigScheme;
+
+    /**
+     * Включает обход openssl-gost-provider v3.6.0: клиент (в т.ч. Angie
+     * в роли mTLS-клиента на upstream-части) всегда шлёт базовые схемы
+     * (0x0709 для 256-bit, 0x070D для 512-bit) независимо от реальной
+     * кривой сертификата.
+     * <p>
+     * По умолчанию выключено. Включение — осознанное решение разработчика
+     * для совместимости с openssl-gost-provider. RFC 9367 §5 формально
+     * требует точного соответствия схемы кривой сертификата.
+     *
+     * @param enabled true — принимать базовые схемы для любого ключа того же размера
+     * @return this
+     */
+    public TlsServerConfig withInteropAcceptGostBaseSigScheme(boolean enabled) {
+        this.interopAcceptGostBaseSigScheme = enabled;
+        return this;
+    }
+
+    public boolean isInteropAcceptGostBaseSigScheme() {
+        return interopAcceptGostBaseSigScheme;
+    }
 
     /**
      * @param ciphersuite             cipher suite (не null)

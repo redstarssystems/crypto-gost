@@ -448,6 +448,9 @@ public final class GostSSLEngine extends SSLEngine {
                 messageBuilder.setClientMaxFragLen(clientMaxFragLenRequest);
                 handshakeEngine.setClientMaxFragLenRequest(clientMaxFragLenRequest);
             }
+            if (sessionContext != null && sessionContext.isInteropAcceptGostBaseSigScheme()) {
+                handshakeEngine.setInteropAcceptGostBaseSigScheme(true);
+            }
 
             // PSK resumption: ищем тикет для этого сервера
             if (sessionContext != null && peerHost != null && !peerHost.isEmpty()) {
@@ -516,6 +519,12 @@ public final class GostSSLEngine extends SSLEngine {
             // только при requestClientAuth=true.
             SniCertificateSelector sniSel = keyManager != null ? keyManager.asSniSelector() : null;
 
+            // mTLS: читаем needClientAuth из sessionContext (GostSslBuilder.needClientAuth /
+            // ss.setNeedClientAuth)
+            if (sessionContext != null && sessionContext.isNeedClientAuth()) {
+                needClientAuth = true;
+            }
+
             this.handshakeEngine =
                     new TlsHandshakeEngine(
                             TlsHandshakeEngine.Role.SERVER,
@@ -538,6 +547,9 @@ public final class GostSSLEngine extends SSLEngine {
             if (applicationProtocols != null && applicationProtocols.length > 0) {
                 handshakeEngine.setServerAlpnProtocols(
                         java.util.Arrays.asList(applicationProtocols));
+            }
+            if (sessionContext != null && sessionContext.isInteropAcceptGostBaseSigScheme()) {
+                handshakeEngine.setInteropAcceptGostBaseSigScheme(true);
             }
 
             // Для сервера start() возвращает null
@@ -1612,7 +1624,7 @@ public final class GostSSLEngine extends SSLEngine {
                                     .encode();
                     outgoingQueue.addLast(nstFrame);
 
-                    // Кэшируем на сервере
+                    // Store PSK derived via KDF (RFC 8446 §4.6.1)
                     PskEntry entry =
                             new PskEntry(
                                     ticketIdentity,
@@ -1634,11 +1646,20 @@ public final class GostSSLEngine extends SSLEngine {
 
         handshakeDone = true;
 
+        String sniInfo = !clientMode && requestedServerName != null ? requestedServerName : "N/A";
+        String peerInfo;
+        try {
+            peerInfo = session != null ? session.getPeerPrincipal().getName() : "N/A";
+        } catch (javax.net.ssl.SSLPeerUnverifiedException e) {
+            peerInfo = "none";
+        }
         LOG.log(
                 Level.DEBUG,
-                "Handshake completed: suite={0}, alpn={1}",
+                "Handshake completed: suite={0}, alpn={1}, sni={2}, peer={3}",
                 ciphersuite.getIanaName(),
-                selectedAlpnProtocol != null ? selectedAlpnProtocol : "none");
+                selectedAlpnProtocol != null ? selectedAlpnProtocol : "none",
+                sniInfo,
+                peerInfo);
 
         // Сервер: handshake завершён и нет исходящих фреймов -> переходим в DATA
         // (для клиента переход произойдёт в wrap() после flush Finished)

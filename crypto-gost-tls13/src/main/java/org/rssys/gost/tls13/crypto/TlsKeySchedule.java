@@ -208,20 +208,19 @@ public final class TlsKeySchedule {
     }
 
     /**
-     * Resumption Master Secret = Derive-Secret(master_secret, "res master", "").
-     * Вызывается после deriveMasterSecret().
+     * Resumption Master Secret = Derive-Secret(master_secret, "res master", transcriptHash)
+     * (RFC 8446 §7.1).
      *
+     * @param transcriptHash хэш всех handshake-сообщений, включая Client Finished
      * @return resumption master secret
-     * @throws IllegalStateException если master_secret не выведен
      */
-    public byte[] getResumptionMasterSecret() {
+    public byte[] getResumptionMasterSecret(byte[] transcriptHash) {
         checkNotDestroyed();
         if (masterSecret == null) {
             throw new IllegalStateException("Master secret not yet derived");
         }
-        byte[] emptyHash = computeEmptyHash();
         return HkdfStreebog.deriveSecret(
-                masterSecret, HkdfStreebog.PREFIXED_RES_MASTER, emptyHash, hashLen);
+                masterSecret, HkdfStreebog.PREFIXED_RES_MASTER, transcriptHash, hashLen);
     }
 
     // exporter_secret = Derive-Secret(master, "exp master", "") (RFC 8446 §7.5)

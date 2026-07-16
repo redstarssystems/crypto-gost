@@ -250,6 +250,14 @@ public final class TlsHandshakeEngine {
     // Селектор сертификата клиента по OID-фильтрам (клиент)
     private ClientCertificateSelector clientCertificateSelector;
 
+    /**
+     * Обход openssl-gost-provider v3.6.0: сервер всегда шлёт базовую
+     * схему (0x0709 для 256-bit, 0x070D для 512-bit) независимо от
+     * реальной кривой сертификата.
+     * По умолчанию false (строгая проверка по RFC 9367 §5/§6.3.4).
+     */
+    private boolean interopAcceptGostBaseSigScheme;
+
     // Post-handshake (KeyUpdate)
     // Флаги и ключи для двухфазного подтверждения KeyUpdate:
     // 1. engine выставляет pendingWriteUpdate -> caller отправляет KU-фрейм через старый
@@ -392,6 +400,17 @@ public final class TlsHandshakeEngine {
      */
     public void setClientCertificateSelector(ClientCertificateSelector selector) {
         this.clientCertificateSelector = selector;
+    }
+
+    /**
+     * Включает обход openssl-gost-provider: принимать базовые схемы
+     * (0x0709 для 256-bit, 0x070D для 512-bit) для любых сертификатов
+     * того же размера ключа. По умолчанию выключено.
+     *
+     * @see TlsCertUtils#hasSignatureScheme(PublicKeyParameters, int, boolean)
+     */
+    public void setInteropAcceptGostBaseSigScheme(boolean enabled) {
+        this.interopAcceptGostBaseSigScheme = enabled;
     }
 
     // ========================================================================
@@ -956,7 +975,12 @@ public final class TlsHandshakeEngine {
                                 pskIdentity != null ? pskIdentity : new byte[0],
                                 obfuscatedTicketAge,
                                 serverHostname);
-                byte[] binder = TlsPskHelper.computeBinder(clientHelloBody, pskKey, hashLen);
+                // RFC 8446 §4.2.11.2: binder считается от полного handshake-фрейма
+                // (тип + длина + тело).
+                byte[] chFrameBeforeBinder =
+                        new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, clientHelloBody)
+                                .encode();
+                byte[] binder = TlsPskHelper.computeBinder(chFrameBeforeBinder, pskKey, hashLen);
                 System.arraycopy(
                         binder,
                         0,
@@ -1171,8 +1195,11 @@ public final class TlsHandshakeEngine {
                             obfuscatedTicketAge,
                             serverHostname,
                             cookie);
+            // RFC 8446 §4.2.11.2: Через HMAC считаем от полного handshake-фрейма
+            byte[] ch2BeforeBinder =
+                    new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, clientHelloBody).encode();
             byte[] binder =
-                    TlsPskHelper.computeBinderForHrr(hrrPrefix, clientHelloBody, pskKey, hashLen);
+                    TlsPskHelper.computeBinderForHrr(hrrPrefix, ch2BeforeBinder, pskKey, hashLen);
             System.arraycopy(
                     binder,
                     0,
@@ -1361,7 +1388,8 @@ public final class TlsHandshakeEngine {
 
         byte[] cvBody = cvMsg.getBody();
         GostCertificate cert = receivedCertificates.get(0);
-        TlsCertificateValidator.verifyCertificateVerify(cvBody, cert, cvTranscript, isServer);
+        TlsCertificateValidator.verifyCertificateVerify(
+                cvBody, cert, cvTranscript, isServer, interopAcceptGostBaseSigScheme);
         TlsUtils.wipeArray(cvTranscript);
 
         state = isServer ? State.CLIENT_WAIT_FINISHED : State.SERVER_WAIT_CLIENT_FINISHED;
@@ -1475,8 +1503,7 @@ public final class TlsHandshakeEngine {
      */
     private void finishHandshake() {
         ctx.getKeySchedule().deriveMasterSecret();
-        this.resumptionMasterSecret = ctx.getKeySchedule().getResumptionMasterSecret();
-        // RFC 8446 §7.1 Table 2: app transcript захвачен в receiveFinished() ДО client Cert/CV
+        // RFC 8446 §7.1 Table 2: app transcript без client Finished
         byte[] appTranscript = appTranscriptHash != null ? appTranscriptHash : ctx.transcriptHash();
 
         // Capture app traffic secrets для KeyUpdate до ctx.destroy()
@@ -1491,15 +1518,19 @@ public final class TlsHandshakeEngine {
                 ctx.getKeySchedule().deriveTrafficKeys(clientAppTrafficSecret);
 
         TlsUtils.wipeArray(appTranscript);
-        TlsUtils.wipeArray(appTranscriptHash);
         appTranscriptHash = null;
 
-        // Добавляем клиентский Finished в транскрипт ПОСЛЕ выработки app keys
-        // (RFC 8446 §4.4.1 — транскрипт для app traffic без client Finished)
+        // Добавляем клиентский Finished в транскрипт для RMS
+        // (RFC 8446 §4.6.1 — res_master требует полный транскрипт включая client Finished)
         if (pendingClientFinished != null) {
             ctx.addToTranscript(pendingClientFinished);
             pendingClientFinished = null;
         }
+
+        // RMS = Derive-Secret(MS, "res master", Transcript-Hash) ПОСЛЕ client Finished
+        byte[] hsTranscript = ctx.transcriptHash();
+        this.resumptionMasterSecret = ctx.getKeySchedule().getResumptionMasterSecret(hsTranscript);
+        TlsUtils.wipeArray(hsTranscript);
 
         readKeys = appServerKeys;
         readKeysChanged = true;
@@ -1629,9 +1660,10 @@ public final class TlsHandshakeEngine {
                 // CH2 после HRR: binder считается от Hash(message_hash + HRR + Truncated_CH2)
                 byte[] hrrPrefix = ctx.transcriptHash(); // Hash(message_hash + HRR)
                 boolean binderOk =
-                        TlsPskHelper.verifyBinderForHrr(hrrPrefix, chBody, pskKey, hashLen);
+                        TlsPskHelper.verifyBinderForHrr(hrrPrefix, frame, pskKey, hashLen);
                 TlsUtils.wipeArray(hrrPrefix);
                 if (!binderOk) {
+                    LOG.log(Level.WARNING, "PSK binder verification failed for CH2 after HRR");
                     throw new TlsException(
                             TlsConstants.ALERT_HANDSHAKE_FAILURE,
                             "PSK binder verification failed for CH2 after HRR");
@@ -1669,7 +1701,9 @@ public final class TlsHandshakeEngine {
                 }
                 pskAccepted = ageOk;
             } else {
-                if (TlsPskHelper.verifyBinder(chBody, pskKey, hashLen)) {
+                // RFC 8446 §4.2.11.2: binder считается от полного handshake-фрейма
+                boolean binderOk = TlsPskHelper.verifyBinder(frame, pskKey, hashLen);
+                if (binderOk) {
                     if (pskKeyFromStore) {
                         PskEntry consumed = serverPskStore.get(pskIdentityRaw);
                         if (consumed != null) {
@@ -1691,6 +1725,7 @@ public final class TlsHandshakeEngine {
                         pskAccepted = true;
                     }
                 } else {
+                    LOG.log(Level.WARNING, "PSK binder verification failed");
                     throw new TlsException(
                             TlsConstants.ALERT_HANDSHAKE_FAILURE, "PSK binder verification failed");
                 }
@@ -2050,7 +2085,10 @@ public final class TlsHandshakeEngine {
         }
 
         ctx.getKeySchedule().deriveMasterSecret();
-        this.resumptionMasterSecret = ctx.getKeySchedule().getResumptionMasterSecret();
+        // RMS = Derive-Secret(MS, "res master", Transcript-Hash) после включения CF
+        byte[] hsTranscript = ctx.transcriptHash();
+        this.resumptionMasterSecret = ctx.getKeySchedule().getResumptionMasterSecret(hsTranscript);
+        TlsUtils.wipeArray(hsTranscript);
         // Используем транскрипт ДО client Cert/CV/CF — RFC 8446 §7.1 Table 2
         byte[] appTranscript =
                 appTranscriptHash != null ? appTranscriptHash : clientFinishedTranscript;

@@ -339,7 +339,12 @@ public final class GostPkcs12Loader {
         if (jdkKey instanceof GostECPrivateKey) {
             return ((GostECPrivateKey) jdkKey).toPrivateKeyParameters();
         }
-        return GostDerCodec.decodePrivateKey(jdkKey.getEncoded());
+        byte[] encoded = jdkKey.getEncoded();
+        try {
+            return GostDerCodec.decodePrivateKey(encoded);
+        } finally {
+            Arrays.fill(encoded, (byte) 0);
+        }
     }
 
     static byte[] toUtf8Bytes(char[] password) {

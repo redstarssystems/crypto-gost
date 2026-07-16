@@ -412,6 +412,12 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
         } catch (Exception e) {
             throw new CertificateException("Certificate validation error: " + e.getMessage(), e);
         }
+        X509Certificate leafCert = chain[0];
+        LOG.log(
+                Level.INFO,
+                "Client certificate accepted: subject={0}, serial=0x{1}",
+                leafCert.getSubjectX500Principal(),
+                leafCert.getSerialNumber().toString(16));
     }
 
     /**

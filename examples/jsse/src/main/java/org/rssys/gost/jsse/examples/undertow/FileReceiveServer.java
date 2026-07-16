@@ -24,6 +24,8 @@ import javax.net.ssl.SSLContext;
 import org.rssys.gost.jsse.GostSsl;
 import org.rssys.gost.jsse.GostSslBuilder;
 import org.rssys.gost.jsse.examples.ExamplesCertHelper;
+import org.xnio.Options;
+import org.xnio.SslClientAuthMode;
 
 /**
  * Многопоточный ГОСТ TLS 1.3 сервер приёма файлов на Undertow + виртуальных потоках Java 21.
@@ -64,6 +66,8 @@ import org.rssys.gost.jsse.examples.ExamplesCertHelper;
 public final class FileReceiveServer {
 
     private static final int BUF_SIZE = 65536;
+
+    private static String clientAuthMode = "none";
 
     // Один executor на весь сервер — виртуальный поток под каждый запрос
     private static final Executor VIRTUAL = Executors.newVirtualThreadPerTaskExecutor();
@@ -116,6 +120,17 @@ public final class FileReceiveServer {
                 case "--upload-out":
                     uploadOutPath = Path.of(args[++i]);
                     break;
+                case "--client-auth":
+                    clientAuthMode = args[++i];
+                    if (!"none".equals(clientAuthMode)
+                            && !"want".equals(clientAuthMode)
+                            && !"need".equals(clientAuthMode)) {
+                        System.err.println(
+                                "--client-auth must be none|want|need, got: " + clientAuthMode);
+                        printUsage();
+                        System.exit(1);
+                    }
+                    break;
                 default:
                     System.err.println("Unknown flag: " + args[i]);
                     printUsage();
@@ -126,9 +141,24 @@ public final class FileReceiveServer {
         SSLContext sslCtx = buildSslContext(certPath, password, caPath, caPassword);
         PrintWriter log = new PrintWriter(new FileWriter(logPath, true), false);
 
+        Undertow.Builder undertowBuilder = Undertow.builder();
+
+        // mTLS: setSocketOption ДО addHttpsListener (иначе listener не видит OptionMap)
+        switch (clientAuthMode) {
+            case "need":
+                undertowBuilder.setSocketOption(
+                        Options.SSL_CLIENT_AUTH_MODE, SslClientAuthMode.REQUIRED);
+                break;
+            case "want":
+                undertowBuilder.setSocketOption(
+                        Options.SSL_CLIENT_AUTH_MODE, SslClientAuthMode.REQUESTED);
+                break;
+        }
+
+        undertowBuilder.addHttpsListener(port, "0.0.0.0", sslCtx);
+
         Undertow server =
-                Undertow.builder()
-                        .addHttpsListener(port, "0.0.0.0", sslCtx)
+                undertowBuilder
                         .setHandler(
                                 exchange -> {
                                     if (exchange.isInIoThread()) {
@@ -173,6 +203,17 @@ public final class FileReceiveServer {
         } else {
             System.out.println("WARNING: no --ca specified — trust-all mode (development only)");
             builder.trustAll();
+        }
+
+        if ("need".equals(clientAuthMode)) {
+            builder.needClientAuth(true);
+        }
+        // Обход openssl-gost-provider для любой формы client-auth (need/want):
+        // ошибка signature scheme (0x0709 вместо 0x070A для GC256B) не зависит
+        // от обязательности сертификата — она возникает при любой проверке
+        // клиентского CertificateVerify.
+        if (!"none".equals(clientAuthMode)) {
+            builder.interopAcceptGostBaseSigScheme(true);
         }
 
         return builder.buildServerContext();
@@ -412,6 +453,6 @@ public final class FileReceiveServer {
         System.err.println(
                 "Usage: FileReceiveServer [--port N] [--cert p12] [--password pwd]"
                         + " [--ca p12] [--ca-password pwd] [--log path] [--file path]"
-                        + " [--upload-out path]");
+                        + " [--upload-out path] [--client-auth none|want|need]");
     }
 }

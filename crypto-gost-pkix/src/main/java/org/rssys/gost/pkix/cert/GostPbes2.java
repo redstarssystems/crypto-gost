@@ -69,12 +69,16 @@ public final class GostPbes2 {
                 "Decrypting private key via PBES2 (scheme={0})",
                 params.getEncryptionSchemeOid());
         byte[] dk = deriveKey(password, params);
+        byte[] privateKeyInfoDer = null;
         try {
-            byte[] privateKeyInfoDer = decryptKeyData(dk, params, epki.getEncryptedData());
+            privateKeyInfoDer = decryptKeyData(dk, params, epki.getEncryptedData());
             GostDerCodec.checkNotMasked(privateKeyInfoDer);
             return GostDerCodec.decodePrivateKey(privateKeyInfoDer);
         } finally {
             Arrays.fill(dk, (byte) 0);
+            if (privateKeyInfoDer != null) {
+                Arrays.fill(privateKeyInfoDer, (byte) 0);
+            }
         }
     }
 
