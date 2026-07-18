@@ -536,7 +536,111 @@ gost-curl — отдельный проект. Репозиторий:
     # Для Linux x86-64:
     ./gost-curl --help
 
-# 9. Проверка
+# 9. Работа с curl от CryptoPro
+
+Если доступен curl из состава КриптоПро CSP
+(`/opt/cprocsp/bin/amd64/curl`). Он использует Schannel (CryptoPro TLS)
+и поддерживает GOST TLS 1.3, но для клиентских сертификатов требует,
+чтобы сертификат был установлен в хранилище CryptoPro CSP.
+
+## Подготовка сертификата для CryptoPro curl
+
+Если сертификаты сгенерированы скриптом `GenerateTestCerts`, сертификат
+`gost-curl-client.p12` уже создан в `/etc/angie/`. Однако CryptoPro CSP
+не может импортировать PKCS12, созданный crypto-gost или OpenSSL —
+требуется выпуск сертификата через контейнер CSP.
+
+Процесс настройки (однократно):
+
+    # 1. Создать контейнер с ключами
+    csptest -keyset -newkeyset -cont gost-curl-mtls -password changeit
+
+    # 2. Выпустить самоподписанный сертификат и экспортировать
+    csptest -keyset -makecert -cont gost-curl-mtls -password changeit
+    csptest -keyset -expcert /tmp/container-cert.cer \
+        -cont gost-curl-mtls -keytype signature -password changeit
+
+    # 3. Подписать от тестового ЦА (через crypto-gost)
+    cd ~/projects/crypto-gost
+    sudo java -cp examples/pkix/target/crypto-gost-pkix-examples-0.7.1-SNAPSHOT.jar:\
+    crypto-gost-pkix/target/crypto-gost-pkix-0.7.0-SNAPSHOT.jar:\
+    crypto-gost-core/target/crypto-gost-core-0.7.0-SNAPSHOT.jar \
+      org.rssys.gost.pkix.examples.SignContainerCert \
+      --container-cert /tmp/container-cert.cer \
+      --ca-key /etc/angie/ca-key.pem \
+      --ca-cert /etc/angie/ca.pem \
+      --out /tmp/client-signed.cer
+
+    # 4. Импортировать подписанный сертификат в контейнер
+    csptest -keyset -impcert /tmp/client-signed.cer \
+        -cont gost-curl-mtls -keytype signature -password changeit
+
+    # 5. Установить сертификат в хранилище с автопривязкой ключа
+    certmgr -install -certificate -file /tmp/client-signed.cer \
+        -store uMy -autocont
+
+После этого в хранилище появится сертификат с привязкой к закрытому
+ключу (`PrivateKey Link: Yes`) и SHA-1 отпечатком, который используется
+для подключения.
+
+## Подключение через CryptoPro curl
+
+Синтаксис: указать SHA-1 отпечаток сертификата (заглавными, без
+пробелов) и пароль контейнера:
+
+    # Получить отпечаток
+    THUMBPRINT=$(certmgr -list -store uMy | grep -B1 "Test GOST CA" | \
+      grep "SHA1" | awk "{print \$NF}")
+    echo "THUMBPRINT=$THUMBPRINT"
+
+    # GET через Angie (порт 443) с mTLS
+    /opt/cprocsp/bin/amd64/curl -v \
+      --cert "$THUMBPRINT" \
+      --pass changeit \
+      --cacert /etc/angie/ca.pem \
+      https://localhost:443/test.txt
+
+    # GET напрямую к FileReceiveServer (порт 8443) с mTLS
+    /opt/cprocsp/bin/amd64/curl -v \
+      --cert "$THUMBPRINT" \
+      --pass changeit \
+      -k \
+      https://127.0.0.1:8443/test.txt
+
+Параметры:
+
+- `--cert` — SHA-1 отпечаток сертификата в хранилище `uMy` (без
+  `--cert-type` — автоопределение).
+
+- `--pass` — пароль от контейнера CSP.
+
+- `--cacert` или `-k` — проверка сертификата сервера.
+
+`--cert-type PROV` не используется — он выдаёт ошибку
+`Failed to get convert_cert_type_to_cert PROV`. Вместо этого отпечаток
+указывается напрямую в `--cert`, а тип определяется автоматически.
+CryptoPro curl сам находит сертификат в хранилище по отпечатку и
+запрашивает пароль контейнера. Если пароль передан через `--pass`,
+запрос происходит неявно.
+
+## Ограничения CryptoPro curl
+
+- **mTLS** — работает только если сертификат установлен в локальное
+  хранилище CryptoPro CSP (нельзя указать PEM/PKCS12).
+
+- **`--cert-type PROV`** — не поддерживается в данной версии
+  (8.19.0-CPRO) на Linux.
+
+- **`--ssl-auto-client-cert`** — не отправляет сертификат серверу,
+  несмотря на `PrivateKey Link: Yes`.
+
+- **PEM/P12** — импорт внешних файлов сертификатов не работает
+  (`schannel: Failed to import cert file`).
+
+Для mTLS на машинах, где не установлен CryptoPro CSP, используйте
+`gost-curl` с PEM-файлами.
+
+# 10. Проверка
 
 ## Подготовка тестовых файлов
 

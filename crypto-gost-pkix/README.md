@@ -1387,7 +1387,7 @@ TSA. Передача по незащищённому каналу допуст�
     import org.rssys.gost.pkix.tsp.TspResponse;
     import org.rssys.gost.pkix.tsp.TspTransport;
 
-    // Дефолтный HTTP-транспорт (JDK 11+, совместим с virtual threads)
+    // Дефолтный HTTP-транспорт (JVM). Для Android — UrlConnectionTspTransport
     TspTransport transport = new JdkHttpTspTransport();
 
     // Отправляем запрос на TSA
@@ -1408,6 +1408,11 @@ TSA. Передача по незащищённому каналу допуст�
     System.out.println("GenTime: " + tspResponse.tstInfo().genTime());        // YYYYMMDDHHMMSSZ
     System.out.println("Serial: " + tspResponse.tstInfo().serialNumber());   // BigInteger
 
+Для Android-приложений используйте `UrlConnectionTspTransport` из того
+же пакета (`org.rssys.gost.pkix.tsp`). Он использует `HttpURLConnection`
+(доступен с API level 1) вместо `java.net.http.HttpClient` и не требует
+десугаринга.
+
 `TspResponse.verify()` проверяет: . `messageImprint` — совпадает ли хэш
 в ответе с ожидаемым (constant-time через `MessageDigest.isEqual`). .
 `genTime` — не в будущем (с допуском ±5 минут). . nonce — если передан в
@@ -1420,8 +1425,9 @@ SignedData). . **Цепочку сертификатов TSA** через `Chain
 
 #### Кастомный HTTP-транспорт
 
-Дефолтный `JdkHttpTspTransport` принимает URL и выполняет HTTP POST.
-Если требуется прокси, аутентификация mTLS или другой HTTP-клиент —
+По умолчанию используется `JdkHttpTspTransport` (JVM, `HttpClient`) или
+`UrlConnectionTspTransport` (Android, `HttpURLConnection`). Если
+требуется прокси, аутентификация mTLS или другой HTTP-клиент —
 реализуйте интерфейс `TspTransport`:
 
     import org.rssys.gost.pkix.tsp.TspTransport;
@@ -1537,6 +1543,7 @@ unsigned-атрибутах. При верификации сертификат 
     import org.rssys.gost.pkix.cms.CAdESExtender;
     import org.rssys.gost.pkix.cms.CmsSignedDataBuilder;
     import org.rssys.gost.pkix.tsp.JdkHttpTspTransport;
+    import org.rssys.gost.pkix.tsp.TspTransport;
 
     // Шаг 1. Создаём CAdES-BES
     byte[] cadesBes = CmsSignedDataBuilder.create()

@@ -1,7 +1,6 @@
 package org.rssys.gost.pkix.cms;
 
 import java.io.IOException;
-import java.lang.System.Logger;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -23,6 +22,7 @@ import org.rssys.gost.pkix.tsp.TspRequestBuilder;
 import org.rssys.gost.pkix.tsp.TspResponse;
 import org.rssys.gost.pkix.tsp.TspTransport;
 import org.rssys.gost.pkix.tsp.TstInfo;
+import org.rssys.gost.pkix.util.GostLogger;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
@@ -41,7 +41,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class CAdESExtender {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cms.CAdESExtender");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cms.CAdESExtender");
 
     private CAdESExtender() {}
 
@@ -1908,7 +1909,7 @@ public final class CAdESExtender {
                 }
             } catch (Exception e) {
                 LOG.log(
-                        System.Logger.Level.WARNING,
+                        GostLogger.Level.WARNING,
                         "Failed to extract certificates from TimeStampToken #" + tokenIdx,
                         e);
             }

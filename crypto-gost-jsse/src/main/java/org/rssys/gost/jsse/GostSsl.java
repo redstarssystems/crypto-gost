@@ -327,8 +327,7 @@ public final class GostSsl {
                 (SSLServerSocket) serverCtx.getServerSocketFactory().createServerSocket(0)) {
             int port = ss.getLocalPort();
 
-            Thread.ofVirtual()
-                    .start(
+            new Thread(
                             () -> {
                                 try (SSLSocket accepted = (SSLSocket) ss.accept()) {
                                     accepted.startHandshake();
@@ -337,7 +336,8 @@ public final class GostSsl {
                                 } finally {
                                     serverDone.countDown();
                                 }
-                            });
+                            })
+                    .start();
 
             try (SSLSocket s =
                     (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port)) {

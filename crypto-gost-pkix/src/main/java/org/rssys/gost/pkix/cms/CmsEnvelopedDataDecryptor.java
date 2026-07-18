@@ -1,7 +1,5 @@
 package org.rssys.gost.pkix.cms;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -13,6 +11,8 @@ import org.rssys.gost.cipher.mode.CtrAcpkmMode;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.AuthenticationException;
@@ -33,8 +33,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class CmsEnvelopedDataDecryptor {
 
-    private static final Logger LOG =
-            System.getLogger("org.rssys.gost.pkix.cms.CmsEnvelopedDataDecryptor");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cms.CmsEnvelopedDataDecryptor");
 
     private static final int TAG_KARI = 0xA1;
     private static final int TAG_KTRI = 0x30;

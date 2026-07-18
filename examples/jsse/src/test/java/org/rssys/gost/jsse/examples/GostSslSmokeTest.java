@@ -70,6 +70,13 @@ class GostSslSmokeTest {
     }
 
     @Test
+    @DisplayName(
+            "GostSslDev.trustAllNoHostnameCheckInsecure() — dev-контекст без проверки цепочки и hostname")
+    void trustAllNoHostnameCheckInsecure() {
+        assertNotNull(GostSslDev.trustAllNoHostnameCheckInsecure());
+    }
+
+    @Test
     @DisplayName("GostSsl.socket() + serverSocket() — полный handshake + echo")
     void socketHandshake() throws Exception {
         SSLContext srvCtx = GostSsl.serverContext(certDer, keyDer, caDer);

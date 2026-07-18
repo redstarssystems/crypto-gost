@@ -1,14 +1,14 @@
 package org.rssys.gost.tls13.cert;
 
 import java.io.IOException;
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.util.Arrays;
 import java.util.List;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.pkix.cert.ChainValidator;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
@@ -28,8 +28,8 @@ import org.rssys.gost.tls13.message.TlsEncoding;
  */
 public final class TlsCertificateValidator {
 
-    private static final Logger LOG =
-            System.getLogger("org.rssys.gost.tls13.cert.TlsCertificateValidator");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.tls13.cert.TlsCertificateValidator");
 
     private TlsCertificateValidator() {}
 

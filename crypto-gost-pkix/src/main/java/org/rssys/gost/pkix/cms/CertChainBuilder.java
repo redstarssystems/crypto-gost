@@ -1,7 +1,5 @@
 package org.rssys.gost.pkix.cms;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -10,6 +8,8 @@ import java.util.List;
 import java.util.Set;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 
 /**
  * Построение цепочки сертификатов leaf→root из неупорядоченного набора.
@@ -20,7 +20,8 @@ import org.rssys.gost.pkix.cert.PkixException;
  */
 public final class CertChainBuilder {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cms.CertChainBuilder");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cms.CertChainBuilder");
 
     private CertChainBuilder() {}
 

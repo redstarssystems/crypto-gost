@@ -607,27 +607,31 @@ class CAdESExtenderXLongTest {
     }
 
     @Test
-    @DisplayName("3-уровневая цепочка: RootCA->IntCA->Leaf — verifyCAdESXLong проходит (regression: certRefs непуст)")
+    @DisplayName(
+            "3-уровневая цепочка: RootCA->IntCA->Leaf — verifyCAdESXLong проходит (regression: certRefs непуст)")
     void xLongWithIntermediateCA() throws Exception {
-        byte[] cadesBes = CmsSignedDataBuilder.create()
-                .data("3-level xlong".getBytes())
-                .addSigner(leafUnderIntCAKp.getPrivate(), leafUnderIntCACert)
-                .withCAdES()
-                .build();
+        byte[] cadesBes =
+                CmsSignedDataBuilder.create()
+                        .data("3-level xlong".getBytes())
+                        .addSigner(leafUnderIntCAKp.getPrivate(), leafUnderIntCACert)
+                        .withCAdES()
+                        .build();
 
         List<GostCertificate> chain = Arrays.asList(leafUnderIntCACert, intCACert, rootCert);
 
-        byte[] crlDer = GostCrlBuilder.create(rootCert.getSubjectDnBytes())
-                .thisUpdateNow()
-                .nextUpdateDays(30)
-                .withCrlNumber(1)
-                .sign(rootKp.getPrivate());
+        byte[] crlDer =
+                GostCrlBuilder.create(rootCert.getSubjectDnBytes())
+                        .thisUpdateNow()
+                        .nextUpdateDays(30)
+                        .withCrlNumber(1)
+                        .sign(rootKp.getPrivate());
         GostCrl crl = new GostCrl(crlDer);
 
-        byte[] ocspDer = GostOcspResponseBuilder.create(leafUnderIntCACert.getSerialNumber())
-                .issuerDn(intCACert.getSubjectDnBytes())
-                .good()
-                .sign(intCAKp.getPrivate());
+        byte[] ocspDer =
+                GostOcspResponseBuilder.create(leafUnderIntCACert.getSerialNumber())
+                        .issuerDn(intCACert.getSubjectDnBytes())
+                        .good()
+                        .sign(intCAKp.getPrivate());
         GostOcspResponse ocsp = new GostOcspResponse(ocspDer);
 
         List<GostCrl> crls = Arrays.asList(null, crl, null);
@@ -645,21 +649,32 @@ class CAdESExtenderXLongTest {
                     }
                 };
 
-        byte[] cadesXLong = CAdESExtender.embedXLongType1(
-                cadesBes, chain, crls, ocspList,
-                "http://local.tsa", mockTransport, tsaCert);
+        byte[] cadesXLong =
+                CAdESExtender.embedXLongType1(
+                        cadesBes,
+                        chain,
+                        crls,
+                        ocspList,
+                        "http://local.tsa",
+                        mockTransport,
+                        tsaCert);
         assertNotNull(cadesXLong);
 
         // Проверяем что verifyCAdESXLong проходит (непадает с certHash/IssuerSerial mismatch)
-        VerifiedCAdESData result = CAdESExtender.verifyCAdESXLong(
-                cadesXLong, rootCert, tsaCert);
+        VerifiedCAdESData result = CAdESExtender.verifyCAdESXLong(cadesXLong, rootCert, tsaCert);
         assertNotNull(result);
         assertEquals(1, result.signers().size());
-        assertEquals(3, result.signers().get(0).certificateValues().size(),
+        assertEquals(
+                3,
+                result.signers().get(0).certificateValues().size(),
                 "certificate-values должна содержать 3 сертификата (leaf, intCA, root)");
-        assertEquals(1, result.signers().get(0).revocationValues().crls().size(),
+        assertEquals(
+                1,
+                result.signers().get(0).revocationValues().crls().size(),
                 "должен быть 1 CRL (от rootCA для intCA)");
-        assertEquals(1, result.signers().get(0).revocationValues().ocspResponses().size(),
+        assertEquals(
+                1,
+                result.signers().get(0).revocationValues().ocspResponses().size(),
                 "должен быть 1 OCSP (от intCA для leaf)");
     }
 

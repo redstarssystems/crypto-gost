@@ -2,12 +2,12 @@ package org.rssys.gost.pkix.cert;
 
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.util.Arrays;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.CheckReturnValue;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
@@ -33,7 +33,8 @@ import org.rssys.gost.signature.PublicKeyParameters;
  */
 public final class GostCsrParser {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cert.GostCsrParser");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cert.GostCsrParser");
 
     private final byte[] certData;
     private final int tbsOff;

@@ -2,8 +2,6 @@ package org.rssys.gost.jsse.engine;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
 import java.security.cert.CertificateException;
 import java.util.Arrays;
@@ -21,6 +19,8 @@ import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
@@ -51,7 +51,7 @@ import org.rssys.gost.util.CryptoRandom;
  */
 public final class GostSSLEngine extends SSLEngine {
 
-    private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSSLEngine");
+    private static GostLogger LOG = GostLogger.getLogger("org.rssys.gost.jsse.GostSSLEngine");
 
     // ========================================================================
     // Состояние
@@ -267,7 +267,16 @@ public final class GostSSLEngine extends SSLEngine {
             GostSSLSessionContext sessionContext) {
         GostSSLEngine engine =
                 new GostSSLEngine(keyManager, trustManager, host, port, true, sessionContext, null);
-        engine.endpointIdentificationAlgorithm = "HTTPS";
+        if (sessionContext != null && sessionContext.isEndpointIdentificationDisabled()) {
+            LOG.log(
+                    Level.WARNING,
+                    "Client SSLEngine created WITHOUT hostname verification "
+                            + "(session context flag). "
+                            + "Disable hostname verification only for development.");
+            engine.explicitNoHostnameCheck = true;
+        } else {
+            engine.endpointIdentificationAlgorithm = "HTTPS";
+        }
         return engine;
     }
 
@@ -300,7 +309,17 @@ public final class GostSSLEngine extends SSLEngine {
                         clientSessionContext,
                         serverSessionContext);
         if (host != null && !host.isEmpty()) {
-            engine.endpointIdentificationAlgorithm = "HTTPS";
+            if (clientSessionContext != null
+                    && clientSessionContext.isEndpointIdentificationDisabled()) {
+                LOG.log(
+                        Level.WARNING,
+                        "Client SSLEngine created WITHOUT hostname verification "
+                                + "(session context flag). "
+                                + "Disable hostname verification only for development.");
+                engine.explicitNoHostnameCheck = true;
+            } else {
+                engine.endpointIdentificationAlgorithm = "HTTPS";
+            }
         }
         return engine;
     }
@@ -2001,7 +2020,7 @@ public final class GostSSLEngine extends SSLEngine {
         // createSSLEngine() без host; PSK в этом сценарии не используется.
         if (!mode && (peerHost == null || peerHost.isEmpty())) {
             LOG.log(
-                    System.Logger.Level.WARNING,
+                    GostLogger.Level.WARNING,
                     "Server engine created without host — PSK resumption disabled");
         }
         // Переключаем sessionContext на серверный, если engine создан через SSLContextSpi
@@ -2178,11 +2197,9 @@ public final class GostSSLEngine extends SSLEngine {
         return ocspResponse;
     }
 
-    /** Тестовый хелпер: подменить logger для перехвата сообщений. Возвращает предыдущий для restore в tearDown. */
-    static System.Logger setLoggerForTest(System.Logger testLogger) {
-        System.Logger prev = LOG;
-        LOG = testLogger;
-        return prev;
+    /** Тестовый хелпер: подменить логгер для перехвата сообщений. */
+    static GostLogger.LogSink setLoggerForTest(GostLogger.LogSink testSink) {
+        return LOG.setInstanceSink(testSink);
     }
 
     static byte[] buildPlaintextRecord(byte contentType, byte[] body) {

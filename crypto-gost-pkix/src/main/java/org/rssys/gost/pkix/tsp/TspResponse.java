@@ -1,7 +1,5 @@
 package org.rssys.gost.pkix.tsp;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -18,6 +16,8 @@ import org.rssys.gost.pkix.cms.CmsContentInfo;
 import org.rssys.gost.pkix.cms.CmsSignedDataVerifier;
 import org.rssys.gost.pkix.cms.MultiSignerVerifiedData;
 import org.rssys.gost.pkix.cms.SignerResult;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.util.DerCodec;
 
 /**
@@ -29,7 +29,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class TspResponse {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.tsp.TspResponse");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.tsp.TspResponse");
 
     private final int status;
     private final String statusString;

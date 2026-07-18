@@ -2,8 +2,6 @@ package org.rssys.gost.pkix.cert;
 
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -15,6 +13,8 @@ import java.util.Map;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
@@ -38,7 +38,7 @@ import org.rssys.gost.signature.PublicKeyParameters;
  */
 public final class GostCrl {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cert.GostCrl");
+    private static final GostLogger LOG = GostLogger.getLogger("org.rssys.gost.pkix.cert.GostCrl");
 
     private final byte[] crlData;
     private final int tbsStart;

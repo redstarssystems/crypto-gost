@@ -1,7 +1,5 @@
 package org.rssys.gost.pkix.cert;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -11,6 +9,8 @@ import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.SignatureCodec;
 import org.rssys.gost.util.DerCodec;
@@ -26,8 +26,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class GostSignatureHelper {
 
-    private static final Logger LOG =
-            System.getLogger("org.rssys.gost.pkix.cert.GostSignatureHelper");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cert.GostSignatureHelper");
 
     private GostSignatureHelper() {}
 

@@ -3,6 +3,9 @@ target/
 /classes
 /checkouts
 *.jar
+!gradle/wrapper/gradle-wrapper.jar
+**/build/
+local.properties
 *.class
 *.xml.asc
 /.cpcache
@@ -52,6 +55,7 @@ README.xml
 /CHANGELOG.xml
 .DS_Store
 .idea
+.gradle/
 .flattened-pom.xml
 /crypto-gost-tls13/doc/architecture.xml
 /crypto-gost-tls13/doc/manual-interop-test.xml

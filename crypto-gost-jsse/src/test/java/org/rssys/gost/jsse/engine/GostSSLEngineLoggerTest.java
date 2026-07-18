@@ -2,11 +2,9 @@ package org.rssys.gost.jsse.engine;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.lang.System.Logger;
 import java.security.Security;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.ResourceBundle;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +14,7 @@ import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.util.GostLogger;
 
 class GostSSLEngineLoggerTest {
 
@@ -24,7 +23,7 @@ class GostSSLEngineLoggerTest {
     private static GostX509KeyManager serverKeyManager;
 
     private TestLogger testLogger;
-    private System.Logger originalLogger;
+    private GostLogger.LogSink originalLogger;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -56,7 +55,8 @@ class GostSSLEngineLoggerTest {
         clientEngine.beginHandshake();
 
         assertTrue(
-                testLogger.containsLevel(Logger.Level.DEBUG), "Должен быть хотя бы один DEBUG лог");
+                testLogger.containsLevel(GostLogger.Level.DEBUG),
+                "Должен быть хотя бы один DEBUG лог");
         assertTrue(
                 testLogger.containsMessage("Handshake started"),
                 "Должен содержать 'Handshake started' в любом сообщении");
@@ -65,6 +65,52 @@ class GostSSLEngineLoggerTest {
     // Фрагмент именно handshake-предупреждения (отличается от создания "created WITHOUT")
     private static final String HANDSHAKE_NO_HOSTNAME =
             "Client TLS handshake without hostname verification";
+
+    // сообщение при создании engine через session context флаг
+    private static final String CREATED_NO_HOSTNAME =
+            "Client SSLEngine created WITHOUT hostname verification";
+
+    @Test
+    @DisplayName("Лог: session context флаг — ровно один WARNING при создании, ноль при handshake")
+    void testSessionContextFlagLogsOnceOnCreate() throws Exception {
+        GostSSLSessionContext sc = new GostSSLSessionContext(null, 0);
+        sc.setEndpointIdentificationDisabled(true);
+
+        // создание engine — должен быть ровно 1 WARNING
+        GostSSLEngine clientEngine =
+                GostSSLEngine.createForClient(
+                        new GostX509KeyManager(),
+                        new GostX509TrustManager(null, false),
+                        "example.com",
+                        443,
+                        sc);
+
+        long creationWarnings =
+                testLogger.entries().stream()
+                        .filter(e -> e.level() == GostLogger.Level.WARNING)
+                        .filter(
+                                e ->
+                                        e.message() != null
+                                                && e.message().contains(CREATED_NO_HOSTNAME))
+                        .count();
+        assertEquals(
+                1,
+                creationWarnings,
+                "Ровно один WARNING при создании engine через session context флаг");
+
+        // handshake — не должен добавлять handshake-WARNING
+        clientEngine.beginHandshake();
+
+        long handshakeWarnings =
+                testLogger.entries().stream()
+                        .filter(
+                                e ->
+                                        e.message() != null
+                                                && e.message().contains(HANDSHAKE_NO_HOSTNAME))
+                        .count();
+        assertEquals(
+                0, handshakeWarnings, "Session context opt-out не должен давать handshake-WARNING");
+    }
 
     @Test
     @DisplayName(
@@ -128,32 +174,26 @@ class GostSSLEngineLoggerTest {
                 "при активной проверке hostname handshake-WARNING не нужен");
     }
 
-    private static final class TestLogger implements System.Logger {
+    private static final class TestLogger implements GostLogger.LogSink {
         private final List<LogEntry> entries = new ArrayList<>();
 
-        record LogEntry(Level level, String message) {}
+        record LogEntry(GostLogger.Level level, String message) {}
 
         @Override
-        public String getName() {
-            return "test";
-        }
-
-        @Override
-        public boolean isLoggable(Level level) {
-            return true;
-        }
-
-        @Override
-        public void log(Level level, ResourceBundle bundle, String msg, Throwable thrown) {
+        public void log(GostLogger.Level level, String msg, Throwable thrown) {
             entries.add(new LogEntry(level, msg));
         }
 
         @Override
-        public void log(Level level, ResourceBundle bundle, String format, Object... params) {
+        public void log(GostLogger.Level level, String format, Object... params) {
             entries.add(new LogEntry(level, format));
         }
 
-        boolean containsLevel(Level level) {
+        List<LogEntry> entries() {
+            return entries;
+        }
+
+        boolean containsLevel(GostLogger.Level level) {
             return entries.stream().anyMatch(e -> e.level() == level);
         }
 

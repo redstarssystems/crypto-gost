@@ -218,16 +218,25 @@ import org.rssys.gost.jsse.GostSslDev;
 SSLContext dev = GostSslDev.trustAllClientContextInsecure();
 ----
 
+Если нужно также отключить проверку hostname (подключение по
+IP-адресу к серверу с самоподписанным сертификатом):
+
+[source,java]
+----
+SSLContext dev = GostSslDev.trustAllNoHostnameCheckInsecure();
+----
+
 Или через builder:
 
 [source,java]
 ----
 SSLContext dev = GostSsl.builder()
-    .certificate(serverPem, serverKeyPem)
     .trustAll()                                 // <1>
-    .buildServerContext();
+    .withoutHostnameVerification()              // <2>
+    .buildClientContext();
 ----
 <1> `trustAll()` — только для разработки и изолированных сетей.
+<2> `withoutHostnameVerification()` — отключает проверку hostname, MITM-риск. Применимо только к `buildClientContext()`.
 
 ==== Loopback-проверка
 
@@ -315,10 +324,10 @@ SSLContext ctx = GostSsl.builder()
     .trustCa(pfxData, pfxPassword)      // CA из PKCS12 (извлекает isCA=true)
     .trustCaFromPem(pemChain)           // CA из PEM-цепочки
     .ocsp(true)                         // включить OCSP-степплинг
-    .ocspFetcher(new JdkHttpOcspFetcher())   // client-side OCSP-fetcher (по умолчанию нет)
+    .ocspFetcher(new JdkHttpOcspFetcher())         // client-side OCSP-fetcher (JVM)
     .maxOcspAgeMs(6 * 3600_000L)        // макс. возраст OCSP-ответа без nextUpdate (RFC 6960)
     .crlPolicy(CrlPolicy.IF_CDP_PRESENT)     // политика CRL (по умолчанию DISABLED)
-    .crlFetcher(new JdkHttpCrlFetcher())     // fetcher CRL по CDP URI
+    .crlFetcher(new JdkHttpCrlFetcher())           // fetcher CRL по CDP URI (JVM)
     .maxCrlSize(16 * 1024 * 1024)       // лимит размера CRL в байтах
     .maxRevokedEntries(500_000)         // лимит числа отозванных записей
     .sessionCacheSize(5000)             // размер кэша сессий (0=без ограничения)
@@ -329,8 +338,9 @@ SSLContext ctx = GostSsl.builder()
 
 NOTE: Лимиты `maxCrlSize`/`maxRevokedEntries`/`maxOcspAgeMs` имеют безопасные дефолты и нужны
 только для тюнинга под конкретную PKI. При `crlPolicy(null)` CRL-проверка трактуется как
-`DISABLED`. Лимит `maxResponseSize` у `JdkHttpCrlFetcher` должен быть &ge; `maxCrlSize`, иначе
-CRL не дойдёт до парсера.
+`DISABLED`. Для OCSP и CRL доступны две реализации: `JdkHttp*` (JVM, HttpClient)
+и `UrlConnection*` (Android, HttpURLConnection). Лимит `maxResponseSize` у *CrlFetcher
+должен быть &ge; `maxCrlSize`, иначе CRL не дойдёт до парсера.
 
 NOTE: `interopAcceptGostBaseSigScheme` (default=false) — обход openssl-gost-provider v3.6.0:
 он всегда шлёт базовые signature scheme (0x0709 для 256-bit, 0x070D для 512-bit) независимо
@@ -489,6 +499,7 @@ GostX509TrustManager tm = new GostX509TrustManager(
 ----
 <1> Политика: `STAPLING_OR_FETCH` — если нет staple-ответа, клиент сам сходит на OCSP-responder.
 Также доступны: `DISABLED`, `IF_PRESENT`, `STAPLING_REQUIRED`.
+Для Android используйте `UrlConnectionOcspFetcher` вместо `JdkHttpOcspFetcher`.
 
 .С несколькими CA + OCSP:
 [source,java]
@@ -500,7 +511,7 @@ GostX509TrustManager tm = new GostX509TrustManager(
 ----
 <1> Все переданные CA участвуют в проверке цепочки. Порядок не важен.
 
-.Полный конструктор: CA + OCSP + CRL:
+.Полный конструктор: CA + OCSP + CRL (JVM — `JdkHttp*`; для Android подставьте `UrlConnection*`):
 [source,java]
 ----
 import org.rssys.gost.jsse.crl.CrlPolicy;
@@ -529,7 +540,7 @@ GostX509TrustManager tm = new GostX509TrustManager(
     500_000,                          // <2> maxRevokedEntries
     12 * 3600_000L);                  // <3> maxOcspAgeMs (RFC 6960 §2.4)
 ----
-<1> Максимальный размер CRL. Лимит `maxResponseSize` у `JdkHttpCrlFetcher` должен быть &ge; этого значения.
+<1> Максимальный размер CRL. Лимит `maxResponseSize` у *CrlFetcher должен быть &ge; этого значения.
 <2> Максимальное число отозванных записей в CRL (защита от DoS-раздувания).
 <3> Максимальный возраст OCSP-ответа без `nextUpdate` — локальная политика свежести relying party.
 Перегрузка без `maxOcspAgeMs` использует дефолт `GostOids.MAX_OCSP_AGE_MS` (24 ч).
@@ -622,12 +633,17 @@ WARNING: Без проверки hostname клиент уязвим для MITM-
 И socket-путь, и engine-путь включают проверку hostname по RFC 6125 по умолчанию:
 `ctx.getSocketFactory()`-сокеты и `ctx.createSSLEngine(host, port)` с непустым host
 получают `endpointIdentificationAlgorithm = "HTTPS"` автоматически.
-Явный отказ (тесты, изолированные сети) — по контракту `SSLParameters`:
-`params.setEndpointIdentificationAlgorithm(null)` (или `""`) и `engine.setSSLParameters(params)`;
-этот путь отключает проверку, но каждое клиентское рукопожатие без проверки hostname
-логгирует WARNING (снятие safe-default неотличимо от случайного).
-Для осознанного отказа без per-connection логов — `GostSSLEngine.createForClientNoHostnameCheck()`:
-намерение объявляется однократным WARNING при создании, рукопожатия не логгируются.
+Явный отказ (тесты, изолированные сети):
+
+* По контракту `SSLParameters`: `params.setEndpointIdentificationAlgorithm(null)`
+  и `engine.setSSLParameters(params)` — отключает проверку, но каждое рукопожатие
+  без проверки hostname логгирует WARNING.
+* `GostSSLEngine.createForClientNoHostnameCheck()` — однократный WARNING при создании,
+  рукопожатия без логов.
+* `GostSslDev.trustAllNoHostnameCheckInsecure()` — dev-контекст без проверки цепочки
+  сертификатов и без проверки hostname (через session context флаг).
+* `GostSslBuilder.withoutHostnameVerification()` — флаг в builder, компонуется
+  с `trustAll()` или `trustCa()`.
 
 ==== Выбор клиентского сертификата по OID-фильтрам (oid_filters)
 
@@ -700,29 +716,60 @@ OcspRequest hsmReq = OcspRequestBuilder.create()
 | `STAPLING_OR_FETCH` | Использовать stapling, если есть; иначе клиент сам сходит на респондер
 |===
 
-==== JdkHttpOcspFetcher
+==== HTTP-фетчеры OCSP и CRL
 
-Реализация `OcspFetcher` на JDK HttpClient — vthread-friendly.
+Реализации `OcspFetcher` и `CrlFetcher` для HTTP-загрузки OCSP-ответов
+и CRL-списков. На выбор две реализации:
+
+* `JdkHttpOcspFetcher` / `JdkHttpCrlFetcher` — на JDK HttpClient (JVM, JDK 11+);
+* `UrlConnectionOcspFetcher` / `UrlConnectionCrlFetcher` — на HttpURLConnection
+  (Android, API level 1+, не требует java.net.http).
+
+[[ocsp-fetchers]]
+===== UrlConnectionOcspFetcher (Android) и JdkHttpOcspFetcher (JVM)
+
+Реализация `OcspFetcher` на JDK HttpClient или HttpURLConnection.
 
 [source,java]
 ----
+// JVM: используем JdkHttpOcspFetcher
 import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
 import java.time.Duration;
 
-// С настройками по умолчанию: таймаут 5 с, лимит ответа 256 КБ
 OcspFetcher fetcher = new JdkHttpOcspFetcher();
-// Кастомные настройки
 OcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(10), 131072);
 ----
 
-Использование через TrustManager:
+[source,java]
+----
+// Android: используем UrlConnectionOcspFetcher
+import org.rssys.gost.jsse.ocsp.UrlConnectionOcspFetcher;
+import java.time.Duration;
+
+OcspFetcher fetcher = new UrlConnectionOcspFetcher();
+OcspFetcher fetcher = new UrlConnectionOcspFetcher(Duration.ofSeconds(10), 131072);
+----
+
+===== TrustManager с OCSP-фетчером
 
 [source,java]
 ----
+// JVM
+import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
 GostX509TrustManager tm = new GostX509TrustManager(
     caKey,
     OcspPolicy.STAPLING_OR_FETCH,
     new JdkHttpOcspFetcher());
+----
+
+[source,java]
+----
+// Android
+import org.rssys.gost.jsse.ocsp.UrlConnectionOcspFetcher;
+GostX509TrustManager tm = new GostX509TrustManager(
+    caKey,
+    OcspPolicy.STAPLING_OR_FETCH,
+    new UrlConnectionOcspFetcher());
 ----
 
 NOTE: OCSP-ответы кэшируются в `GostX509TrustManager` на 1 час (TTL настраивается через `setOcspCacheTtlMs()`).
@@ -743,21 +790,35 @@ API для проверки сертификатов через CRL (Certificate
 | `REQUIRE` | Требовать CRL всегда — fail-closed при отсутствии CDP
 |===
 
-==== JdkHttpCrlFetcher
+[[crl-fetchers]]
+===== UrlConnectionCrlFetcher (Android) и JdkHttpCrlFetcher (JVM)
 
-Реализация `CrlFetcher` на JDK HttpClient. Имеет защиту от SSRF.
+Реализация `CrlFetcher` на JDK HttpClient или HttpURLConnection. Имеет защиту от SSRF.
 
 [source,java]
 ----
+// JVM
 import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
 import org.rssys.gost.jsse.crl.CrlPolicy;
-
 GostX509TrustManager tm = new GostX509TrustManager(
     List.of(caKey),
     OcspPolicy.IF_PRESENT,
-    null,                                // без OCSP
+    null,
     CrlPolicy.IF_CDP_PRESENT,
     new JdkHttpCrlFetcher());
+----
+
+[source,java]
+----
+// Android
+import org.rssys.gost.jsse.crl.UrlConnectionCrlFetcher;
+import org.rssys.gost.jsse.crl.CrlPolicy;
+GostX509TrustManager tm = new GostX509TrustManager(
+    List.of(caKey),
+    OcspPolicy.IF_PRESENT,
+    null,
+    CrlPolicy.IF_CDP_PRESENT,
+    new UrlConnectionCrlFetcher());
 ----
 
 NOTE: CRL-ответы кэшируются до `nextUpdate`, с grace-периодом 1 час (перекос часов).

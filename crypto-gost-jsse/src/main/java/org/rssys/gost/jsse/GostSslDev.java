@@ -1,6 +1,7 @@
 package org.rssys.gost.jsse;
 
 import javax.net.ssl.SSLContext;
+import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 
 /**
  * Dev/тестовые утилиты {@link GostSsl} — <b>НЕ для production</b>.
@@ -22,5 +23,20 @@ public final class GostSslDev {
      */
     public static SSLContext trustAllClientContextInsecure() {
         return GostSsl.buildContext(null, null, null, null, null, false, -1, true, false);
+    }
+
+    /**
+     * Клиентский SSLContext без проверки сертификата сервера
+     * И без проверки hostname (RFC 6125).
+     * <p>
+     * Отключает ОБА уровня: chain validation (CA) и hostname verification.
+     * Создаёт MITM-уязвимость — только для разработки и изолированных сетей.
+     * Для production используйте {@link GostSsl#clientContext(byte[])}.
+     */
+    public static SSLContext trustAllNoHostnameCheckInsecure() {
+        SSLContext ctx = trustAllClientContextInsecure();
+        ((GostSSLSessionContext) ctx.getClientSessionContext())
+                .setEndpointIdentificationDisabled(true);
+        return ctx;
     }
 }

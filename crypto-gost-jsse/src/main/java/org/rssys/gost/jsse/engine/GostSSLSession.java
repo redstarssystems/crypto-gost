@@ -261,12 +261,15 @@ public final class GostSSLSession extends ExtendedSSLSession {
         return LOCAL_SIG_ALGS.clone();
     }
 
-    @Override
+    // Android: @Override снят — AGP-трансформация android.jar удаляет эти методы
+    // из compile classpath, хотя они есть в android.jar API 34:
+    //   javap -classpath android.jar javax.net.ssl.ExtendedSSLSession:
+    //     public abstract String[] getPeerSupportedSignatureAlgorithms();
+    //     public List<byte[]> getStatusResponses();
     public String[] getPeerSupportedSignatureAlgorithms() {
         return new String[0];
     }
 
-    @Override
     public List<byte[]> getStatusResponses() {
         if (ocspResponse != null) {
             return Collections.singletonList(ocspResponse.clone());

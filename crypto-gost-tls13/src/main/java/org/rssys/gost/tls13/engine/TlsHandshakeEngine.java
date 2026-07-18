@@ -1,7 +1,6 @@
 package org.rssys.gost.tls13.engine;
 
 import java.io.IOException;
-import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.List;
@@ -9,6 +8,8 @@ import java.util.Map;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -272,8 +273,8 @@ public final class TlsHandshakeEngine {
     private int keyUpdateCount;
     private static final int MAX_KEY_UPDATES = 32;
 
-    private static final System.Logger LOG =
-            System.getLogger("org.rssys.gost.tls13.engine.TlsHandshakeEngine");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.tls13.engine.TlsHandshakeEngine");
 
     private static final byte[] KU_NOT_REQUESTED = new byte[] {0};
     private static final byte[] KU_REQUESTED = new byte[] {1};

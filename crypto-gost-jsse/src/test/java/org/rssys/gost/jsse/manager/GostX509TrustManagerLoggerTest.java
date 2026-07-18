@@ -2,11 +2,9 @@ package org.rssys.gost.jsse.manager;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.lang.System.Logger;
 import java.security.Security;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.ResourceBundle;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,6 +12,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.util.GostLogger;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsTestHelper;
 
@@ -22,7 +21,7 @@ class GostX509TrustManagerLoggerTest {
     private static TlsTestHelper.CertBundle root;
     private static TlsTestHelper.CertBundle leaf;
     private TestLogger testLogger;
-    private System.Logger originalLogger;
+    private GostLogger.LogSink originalLogger;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -69,36 +68,26 @@ class GostX509TrustManagerLoggerTest {
                 () -> tm.validateChainWithOcsp(chain, "wrong-host", false));
 
         assertTrue(
-                testLogger.containsLevel(Logger.Level.WARNING),
+                testLogger.containsLevel(GostLogger.Level.WARNING),
                 "При ошибке валидации должен быть WARNING лог");
     }
 
-    private static final class TestLogger implements System.Logger {
+    private static final class TestLogger implements GostLogger.LogSink {
         private final List<LogEntry> entries = new ArrayList<>();
 
-        record LogEntry(Level level, String message) {}
+        record LogEntry(GostLogger.Level level, String message) {}
 
         @Override
-        public String getName() {
-            return "test";
-        }
-
-        @Override
-        public boolean isLoggable(Level level) {
-            return true;
-        }
-
-        @Override
-        public void log(Level level, ResourceBundle bundle, String msg, Throwable thrown) {
+        public void log(GostLogger.Level level, String msg, Throwable thrown) {
             entries.add(new LogEntry(level, msg));
         }
 
         @Override
-        public void log(Level level, ResourceBundle bundle, String format, Object... params) {
+        public void log(GostLogger.Level level, String format, Object... params) {
             entries.add(new LogEntry(level, format));
         }
 
-        boolean containsLevel(Level level) {
+        boolean containsLevel(GostLogger.Level level) {
             return entries.stream().anyMatch(e -> e.level() == level);
         }
 

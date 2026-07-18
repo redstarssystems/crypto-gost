@@ -26,7 +26,8 @@
 - `crypto-gost-core` - криптографическое ядро алгоритмов ГОСТ: Стрибог,
   Кузнечик, ГОСТ Р 34.10-2012, JCA-провайдер.
 
-**Целевая JDK при сборке модулей библиотеки: JDK 21**.
+**Целевая JDK при сборке модулей библиотеки: JDK 21 и Android 12+ (кроме
+Netty)**.
 
 Основной репозиторий хранения исходного кода и артефактов:
 [GitFlic](https://gitflic.ru/project/red-stars-systems/crypto-gost).
@@ -109,26 +110,44 @@
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-core</artifactId>
-        <version>0.7.0</version>
+        <version>0.7.1</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-tls13</artifactId>
-        <version>0.7.0</version>
+        <version>0.7.1</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-jsse</artifactId>
-        <version>0.7.0</version>
+        <version>0.7.1</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-pkix</artifactId>
-        <version>0.7.0</version>
+        <version>0.7.1</version>
     </dependency>
+
+- **Для Android.** Подключитесь к Maven-репозиторию GitFlic и добавьте
+  зависимости в `build.gradle.kts` вашего Android-проекта.
+
+Репозиторий:
+
+    repositories {
+        maven {
+            url = uri("https://registry.gitflic.ru/project/red-stars-systems/crypto-gost/package/-/maven")
+        }
+    }
+
+Зависимости:
+
+    implementation("org.rssys:crypto-gost-core-android:0.7.1")
+    implementation("org.rssys:crypto-gost-pkix-android:0.7.1")
+    implementation("org.rssys:crypto-gost-tls13-android:0.7.1")
+    implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
 
 - **Способ 2.** Клонируйте репозиторий и выполните сборку и установку в
   локальный .m2:  
@@ -140,7 +159,7 @@
   При необходимости проверить подпись релизного тега можно так:
 
       gpg --import KEYS
-      gpg -v v0.6.5
+      gpg -v v0.7.1
 
 # Методики кросс-валидации
 
@@ -169,23 +188,7 @@
 - [Стресс-тестирование JSSE-модуля (отчёт
   №4)](crypto-gost-jsse/doc/stress-test-04.md)
 
-# Раздел для разработчиков
-
-Для доработки библиотеки необходимо установить OpenJDK 21+, maven.
-
-- `mvn test` — запуск тестов.
-
-- `mvn package` — получение дистрибутива библиотеки.
-
-- `mvn install` — установка дистрибутива библиотеки в локальный .m2.
-
-- `make doc` — генерация md-файлов (Markdown) из adoc-файлов (asciidoc).
-
-В папке *bench* созданы примеры кросс-верификации **crypto-gost**,
-**BouncyCastle 1.83** и **OpenSSL**, а также много других бенчмарков.
-
-В каталоге *examples/* находятся интеграционные тесты и примеры
-использования.
+## Документация
 
 Документация в этом проекте ведется в asciidoc-формате и на основе него
 генерируется в markdown и другие форматы.
@@ -448,6 +451,120 @@ style="text-align: center;"><p><code>ECAlgorithms.implShamirsTrickWNaf</code>,<b
 [CVE-2025-14813](https://www.cve.org/CVERecord?id=CVE-2025-14813) и
 вышеприведенной таблицы в части электронной подписи, я категорически не
 рекомендую использовать ГОСТ от Bouncycastle даже для личных проектов.
+
+# Раздел для разработчиков
+
+Для доработки библиотеки необходимо установить OpenJDK 21+, maven.
+
+- `mvn test` — запуск тестов.
+
+- `mvn package` — получение дистрибутива библиотеки.
+
+- `mvn install` — установка дистрибутива библиотеки в локальный .m2.
+
+- `make doc` — генерация md-файлов (Markdown) из adoc-файлов (asciidoc).
+
+Сборка JAR-артефактов (Java) — только через Maven. Сборка AAR-артефактов
+(Android) — только через Gradle: `make android` или
+`./gradlew assembleRelease`.
+
+В папке *bench* созданы примеры кросс-верификации **crypto-gost**,
+**BouncyCastle 1.83** и **OpenSSL**, а также много других бенчмарков.
+
+В каталоге *examples/* находятся интеграционные тесты и примеры
+использования.
+
+В каталоге *android-demo/* находится тестовое Android-приложение
+(instrumented tests) для проверки библиотеки на реальном ART (Android
+Runtime). Запускается на эмуляторе API 31+ или физическом устройстве.
+
+## Работа с Android
+
+### Предварительная настройка Android
+
+Перед первым запуском соберите AAR-файлы модулей библиотеки и скопируйте
+их в android-demo:
+
+    # 1. Сборка AAR (из корня проекта)
+    make android
+    # или: ./gradlew assembleRelease
+
+    # 2. Копирование AAR в android-demo
+    cp crypto-gost-core/build/outputs/aar/*-release.aar android-demo/app/libs/
+    cp crypto-gost-pkix/build/outputs/aar/*-release.aar android-demo/app/libs/
+    cp crypto-gost-tls13/build/outputs/aar/*-release.aar android-demo/app/libs/
+    cp crypto-gost-jsse/build/outputs/aar/*-release.aar android-demo/app/libs/
+
+Создайте `android-demo/local.properties` и укажите путь к Android SDK:
+
+    sdk.dir=/path/to/Android/Sdk
+
+### Запуск эмулятора Android
+
+Убедитесь, что эмулятор запущен и отображается в списке устройств:
+
+    adb devices
+    # -> emulator-5554   device
+
+Запуск headless-эмулятора (если не запущен):
+
+    emulator -avd test_api31 -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim &
+
+### Сборка и установка APK
+
+    cd android-demo
+
+    # Сборка основного и тестового APK
+    ./gradlew assembleDebug assembleDebugAndroidTest
+
+    # Установка на устройство/эмулятор
+    adb install -r app/build/outputs/apk/debug/app-debug.apk
+    adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+
+### Запуск всех instrumented-тестов на Android
+
+Запуск всех тестов, имеющихся в `android-demo`:
+
+    adb shell am instrument -w org.rssys.gost.demo.test/androidx.test.runner.AndroidJUnitRunner
+
+### Запуск выбранных тестов на Android
+
+    # PKIX — сертификаты, CRL, OCSP, CMS, CAdES, TSP, PKCS#12
+    adb shell am instrument -w -e class 'org.rssys.gost.demo.PkixDemoAndroidTest' \
+      org.rssys.gost.demo.test/androidx.test.runner.AndroidJUnitRunner
+
+    # TLS 1.3 — анонимный клиент, mTLS, PSK, OCSP stapling, ALPN, KeyUpdate
+    adb shell am instrument -w -e class 'org.rssys.gost.demo.Tls13DemoAndroidTest' \
+      org.rssys.gost.demo.test/androidx.test.runner.AndroidJUnitRunner
+
+    # JSSE — GostSslBuilder, SSLEngine, mTLS, PKCS#12, session resumption
+    adb shell am instrument -w -e class 'org.rssys.gost.demo.JsseDemoAndroidTest' \
+      org.rssys.gost.demo.test/androidx.test.runner.AndroidJUnitRunner
+
+### Логирование
+
+    adb logcat | grep -i gost
+
+Подробное описание тестовых сценариев — в файлах `*.java` в
+`android-demo/app/src/androidTest/java/org/rssys/gost/demo/`.
+
+### Проверка публикации (удалённый резолвинг)
+
+После публикации новых артефактов в GitFlic Maven Registry замените в
+`android-demo/app/build.gradle.kts` блок `implementation(files(...))` на
+зависимости с Maven-координатами. Например:
+
+    implementation("org.rssys:crypto-gost-core-android:0.7.1-SNAPSHOT")
+    implementation("org.rssys:crypto-gost-pkix-android:0.7.1-SNAPSHOT")
+    implementation("org.rssys:crypto-gost-tls13-android:0.7.1-SNAPSHOT")
+    implementation("org.rssys:crypto-gost-jsse-android:0.7.1-SNAPSHOT")
+
+и выполните сборку:
+
+    cd android-demo
+    ./gradlew :app:assembleDebug
+
+После успешной проверки верните `implementation(files(...))` обратно.
 
 # Лицензия
 

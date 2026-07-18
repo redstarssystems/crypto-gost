@@ -2,8 +2,6 @@ package org.rssys.gost.pkix.cert;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.Security;
@@ -20,6 +18,8 @@ import org.rssys.gost.pkix.cert.GostPkcs12Parser.EncryptedPrivateKeyInfo;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.MacData;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.PfxData;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.SafeBagData;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PrivateKeyParameters;
 
 /**
@@ -31,7 +31,8 @@ import org.rssys.gost.signature.PrivateKeyParameters;
  */
 public final class GostPkcs12Loader {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cert.GostPkcs12Loader");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cert.GostPkcs12Loader");
 
     static {
         if (Security.getProvider("RssysGostProvider") == null) {

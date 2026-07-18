@@ -8,6 +8,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.util.GostLogger;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -39,7 +40,7 @@ import org.rssys.gost.util.CryptoRandom;
  */
 public final class TlsSession implements AutoCloseable {
 
-    private static final System.Logger LOG = System.getLogger("org.rssys.gost.tls13.TlsSession");
+    private static final GostLogger LOG = GostLogger.getLogger("org.rssys.gost.tls13.TlsSession");
 
     private final TlsTransport transport;
     private TlsCiphersuite
@@ -956,7 +957,7 @@ public final class TlsSession implements AutoCloseable {
             // Контракт PskStore.onTicketReceived: стек логирует и продолжает handshake.
             // Только метаданные исключения, без ключевого материала (no-debug).
             LOG.log(
-                    System.Logger.Level.WARNING,
+                    GostLogger.Level.WARNING,
                     "PskStore.onTicketReceived failed, resumption unavailable: "
                             + e.getClass().getName());
         } finally {
@@ -1015,7 +1016,7 @@ public final class TlsSession implements AutoCloseable {
                     // Контракт PskStore.onTicketReceived: стек логирует и продолжает handshake.
                     // Только метаданные исключения, без ключевого материала (no-debug).
                     LOG.log(
-                            System.Logger.Level.WARNING,
+                            GostLogger.Level.WARNING,
                             "PskStore.onTicketReceived failed, resumption unavailable: "
                                     + e.getClass().getName());
                 }

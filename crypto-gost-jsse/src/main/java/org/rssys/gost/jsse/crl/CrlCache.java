@@ -1,12 +1,12 @@
 package org.rssys.gost.jsse.crl;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import org.rssys.gost.pkix.cert.CrlVerifier;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 
 /**
  * Кэш CRL-ответов с инвалидацией по nextUpdate (RFC 5280 §5.1.2.4)
@@ -25,7 +25,7 @@ import org.rssys.gost.pkix.cert.CrlVerifier;
  */
 public final class CrlCache {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.jsse.crl.CrlCache");
+    private static final GostLogger LOG = GostLogger.getLogger("org.rssys.gost.jsse.crl.CrlCache");
 
     /** Grace-период после nextUpdate для перекоса часов */
     private static final long GRACE_MS = 3600_000L; // 1 час

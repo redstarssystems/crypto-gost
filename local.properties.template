@@ -1,0 +1,3 @@
+# Android SDK location
+# Either set ANDROID_HOME environment variable, or uncomment and adjust:
+#sdk.dir=/path/to/Android

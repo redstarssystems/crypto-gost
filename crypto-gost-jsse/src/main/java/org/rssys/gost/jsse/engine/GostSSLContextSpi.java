@@ -1,7 +1,5 @@
 package org.rssys.gost.jsse.engine;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.security.SecureRandom;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContextSpi;
@@ -16,6 +14,8 @@ import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.socket.GostSSLServerSocketFactory;
 import org.rssys.gost.jsse.socket.GostSSLSocketFactory;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.tls13.TlsCiphersuite;
 
 /**
@@ -26,7 +26,7 @@ import org.rssys.gost.tls13.TlsCiphersuite;
  */
 public final class GostSSLContextSpi extends SSLContextSpi {
 
-    private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSSLContextSpi");
+    private static GostLogger LOG = GostLogger.getLogger("org.rssys.gost.jsse.GostSSLContextSpi");
 
     private GostX509KeyManager keyManager;
     private GostX509TrustManager trustManager;

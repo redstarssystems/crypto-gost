@@ -1,8 +1,6 @@
 package org.rssys.gost.pkix.cms;
 
 import java.io.IOException;
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.util.ArrayList;
 import java.util.List;
 import org.rssys.gost.api.GostSigner;
@@ -14,6 +12,8 @@ import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.pkix.tsp.TspRequestBuilder;
 import org.rssys.gost.pkix.tsp.TspResponse;
 import org.rssys.gost.pkix.tsp.TspTransport;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -25,8 +25,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class CmsSignedDataBuilder {
 
-    private static final Logger LOG =
-            System.getLogger("org.rssys.gost.pkix.cms.CmsSignedDataBuilder");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cms.CmsSignedDataBuilder");
 
     private byte[] data;
     private boolean encapsulated = true;

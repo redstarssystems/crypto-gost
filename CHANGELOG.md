@@ -1,3 +1,137 @@
+# \[0.7.1\] - 18-07-2026
+
+Данная ветка релизов 0.7.хх целиком посвящена повышению уровня
+интероперабельности библиотеки при интеграции с различными провайдерами
+и продуктами. Производится тестирование с различными продуктами:
+Инфортекс, Контур, КриптоПро, angie и других, которые можно найти и
+протестировать хотя бы демо режиме.
+
+Теперь crypto-gost работает на платформе Android 12+.
+
+## Инфраструктура сборки
+
+### Добавлено
+
+- **Публикация Android-артефактов (AAR) в GitFlic Maven Registry.**  
+  Модули `core`, `pkix`, `tls13`, `jsse` публикуются под координатами
+  `org.rssys:crypto-gost-*-android:${revision}` с GPG-подписью. Версия
+  синхронизирована с Maven-релизом (читается из `<revision>` pom.xml),
+  URL репозитория — из `<distributionManagement>`, credentials — из
+  `~/.m2/settings.xml`.  
+  Javadoc JAR не прилагается: Dokka (AGP 9.2.1) не читает Java records
+  из classpath зависимостей (ASM8).
+
+## Модуль crypto-gost-pkix
+
+### Добавлено
+
+- **Android-совместимые реализации HTTP-транспортов и удаление
+  зависимости от java.net.http.HexFormat в CertificateTextFormatter.**
+
+  Ранее HTTP-транспорт для TSP (`JdkHttpTspTransport`) и форматирование
+  шестнадцатеричных отпечатков в `CertificateTextFormatter` использовали
+  `java.net.http.*` (`HttpClient` и `HexFormat`). Оба API отсутствуют в
+  Android core library (`HexFormat` — Java 17, не входит в
+  desugar\_jdk\_libs; `HttpClient` недоступен в Android SDK), что делало
+  модуль `crypto-gost-pkix` непригодным для Android.
+
+  Стало: добавлен `UrlConnectionTspTransport` — реализация
+  `TspTransport` на `HttpURLConnection` (доступен с API level 1) с общей
+  инфраструктурой `DeadlineWatchdog` для total-deadline таймаутов и
+  ручной follow-redirect с SSRF-проверкой каждого хопа. В
+  `CertificateTextFormatter` удалён импорт `HexFormat` — заменён на
+  собственный hex-кодировщик, не требующий десугаринга. Во избежание
+  регресса добавлен тест, верифицирующий тождественность вывода с
+  `HexFormat.of()`.
+
+### Изменено
+
+- **Javadoc JdkHttpTspTransport.**
+
+  Категоричное утверждение о vthread-совместимости заменено на
+  «vthread-совместимость не валидирована JFR»; добавлена ссылка на
+  `UrlConnectionTspTransport` для Android.
+
+## Модуль crypto-gost-jsse
+
+### Добавлено
+
+- **Android-совместимые HTTP-фетчеры OCSP и CRL.**
+
+  Ранее HTTP-загрузка OCSP-ответов и CRL-списков была возможна только
+  через `JdkHttpOcspFetcher` и `JdkHttpCrlFetcher` на
+  `java.net.http.HttpClient`, отсутствующем в Android SDK.
+
+  Стало: добавлены `UrlConnectionOcspFetcher` и
+  `UrlConnectionCrlFetcher` — реализации `OcspFetcher` и `CrlFetcher` на
+  `HttpURLConnection`, пригодные для Android (API level 1+). Используют
+  общий `DeadlineWatchdog` из pkix и переработанный ручной
+  follow-redirect с SSRF-проверкой.
+
+### Изменено
+
+- **Javadoc JdkHttpOcspFetcher и JdkHttpCrlFetcher.**
+
+  Убраны утверждения о vthread-совместимости; добавлены ссылки на
+  `UrlConnectionOcspFetcher` и `UrlConnectionCrlFetcher` для Android.
+
+- **Dev-контекст без проверки цепочки сертификатов и без проверки
+  hostname.**
+
+  Ранее `GostSslDev`-контекст для разработки отключал только проверку
+  цепочки сертификатов (CA) — hostname verification
+  (`endpointIdentificationAlgorithm = "HTTPS"`) оставалась включена, и
+  подключение по IP-адресу к серверу с самоподписанным сертификатом
+  отклонялось даже в dev-режиме. Единственный обходной путь —
+  `SSLParameters.setEndpointIdentificationAlgorithm(null)`,
+  недокументированный и с WARNING на каждом рукопожатии.
+
+  Стало: добавлен метод, отключающий оба уровня проверки через флаг на
+  `GostSSLSessionContext`. Осознанный отказ логирует ровно один WARNING
+  при создании `GostSSLEngine`, а не на каждое рукопожатие. **Safe
+  default поведение** библиотеки не меняется. Безопасность не снижена.
+
+- **Независимый opt-out проверки hostname в builder.**
+
+  Флаг компонуется с `trustAll` и `trustCa` — в частности, для
+  mesh-сервисов и IP-based соединений, где CA-аутентификация
+  обязательна, но DNS-имя не используется. Применим только при сборке
+  клиентского контекста; вызов при сборке серверного контекста
+  завершается `IllegalStateException` (hostname verification не имеет
+  смысла на серверной стороне).
+
+### Исправлено
+
+- **Устранена несовместимость loopback-диагностики с Android.**
+
+  Ранее проверка `GostSsl.verify()` использовала API виртуальных
+  потоков, отсутствующее в Android, из-за чего self-check был недоступен
+  на этой платформе.
+
+  Стало: фоновая задача запускается стандартным конструктором потока,
+  совместимым с Android и не требующим JDK 21. Поведение метода не
+  изменилось — для одного диагностического потока на вызов накладные
+  расходы платформенного потока несущественны.
+
+- **Android-демонстрации PKIX, TLS 1.3 и JSSE.**
+
+  Добавлены файлы instrumented-тестов для android-demo:
+
+- `Tls13DemoAndroidTest.java` — 12 тестовых сценариев для модуля
+  `crypto-gost-tls13`: анонимный клиент, сервер с CA-валидацией, mTLS,
+  PSK resumption, OCSP stapling, ALPN, KeyUpdate, трёхуровневая цепочка,
+  IP SAN, потоковая передача, fail-closed, проверка сертификатов.
+
+- `JsseDemoAndroidTest.java` — 11 тестовых сценариев для модуля
+  `crypto-gost-jsse`: GostSslBuilder, PKCS#12, mTLS через JSSE,
+  dev-режим (GostSslDev), OCSP/CRL, PSK resumption, GostSSLEngine
+  loopback, совместимость ExtendedSSLSession с ART.
+
+- `PkixDemoAndroidTest.java` - тестовые сценарии, показывающие
+  возможности модуля PKIX.
+
+  Все тесты запускаются на эмуляторе API 31+.
+
 # \[0.7.0\] - 16-07-2026
 
 Данная ветка релизов 0.7.хх целиком посвящена повышению уровня

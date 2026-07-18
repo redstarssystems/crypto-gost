@@ -1,7 +1,5 @@
 package org.rssys.gost.pkix.cms;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import org.rssys.gost.cipher.Kuznyechik;
@@ -10,6 +8,8 @@ import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.mode.AcpkmSectionSize;
 import org.rssys.gost.cipher.mode.CtrAcpkmMode;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.DerCodec;
 
@@ -38,7 +38,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class CmsOmacHelper {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cms.CmsOmacHelper");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cms.CmsOmacHelper");
 
     /** Атрибут content-mac для unprotectedAttrs, закодированный в DER. */
     public record ContentMacAttribute(byte[] encodedMac, byte[] derEncoded) {}

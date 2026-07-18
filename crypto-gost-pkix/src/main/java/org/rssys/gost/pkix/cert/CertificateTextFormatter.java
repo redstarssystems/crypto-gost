@@ -3,7 +3,6 @@ package org.rssys.gost.pkix.cert;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.HexFormat;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.util.DerCodec;
 
@@ -26,7 +25,7 @@ public final class CertificateTextFormatter {
     private static final DateTimeFormatter TIME_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss 'UTC'").withZone(ZoneOffset.UTC);
 
-    private static final HexFormat HEX = HexFormat.of().withDelimiter(":");
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
 
     private static final String INDENT = "    ";
 
@@ -138,11 +137,11 @@ public final class CertificateTextFormatter {
         // Subject / Authority Key Identifier
         byte[] ski = cert.getSubjectKeyIdentifier();
         if (ski != null) {
-            ext(sb, "Subject Key Identifier", HEX.formatHex(ski));
+            ext(sb, "Subject Key Identifier", hex(ski, true));
         }
         byte[] aki = cert.getAuthorityKeyIdentifier();
         if (aki != null) {
-            ext(sb, "Authority Key Identifier", HEX.formatHex(aki));
+            ext(sb, "Authority Key Identifier", hex(aki, true));
         }
 
         // Authority Info Access
@@ -232,7 +231,7 @@ public final class CertificateTextFormatter {
         try {
             return DerCodec.parseOid(DerCodec.encodeTlv(DerCodec.TAG_OID, oidContent), 0);
         } catch (RuntimeException e) {
-            return HexFormat.of().formatHex(oidContent);
+            return hex(oidContent, false);
         }
     }
 
@@ -277,7 +276,7 @@ public final class CertificateTextFormatter {
         }
         if (hasDirName) {
             for (byte[] dn : directoryNames) {
-                appendCsv(value, "DIRNAME:" + HexFormat.of().formatHex(dn));
+                appendCsv(value, "DIRNAME:" + hex(dn, false));
             }
         }
         if (hasOtherName) {
@@ -356,6 +355,26 @@ public final class CertificateTextFormatter {
         sb.append(value);
     }
 
+    /** Форматирует байты в hex-строку, опционально с разделителем ":". */
+    static String hex(byte[] bytes, boolean withDelimiter) {
+        if (bytes == null || bytes.length == 0) {
+            return "";
+        }
+        int delLen = withDelimiter ? 1 : 0;
+        int total = bytes.length * 2 + (bytes.length - 1) * delLen;
+        char[] out = new char[total];
+        int pos = 0;
+        for (int i = 0; i < bytes.length; i++) {
+            if (i > 0 && withDelimiter) {
+                out[pos++] = ':';
+            }
+            int b = bytes[i] & 0xFF;
+            out[pos++] = HEX[b >>> 4];
+            out[pos++] = HEX[b & 0xF];
+        }
+        return new String(out);
+    }
+
     /**
      * Форматирует сырой IP-адрес. Для SAN — 4 (IPv4) или 16 (IPv6) байт; для
      * NameConstraints — 8 (IPv4+маска) или 32 (IPv6+маска) байта.
@@ -376,7 +395,7 @@ public final class CertificateTextFormatter {
         if (ip.length == 32) {
             return ipv6(ip, 0) + "/" + ipv6(ip, 16);
         }
-        return HexFormat.of().formatHex(ip);
+        return hex(ip, false);
     }
 
     private static String ipv4(byte[] ip, int off) {

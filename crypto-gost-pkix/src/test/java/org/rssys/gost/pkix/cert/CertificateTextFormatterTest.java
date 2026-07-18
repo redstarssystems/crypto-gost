@@ -3,6 +3,7 @@ package org.rssys.gost.pkix.cert;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigInteger;
+import java.util.HexFormat;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -290,5 +291,23 @@ class CertificateTextFormatterTest {
         assertTrue(
                 out.contains("class-kc2") || out.contains("1.2.643.100.113.2"),
                 "OID политики KC2 без CPS");
+    }
+
+    @Test
+    @DisplayName("hex(): побайтовое совпадение с HexFormat")
+    void hexVsHexFormat() {
+        HexFormat hf = HexFormat.of();
+        HexFormat hfDelim = HexFormat.of().withDelimiter(":");
+        byte[][] cases = {
+            new byte[0],
+            new byte[] {0x00},
+            new byte[] {(byte) 0xFF},
+            new byte[] {0x01, 0x23, 0x45, 0x67, (byte) 0x89, (byte) 0xAB, (byte) 0xCD, (byte) 0xEF},
+            "Hello, ГОСТ!".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+        };
+        for (byte[] data : cases) {
+            assertEquals(hf.formatHex(data), CertificateTextFormatter.hex(data, false), "без дел.");
+            assertEquals(hfDelim.formatHex(data), CertificateTextFormatter.hex(data, true), "с :");
+        }
     }
 }

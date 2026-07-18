@@ -1,8 +1,6 @@
 package org.rssys.gost.jsse.manager;
 
 import java.io.IOException;
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.net.Socket;
 import java.security.cert.CertificateException;
@@ -28,6 +26,8 @@ import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.tls13.cert.TlsCertificateValidator;
@@ -41,7 +41,8 @@ import org.rssys.gost.tls13.cert.TlsCertificateValidator;
  */
 public final class GostX509TrustManager extends X509ExtendedTrustManager {
 
-    private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostX509TrustManager");
+    private static GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.jsse.GostX509TrustManager");
 
     private final List<PublicKeyParameters> caPublicKeys;
     private final boolean requireOcspStapling;
@@ -625,9 +626,7 @@ public final class GostX509TrustManager extends X509ExtendedTrustManager {
     }
 
     /** Тестовый хелпер: подменить logger для перехвата сообщений. Возвращает предыдущий для restore в tearDown. */
-    static System.Logger setLoggerForTest(System.Logger testLogger) {
-        System.Logger prev = LOG;
-        LOG = testLogger;
-        return prev;
+    static GostLogger.LogSink setLoggerForTest(GostLogger.LogSink testSink) {
+        return LOG.setInstanceSink(testSink);
     }
 }

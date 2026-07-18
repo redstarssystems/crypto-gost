@@ -157,6 +157,13 @@ public final class GenerateTestCerts {
         Files.writeString(angieKeyPath, angieKeyPem);
         System.out.println("Angie key: " + angieKeyPath.toAbsolutePath());
 
+        // ca-key.pem — закрытый ключ ЦА в PKCS#8 PEM (для подписывания новых сертификатов)
+        byte[] caKeyDer = GostDerCodec.encodePrivateKey(caPriv);
+        String caKeyPem = GostPemUtils.toPem(caKeyDer, "PRIVATE KEY");
+        Path caKeyPath = outDir.resolve("ca-key.pem");
+        Files.writeString(caKeyPath, caKeyPem);
+        System.out.println("CA key: " + caKeyPath.toAbsolutePath());
+
         // backend.p12 — PFX для FileReceiveServer
         byte[] backendPfx =
                 GostPkcs12Builder.create()
@@ -195,6 +202,19 @@ public final class GenerateTestCerts {
         Path gostCurlKeyPath = outDir.resolve("gost-curl-client-key.pem");
         Files.writeString(gostCurlKeyPath, gostCurlKeyPem);
         System.out.println("gost-curl mTLS client key: " + gostCurlKeyPath.toAbsolutePath());
+
+        // gost-curl-client.p12 — PFX для mTLS-клиента gost-curl (для импорта в CryptoPro CSP)
+        byte[] gostCurlPfx =
+                GostPkcs12Builder.create()
+                        .key(gostCurlPriv)
+                        .certificate(gostCurlCert)
+                        .caCertificate(caCert)
+                        .password(caPassword.toCharArray())
+                        .friendlyName("gost-curl-client")
+                        .build();
+        Path gostCurlPfxPath = outDir.resolve("gost-curl-client.p12");
+        Files.write(gostCurlPfxPath, gostCurlPfx);
+        System.out.println("gost-curl PFX: " + gostCurlPfxPath.toAbsolutePath());
 
         // —————— Защита ключевого материала ——————
         angiePriv.destroy();

@@ -1,7 +1,5 @@
 package org.rssys.gost.pkix.cms;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.math.BigInteger;
 import java.security.cert.CertificateException;
 import java.util.ArrayList;
@@ -15,6 +13,8 @@ import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostSignatureHelper;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -38,8 +38,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class CmsSignedDataVerifier {
 
-    private static final Logger LOG =
-            System.getLogger("org.rssys.gost.pkix.cms.CmsSignedDataVerifier");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cms.CmsSignedDataVerifier");
 
     private CmsSignedDataVerifier() {}
 

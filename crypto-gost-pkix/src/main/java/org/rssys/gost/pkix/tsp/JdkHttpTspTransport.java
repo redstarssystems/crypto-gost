@@ -3,13 +3,13 @@ package org.rssys.gost.pkix.tsp;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.pkix.util.SsrfGuard;
 
 /**
@@ -17,7 +17,8 @@ import org.rssys.gost.pkix.util.SsrfGuard;
  *
  * <p>Отправляет HTTP POST с Content-Type {@code application/timestamp-query}
  * и принимает ответ с типом {@code application/timestamp-reply}.
- * Совместим с virtual threads (JDK 21+): HttpClient не блокирует carrier thread.
+ * <p>JVM only. Для Android используйте {@link UrlConnectionTspTransport}.</p>
+ * <p>vthread-совместимость не валидирована JFR.</p>
  *
  * <p><b>Остаточный риск SSRF (простыми словами):</b> адрес проверяется до
  * запроса, но само соединение делает {@code HttpClient}, который заново
@@ -30,8 +31,8 @@ import org.rssys.gost.pkix.util.SsrfGuard;
  */
 public final class JdkHttpTspTransport implements TspTransport {
 
-    private static final Logger LOG =
-            System.getLogger("org.rssys.gost.pkix.tsp.JdkHttpTspTransport");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.tsp.JdkHttpTspTransport");
 
     private static final String REQUEST_CONTENT_TYPE = "application/timestamp-query";
     private static final String RESPONSE_CONTENT_TYPE = "application/timestamp-reply";

@@ -1,13 +1,13 @@
 package org.rssys.gost.pkix.cert;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
@@ -26,7 +26,8 @@ import org.rssys.gost.signature.PublicKeyParameters;
  */
 public final class ChainValidator {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cert.ChainValidator");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cert.ChainValidator");
 
     private ChainValidator() {}
 

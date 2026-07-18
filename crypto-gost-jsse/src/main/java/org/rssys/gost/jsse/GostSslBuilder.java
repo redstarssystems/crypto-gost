@@ -1,7 +1,5 @@
 package org.rssys.gost.jsse;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.util.List;
 import java.util.stream.Collectors;
 import javax.net.ssl.SSLContext;
@@ -13,6 +11,8 @@ import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 
 /**
  * Fluent builder для сложных случаев настройки {@link GostSsl}.
@@ -22,7 +22,8 @@ import org.rssys.gost.pkix.cert.GostPkcs12Loader;
  */
 public class GostSslBuilder {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSslBuilder");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.jsse.GostSslBuilder");
 
     private byte[] certDer;
     private byte[] keyDer;
@@ -40,6 +41,7 @@ public class GostSslBuilder {
     private long maxOcspAgeMs = GostOids.MAX_OCSP_AGE_MS;
     private boolean interopAcceptGostBaseSigScheme;
     private boolean needClientAuth;
+    private boolean disableHostnameVerification;
 
     GostSslBuilder() {}
 
@@ -261,9 +263,39 @@ public class GostSslBuilder {
     }
 
     /**
+     * Отключает проверку hostname в сертификате сервера (RFC 6125).
+     * <p>
+     * <b>Внимание: это создаёт MITM-уязвимость.</b> Используйте только
+     * для разработки и изолированных сетей. Для production используйте
+     * {@link #trustCa(byte[])} с явным hostname.
+     * <p>
+     * Компонуется с {@link #trustAll()} и {@link #trustCa(byte[])}:
+     * отдельный флаг, не меняющий семантику trustAll.
+     * Без явного вызова hostname verification остаётся включена (safe-default).
+     * <p>
+     * <b>Применимо только к {@link #buildClientContext()}.</b>
+     * Вызов перед {@link #buildServerContext()} приведёт к
+     * {@link IllegalStateException} — на серверной стороне hostname
+     * verification не имеет смысла (RFC 6125 регулирует клиентскую
+     * проверку, а не серверную).
+     *
+     * @return this
+     * @throws IllegalStateException если вызван перед buildServerContext()
+     */
+    public GostSslBuilder withoutHostnameVerification() {
+        this.disableHostnameVerification = true;
+        return this;
+    }
+
+    /**
      * Строит серверный SSLContext.
      */
     public SSLContext buildServerContext() {
+        if (disableHostnameVerification) {
+            throw new IllegalStateException(
+                    "withoutHostnameVerification() has no effect on server side. "
+                            + "Call it only before buildClientContext().");
+        }
         SSLContext ctx =
                 GostSsl.buildContext(
                         certDer,
@@ -315,6 +347,10 @@ public class GostSslBuilder {
         if (interopAcceptGostBaseSigScheme) {
             ((GostSSLSessionContext) ctx.getClientSessionContext())
                     .setInteropAcceptGostBaseSigScheme(true);
+        }
+        if (disableHostnameVerification) {
+            ((GostSSLSessionContext) ctx.getClientSessionContext())
+                    .setEndpointIdentificationDisabled(true);
         }
         return ctx;
     }

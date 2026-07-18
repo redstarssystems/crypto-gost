@@ -3,19 +3,20 @@ package org.rssys.gost.jsse.crl;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.pkix.util.SsrfGuard;
 
 /**
  * Реализация {@link CrlFetcher} на JDK HttpClient с SSRF-защитой.
  * <p>
- * vthread-friendly с JDK 21: HttpClient блокирует vthread, не carrier thread.
+ * <p>JVM only. Для Android используйте {@link UrlConnectionCrlFetcher}.</p>
+ * <p>vthread-совместимость не валидирована JFR.</p>
  * SSRF-защита: только http:// и https:// схемы, блокировка private/reserved IP
  * после DNS-разрешения (проверяются все резолвнутые адреса, fail-closed).
  * <p>
@@ -30,7 +31,8 @@ import org.rssys.gost.pkix.util.SsrfGuard;
  */
 public final class JdkHttpCrlFetcher implements CrlFetcher {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.jsse.crl.JdkHttpCrlFetcher");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.jsse.crl.JdkHttpCrlFetcher");
 
     private static final int DEFAULT_TIMEOUT_MS = 30_000;
     private static final int DEFAULT_MAX_RESPONSE_SIZE = 67_108_864; // 64 МБ

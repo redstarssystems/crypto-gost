@@ -1,7 +1,5 @@
 package org.rssys.gost.pkix.cert;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import org.rssys.gost.digest.Digest;
@@ -11,6 +9,8 @@ import org.rssys.gost.kdf.Pbkdf2Streebog;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.MacData;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.util.DerCodec;
 
 /**
@@ -21,7 +21,8 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class GostPkcs12Mac {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cert.GostPkcs12Mac");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cert.GostPkcs12Mac");
 
     private static final int DK_LEN = 96;
     private static final int HMAC_KEY_LEN = 32;

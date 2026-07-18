@@ -32,7 +32,10 @@ public final class GostJsseConstants {
     public static final String PROTOCOL_GOST_TLS_1_3 = "GOST-TLSv1.3";
 
     public static final String PROVIDER_NAME = "RssysGostJsse";
-    public static final String PROVIDER_VERSION = "1.0";
+    // Android: java.security.Provider имеет только конструктор
+    // Provider(String, double, String) с API 1. Вариант с String-версией
+    // (Provider(String, String, String)) — JDK 9+, на Android отсутствует.
+    public static final double PROVIDER_VERSION = 1.0;
     public static final String PROVIDER_INFO = "Rssys GOST JSSE Provider";
 
     public static final int DEFAULT_PACKET_BUFFER_SIZE = TlsConstants.MAX_CIPHERTEXT_LENGTH;

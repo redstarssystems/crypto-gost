@@ -3,19 +3,20 @@ package org.rssys.gost.jsse.ocsp;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.pkix.util.SsrfGuard;
 
 /**
  * Реализация {@link OcspFetcher} на JDK HttpClient с SSRF-защитой.
  * <p>
- * vthread-friendly с JDK 21: HttpClient блокирует vthread, не carrier thread.
+ * <p>JVM only. Для Android используйте {@link UrlConnectionOcspFetcher}.</p>
+ * <p>vthread-совместимость не валидирована JFR.</p>
  * Используется как singleton поверх TrustManager.
  * SSRF-защита: только http:// схема, блокировка private/reserved IP
  * после DNS-разрешения (проверяются все резолвнутые адреса, fail-closed).
@@ -31,8 +32,8 @@ import org.rssys.gost.pkix.util.SsrfGuard;
  */
 public final class JdkHttpOcspFetcher implements OcspFetcher {
 
-    private static final Logger LOG =
-            System.getLogger("org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher");
 
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(5);
     private static final int DEFAULT_MAX_RESPONSE_SIZE = 262_144; // 256 KB

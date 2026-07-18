@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: clean doc format test test-stress-tlssession test-stress-tlssession-mixed fuzz fuzz-all
+.PHONY: clean doc format test test-stress-tlssession test-stress-tlssession-mixed fuzz fuzz-all android
 
 ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -100,8 +100,15 @@ fuzz-all:
 	done; \
 	exit $$total_fail
 
+# Собрать Android AAR для всех модулей
+android:
+	./gradlew assembleRelease --no-daemon $(ARGS)
+
 clean:
 	find $(ROOT) -type d -name target -exec rm -rf {} + 2>/dev/null
+	find $(ROOT) -type d -name build -exec rm -rf {} + 2>/dev/null
+	rm -rf $(ROOT)/.gradle
+	rm -f $(ROOT)/.flattened-pom.xml
 	find $(ROOT) -name 'dependency-reduced-pom.xml' -delete 2>/dev/null
 	rm -f $(ROOT)/*.log $(ROOT)/*.orig
 	$(MAKE) -s -C bench clean

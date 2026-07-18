@@ -1,7 +1,5 @@
 package org.rssys.gost.jsse.engine;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.nio.ByteBuffer;
 import java.util.Enumeration;
 import java.util.Iterator;
@@ -13,6 +11,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import javax.net.ssl.SSLSession;
 import javax.net.ssl.SSLSessionContext;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsException;
@@ -45,7 +45,8 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     static final long RFC_MAX_TICKET_LIFETIME = 604800L;
 
     private static final int DEFAULT_MAX_PSK = 1000;
-    private static Logger LOG = System.getLogger("org.rssys.gost.jsse.GostSSLSessionContext");
+    private static GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.jsse.GostSSLSessionContext");
 
     private int maxIdentityEntries = 1000;
 
@@ -63,6 +64,16 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     private volatile int sessionTimeout = TlsConstants.DEFAULT_SESSION_TIMEOUT;
     private volatile int sessionCacheSize;
     private boolean interopAcceptGostBaseSigScheme;
+
+    private boolean endpointIdentificationDisabled;
+
+    public void setEndpointIdentificationDisabled(boolean disabled) {
+        this.endpointIdentificationDisabled = disabled;
+    }
+
+    public boolean isEndpointIdentificationDisabled() {
+        return endpointIdentificationDisabled;
+    }
 
     public void setInteropAcceptGostBaseSigScheme(boolean enabled) {
         this.interopAcceptGostBaseSigScheme = enabled;
@@ -274,10 +285,8 @@ public final class GostSSLSessionContext implements SSLSessionContext {
     }
 
     /** Тестовый хелпер: подменить logger для перехвата сообщений. Возвращает предыдущий для restore в tearDown. */
-    static System.Logger setLoggerForTest(System.Logger testLogger) {
-        System.Logger prev = LOG;
-        LOG = testLogger;
-        return prev;
+    static GostLogger.LogSink setLoggerForTest(GostLogger.LogSink testSink) {
+        return LOG.setInstanceSink(testSink);
     }
 
     /**

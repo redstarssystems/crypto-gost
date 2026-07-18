@@ -110,12 +110,15 @@ public final class FieldElement {
             // R mod p = 2^(64n) mod p
             BigInteger R = BigInteger.ONE.shiftLeft(64 * n);
             this.rModP = toLimbs(R.mod(modulus), n);
-            this.expPMinus2 = modulus.subtract(BigInteger.TWO);
+            // BigInteger.TWO добавлен в Android API 33 (Java 9); ZERO/ONE/TEN — с API 1.
+            // Проверено: javap -cp android.jar java.math.BigInteger | grep "TWO" пуст на API 31/32.
+            BigInteger two = BigInteger.valueOf(2);
+            this.expPMinus2 = modulus.subtract(two);
             // R² mod p = R·R mod p
             this.r2ModP = toLimbs(R.multiply(R).mod(modulus), n);
 
             // Предвычисляем константы умножения для shiftLeft(1,2,3)
-            long[] twoLimbs = toLimbs(BigInteger.TWO, n);
+            long[] twoLimbs = toLimbs(two, n);
             long[] fourLimbs = toLimbs(BigInteger.valueOf(4L), n);
             long[] eightLimbs = toLimbs(BigInteger.valueOf(8L), n);
             this.twoR = montMul(twoLimbs, r2ModP, this);

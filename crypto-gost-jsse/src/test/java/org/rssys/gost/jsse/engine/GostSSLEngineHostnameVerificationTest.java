@@ -112,6 +112,33 @@ class GostSSLEngineHostnameVerificationTest {
     }
 
     // ========================================================================
+    // Opt-out через session context флаг (endpointIdentificationDisabled)
+    // ========================================================================
+
+    @Test
+    @DisplayName(
+            "SessionContext флаг: wrong host проходит (аналог trustAllNoHostnameCheckInsecure)")
+    void disabledFlagOnSessionContextAllowsWrongHost() throws Exception {
+        SSLContext ctx = clientContext();
+        ((GostSSLSessionContext) ctx.getClientSessionContext())
+                .setEndpointIdentificationDisabled(true);
+        GostSSLEngine client = (GostSSLEngine) ctx.createSSLEngine("wronghost.invalid", 0);
+        doLoopback(client, newServerEngine());
+        assertTrue(client.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
+    }
+
+    @Test
+    @DisplayName("SessionContext флаг: matching host всё ещё работает")
+    void disabledFlagOnSessionContextWithMatchingHost() throws Exception {
+        SSLContext ctx = clientContext();
+        ((GostSSLSessionContext) ctx.getClientSessionContext())
+                .setEndpointIdentificationDisabled(true);
+        GostSSLEngine client = (GostSSLEngine) ctx.createSSLEngine("localhost", 0);
+        doLoopback(client, newServerEngine());
+        assertTrue(client.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
+    }
+
+    // ========================================================================
     // Opt-out по контракту SSLParameters: null и "" отключают проверку
     // ========================================================================
 

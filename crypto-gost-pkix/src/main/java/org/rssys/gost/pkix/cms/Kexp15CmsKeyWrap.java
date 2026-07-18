@@ -1,12 +1,12 @@
 package org.rssys.gost.pkix.cms;
 
-import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
 import java.util.Arrays;
 import org.rssys.gost.api.KeyExport;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.util.GostLogger;
+import org.rssys.gost.pkix.util.GostLogger.Level;
 
 /**
  * Реализация {@link CmsKeyWrap} через KExp15/KImp15 (RFC 9189 §8.2.1).
@@ -18,7 +18,8 @@ import org.rssys.gost.pkix.GostOids;
  */
 public final class Kexp15CmsKeyWrap implements CmsKeyWrap {
 
-    private static final Logger LOG = System.getLogger("org.rssys.gost.pkix.cms.Kexp15CmsKeyWrap");
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cms.Kexp15CmsKeyWrap");
 
     // Метка KDF_TREE для KEG — нормативная "kdf tree" (R 1323565.1.020-2018),
     // а не "kexp15": именно её использует КриптоПРО/gost-engine при выводе K_MAC/K_ENC.

@@ -47,6 +47,8 @@ import org.rssys.gost.pkix.cert.OcspVerifier;
  * @see CrlVerifier
  * @see JdkHttpOcspFetcher
  * @see JdkHttpCrlFetcher
+ * @see UrlConnectionOcspFetcher
+ * @see UrlConnectionCrlFetcher
  */
 public final class CertificateStatusCheck {
 
