@@ -554,10 +554,10 @@ Runtime). Запускается на эмуляторе API 31+ или физи
 `android-demo/app/build.gradle.kts` блок `implementation(files(...))` на
 зависимости с Maven-координатами. Например:
 
-    implementation("org.rssys:crypto-gost-core-android:0.7.1-SNAPSHOT")
-    implementation("org.rssys:crypto-gost-pkix-android:0.7.1-SNAPSHOT")
-    implementation("org.rssys:crypto-gost-tls13-android:0.7.1-SNAPSHOT")
-    implementation("org.rssys:crypto-gost-jsse-android:0.7.1-SNAPSHOT")
+    implementation("org.rssys:crypto-gost-core-android:0.7.1")
+    implementation("org.rssys:crypto-gost-pkix-android:0.7.1")
+    implementation("org.rssys:crypto-gost-tls13-android:0.7.1")
+    implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
 
 и выполните сборку:
 

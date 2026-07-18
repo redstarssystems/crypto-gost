@@ -414,10 +414,10 @@ adb logcat | grep -i gost
 
 [source,kotlin]
 ----
-implementation("org.rssys:crypto-gost-core-android:0.7.1-SNAPSHOT")
-implementation("org.rssys:crypto-gost-pkix-android:0.7.1-SNAPSHOT")
-implementation("org.rssys:crypto-gost-tls13-android:0.7.1-SNAPSHOT")
-implementation("org.rssys:crypto-gost-jsse-android:0.7.1-SNAPSHOT")
+implementation("org.rssys:crypto-gost-core-android:0.7.1")
+implementation("org.rssys:crypto-gost-pkix-android:0.7.1")
+implementation("org.rssys:crypto-gost-tls13-android:0.7.1")
+implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
 ----
 
 и выполните сборку:

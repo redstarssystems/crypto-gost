@@ -562,7 +562,7 @@ gost-curl — отдельный проект. Репозиторий:
 
     # 3. Подписать от тестового ЦА (через crypto-gost)
     cd ~/projects/crypto-gost
-    sudo java -cp examples/pkix/target/crypto-gost-pkix-examples-0.7.1-SNAPSHOT.jar:\
+    sudo java -cp examples/pkix/target/crypto-gost-pkix-examples-0.7.1.jar:\
     crypto-gost-pkix/target/crypto-gost-pkix-0.7.0-SNAPSHOT.jar:\
     crypto-gost-core/target/crypto-gost-core-0.7.0-SNAPSHOT.jar \
       org.rssys.gost.pkix.examples.SignContainerCert \
