@@ -5,7 +5,10 @@
 внедрить ГОСТ в инфраструктуру Java.
 
 **Данная библиотека не является сертифицированной и не предназначена для
-работы там, где требуются сертифицированные средства криптографии.**
+работы там, где требуются сертифицированные средства криптографии.
+Библиотека ничего не гарантирует, включая отсутствие ошибок и правильной
+реализации стандартов. Использовать только для личных проектов и личных
+нужд!**
 
 Библиотека состоит из модулей:
 
@@ -144,10 +147,10 @@ Netty)**.
 
 Зависимости:
 
-    implementation("org.rssys:crypto-gost-core-android:0.7.1")
-    implementation("org.rssys:crypto-gost-pkix-android:0.7.1")
-    implementation("org.rssys:crypto-gost-tls13-android:0.7.1")
-    implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
+    implementation("org.rssys:crypto-gost-core-android:0.7.2-SNAPSHOT")
+    implementation("org.rssys:crypto-gost-pkix-android:0.7.2-SNAPSHOT")
+    implementation("org.rssys:crypto-gost-tls13-android:0.7.2-SNAPSHOT")
+    implementation("org.rssys:crypto-gost-jsse-android:0.7.2-SNAPSHOT")
 
 - **Способ 2.** Клонируйте репозиторий и выполните сборку и установку в
   локальный .m2:  
