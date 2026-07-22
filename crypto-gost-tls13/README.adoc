@@ -936,11 +936,6 @@ mvn test -pl crypto-gost-tls13 -am \
 mvn -Pcrossval -pl x-validation-tests/pkcs12 -am test -Dexec.skip=true
 ----
 
-== Поддержать проект
-
-Если проект оказался полезным, вы можете поддержать проект на link:https://boosty.to/mike_ananev/donate[*Boosty*]
-
-
 == Лицензия
 
 Автор: Михаил Ананьев. +

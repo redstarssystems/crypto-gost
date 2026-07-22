@@ -2225,11 +2225,6 @@ MAC](../x-validation-tests/digest-mac/doc/digest-mac-cross-validation.md).
     mvn -Pcrossval -pl x-validation-tests/sign -am test -Dexec.skip=true \
         -Dtest=OpenSsl*CrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
 
-# Поддержать проект
-
-Если проект оказался полезным, вы можете поддержать проект на
-[**Boosty**](https://boosty.to/mike_ananev/donate)
-
 # Лицензия
 
 Автор: Михаил Ананьев.  

@@ -2621,11 +2621,6 @@ CTR-ACPKM. Несовместимы по дизайну.
     # CSR (OpenSSL)
     mvn -Pcrossval -pl x-validation-tests/csr -am test -Dexec.skip=true
 
-## Поддержать проект
-
-Если проект оказался полезным, вы можете поддержать проект на
-[**Boosty**](https://boosty.to/mike_ananev/donate)
-
 ## Лицензия
 
 Автор: Михаил Ананьев.  

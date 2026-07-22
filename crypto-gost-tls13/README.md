@@ -990,11 +990,6 @@ OpenSSL (`genpkey` → `req` → `pkcs12 -export`). Проверяется: чт
 
     mvn -Pcrossval -pl x-validation-tests/pkcs12 -am test -Dexec.skip=true
 
-# Поддержать проект
-
-Если проект оказался полезным, вы можете поддержать проект на
-[**Boosty**](https://boosty.to/mike_ananev/donate)
-
 # Лицензия
 
 Автор: Михаил Ананьев.  
