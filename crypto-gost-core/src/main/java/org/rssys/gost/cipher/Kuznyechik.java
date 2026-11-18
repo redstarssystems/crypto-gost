@@ -16,50 +16,37 @@ import org.rssys.gost.util.OutputLengthException;
  *   <li>Количество раундов: 10 (9 полных раундов LSX + финальный XOR с K9)</li>
  * </ul>
  *
- * <h2>Ключевые оптимизации относительно исходной реализации</h2>
+ * <h2>Устройство реализации</h2>
  *
- * <h3>T-таблицы переупакованы из {@code byte[16][256][16]} в {@code long[16][256]} × 2</h3>
- * Исходная реализация хранила T-таблицы как {@code byte[][][]}: каждый lookup возвращал
- * {@code byte[16]}, после чего следовали 16 байтовых XOR. Итого на раунд: 16 × 16 = 256
- * байтовых операций.
+ * <h3>T-таблицы как {@code long[16][256]} × 2</h3>
+ * {@code T_HI_S[i][x]} и {@code T_LO_S[i][x]} хранят 8 байт результата как {@code long}: на раунд
+ * приходится 16 обращений к таблицам и 32 XOR слов вместо 256 побайтовых операций. Таблицы
+ * занимают около 64 КБ и помещаются в L2.
+ *
+ * <h3>S-замена встроена в таблицы шифрования</h3>
+ * {@code T_HI_S[i][x] = L(e_i · PI[x])} вычислена при загрузке класса: один обход таблицы вместо
+ * двух, отдельных обращений к PI нет.
  * <p>
- * Теперь: {@code T_HI_S[i][x]} и {@code T_LO_S[i][x]} хранят 8 байт результата как {@code long}.
- * На каждый раунд: 16 lookups -> 32 long-XOR (вместо 256 байтовых). Таблицы ≈ 64 КБ —
- * укладываются в L2.
+ * При расшифровании S⁻¹ применяется <em>после</em> L⁻¹, поэтому PI_INV нельзя встроить в T_INV
+ * по входу. Для неё есть таблица {@code SI_HI[p][b]} ({@code = (long)PI_INV[b] << (56-8·p)}):
+ * S⁻¹ к 128-битному значению это 16 обращений и 16 OR без цепочек сдвигов.
  *
- * <h3>PI встроен в T_HI_S / T_LO_S (только шифрование)</h3>
- * Исходная реализация: горячий путь шифрования обращался к {@code T[i][PI[byte]]}.
- * Два уровня индексирования — лишний indirect lookup через массив PI.
- * <p>
- * Теперь: {@code T_HI_S[i][x] = L(e_i · PI[x])} предвычислен при загрузке класса —
- * один lookup вместо двух, 16 PI-обращений на блок устранены.
- * <p>
- * Для расшифрования S⁻¹ применяется <em>после</em> L⁻¹, поэтому PI_INV нельзя встроить
- * в T_INV по входу. Вместо этого добавлена таблица {@code SI_HI[p][b]}
- * ({@code = (long)PI_INV[b] << (56-8·p)}) — применение S⁻¹ к 128-битному значению за
- * 16 lookups + 16 OR, без побайтовых shift-chains.
+ * <h3>Блок как пара (hi, lo) : long</h3>
+ * Блок читается двумя {@code VarHandle.getLong} и живёт как два {@code long} в регистрах. В
+ * {@code processBlock} нет {@code new byte[]}.
  *
- * <h3>Блок как пара (hi, lo) : long — нет byte[] на горячем пути</h3>
- * Исходная реализация копировала входной блок в {@code scratchBlock[16]} и работала
- * побайтово. Теперь блок читается двумя {@code VarHandle.getLong} и хранится как два
- * {@code long} в регистрах JIT. Никаких {@code new byte[]} в {@code processBlock}.
+ * <h3>Раундовые ключи и константы</h3>
+ * Раундовые ключи лежат в {@code skHi[10]} и {@code skLo[10]}, а не в {@code byte[10][16]}: нет
+ * двойного разыменования в цикле раундов. Раундовые константы C_n = L(e_n) не зависят от ключа и
+ * считаются один раз при загрузке класса.
  *
- * <h3>Раундовые ключи как long[] вместо byte[][]</h3>
- * {@code skHi[10]} и {@code skLo[10]} вместо {@code byte[10][16]}. Исключает двойное
- * разыменование указателей в цикле раундов.
+ * <h3>VarHandle для ввода-вывода блоков</h3>
+ * {@code LONG_BE.get(arr, off)} читает 8 байт одной операцией. Два вызова дают весь 16-байтовый
+ * блок. {@code --add-opens} не нужен; {@code VarHandle} доступен на Android 14.
  *
- * <h3>VarHandle для I/O блоков</h3>
- * {@code LONG_BE.get(arr, off)} генерирует одну инструкцию {@code MOV r64, [mem]} вместо
- * 8 {@code MOVZX}. Два вызова = весь 16-байтовый блок. Не требует {@code --add-opens}.
- *
- * <h3>Инлайн LSX — устранены long[] returns</h3>
- * Промежуточные методы объявлены {@code private static} — JIT инлайнит их без virtual
- * dispatch и без escape analysis, регаля {@code hi}/{@code lo} в регистры. Нет аллокаций
- * ни в каком сценарии прогрева.
- *
- * <h2>Совместимость</h2>
- * Drop-in замена исходного {@code Kuznyechik} — реализует тот же интерфейс {@link BlockCipher}.
- * Требует JDK 9+ (VarHandle); оптимально работает на JDK 25+ с прогретым JIT.
+ * <h3>Встраиваемые вспомогательные методы</h3>
+ * Промежуточные методы LSX объявлены {@code private static}: JIT встраивает их, {@code hi} и
+ * {@code lo} остаются в регистрах, массивов результата нет.
  */
 public final class Kuznyechik implements BlockCipher {
 
@@ -70,7 +57,7 @@ public final class Kuznyechik implements BlockCipher {
     public static final int KEY_SIZE = 32;
 
     // VarHandle для чтения/записи long из byte[] в big-endian порядке.
-    // Стандартный API JDK 9+, не требует --add-opens.
+    // Не требует --add-opens.
     private static final VarHandle LONG_BE =
             MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
@@ -198,8 +185,18 @@ public final class Kuznyechik implements BlockCipher {
     private static final long[][] T_INV_LO = new long[16][256];
     private static final long[][] SI_HI = new long[8][256];
 
+    /**
+     * Раундовые константы C_n = L(e_n), n = 1..32 (ГОСТ Р 34.12-2015, 7.3): старшие и младшие 8
+     * байт. Не зависят от ключа, поэтому считаются один раз при загрузке класса, а не 32 раза на
+     * каждый {@code init} (каждое L - 16 шагов регистра с умножениями в GF(2⁸)).
+     */
+    private static final long[] ROUND_C_HI = new long[32];
+
+    private static final long[] ROUND_C_LO = new long[32];
+
     static {
         buildAllTables();
+        buildRoundConstants();
     }
 
     // -----------------------------------------------------------------------
@@ -231,11 +228,10 @@ public final class Kuznyechik implements BlockCipher {
 
     /** Обратный R-шаг для L⁻¹-преобразования. */
     private static void applyRInv(byte[] a) {
-        byte[] t = new byte[16];
-        System.arraycopy(a, 1, t, 0, 15);
-        t[15] = a[0];
-        byte fb = t[15];
-        for (int i = 14; i >= 0; i--) fb ^= gfMul(t[i] & 0xFF, L_FACTORS[i]);
+        // Сдвинутый на байт влево вход t = a[1..15] || a[0] строить не нужно: t[i] = a[i + 1],
+        // t[15] = a[0]
+        byte fb = a[0];
+        for (int i = 14; i >= 0; i--) fb ^= gfMul(a[i + 1] & 0xFF, L_FACTORS[i]);
         System.arraycopy(a, 1, a, 0, 15);
         a[15] = fb;
     }
@@ -245,6 +241,17 @@ public final class Kuznyechik implements BlockCipher {
         for (int s = 0; s < 16; s++) {
             if (inv) applyRInv(a);
             else applyR(a);
+        }
+    }
+
+    private static void buildRoundConstants() {
+        byte[] constant = new byte[16];
+        for (int n = 1; n <= 32; n++) {
+            Arrays.fill(constant, (byte) 0);
+            constant[15] = (byte) n;
+            applyL(constant, false);
+            ROUND_C_HI[n - 1] = (long) LONG_BE.get(constant, 0);
+            ROUND_C_LO[n - 1] = (long) LONG_BE.get(constant, 8);
         }
     }
 
@@ -324,17 +331,27 @@ public final class Kuznyechik implements BlockCipher {
             throw new IllegalArgumentException(
                     "invalid parameter passed to Kuznyechik.init - " + params.getClass().getName());
         }
+        // getKey() отдаёт копию; без затирания она остаётся в куче после каждого init
+        // (в том числе после каждой смены ключа секции ACPKM).
         byte[] key = sk.getKey();
-        if (key.length != KEY_SIZE) {
-            throw new IllegalArgumentException(
-                    "invalid key size: " + key.length + " bytes, required " + KEY_SIZE + " bytes");
+        try {
+            if (key.length != KEY_SIZE) {
+                throw new IllegalArgumentException(
+                        "invalid key size: "
+                                + key.length
+                                + " bytes, required "
+                                + KEY_SIZE
+                                + " bytes");
+            }
+            Arrays.fill(skHi, 0L);
+            Arrays.fill(skLo, 0L);
+            this.keyInitialized = false;
+            this.forEncryption = forEncryption;
+            generateSubKeys(key);
+            this.keyInitialized = true;
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
-        Arrays.fill(skHi, 0L);
-        Arrays.fill(skLo, 0L);
-        this.keyInitialized = false;
-        this.forEncryption = forEncryption;
-        generateSubKeys(key);
-        this.keyInitialized = true;
     }
 
     @Override
@@ -552,8 +569,11 @@ public final class Kuznyechik implements BlockCipher {
      *
      * @param inHi верхние 8 байт входного блока (big-endian long)
      * @param inLo нижние 8 байт входного блока (big-endian long)
+     * @throws IllegalStateException если ключ не задан или шифр уничтожен: без проверки расчёт шёл бы
+     *                               на нулевых раундовых ключах и молча давал бы не шифртекст
      */
     public void encryptToFields(long inHi, long inLo) {
+        if (!keyInitialized) throw new IllegalStateException("Kuznyechik not initialized");
         long hi = inHi, lo = inLo;
         for (int r = 0; r < 9; r++) {
             long xhi = hi ^ skHi[r];
@@ -568,8 +588,8 @@ public final class Kuznyechik implements BlockCipher {
     // -----------------------------------------------------------------------
     // Развёртка ключа (Key Schedule) — ГОСТ Р 34.12-2015, §4.3
     //
-    // Алгоритм идентичен исходному. Изменено: раундовые ключи хранятся как long-пары
-    // (skHi/skLo) вместо byte[][], LSX-шаг функции Фейстеля использует lsxHi/lsxLo.
+    // Раундовые ключи хранятся как long-пары (skHi/skLo), LSX-шаг функции Фейстеля использует
+    // lsxHi/lsxLo; константы раундов берутся из таблицы, посчитанной при загрузке класса.
     // -----------------------------------------------------------------------
 
     private void generateSubKeys(byte[] key) {
@@ -585,15 +605,12 @@ public final class Kuznyechik implements BlockCipher {
         skLo[1] = ylo;
 
         // 4 итерации по 8 раундов функции Фейстеля F(C_n, x, y)
-        byte[] cBuf = new byte[16];
         for (int i = 1; i <= 4; i++) {
             for (int j = 1; j <= 8; j++) {
                 // Константа раунда C_n = L(e_n), где n = 8·(i-1)+j
-                Arrays.fill(cBuf, (byte) 0);
-                cBuf[15] = (byte) (8 * (i - 1) + j);
-                applyL(cBuf, false);
-                long chi = (long) LONG_BE.get(cBuf, 0);
-                long clo = (long) LONG_BE.get(cBuf, 8);
+                int n = 8 * (i - 1) + j;
+                long chi = ROUND_C_HI[n - 1];
+                long clo = ROUND_C_LO[n - 1];
 
                 // Функция Фейстеля F(C, x, y): tmp = LSX(C XOR x) XOR y; y = x; x = tmp
                 long txhi = chi ^ xhi, txlo = clo ^ xlo;

@@ -13,12 +13,15 @@ import org.rssys.gost.pkix.cert.GostCertificate;
  *                            signingCertificateV2 и др.) — проверены при верификации
  * @param unsignedAttributes  unsigned-атрибуты этого подписанта (метки времени CAdES-T и др.)
  *                            — не проверены криптографически, только распарсены
+ * @param certificateChain    первичная проверенная цепочка leaf-first, включая доверенный
+ *                            якорь; пустая для signature-only проверки
  */
 public record SignerResult(
         GostCertificate signerCertificate,
         byte[] signatureValue,
         List<CmsAttribute> signedAttributes,
-        List<CmsAttribute> unsignedAttributes) {
+        List<CmsAttribute> unsignedAttributes,
+        List<GostCertificate> certificateChain) {
 
     public SignerResult {
         signatureValue = signatureValue.clone();
@@ -28,6 +31,29 @@ public record SignerResult(
                 unsignedAttributes != null
                         ? List.copyOf(unsignedAttributes)
                         : Collections.emptyList();
+        certificateChain =
+                certificateChain != null ? List.copyOf(certificateChain) : Collections.emptyList();
+    }
+
+    /**
+     * Совместимый конструктор без цепочки.
+     *
+     * @param signerCertificate  сертификат подписанта
+     * @param signatureValue     значение подписи
+     * @param signedAttributes   signed-атрибуты
+     * @param unsignedAttributes unsigned-атрибуты
+     */
+    public SignerResult(
+            GostCertificate signerCertificate,
+            byte[] signatureValue,
+            List<CmsAttribute> signedAttributes,
+            List<CmsAttribute> unsignedAttributes) {
+        this(
+                signerCertificate,
+                signatureValue,
+                signedAttributes,
+                unsignedAttributes,
+                Collections.emptyList());
     }
 
     @Override
@@ -45,6 +71,11 @@ public record SignerResult(
         return unsignedAttributes;
     }
 
+    @Override
+    public List<GostCertificate> certificateChain() {
+        return certificateChain;
+    }
+
     /** Сигнатура не выводится — ключевой материал не должен попадать в логи. */
     @Override
     public String toString() {
@@ -56,6 +87,8 @@ public record SignerResult(
                 + unsignedAttributes
                 + ", signatureValue=<"
                 + signatureValue.length
-                + " bytes>]";
+                + " bytes>, certificateChain="
+                + certificateChain.size()
+                + "]";
     }
 }

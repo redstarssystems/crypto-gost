@@ -2,8 +2,8 @@
 :toc:
 :toc-title: Содержание
 :sectnums:
-:revdate: 2026-05-30
-:revnumber: 1.1
+:revdate: 2026-11-01
+:revnumber: 1.2
 :lang: ru
 
 == Цели
@@ -65,14 +65,19 @@ NOTE: CBC тестируется в двух вариантах: с PKCS7-пад
 ....
 x-validation-tests/kuznyechik/
   src/main/java/.../crossval/kuznyechik/
-    CrossVersionTool.java  - subprocess-хелпер для предыдущей версии JAR
+    CrossVersionTool.java           - файловый CLI + режим serve (worker предыдущей версии)
   src/test/java/.../crossval/kuznyechik/
     BcHelper.java                   - BC-криптопримитивы (CTR, CBC, CFB, OFB)
-    CompatHelper.java               - общие методы: subprocess, OpenSSL
+    CompatHelper.java               - OpenSSL через subprocess
+    OldVersionWorker.java           - долгоживущий worker предыдущей версии, бинарный протокол
     TestData.java                   - SIZES[], утилиты
     BcCrossValidationTest.java      - JUnit 5: текущая vs BC
     CrossVersionTest.java           - JUnit 5: текущая vs предыдущая версия
     OpenSslCrossValidationTest.java - JUnit 5: текущая vs OpenSSL
+    OpenSslMgmCrossValidationTest.java - JUnit 5: MGM (JCA и MgmCipher) vs OpenSSL
+    MgmToolRunner.java              - сборка gcc и запуск C-хелпера mgm_tool
+  src/test/resources/
+    mgm_tool.c                      - C-хелпер: Кузнечик-MGM на EVP API OpenSSL (gostprov)
 ....
 
 BC-тестирование — только JUnit (`BcCrossValidationTest`): BouncyCastle доступен
@@ -81,23 +86,69 @@ BC-тестирование — только JUnit (`BcCrossValidationTest`): Bo
 
 === Технические решения
 
-*Данные через файлы.* `CrossVersionTool` принимает пути к файлам, не hex-аргументы —
-аргументы командной строки ограничены ОС (128–256 КБ), что делало бы тесты на 262 КБ и 1 МБ
-невозможными.
-
-*Subprocess для изоляции версий.* Предыдущая версия библиотеки запускается в отдельной JVM
+*Worker вместо JVM на кейс.* Предыдущая версия библиотеки запускается в отдельной JVM
 с `OLD_JAR` на classpath — единственный способ избежать конфликтов загрузчика классов.
+Раньше JVM поднималась на каждый вызов (дважды на кейс): 430 стартов, ≈59 с на класс.
+Теперь `OldVersionWorker` держит один процесс `CrossVersionTool serve` на весь тестовый класс.
 
-*Graceful skip.* Тесты пропускаются (`Assumptions.assumeTrue`) с понятным сообщением если
-предыдущий JAR не найден или OpenSSL собран без поддержки Кузнечика. Основная CI-сборка
-не ломается.
+*Бинарный протокол через pipe.* Запросы и ответы идут потоком `DataInputStream`/`DataOutputStream`
+через stdin/stdout: версия протокола, режим, операция, ключ, IV/ICN и payload с префиксами длины.
+Данные не пишутся на диск и не передаются через аргументы командной строки (ограничение ОС
+128–256 КБ исключило бы тесты на 262 КБ и 1 МиБ). Файловый режим `CrossVersionTool` сохранён
+для ручного CLI-запуска.
+
+*Fail-closed на фрейминге.* Ошибка операции (например, провал аутентификации MGM) возвращается
+статусом и не роняет worker. Ошибка фрейминга или ввода-вывода фатальна: worker завершается,
+продолжать на рассинхронизированном потоке нельзя. Размер любого кадра ограничен сверху.
+
+*Диагностика и таймаут.* stderr worker читается daemon-потоком в кольцевой буфер последних строк,
+поэтому заполненный pipe не блокирует процесс. Запрос ограничен таймаутом; по истечении worker
+принудительно уничтожается, а в сообщении остаётся хвост stderr.
+
+*Затирание ключей.* Worker обнуляет ключ через `SymmetricKey.destroy()` и локальные массивы
+через `Arrays.fill` после каждой операции.
+
+*Graceful skip.* OpenSSL-тесты пропускаются (`Assumptions.assumeTrue`), если OpenSSL недоступен
+или собран без поддержки Кузнечика. Кросс-версионный тест падает (`fail`) с понятным сообщением,
+если JAR предыдущей версии не найден: без него проверка обратной совместимости невозможна.
 
 *CTR IV.* CTR по ГОСТ Р 34.13-2015 использует 8-байтный IV. Тесты генерируют 16 байт,
 `CrossVersionTool` обрезает до 8 сам; в `Cipher.encrypt` передаётся `Arrays.copyOf(iv, 8)`.
 
-*MGM.* MGM — AEAD-режим вне `Cipher.Mode`. Тестируется только кросс-версионно
-(`MgmCipher.sealWithIcn/open`, пустой AAD, три направления на все размеры).
-BC и OpenSSL MGM не поддерживают.
+*MGM.* MGM — AEAD-режим вне `Cipher.Mode`. С предыдущей версией сверяется
+`MgmCipher.sealWithIcn/open` (пустой AAD на все размеры, а для размера 0 непустой AAD: MGM
+отвергает пустой открытый текст без AAD, RFC 9058 §6; три направления на все размеры).
+BouncyCastle MGM не поддерживает. С OpenSSL MGM сверяет `OpenSslMgmCrossValidationTest`:
+утилита `openssl enc` AEAD не умеет, поэтому эталоном служит небольшая C-программа
+`mgm_tool.c` на EVP API (`kuznyechik-mgm` из провайдера gostprov). `MgmToolRunner` собирает её
+`gcc` один раз за прогон. Тест пропускается только при отсутствии предпосылок (`gcc`, заголовки
+и `libcrypto` OpenSSL, `gostprov.so`, возможность запускать файлы из каталога временных файлов:
+он может быть смонтирован с `noexec`); если они есть, а сборка или запуск упали, тест падает.
+Матрица: AAD {0, 1, 15, 16, 17, 41, 100} байт × открытый текст {0, 1, 16, 17, 67} байт (кроме
+пары пустых). Для каждой пары JCA `Kuznyechik/MGM/NoPadding` и `MgmCipher.sealWithIcn`
+совпадают с OpenSSL байт в байт, OpenSSL расшифровывает наши пакеты, мы — его пакеты. Отдельно:
+`updateAAD` и `update` порциями 1, 7 и 16 байт (хелпер принимает AAD целиком, так что порции
+сверяются с одним вызовом OpenSSL); искажение тега, шифртекста и AAD отвергается обеими
+сторонами; при пустых P и A тег OpenSSL не зависит от ICN и равен `E_K(0)`, чем подтверждается
+довод RFC 9058 §6, а библиотека такое сообщение отвергает.
+
+== Ограничения
+
+*Пространство API предыдущего релиза.* `CrossVersionTool` компилируется против текущего core,
+а исполняется против `OLD_JAR`. Поэтому режим `serve` может вызывать только методы, существующие
+в предыдущем релизе (`Cipher.encrypt/decrypt(data, key, iv, mode[, padding])`,
+`MgmCipher.sealWithIcn/open`, `SymmetricKey(byte[])`, `SymmetricKey.destroy()`). Новый overload
+даст `NoSuchMethodError` только в рантайме.
+
+*Общая статика.* Worker живёт весь тестовый класс, поэтому статическое состояние предыдущей
+версии общее для всех кейсов. Для проверки совместимости шифртекстов это приемлемо; более того,
+проверяется и «прогретое» состояние, а не только холодный старт.
+
+*Расшифрование MGM в gost-engine без AAD.* Проверено на gost-engine v3.0.3-85: `gost_mgm128_decrypt`
+не вычисляет Z₁ = E_K(1 ‖ ICN), если AAD не передавался (шифрование делает это само), и для пакета без
+AAD считает неверный тег. Шифртекст и тег при шифровании совпадают с нашими, расходится только
+расшифрование самого движка. Хелпер `mgm_tool` при расшифровании всегда вызывает обновление AAD
+нулевой длины: это обходит дефект и результата не меняет. Тест этот дефект не закрепляет.
 
 == Покрытие
 
@@ -112,7 +163,7 @@ BC и OpenSSL MGM не поддерживают.
 |✓ |✓ |✓ |✓ |✓
 
 |Совместимость с OpenSSL
-|✓ |✓ |✓ |✓ |—
+|✓ |✓ |✓ |✓ |✓
 
 |Совместимость с BouncyCastle 1.84
 |✓ |✓ |✓ |✓ |—
@@ -136,6 +187,10 @@ mvn -Pcrossval -pl x-validation-tests/kuznyechik -am test -Dexec.skip=true
 # Только OpenSSL-проверки (фильтр JUnit)
 mvn -Pcrossval -pl x-validation-tests/kuznyechik -am test -Dexec.skip=true \
     -Dtest=OpenSslCrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
+
+# Только MGM против OpenSSL (нужны gcc, заголовки OpenSSL и gostprov.so)
+mvn -Pcrossval -pl x-validation-tests/kuznyechik -am test -Dexec.skip=true \
+    -Dtest=OpenSslMgmCrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
 
 # Только кросс-версионная проверка между crypto-gost (фильтр JUnit)
 mvn -Pcrossval -pl x-validation-tests/kuznyechik -am test -Dexec.skip=true \

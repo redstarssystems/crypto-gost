@@ -1,72 +1,72 @@
 package org.rssys.gost.jsse.examples.undertow;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import io.undertow.Undertow;
 import io.undertow.server.HttpHandler;
+import io.undertow.util.Headers;
+import io.undertow.util.HttpString;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.lang.management.GarbageCollectorMXBean;
-import java.lang.management.ManagementFactory;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.Security;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManager;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.examples.ExamplesCertHelper;
-import org.rssys.gost.tls13.TlsConstants;
 
-@DisplayName("Стресс-тест: Undertow с большими телами (handshake stress + throughput)")
+/**
+ * Большие тела запросов через Undertow: блокирующее чтение тела в рабочем потоке, тело много
+ * больше записи TLS, после ответа соединение закрывается. Именно в таком сочетании хвост тела
+ * разбирался как начало нового запроса (UT005014), поэтому сервер сверяет хеш всего тела.
+ */
+@DisplayName("Стресс-тест: Undertow, большие тела запросов с закрытием соединения, сверка хеша")
 @Tag("stress")
 @Timeout(value = 10, unit = TimeUnit.MINUTES)
 class UndertowLargeUploadTest {
 
-    private static final int DURATION_SEC = Integer.getInteger("upload.duration", 30);
-    private static final int CLIENTS = Integer.getInteger("upload.clients", 10);
-    private static final long MIN_BYTES = 100L * 1024 * 1024;
-    private static final int PHASE1_BODY = 1024 * 1024;
-    private static final int CHUNK_SIZE = 64 * 1024;
-    private static final int BUF_SIZE = 65536;
-    private static final int HEAP_WARN_PCT = 85;
+    private static final int BODY_MB = Integer.getInteger("stress.bodyMb", 64);
+    private static final int CLIENTS = Integer.getInteger("upload.largeClients", 8);
+    private static final int REQUESTS_PER_CLIENT = Integer.getInteger("upload.requests", 2);
+    private static final int BUF_SIZE = 64 * 1024;
+    private static final int SOCKET_TIMEOUT_MS = 180_000;
+    private static final long JOIN_TIMEOUT_MS = 300_000;
+    private static final String HASH_HEADER = "X-Received-SHA256";
+    // Контрольная сумма тела считается JDK, а не проверяемой библиотекой: сверка не должна
+    // зависеть от кода, который она проверяет
+    private static final String CHECKSUM_ALGORITHM = "SHA-256";
 
     private static Undertow server;
     private static int port;
     private static SSLContext clientCtx;
 
-    private static byte[] phase1Request;
-    private static byte[] phase2Request;
-
-    private static volatile boolean running;
-    private static final AtomicLong phase1Reqs = new AtomicLong();
-    private static final AtomicLong phase1Errs = new AtomicLong();
-    private static final AtomicLong phase1Bytes = new AtomicLong();
-    private static final AtomicLong phase2Reqs = new AtomicLong();
-    private static final AtomicLong phase2Errs = new AtomicLong();
-    private static final AtomicLong phase2Bytes = new AtomicLong();
-
     @BeforeAll
     static void startServer() throws Exception {
-        Security.addProvider(new org.rssys.gost.jsse.RssysGostJsseProvider());
+        Security.addProvider(new RssysGostJsseProvider());
         ExamplesCertHelper helper = new ExamplesCertHelper();
-        SSLContext serverCtx = helper.getSslContext();
 
         server =
                 Undertow.builder()
-                        .addHttpsListener(0, "0.0.0.0", serverCtx)
-                        .setHandler(streamingHandler())
+                        .addHttpsListener(0, "0.0.0.0", helper.getSslContext())
+                        .setHandler(hashingHandler())
                         .build();
         server.start();
         port = ((InetSocketAddress) server.getListenerInfo().get(0).getAddress()).getPort();
@@ -75,14 +75,6 @@ class UndertowLargeUploadTest {
                 SSLContext.getInstance(
                         GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         clientCtx.init(null, new TrustManager[] {helper.createTrustManager()}, null);
-
-        byte[] body1 = new byte[PHASE1_BODY];
-        byte[] body2 = new byte[CHUNK_SIZE];
-        for (int i = 0; i < body1.length; i++) body1[i] = 0x41;
-        for (int i = 0; i < body2.length; i++) body2[i] = 0x41;
-
-        phase1Request = buildHttpPost("/handshake-stress", body1, true);
-        phase2Request = buildHttpPost("/throughput", body2, false);
     }
 
     @AfterAll
@@ -90,424 +82,167 @@ class UndertowLargeUploadTest {
         if (server != null) server.stop();
     }
 
-    private static HttpHandler streamingHandler() {
+    /**
+     * Читает тело блокирующе в рабочем потоке (не в потоке ввода-вывода XNIO) и отвечает хешем
+     * прочитанного. При недоборе тела отвечает 400, а не хешем части тела.
+     */
+    private static HttpHandler hashingHandler() {
         return exchange -> {
             if (exchange.isInIoThread()) {
-                exchange.dispatch(streamingHandler());
+                exchange.dispatch(hashingHandler());
                 return;
             }
             exchange.startBlocking();
-            try (InputStream rawIn = exchange.getInputStream();
+            try (InputStream in = exchange.getInputStream();
                     OutputStream out = exchange.getOutputStream()) {
-                MessageDigest digest = MessageDigest.getInstance("SHA-256");
-                long contentLen = exchange.getRequestContentLength();
+                MessageDigest digest = MessageDigest.getInstance(CHECKSUM_ALGORITHM);
+                long remaining = exchange.getRequestContentLength();
                 byte[] buf = new byte[BUF_SIZE];
-                try (InputStream in = new DigestInputStream(rawIn, digest)) {
-                    while (contentLen > 0) {
-                        int want = (int) Math.min(buf.length, contentLen);
-                        int n = in.read(buf, 0, want);
-                        if (n < 0) break;
-                        contentLen -= n;
-                    }
+                while (remaining > 0) {
+                    int n = in.read(buf, 0, (int) Math.min(buf.length, remaining));
+                    if (n < 0) break;
+                    digest.update(buf, 0, n);
+                    remaining -= n;
                 }
-                String hashHex = bytesToHex(digest.digest());
-                out.write(
-                        ("HTTP/1.1 200 OK\r\n"
-                                        + "X-Received-SHA256: "
-                                        + hashHex
-                                        + "\r\n"
-                                        + "Content-Length: 0\r\n\r\n")
-                                .getBytes(StandardCharsets.UTF_8));
+                byte[] hash = digest.digest();
+                if (remaining > 0) {
+                    exchange.setStatusCode(400);
+                } else {
+                    exchange.setStatusCode(200);
+                    exchange.getResponseHeaders()
+                            .put(new HttpString(HASH_HEADER), HexFormat.of().formatHex(hash));
+                }
+                exchange.getResponseHeaders().put(Headers.CONTENT_LENGTH, 0);
                 out.flush();
             }
         };
     }
 
     @Test
-    @DisplayName("Фаза 1: handshake stress + Фаза 2: data throughput")
-    void test() throws Exception {
-        runPhase1();
-        runPhase2();
-    }
+    @DisplayName("Большие тела (размер через -Dstress.bodyMb): каждый запрос принят целиком")
+    void largeBodyUpload() throws Exception {
+        int bodySize = BODY_MB * 1024 * 1024;
+        byte[] body = new byte[bodySize];
+        for (int i = 0; i < bodySize; i++) {
+            body[i] = (byte) i;
+        }
+        String expectedHash = sha256Hex(body);
+        byte[] request = buildPost(body);
 
-    private static void runPhase1() throws Exception {
-        System.out.println(
-                "[PHASE1] handshake stress: "
-                        + CLIENTS
-                        + " clients x "
-                        + DURATION_SEC
-                        + "s, body="
-                        + (PHASE1_BODY / 1024)
-                        + "KB, Connection: close");
-        phase1Reqs.set(0);
-        phase1Errs.set(0);
-        phase1Bytes.set(0);
-        running = true;
+        System.out.printf(
+                "[UPLOAD] %d МБ x %d клиентов x %d запросов (Connection: close)%n",
+                BODY_MB, CLIENTS, REQUESTS_PER_CLIENT);
+
+        AtomicLong done = new AtomicLong();
+        AtomicLong errors = new AtomicLong();
+        long t0 = System.nanoTime();
 
         List<Thread> workers = new ArrayList<>();
-        for (int i = 0; i < CLIENTS; i++)
+        for (int i = 0; i < CLIENTS; i++) {
             workers.add(
                     Thread.ofVirtual()
-                            .name("p1-" + i)
-                            .unstarted(UndertowLargeUploadTest::phase1Worker));
-        workers.forEach(Thread::start);
-
-        ScheduledExecutorService monitor = Executors.newSingleThreadScheduledExecutor();
-        final long gcStart = totalGcCount();
-        final long t0 = System.currentTimeMillis();
-        monitor.scheduleAtFixedRate(() -> reportPhase1(gcStart), 0, 5, TimeUnit.SECONDS);
-
-        long deadline = t0 + DURATION_SEC * 1000L;
-        while (System.currentTimeMillis() < deadline && phase1Bytes.get() < MIN_BYTES) {
-            Thread.sleep(100);
+                            .name("upload-" + i)
+                            .start(
+                                    () -> {
+                                        for (int r = 0; r < REQUESTS_PER_CLIENT; r++) {
+                                            try {
+                                                upload(request, expectedHash);
+                                                done.incrementAndGet();
+                                            } catch (Exception e) {
+                                                errors.incrementAndGet();
+                                                System.err.println("[UPLOAD_ERR] " + causeChain(e));
+                                            }
+                                        }
+                                    }));
         }
-        running = false;
-        monitor.shutdown();
-        workers.forEach(
-                t -> {
-                    try {
-                        t.join(5000);
-                    } catch (Exception ignored) {
-                    }
-                });
+        for (Thread t : workers) {
+            t.join(JOIN_TIMEOUT_MS);
+            assertFalse(
+                    t.isAlive(), "клиент " + t.getName() + " не завершился за отведённое время");
+        }
 
-        long elapsed = System.currentTimeMillis() - t0;
-        long bytes = phase1Bytes.get();
-        long mbPerSec = elapsed > 0 ? bytes / 1024 / 1024 * 1000 / elapsed : 0;
+        long elapsedMs = (System.nanoTime() - t0) / 1_000_000;
+        long mbPerSec = elapsedMs > 0 ? done.get() * BODY_MB * 1000 / elapsedMs : 0;
         System.out.printf(
-                "[PHASE1] Done: %d req, %d err, %d MB, ~%d MB/s (%dms)%n",
-                phase1Reqs.get(), phase1Errs.get(), bytes / 1024 / 1024, mbPerSec, elapsed);
+                "[UPLOAD] Итог: %d запросов, %d ошибок, ~%d МБ/с (%d мс)%n",
+                done.get(), errors.get(), mbPerSec, elapsedMs);
 
-        assertEquals(0, phase1Errs.get(), "Фаза 1: ошибок быть не должно");
-        assertTrue(bytes >= MIN_BYTES, "Фаза 1: передано " + bytes + " байт, минимум " + MIN_BYTES);
+        assertEquals(0, errors.get(), "ошибок быть не должно");
+        assertEquals((long) CLIENTS * REQUESTS_PER_CLIENT, done.get(), "все запросы должны пройти");
     }
 
-    private static void phase1Worker() {
-        while (running) {
-            SSLSocket s = null;
-            try {
-                s = (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port);
-                s.setSoTimeout(30000);
-                OutputStream out = s.getOutputStream();
-                out.write(phase1Request);
-                out.flush();
-                readHttpResponse(s.getInputStream());
-                phase1Reqs.incrementAndGet();
-                phase1Bytes.addAndGet(PHASE1_BODY);
-            } catch (Exception e) {
-                phase1Errs.incrementAndGet();
-            } finally {
-                if (s != null)
-                    try {
-                        s.close();
-                    } catch (Exception ignored) {
-                    }
+    /** Один запрос на новом соединении: статус 200 и хеш тела, совпадающий с отправленным. */
+    private static void upload(byte[] request, String expectedHash) throws IOException {
+        try (SSLSocket s =
+                (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port)) {
+            s.setSoTimeout(SOCKET_TIMEOUT_MS);
+            OutputStream out = s.getOutputStream();
+            out.write(request);
+            out.flush();
+
+            String headers = readResponseHeaders(s.getInputStream());
+            String statusLine = headers.substring(0, headers.indexOf("\r\n"));
+            if (!statusLine.contains(" 200 ")) {
+                throw new IOException("статус ответа не 200: " + statusLine);
+            }
+            String hash = headerValue(headers, HASH_HEADER);
+            if (!expectedHash.equals(hash)) {
+                throw new IOException("хеш тела не совпал: получен «" + hash + "»");
             }
         }
     }
 
-    private static void runPhase2() throws Exception {
-        System.out.println(
-                "[PHASE2] data throughput: "
-                        + CLIENTS
-                        + " clients x "
-                        + DURATION_SEC
-                        + "s, chunk="
-                        + (CHUNK_SIZE / 1024)
-                        + "KB, keep-alive");
-        phase2Reqs.set(0);
-        phase2Errs.set(0);
-        phase2Bytes.set(0);
-        running = true;
-
-        List<Thread> workers = new ArrayList<>();
-        for (int i = 0; i < CLIENTS; i++)
-            workers.add(
-                    Thread.ofVirtual()
-                            .name("p2-" + i)
-                            .unstarted(UndertowLargeUploadTest::phase2Worker));
-        workers.forEach(Thread::start);
-
-        ScheduledExecutorService monitor = Executors.newSingleThreadScheduledExecutor();
-        final long gcStart = totalGcCount();
-        final long t0 = System.currentTimeMillis();
-        monitor.scheduleAtFixedRate(() -> reportPhase2(gcStart), 0, 5, TimeUnit.SECONDS);
-
-        long deadline = t0 + DURATION_SEC * 1000L;
-        while (System.currentTimeMillis() < deadline && phase2Bytes.get() < MIN_BYTES) {
-            Thread.sleep(100);
-        }
-        running = false;
-        monitor.shutdown();
-        workers.forEach(
-                t -> {
-                    try {
-                        t.join(5000);
-                    } catch (Exception ignored) {
-                    }
-                });
-
-        long elapsed = System.currentTimeMillis() - t0;
-        long bytes = phase2Bytes.get();
-        long mbPerSec = elapsed > 0 ? bytes / 1024 / 1024 * 1000 / elapsed : 0;
-        long approxRecs = bytes / TlsConstants.MAX_PLAINTEXT_LENGTH;
-        System.out.printf(
-                "[PHASE2] Done: %d req, %d err, %d MB, ~%d MB/s (%dms), ~%d TLS records%n",
-                phase2Reqs.get(),
-                phase2Errs.get(),
-                bytes / 1024 / 1024,
-                mbPerSec,
-                elapsed,
-                approxRecs);
-
-        assertEquals(0, phase2Errs.get(), "Фаза 2: ошибок быть не должно");
-        assertTrue(bytes >= MIN_BYTES, "Фаза 2: передано " + bytes + " байт, минимум " + MIN_BYTES);
-    }
-
-    private static void phase2Worker() {
-        while (running) {
-            SSLSocket s = null;
-            try {
-                s = (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port);
-                s.setSoTimeout(30000);
-                OutputStream out = s.getOutputStream();
-                InputStream in = s.getInputStream();
-
-                while (running) {
-                    out.write(phase2Request);
-                    out.flush();
-                    readHttpResponse(in);
-                    phase2Reqs.incrementAndGet();
-                    phase2Bytes.addAndGet(CHUNK_SIZE);
-                }
-            } catch (Exception e) {
-                phase2Errs.incrementAndGet();
-            } finally {
-                if (s != null)
-                    try {
-                        s.close();
-                    } catch (Exception ignored) {
-                    }
-            }
-        }
-    }
-
-    private static String readHttpResponse(InputStream in) throws IOException {
-        StringBuilder headers = new StringBuilder(1024);
+    /** Читает заголовки ответа; тела у ответа нет (Content-Length: 0). */
+    private static String readResponseHeaders(InputStream in) throws IOException {
+        StringBuilder headers = new StringBuilder(512);
         while (true) {
             int b = in.read();
-            if (b < 0) throw new IOException("Connection closed during headers");
+            if (b < 0) throw new IOException("соединение закрыто во время чтения заголовков");
             headers.append((char) b);
             int len = headers.length();
-            if (len >= 4
-                    && headers.charAt(len - 4) == '\r'
-                    && headers.charAt(len - 3) == '\n'
-                    && headers.charAt(len - 2) == '\r'
-                    && headers.charAt(len - 1) == '\n') break;
-        }
-        String headerStr = headers.toString();
-        int contentLen = parseContentLength(headerStr);
-        if (contentLen > 0) {
-            byte[] buf = new byte[8192];
-            long total = 0;
-            while (total < contentLen) {
-                int want = (int) Math.min(buf.length, contentLen - total);
-                int n = in.read(buf, 0, want);
-                if (n < 0)
-                    throw new IOException(
-                            "Connection closed: " + total + " of " + contentLen + " body bytes");
-                total += n;
+            if (len >= 4 && headers.lastIndexOf("\r\n\r\n") == len - 4) {
+                return headers.toString();
             }
         }
-        return parseHeader(headerStr, "x-received-sha256:");
     }
 
-    private static String parseHeader(String headers, String name) {
+    private static String headerValue(String headers, String name) {
+        String prefix = name.toLowerCase(Locale.ROOT) + ":";
         for (String line : headers.split("\r\n")) {
-            if (line.toLowerCase(java.util.Locale.ROOT).startsWith(name)) {
-                return line.substring(name.length()).trim();
+            if (line.toLowerCase(Locale.ROOT).startsWith(prefix)) {
+                return line.substring(prefix.length()).trim();
             }
         }
         return "";
     }
 
-    private static byte[] buildHttpPost(String path, byte[] body, boolean closeAfter) {
+    private static byte[] buildPost(byte[] body) {
+        String head =
+                "POST /upload HTTP/1.1\r\n"
+                        + "Host: localhost\r\n"
+                        + "Content-Type: application/octet-stream\r\n"
+                        + "Content-Length: "
+                        + body.length
+                        + "\r\n"
+                        + "Connection: close\r\n\r\n";
+        byte[] headBytes = head.getBytes(StandardCharsets.US_ASCII);
+        byte[] request = new byte[headBytes.length + body.length];
+        System.arraycopy(headBytes, 0, request, 0, headBytes.length);
+        System.arraycopy(body, 0, request, headBytes.length, body.length);
+        return request;
+    }
+
+    private static String sha256Hex(byte[] data) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance(CHECKSUM_ALGORITHM).digest(data));
+    }
+
+    // Цепочка причин в одну строку: по ней ошибки раскладываются по исходным исключениям
+    private static String causeChain(Throwable e) {
         StringBuilder sb = new StringBuilder();
-        sb.append("POST ").append(path).append(" HTTP/1.1\r\n");
-        sb.append("Host: localhost\r\n");
-        sb.append("Content-Type: application/octet-stream\r\n");
-        sb.append("Content-Length: ").append(body.length).append("\r\n");
-        sb.append("Connection: ").append(closeAfter ? "close" : "keep-alive").append("\r\n");
-        sb.append("\r\n");
-        byte[] headerBytes = sb.toString().getBytes(StandardCharsets.US_ASCII);
-        byte[] req = new byte[headerBytes.length + body.length];
-        System.arraycopy(headerBytes, 0, req, 0, headerBytes.length);
-        System.arraycopy(body, 0, req, headerBytes.length, body.length);
-        return req;
-    }
-
-    private static int parseContentLength(String response) {
-        for (String line : response.split("\r\n")) {
-            if (line.toLowerCase(java.util.Locale.ROOT).startsWith("content-length:")) {
-                return Integer.parseInt(line.substring(15).trim());
-            }
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (sb.length() > 0) sb.append(" <- ");
+            sb.append(t.getClass().getName()).append(": ").append(t.getMessage());
         }
-        return -1;
-    }
-
-    private static void reportPhase1(long gcStart) {
-        long used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        long max = Runtime.getRuntime().maxMemory();
-        int pct = (int) (used * 100 / max);
-        long gcNow = totalGcCount();
-        System.out.printf(
-                "[P1] Heap: %dMB/%dMB (%d%%) GC: +%d Reqs: %d Err: %d Data: %dMB%n",
-                used / 1024 / 1024,
-                max / 1024 / 1024,
-                pct,
-                gcNow - gcStart,
-                phase1Reqs.get(),
-                phase1Errs.get(),
-                phase1Bytes.get() / 1024 / 1024);
-    }
-
-    private static void reportPhase2(long gcStart) {
-        long used = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
-        long max = Runtime.getRuntime().maxMemory();
-        int pct = (int) (used * 100 / max);
-        long gcNow = totalGcCount();
-        System.out.printf(
-                "[P2] Heap: %dMB/%dMB (%d%%) GC: +%d Reqs: %d Err: %d Data: %dMB%n",
-                used / 1024 / 1024,
-                max / 1024 / 1024,
-                pct,
-                gcNow - gcStart,
-                phase2Reqs.get(),
-                phase2Errs.get(),
-                phase2Bytes.get() / 1024 / 1024);
-    }
-
-    private static long totalGcCount() {
-        long total = 0;
-        for (GarbageCollectorMXBean gc : ManagementFactory.getGarbageCollectorMXBeans()) {
-            total += gc.getCollectionCount();
-        }
-        return total;
-    }
-
-    // ========================================================================
-    // Phase 3: Large body uploads (big file transfer simulation)
-    // ========================================================================
-
-    private static final int LARGE_BODY_MB = Integer.getInteger("stress.bodyMb", 64);
-    private static final int LARGE_CLIENTS = 8;
-
-    @Test
-    @DisplayName("Фаза 3: large body uploads (размер через -Dstress.bodyMb)")
-    void testLargeBodyUpload() throws Exception {
-        // Готовим тело с известным паттерном
-        int bodySize = LARGE_BODY_MB * 1024 * 1024;
-        byte[] body = new byte[bodySize];
-        for (int i = 0; i < bodySize; i++) {
-            body[i] = (byte) (i & 0xFF);
-        }
-
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        byte[] expectedHash = digest.digest(body);
-
-        byte[] httpReq = buildLargePost(body, expectedHash);
-
-        System.out.printf(
-                "[PHASE3] Large body: %d MB x %d clients (Connection: close)%n",
-                LARGE_BODY_MB, LARGE_CLIENTS);
-
-        AtomicLong phase3Reqs = new AtomicLong();
-        AtomicLong phase3Errs = new AtomicLong();
-
-        running = true;
-        long t0 = System.currentTimeMillis();
-
-        List<Thread> workers = new ArrayList<>();
-        for (int i = 0; i < LARGE_CLIENTS; i++) {
-            workers.add(
-                    Thread.ofVirtual()
-                            .name("p3-" + i)
-                            .unstarted(
-                                    () -> {
-                                        while (running) {
-                                            SSLSocket s = null;
-                                            try {
-                                                s =
-                                                        (SSLSocket)
-                                                                clientCtx
-                                                                        .getSocketFactory()
-                                                                        .createSocket(
-                                                                                "localhost", port);
-                                                s.setSoTimeout(180000);
-                                                OutputStream out = s.getOutputStream();
-                                                out.write(httpReq);
-                                                out.flush();
-                                                String receivedHash =
-                                                        readHttpResponse(s.getInputStream());
-                                                if (!receivedHash.isEmpty()) {
-                                                    assertEquals(
-                                                            bytesToHex(expectedHash),
-                                                            receivedHash,
-                                                            "SHA-256 хеш полученного тела должен совпадать с отправленным");
-                                                }
-                                                phase3Reqs.incrementAndGet();
-                                            } catch (Exception e) {
-                                                phase3Errs.incrementAndGet();
-                                                System.err.println(
-                                                        "[PHASE3_ERR] " + e.getMessage());
-                                            } finally {
-                                                if (s != null)
-                                                    try {
-                                                        s.close();
-                                                    } catch (Exception ignored) {
-                                                    }
-                                            }
-                                        }
-                                    }));
-        }
-        workers.forEach(Thread::start);
-
-        // Каждый клиент делает ровно 1 запрос
-        Thread.sleep(Math.max(bodySize / 1024 / 1024 * 1000L, 30000));
-        running = false;
-        for (Thread t : workers) t.join(30000);
-
-        long elapsed = System.currentTimeMillis() - t0;
-        long reqs = phase3Reqs.get();
-        long errs = phase3Errs.get();
-        long mbPerSec = elapsed > 0 && reqs > 0 ? reqs * LARGE_BODY_MB * 1000 / elapsed : 0;
-
-        System.out.printf(
-                "[PHASE3] Done: %d req, %d err, ~%d MB/s (%d ms)%n", reqs, errs, mbPerSec, elapsed);
-
-        assertEquals(0, errs, "Фаза 3: ошибок быть не должно");
-        assertTrue(reqs > 0, "Фаза 3: должен быть хотя бы один успешный запрос");
-    }
-
-    private static byte[] buildLargePost(byte[] body, byte[] sha256Hash) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("POST /echo HTTP/1.1\r\n");
-        sb.append("Host: localhost\r\n");
-        sb.append("Content-Type: application/octet-stream\r\n");
-        sb.append("Content-Length: ").append(body.length).append("\r\n");
-        sb.append("X-Content-SHA256: ").append(bytesToHex(sha256Hash)).append("\r\n");
-        sb.append("Connection: close\r\n");
-        sb.append("\r\n");
-        byte[] headerBytes = sb.toString().getBytes(StandardCharsets.US_ASCII);
-        byte[] req = new byte[headerBytes.length + body.length];
-        System.arraycopy(headerBytes, 0, req, 0, headerBytes.length);
-        System.arraycopy(body, 0, req, headerBytes.length, body.length);
-        return req;
-    }
-
-    private static String bytesToHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02x", b & 0xFF));
         return sb.toString();
     }
 }

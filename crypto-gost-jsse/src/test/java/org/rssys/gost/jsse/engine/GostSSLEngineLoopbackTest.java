@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.ByteBuffer;
 import java.security.Security;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLEngineResult;
@@ -20,29 +19,32 @@ import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.ocsp.OcspPolicy;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsSession;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.config.TlsClientConfig;
-import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.record.TlsRecord;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
 /**
  * Loopback-тесты GostSSLEngine: client <-> server, mTLS, ALPN, SNI.
  */
+@DisplayName("GostSSLEngine: рукопожатие и обмен данными в памяти")
 class GostSSLEngineLoopbackTest {
 
     private static TlsCiphersuite cs;
     private static ECParameters params;
-    private static TlsTestHelper.CertBundle serverCertDefault;
-    private static TlsTestHelper.CertBundle serverCertApi;
-    private static TlsTestHelper.CertBundle clientCertBundle;
-    private static TlsTestHelper.CertBundle rootCa;
+    private static PkixCertTestHelper.CertBundle serverCertDefault;
+    private static PkixCertTestHelper.CertBundle serverCertApi;
+    private static PkixCertTestHelper.CertBundle clientCertBundle;
+    private static PkixCertTestHelper.CertBundle rootCa;
     private static PublicKeyParameters caPub;
+    private static GostCertificate caCert;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -51,18 +53,19 @@ class GostSSLEngineLoopbackTest {
         params = ECParameters.tc26a256();
 
         // один CA на все тесты — единая точка доверия, не плодим ключи
-        rootCa = TlsTestHelper.createRootCA(params);
+        rootCa = PkixCertTestHelper.createRootCA(params);
         caPub = rootCa.cert.getPublicKey();
+        caCert = rootCa.cert;
 
         // серверный сертификат default нужен для всех loopback-тестов (без SNI)
         serverCertDefault =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         caPub,
                         rootCa.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         new byte[] {(byte) 0x80},
                         null,
@@ -72,13 +75,13 @@ class GostSSLEngineLoopbackTest {
         // отдельный сертификат для api.example.com — чтобы проверить,
         // что SNI-селектор выбирает сертификат по имени хоста, а не берёт первый
         serverCertApi =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         caPub,
                         rootCa.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"api.example.com"},
                         new byte[] {(byte) 0x80},
                         null,
@@ -87,13 +90,13 @@ class GostSSLEngineLoopbackTest {
 
         // клиентский сертификат для mTLS-тестов (need/wantClientAuth)
         clientCertBundle =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         caPub,
                         rootCa.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         null,
                         new byte[] {(byte) 0x80},
                         null,
@@ -101,39 +104,98 @@ class GostSSLEngineLoopbackTest {
                         null);
     }
 
-    // ========================================================================
-    // Базовая проверка handshake и обмена данными между двумя GostSSLEngine
-    // ========================================================================
+    @Test
+    @DisplayName("mTLS need/want: NewSessionTicket не выдаётся")
+    void testClientAuthSuppressesNst() throws Exception {
+        for (boolean want : new boolean[] {false, true}) {
+            InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+            GostSSLSessionContext serverContext = new GostSSLSessionContext(cs);
+            GostSSLSessionContext clientContext = new GostSSLSessionContext(cs);
+
+            GostX509KeyManager serverKeyManager = new GostX509KeyManager();
+            serverKeyManager.addKeyEntry(
+                    "default",
+                    CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
+                    serverCertDefault.priv);
+            GostX509KeyManager clientKeyManager = new GostX509KeyManager();
+            clientKeyManager.addKeyEntry(
+                    "client",
+                    CertificateBridge.toJca(List.of(clientCertBundle.cert, rootCa.cert)),
+                    clientCertBundle.priv);
+
+            GostSSLEngine serverEngine =
+                    GostSSLEngine.createForServer(
+                            serverKeyManager,
+                            GostX509TrustManager.fromTrustAnchors(
+                                    TrustAnchors.ofCertificate(caCert)),
+                            "localhost",
+                            0,
+                            serverContext);
+            if (want) {
+                serverEngine.setWantClientAuth(true);
+            } else {
+                serverContext.setNeedClientAuth(true);
+            }
+            GostSSLEngine clientEngine =
+                    GostSSLEngine.createForClient(
+                            clientKeyManager,
+                            GostX509TrustManager.fromTrustAnchors(
+                                    TrustAnchors.ofCertificate(caCert)),
+                            "localhost",
+                            0,
+                            clientContext);
+
+            doLoopback(clientEngine, serverEngine, pair);
+            assertEquals(
+                    0,
+                    serverContext.getPskStore().size(),
+                    "при client auth тикет не должен сохраняться в PskStore (want=" + want + ")");
+        }
+    }
 
     @Test
-    @DisplayName("Петля: GostSSLEngine клиент <-> сервер, рукопожатие + данные")
-    void testLoopbackBasic() throws Exception {
+    @DisplayName("mTLS: STAPLING_REQUIRED у сервера не блокирует клиента без staple")
+    void testMtlsWithServerStaplingRequired() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+        GostSSLSessionContext serverContext = new GostSSLSessionContext(cs);
+        GostSSLSessionContext clientContext = new GostSSLSessionContext(cs);
 
         GostX509KeyManager serverKeyManager = new GostX509KeyManager();
         serverKeyManager.addKeyEntry(
                 "default",
                 CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
                 serverCertDefault.priv);
+        GostX509KeyManager clientKeyManager = new GostX509KeyManager();
+        clientKeyManager.addKeyEntry(
+                "client",
+                CertificateBridge.toJca(List.of(clientCertBundle.cert, rootCa.cert)),
+                clientCertBundle.priv);
 
         GostSSLEngine serverEngine =
-                new GostSSLEngine(
+                GostSSLEngine.createForServer(
                         serverKeyManager,
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.fromTrustAnchors(
+                                TrustAnchors.ofCertificate(caCert),
+                                OcspPolicy.STAPLING_REQUIRED,
+                                null),
                         "localhost",
                         0,
-                        false);
-
+                        serverContext);
+        serverContext.setNeedClientAuth(true);
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
-                        new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        clientKeyManager,
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                         "localhost",
                         0,
-                        null);
+                        clientContext);
 
         doLoopback(clientEngine, serverEngine, pair);
     }
+
+    // ========================================================================
+    // Базовая проверка handshake и обмена данными между двумя GostSSLEngine
+    // ========================================================================
 
     // ========================================================================
     // Loopback mTLS — обе стороны с сертификатами
@@ -159,7 +221,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine serverEngine =
                 new GostSSLEngine(
                         serverKeyManager,
-                        new GostX509TrustManager(caPub, false),
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                         "localhost",
                         0,
                         false);
@@ -168,7 +230,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
                         clientKeyManager,
-                        new GostX509TrustManager(caPub, false),
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                         "localhost",
                         0,
                         null);
@@ -200,7 +262,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine serverEngine =
                 new GostSSLEngine(
                         serverKeyManager,
-                        new GostX509TrustManager(caPub, false),
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                         "localhost",
                         0,
                         false);
@@ -209,7 +271,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
                         clientKeyManager,
-                        new GostX509TrustManager(caPub, false),
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                         "localhost",
                         0,
                         null);
@@ -235,7 +297,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine serverEngine =
                 new GostSSLEngine(
                         serverKeyManager,
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         false);
@@ -246,7 +308,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         null);
@@ -281,12 +343,12 @@ class GostSSLEngineLoopbackTest {
 
         GostSSLEngine serverEngine =
                 new GostSSLEngine(
-                        serverKeyManager, new GostX509TrustManager(null, false), "", 0, false);
+                        serverKeyManager, GostX509TrustManager.insecureTrustAll(), "", 0, false);
 
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "api.example.com",
                         0,
                         null);
@@ -315,7 +377,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine serverEngine =
                 new GostSSLEngine(
                         serverKeyManager,
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         false);
@@ -324,7 +386,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         null);
@@ -353,7 +415,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine serverEngine =
                 new GostSSLEngine(
                         serverKeyManager,
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         false);
@@ -362,7 +424,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         null);
@@ -377,52 +439,50 @@ class GostSSLEngineLoopbackTest {
                 () -> serverEngine.getSession().getPeerCertificates());
     }
 
-    // ========================================================================
-    // Interop: GostSSLEngine <-> TlsSession (совместимость рукопожатия)
-    // ========================================================================
-
     @Test
-    @DisplayName("Совместимость: GostSSLEngine клиент -> TlsSession сервер")
-    void testInteropClient() throws Exception {
+    @DisplayName(
+            "Петля: want из контекста сессии (builder.wantClientAuth) -> клиент без сертификата принят")
+    void testLoopbackWantAuthFromSessionContext() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
-        TlsServerConfig serverConfig =
-                new TlsServerConfig(
-                        cs,
-                        Collections.singletonList(serverCertDefault.cert),
-                        serverCertDefault.priv);
-        TlsSession serverSession = TlsSession.createServer(serverConfig, pair.getServerTransport());
+        GostX509KeyManager serverKeyManager = new GostX509KeyManager();
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
+                serverCertDefault.priv);
 
-        AtomicReference<Throwable> serverError = new AtomicReference<>();
-        Thread serverThread =
-                new Thread(
-                        () -> {
-                            try {
-                                serverSession.handshakeAsServer();
-                            } catch (Exception e) {
-                                serverError.set(e);
-                            }
-                        },
-                        "tls-server");
-        serverThread.start();
+        GostSSLSessionContext serverContext =
+                new GostSSLSessionContext(
+                        TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
+        serverContext.setWantClientAuth(true);
+
+        GostSSLEngine serverEngine =
+                GostSSLEngine.createForServer(
+                        serverKeyManager,
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
+                        "localhost",
+                        0,
+                        serverContext);
 
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                         "localhost",
                         0,
                         null);
 
-        clientEngine.beginHandshake();
-        doClientHandshake(clientEngine, pair);
+        doLoopback(clientEngine, serverEngine, pair);
 
-        serverThread.join(5000);
-        if (serverThread.isAlive()) fail("Рукопожатие сервера не завершилось в течение тайм-аута");
-        if (serverError.get() != null) throw new RuntimeException(serverError.get());
-
-        assertTrue(clientEngine.getSession().getCipherSuite().startsWith("TLS_GOSTR341112_256"));
+        assertThrows(
+                SSLPeerUnverifiedException.class,
+                () -> serverEngine.getSession().getPeerCertificates(),
+                "Клиент без сертификата: у сервера нет сертификата пира");
     }
+
+    // ========================================================================
+    // Interop: GostSSLEngine <-> TlsSession (совместимость рукопожатия)
+    // ========================================================================
 
     // ========================================================================
     // Interop: TlsSession клиент -> GostSSLEngine сервер
@@ -441,9 +501,11 @@ class GostSSLEngineLoopbackTest {
 
         GostSSLEngine serverEngine =
                 new GostSSLEngine(
-                        serverKeyManager, new GostX509TrustManager(null, false), "", 0, false);
+                        serverKeyManager, GostX509TrustManager.insecureTrustAll(), "", 0, false);
 
-        TlsClientConfig clientConfig = new TlsClientConfig(cs, caPub).withoutHostnameVerification();
+        TlsClientConfig clientConfig =
+                new TlsClientConfig(cs, TrustAnchors.ofCertificate(caCert))
+                        .withoutHostnameVerification();
         TlsSession clientSession = TlsSession.createClient(clientConfig, pair.getClientTransport());
 
         AtomicReference<Throwable> clientError = new AtomicReference<>();
@@ -479,7 +541,7 @@ class GostSSLEngineLoopbackTest {
         GostSSLEngine engine =
                 GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         null);
@@ -499,7 +561,8 @@ class GostSSLEngineLoopbackTest {
     // ========================================================================
 
     @Test
-    @DisplayName("getHandshakeApplicationProtocol: не null после завершения handshake")
+    @DisplayName(
+            "ALPN: getApplicationProtocol после handshake, getHandshakeApplicationProtocol -> null")
     void testHandshakeAlpnEarly() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
@@ -512,10 +575,10 @@ class GostSSLEngineLoopbackTest {
 
         GostSSLEngine serverEngine =
                 new GostSSLEngine(
-                        skm, new GostX509TrustManager(null, false), "localhost", 0, false);
+                        skm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, false);
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(
-                        ckm, new GostX509TrustManager(null, false), "localhost", 0, null);
+                        ckm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, null);
 
         SSLParameters serverParams = new SSLParameters();
         serverParams.setApplicationProtocols(new String[] {"h2", "http/1.1"});
@@ -559,12 +622,13 @@ class GostSSLEngineLoopbackTest {
         if (clientError.get() != null) throw new RuntimeException(clientError.get());
         if (serverError.get() != null) throw new RuntimeException(serverError.get());
 
-        // если ALPN не сработал — getApplicationProtocol вернёт null
         assertEquals("h2", clientEngine.getApplicationProtocol(), "ALPN клиента должен быть h2");
-        assertEquals(
-                "h2",
+        assertEquals("h2", serverEngine.getApplicationProtocol(), "ALPN сервера должен быть h2");
+        // Контракт JDK: после завершения рукопожатия handshake-значение уже не определено,
+        // итог читается через getApplicationProtocol()
+        assertNull(
                 serverEngine.getHandshakeApplicationProtocol(),
-                "ALPN сервера (getHandshakeApplicationProtocol) должен быть h2");
+                "после рукопожатия getHandshakeApplicationProtocol должен вернуть null");
     }
 
     // ========================================================================
@@ -577,19 +641,19 @@ class GostSSLEngineLoopbackTest {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
         // Два независимых CA
-        TlsTestHelper.CertBundle ca1 = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle ca2 = TlsTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle ca1 = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle ca2 = PkixCertTestHelper.createRootCA(params);
         PublicKeyParameters caPub2 = ca2.cert.getPublicKey();
 
         // Серверный сертификат подписан CA #2
-        TlsTestHelper.CertBundle serverCert =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle serverCert =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         ca2.priv,
                         caPub2,
                         ca2.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         new byte[] {(byte) 0x80},
                         null,
@@ -603,8 +667,10 @@ class GostSSLEngineLoopbackTest {
                 serverCert.priv);
 
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        List.of(ca1.cert.getPublicKey(), caPub2), OcspPolicy.IF_PRESENT, null);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificates(List.of(ca1.cert, ca2.cert)),
+                        OcspPolicy.IF_PRESENT,
+                        null);
 
         GostSSLEngine serverEngine = new GostSSLEngine(serverKm, tm, "localhost", 0, false);
         GostSSLEngine clientEngine =
@@ -619,20 +685,20 @@ class GostSSLEngineLoopbackTest {
     void testMultiCaNegativeThirdCa() throws Exception {
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
 
-        TlsTestHelper.CertBundle ca1 = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle ca2 = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle ca3 = TlsTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle ca1 = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle ca2 = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle ca3 = PkixCertTestHelper.createRootCA(params);
         PublicKeyParameters caPub3 = ca3.cert.getPublicKey();
 
         // Серверный сертификат подписан CA #3 (не в списке доверенных)
-        TlsTestHelper.CertBundle serverCert =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle serverCert =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         ca3.priv,
                         caPub3,
                         ca3.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         new byte[] {(byte) 0x80},
                         null,
@@ -646,8 +712,8 @@ class GostSSLEngineLoopbackTest {
                 serverCert.priv);
 
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        List.of(ca1.cert.getPublicKey(), ca2.cert.getPublicKey()),
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificates(List.of(ca1.cert, ca2.cert)),
                         OcspPolicy.IF_PRESENT,
                         null);
 
@@ -664,6 +730,115 @@ class GostSSLEngineLoopbackTest {
                 "Причина должна быть SSLException, не " + ex.getCause());
     }
 
+    @Test
+    @DisplayName("Клиент с null TrustManager не принимает сертификат сервера")
+    void testClientWithoutTrustManagerFailsClosed() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        GostX509KeyManager serverKeyManager = new GostX509KeyManager();
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
+                serverCertDefault.priv);
+        GostSSLEngine serverEngine =
+                new GostSSLEngine(
+                        serverKeyManager,
+                        GostX509TrustManager.insecureTrustAll(),
+                        "localhost",
+                        0,
+                        false);
+
+        GostSSLEngine clientEngine =
+                GostSSLEngine.createForClient(new GostX509KeyManager(), null, "localhost", 0, null);
+
+        RuntimeException ex =
+                assertThrows(
+                        RuntimeException.class, () -> doLoopback(clientEngine, serverEngine, pair));
+        assertInstanceOf(SSLException.class, ex.getCause(), "ожидается отказ TLS-рукопожатия");
+    }
+
+    @Test
+    @DisplayName("Сервер без mTLS с null TrustManager работает")
+    void testServerWithoutClientAuthAllowsNullTrustManager() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        GostX509KeyManager serverKeyManager = new GostX509KeyManager();
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
+                serverCertDefault.priv);
+        GostSSLEngine serverEngine =
+                new GostSSLEngine(serverKeyManager, null, "localhost", 0, false);
+        GostSSLEngine clientEngine =
+                GostSSLEngine.createForClient(
+                        new GostX509KeyManager(),
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
+                        "localhost",
+                        0,
+                        null);
+
+        doLoopback(clientEngine, serverEngine, pair);
+    }
+
+    @Test
+    @DisplayName("wantClientAuth с null TrustManager и сертификатом клиента падает")
+    void testServerWantClientAuthWithoutTrustManagerRejectsClientCert() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        GostX509KeyManager serverKeyManager = new GostX509KeyManager();
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
+                serverCertDefault.priv);
+        GostSSLEngine serverEngine =
+                new GostSSLEngine(serverKeyManager, null, "localhost", 0, false);
+        serverEngine.setWantClientAuth(true);
+
+        GostX509KeyManager clientKeyManager = new GostX509KeyManager();
+        clientKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(clientCertBundle.cert, rootCa.cert)),
+                clientCertBundle.priv);
+        GostSSLEngine clientEngine =
+                GostSSLEngine.createForClient(
+                        clientKeyManager,
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
+                        "localhost",
+                        0,
+                        null);
+
+        RuntimeException ex =
+                assertThrows(
+                        RuntimeException.class, () -> doLoopback(clientEngine, serverEngine, pair));
+        assertInstanceOf(
+                SSLException.class, ex.getCause(), "ожидается отказ из-за отсутствия доверия");
+    }
+
+    @Test
+    @DisplayName("wantClientAuth с null TrustManager без сертификата клиента работает")
+    void testServerWantClientAuthWithoutTrustManagerNoClientCert() throws Exception {
+        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
+
+        GostX509KeyManager serverKeyManager = new GostX509KeyManager();
+        serverKeyManager.addKeyEntry(
+                "default",
+                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
+                serverCertDefault.priv);
+        GostSSLEngine serverEngine =
+                new GostSSLEngine(serverKeyManager, null, "localhost", 0, false);
+        serverEngine.setWantClientAuth(true);
+
+        GostSSLEngine clientEngine =
+                GostSSLEngine.createForClient(
+                        new GostX509KeyManager(),
+                        GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
+                        "localhost",
+                        0,
+                        null);
+
+        doLoopback(clientEngine, serverEngine, pair);
+    }
+
     // ========================================================================
     // Утилиты
     // ========================================================================
@@ -672,7 +847,9 @@ class GostSSLEngineLoopbackTest {
      * Выполняет полный handshake между двумя GostSSLEngine в параллельных потоках.
      * <p>
      * Вызывает beginHandshake на обеих сторонах, запускает handshake-циклы в двух
-     * vthread-потоках и ждёт их завершения.
+     * потоках и ждёт их завершения. Упавшая сторона закрывает свой транспорт, чтобы вторая не
+     * ждала таймаут транспорта; причиной отказа считается первая записанная ошибка
+     * ({@link HandshakeFailures}).
      *
      * @param clientEngine клиентский GostSSLEngine (предварительно сконфигурированный, beginHandshake не нужен)
      * @param serverEngine серверный GostSSLEngine (предварительно сконфигурированный, beginHandshake не нужен)
@@ -682,14 +859,13 @@ class GostSSLEngineLoopbackTest {
      * Предусловие: оба engine сконфигурированы (keyManager, trustManager заданы).
      * Постусловие: оба engine в состоянии FINISHED или NOT_HANDSHAKING.
      */
-    private void doLoopback(
+    static void doLoopback(
             GostSSLEngine clientEngine, GostSSLEngine serverEngine, InMemoryTlsTransport.Pair pair)
             throws Exception {
         clientEngine.beginHandshake();
         serverEngine.beginHandshake();
 
-        AtomicReference<Throwable> clientError = new AtomicReference<>();
-        AtomicReference<Throwable> serverError = new AtomicReference<>();
+        HandshakeFailures failures = new HandshakeFailures();
 
         Thread clientThread =
                 new Thread(
@@ -697,7 +873,10 @@ class GostSSLEngineLoopbackTest {
                             try {
                                 doClientHandshake(clientEngine, pair);
                             } catch (Exception e) {
-                                clientError.set(e);
+                                failures.recordAndClose(
+                                        HandshakeFailures.SIDE_CLIENT,
+                                        e,
+                                        pair.getClientTransport());
                             }
                         },
                         "loopback-client");
@@ -707,7 +886,10 @@ class GostSSLEngineLoopbackTest {
                             try {
                                 doServerHandshake(serverEngine, pair);
                             } catch (Exception e) {
-                                serverError.set(e);
+                                failures.recordAndClose(
+                                        HandshakeFailures.SIDE_SERVER,
+                                        e,
+                                        pair.getServerTransport());
                             }
                         },
                         "loopback-server");
@@ -726,10 +908,7 @@ class GostSSLEngineLoopbackTest {
             serverThread.interrupt();
             fail("Тайм-аут рукопожатия сервера");
         }
-        if (clientError.get() != null)
-            throw new RuntimeException("Клиент завершился с ошибкой", clientError.get());
-        if (serverError.get() != null)
-            throw new RuntimeException("Сервер завершился с ошибкой", serverError.get());
+        failures.throwIfFailed();
     }
 
     /**
@@ -746,7 +925,7 @@ class GostSSLEngineLoopbackTest {
      * Предусловие: engine.beginHandshake() уже вызван.
      * Постусловие: engine в состоянии FINISHED или NOT_HANDSHAKING, либо исключение.
      */
-    private void doClientHandshake(GostSSLEngine engine, InMemoryTlsTransport.Pair pair)
+    static void doClientHandshake(GostSSLEngine engine, InMemoryTlsTransport.Pair pair)
             throws Exception {
         ByteBuffer netBuf =
                 ByteBuffer.allocate(
@@ -771,15 +950,11 @@ class GostSSLEngineLoopbackTest {
                     break;
                 case NEED_UNWRAP:
                     byte[] inData = pair.getClientTransport().receiveRecord();
-                    if (inData != null) {
-                        netBuf.clear();
-                        netBuf.put(inData);
-                        netBuf.flip();
-                        appBuf.clear();
-                        engine.unwrap(netBuf, appBuf);
-                    } else {
-                        Thread.sleep(10);
-                    }
+                    netBuf.clear();
+                    netBuf.put(inData);
+                    netBuf.flip();
+                    appBuf.clear();
+                    engine.unwrap(netBuf, appBuf);
                     break;
                 case NEED_TASK:
                     Runnable task = engine.getDelegatedTask();
@@ -802,7 +977,7 @@ class GostSSLEngineLoopbackTest {
      * Предусловие: engine.beginHandshake() уже вызван.
      * Постусловие: engine в состоянии FINISHED или NOT_HANDSHAKING, либо исключение.
      */
-    private void doServerHandshake(GostSSLEngine engine, InMemoryTlsTransport.Pair pair)
+    static void doServerHandshake(GostSSLEngine engine, InMemoryTlsTransport.Pair pair)
             throws Exception {
         ByteBuffer netBuf =
                 ByteBuffer.allocate(
@@ -827,15 +1002,11 @@ class GostSSLEngineLoopbackTest {
                     break;
                 case NEED_UNWRAP:
                     byte[] inData = pair.getServerTransport().receiveRecord();
-                    if (inData != null) {
-                        netBuf.clear();
-                        netBuf.put(inData);
-                        netBuf.flip();
-                        appBuf.clear();
-                        engine.unwrap(netBuf, appBuf);
-                    } else {
-                        Thread.sleep(10);
-                    }
+                    netBuf.clear();
+                    netBuf.put(inData);
+                    netBuf.flip();
+                    appBuf.clear();
+                    engine.unwrap(netBuf, appBuf);
                     break;
                 case NEED_TASK:
                     Runnable task = engine.getDelegatedTask();
@@ -852,37 +1023,6 @@ class GostSSLEngineLoopbackTest {
     // Regression: wrap() возвращает FINISHED при HANDSHAKE->DATA
     // ========================================================================
 
-    @Test
-    @DisplayName("Регрессия: рукопожатие -> wrap возвращает FINISHED, затем NOT_HANDSHAKING")
-    void testWrapReturnsFinished() throws Exception {
-        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
-        GostX509KeyManager skm = new GostX509KeyManager();
-        skm.addKeyEntry(
-                "default",
-                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
-                serverCertDefault.priv);
-        GostSSLEngine server =
-                new GostSSLEngine(
-                        skm, new GostX509TrustManager(null, false), "localhost", 0, false);
-        GostSSLEngine client =
-                GostSSLEngine.createForClient(
-                        new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
-                        "localhost",
-                        0,
-                        null);
-        doLoopback(client, server, pair);
-        // после handshake getHandshakeStatus должен быть NOT_HANDSHAKING
-        assertEquals(
-                SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
-                client.getHandshakeStatus(),
-                "После handshake getHandshakeStatus должен быть NOT_HANDSHAKING");
-        assertEquals(
-                SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING,
-                server.getHandshakeStatus(),
-                "После handshake серверный статус должен быть NOT_HANDSHAKING");
-    }
-
     // ========================================================================
     // Regression: клиентский Finished шифруется handshake-ключами
     // ========================================================================
@@ -898,11 +1038,11 @@ class GostSSLEngineLoopbackTest {
                 serverCertDefault.priv);
         GostSSLEngine server =
                 new GostSSLEngine(
-                        skm, new GostX509TrustManager(null, false), "localhost", 0, false);
+                        skm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, false);
         GostSSLEngine client =
                 GostSSLEngine.createForClient(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         null);
@@ -928,226 +1068,29 @@ class GostSSLEngineLoopbackTest {
         byte[] outData = new byte[netBuf.remaining()];
         netBuf.get(outData);
         pair.getClientTransport().sendRecord(outData);
-        for (int i = 0; i < 80; i++) {
-            byte[] inData = pair.getServerTransport().receiveRecord();
-            if (inData != null) {
-                netBuf.clear();
-                netBuf.put(inData);
-                netBuf.flip();
-                appBuf.clear();
-                assertTrue(
-                        server.unwrap(netBuf, appBuf).bytesProduced() > 0,
-                        "Сервер должен расшифровать AppData");
-                appBuf.flip();
-                byte[] received = new byte[appBuf.remaining()];
-                appBuf.get(received);
-                assertEquals("Hello", new String(received), "Содержимое AppData должно совпадать");
-                return;
-            }
-            Thread.sleep(10);
-        }
-        fail("Сервер не принял AppData за 80 итераций");
+        byte[] inData = pair.getServerTransport().receiveRecord();
+        netBuf.clear();
+        netBuf.put(inData);
+        netBuf.flip();
+        appBuf.clear();
+        assertTrue(
+                server.unwrap(netBuf, appBuf).bytesProduced() > 0,
+                "Сервер должен расшифровать AppData");
+        appBuf.flip();
+        byte[] received = new byte[appBuf.remaining()];
+        appBuf.get(received);
+        assertEquals("Hello", new String(received), "Содержимое AppData должно совпадать");
     }
 
     // ========================================================================
     // Regression: closeOutbound() -> wrap() не перешифровывает close_notify
     // ========================================================================
 
-    @Test
-    @DisplayName("Регрессия: closeOutbound() -> wrap() не перешифровывает close_notify")
-    void testCloseOutboundWrapDoesNotDoubleEncrypt() throws Exception {
-        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
-
-        // Сервер с сертификатом
-        GostX509KeyManager skm = new GostX509KeyManager();
-        skm.addKeyEntry(
-                "default",
-                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
-                serverCertDefault.priv);
-        GostSSLEngine server =
-                new GostSSLEngine(
-                        skm, new GostX509TrustManager(null, false), "localhost", 0, false);
-
-        // Клиент без сертификата (чистый клиент)
-        GostSSLEngine client =
-                GostSSLEngine.createForClient(
-                        new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
-                        "localhost",
-                        0,
-                        null);
-
-        doLoopback(client, server, pair);
-
-        // Сервер закрывает исходящий канал (Undertow-сценарий: closeOutbound -> wrap)
-        server.closeOutbound();
-        assertTrue(server.isOutboundDone(), "isOutboundDone после closeOutbound");
-
-        ByteBuffer netBuf =
-                ByteBuffer.allocate(
-                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
-        netBuf.clear();
-        // именно этот wrap() перешифровывал close_notify до фикса
-        SSLEngineResult wrapResult = server.wrap(ByteBuffer.allocate(0), netBuf);
-        assertTrue(
-                wrapResult.bytesProduced() > 0,
-                "wrap() должен произвести байты (close_notify запись)");
-        netBuf.flip();
-
-        // Передаём клиенту — если двойное шифрование, unwrap() бросит SSLException
-        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
-        // assertDoesNotThrow — ключевая проверка регрессии
-        assertDoesNotThrow(
-                () -> client.unwrap(netBuf, appBuf),
-                "unwrap() close_notify не должен бросать исключение (bad_record_mac)");
-        assertTrue(client.isInboundDone(), "клиент должен зафиксировать получение close_notify");
-    }
-
     // ========================================================================
     // Regression: unwrap() возвращает Status.CLOSED при получении close_notify
     // ========================================================================
 
-    @Test
-    @DisplayName("Регрессия: unwrap() close_notify возвращает Status.CLOSED, а не Status.OK")
-    void testUnwrapCloseNotifyReturnsClosed() throws Exception {
-        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
-
-        GostX509KeyManager skm = new GostX509KeyManager();
-        skm.addKeyEntry(
-                "default",
-                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
-                serverCertDefault.priv);
-        GostSSLEngine server =
-                new GostSSLEngine(
-                        skm, new GostX509TrustManager(null, false), "localhost", 0, false);
-
-        GostSSLEngine client =
-                GostSSLEngine.createForClient(
-                        new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
-                        "localhost",
-                        0,
-                        null);
-
-        doLoopback(client, server, pair);
-
-        ByteBuffer netBuf =
-                ByteBuffer.allocate(
-                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
-        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
-
-        // отправляем app data перед close_notify, чтобы гарантировать,
-        // что close_notify придёт отдельной TLS-записью, а не склеенной с данными.
-        // Иначе тест был бы зелёным и без фикса (как маленькие файлы работали).
-        ByteBuffer sendBuf = ByteBuffer.wrap(new byte[] {0x42});
-        netBuf.clear();
-        client.wrap(sendBuf, netBuf);
-        netBuf.flip();
-
-        appBuf.clear();
-        server.unwrap(netBuf, appBuf);
-        assertEquals(0x42, appBuf.get(0), "сервер должен получить отправленный байт app data");
-
-        // Клиентское closeOutbound -> wrap -> close_notify в отдельной записи
-        client.closeOutbound();
-        netBuf.clear();
-        SSLEngineResult wrapResult = client.wrap(ByteBuffer.allocate(0), netBuf);
-        assertTrue(wrapResult.bytesProduced() > 0, "wrap() должен произвести close_notify запись");
-        netBuf.flip();
-
-        // Сервер принимает close_notify — баг: возвращал Status.OK
-        appBuf.clear();
-        SSLEngineResult unwrapResult = server.unwrap(netBuf, appBuf);
-        assertEquals(
-                SSLEngineResult.Status.CLOSED,
-                unwrapResult.getStatus(),
-                "unwrap() close_notify должен вернуть Status.CLOSED, а не Status.OK");
-        assertTrue(server.isInboundDone(), "сервер должен зафиксировать получение close_notify");
-    }
-
     // ========================================================================
     // Regression: bytesProduced корректен при нескольких AppData записях
     // ========================================================================
-
-    @Test
-    @DisplayName("Регрессия: unwrap bytesProduced совпадает с реальными байтами")
-    void testMultiRecordUnwrapProducedCount() throws Exception {
-        InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
-
-        GostX509KeyManager skm = new GostX509KeyManager();
-        skm.addKeyEntry(
-                "default",
-                CertificateBridge.toJca(List.of(serverCertDefault.cert, rootCa.cert)),
-                serverCertDefault.priv);
-        GostSSLEngine server =
-                new GostSSLEngine(
-                        skm, new GostX509TrustManager(null, false), "localhost", 0, false);
-        GostSSLEngine client =
-                GostSSLEngine.createForClient(
-                        new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
-                        "localhost",
-                        0,
-                        null);
-
-        doLoopback(client, server, pair);
-
-        byte[] data1 = new byte[100];
-        byte[] data2 = new byte[200];
-        // Заполняем тестовыми данными
-        for (int i = 0; i < data1.length; i++) data1[i] = (byte) i;
-        for (int i = 0; i < data2.length; i++) data2[i] = (byte) (i + 100);
-
-        ByteBuffer tmp = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
-        ByteBuffer net1 =
-                ByteBuffer.allocate(
-                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
-        ByteBuffer net2 =
-                ByteBuffer.allocate(
-                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
-
-        // Шифруем две отдельные записи в раздельные буферы
-        tmp.clear();
-        tmp.put(data1);
-        tmp.flip();
-        client.wrap(tmp, net1);
-        net1.flip();
-
-        tmp.clear();
-        tmp.put(data2);
-        tmp.flip();
-        client.wrap(tmp, net2);
-        net2.flip();
-
-        // подаём записи раздельно (а не склеенными), чтобы тест был
-        // детерминирован — каждая unwrap обрабатывает одну запись,
-        // без зависимости от внутренних оптимизаций обработки.
-        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
-
-        // Первая запись — отдельный буфер
-        appBuf.clear();
-        SSLEngineResult r1 = server.unwrap(net1, appBuf);
-        assertTrue(
-                r1.bytesProduced() > 0, "bytesProduced должен быть > 0 после unwrap первой записи");
-        appBuf.flip();
-        assertEquals(
-                data1.length, appBuf.remaining(), "сервер должен получить 100 байт первой записи");
-        assertEquals(
-                data1.length,
-                r1.bytesProduced(),
-                "bytesProduced должен равняться реальному количеству байт в dst");
-
-        // Вторая запись — отдельный буфер
-        appBuf.clear();
-        SSLEngineResult r2 = server.unwrap(net2, appBuf);
-        assertTrue(
-                r2.bytesProduced() > 0, "bytesProduced должен быть > 0 после unwrap второй записи");
-        appBuf.flip();
-        assertEquals(
-                data2.length, appBuf.remaining(), "сервер должен получить 200 байт второй записи");
-        assertEquals(
-                data2.length,
-                r2.bytesProduced(),
-                "bytesProduced должен равняться реальному количеству байт в dst");
-    }
 }

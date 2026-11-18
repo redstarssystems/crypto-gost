@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
-import java.security.Security;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
@@ -13,9 +12,10 @@ import java.util.Arrays;
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.SecretKeySpec;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.rssys.gost.JcaTestSupport;
 import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jca.key.GostECPrivateKeySpec;
 import org.rssys.gost.jca.key.GostECPublicKey;
@@ -25,16 +25,10 @@ import org.rssys.gost.jca.spec.GostCurves;
 import org.rssys.gost.util.CryptoRandom;
 
 @DisplayName("GostKey — ключевые классы, KeyFactory, SecretKeyFactory, DER-кодирование")
+@ExtendWith(JcaTestSupport.class)
 class GostKeyTest {
 
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
-
-    @BeforeAll
-    static void registerProvider() {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
-    }
 
     // -----------------------------------------------------------------------
     // GostSecretKey
@@ -199,7 +193,11 @@ class GostKeyTest {
         assertFalse(priv.isDestroyed());
         priv.destroy();
         assertTrue(priv.isDestroyed());
-        assertNull(priv.getEncoded(), "getEncoded должен вернуть null после уничтожения");
+        assertThrows(
+                IllegalStateException.class,
+                priv::getEncoded,
+                "getEncoded после уничтожения должен бросать IllegalStateException, как у GostSecretKey");
+        assertThrows(IllegalStateException.class, priv::toPrivateKeyParameters);
     }
 
     // -----------------------------------------------------------------------
@@ -222,19 +220,10 @@ class GostKeyTest {
         GostECPublicKey restored =
                 (GostECPublicKey) kf.generatePublic(new X509EncodedKeySpec(encoded));
 
-        // Сравниваем координаты
-        org.rssys.gost.signature.ECPoint qOrig =
-                ((GostECPublicKey) pair.getPublic()).toPublicKeyParameters().getQ().normalize();
-        org.rssys.gost.signature.ECPoint qRestored =
-                restored.toPublicKeyParameters().getQ().normalize();
         assertEquals(
-                qOrig.getX(),
-                qRestored.getX(),
-                "X-координата должна совпадать после DER roundtrip");
-        assertEquals(
-                qOrig.getY(),
-                qRestored.getY(),
-                "Y-координата должна совпадать после DER roundtrip");
+                ((GostECPublicKey) pair.getPublic()).toPublicKeyParameters(),
+                restored.toPublicKeyParameters(),
+                "Ключ должен совпадать после DER roundtrip");
     }
 
     @Test
@@ -274,12 +263,8 @@ class GostKeyTest {
         GostECPublicKey pubRestored =
                 (GostECPublicKey) kf.generatePublic(new X509EncodedKeySpec(pubEncoded));
         assertEquals(
-                ((GostECPublicKey) pair.getPublic())
-                        .toPublicKeyParameters()
-                        .getQ()
-                        .normalize()
-                        .getX(),
-                pubRestored.toPublicKeyParameters().getQ().normalize().getX());
+                ((GostECPublicKey) pair.getPublic()).toPublicKeyParameters(),
+                pubRestored.toPublicKeyParameters());
 
         // Закрытый ключ
         byte[] privEncoded = pair.getPrivate().getEncoded();
@@ -298,15 +283,14 @@ class GostKeyTest {
         KeyPair pair = kpg.generateKeyPair();
 
         GostECPublicKey orig = (GostECPublicKey) pair.getPublic();
-        org.rssys.gost.signature.ECPoint q = orig.toPublicKeyParameters().getQ().normalize();
+        org.rssys.gost.signature.ECPoint q = orig.toPublicKeyParameters().getQ();
         String oid = GostCurves.oidOf(orig.toPublicKeyParameters().getParams());
 
         KeyFactory kf = KeyFactory.getInstance("ECGOST3410-2012", PROVIDER);
         GostECPublicKeySpec spec = new GostECPublicKeySpec(q.getX(), q.getY(), oid);
         GostECPublicKey restored = (GostECPublicKey) kf.generatePublic(spec);
 
-        assertEquals(q.getX(), restored.toPublicKeyParameters().getQ().normalize().getX());
-        assertEquals(q.getY(), restored.toPublicKeyParameters().getQ().normalize().getY());
+        assertEquals(orig.toPublicKeyParameters(), restored.toPublicKeyParameters());
     }
 
     @Test

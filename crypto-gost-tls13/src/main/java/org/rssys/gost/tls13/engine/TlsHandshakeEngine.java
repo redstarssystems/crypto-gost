@@ -1,17 +1,20 @@
 package org.rssys.gost.tls13.engine;
 
 import java.io.IOException;
-import java.math.BigInteger;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongSupplier;
+import java.util.stream.Collectors;
+import org.rssys.gost.api.KeyAgreement;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.cert.GostCertificate;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
@@ -20,21 +23,26 @@ import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.tls13.TlsUtils;
 import org.rssys.gost.tls13.cert.TlsCertUtils;
 import org.rssys.gost.tls13.cert.TlsCertificateValidator;
+import org.rssys.gost.tls13.config.ClientCertificateRequest;
 import org.rssys.gost.tls13.config.ClientCertificateSelector;
 import org.rssys.gost.tls13.config.OIDFilter;
 import org.rssys.gost.tls13.config.SniCertificateSelector;
 import org.rssys.gost.tls13.config.TlsClientCredentials;
 import org.rssys.gost.tls13.config.TlsServerCredentials;
-import org.rssys.gost.tls13.crypto.HkdfStreebog;
+import org.rssys.gost.tls13.crypto.TlsKeyExporter;
 import org.rssys.gost.tls13.crypto.TlsKeySchedule;
+import org.rssys.gost.tls13.message.ServerNameCheck;
 import org.rssys.gost.tls13.message.TlsEncoding;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
 import org.rssys.gost.tls13.message.TlsMessageParser;
+import org.rssys.gost.tls13.psk.PskBinding;
 import org.rssys.gost.tls13.psk.PskEntry;
 import org.rssys.gost.tls13.psk.PskStore;
 import org.rssys.gost.tls13.psk.TlsPskHelper;
 import org.rssys.gost.tls13.record.TlsTrafficKeys;
-import org.rssys.gost.util.Pack;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
+import org.rssys.gost.util.SafeText;
 
 /**
  * Пошаговый state machine для handshake TLS 1.3.
@@ -62,7 +70,7 @@ import org.rssys.gost.util.Pack;
  *       -> receive Certificate -> CLIENT_WAIT_CERTIFICATE_VERIFY
  *       -> receive CV -> CLIENT_WAIT_FINISHED
  *       -> receive Finished -> CLIENT_SEND_FINISHED
- *       -> poll() -> HANDSHAKE_DONE
+ *       -> poll() -> POST_HANDSHAKE
  *
  *   SERVER:
  *     SERVER_WAIT_CLIENT_HELLO -> receive CH1 -> [HRR нужен?]
@@ -72,7 +80,7 @@ import org.rssys.gost.util.Pack;
  *         SERVER_WAIT_CLIENT_FINISHED | SERVER_WAIT_CLIENT_CERTIFICATE
  *       -> receive Cert -> SERVER_WAIT_CLIENT_CERTIFICATE_VERIFY
  *       -> receive CV -> SERVER_WAIT_CLIENT_FINISHED
- *       -> receive Finished -> HANDSHAKE_DONE
+ *       -> receive Finished -> POST_HANDSHAKE
  * </pre>
  * <p>
  * Не thread-safe. Каждый экземпляр — для одного handshake.
@@ -101,23 +109,24 @@ public final class TlsHandshakeEngine {
 
         public final Type type;
 
-        /** Тело NewSessionTicket (null если тип не NEW_SESSION_TICKET) */
-        public final byte[] nstBody;
+        /** Разобранный NewSessionTicket (null если тип не NEW_SESSION_TICKET) */
+        public final TlsMessageParser.ParsedNewSessionTicket ticket;
 
         private static final PostHandshakeResult KEY_UPDATE_HANDLED_INSTANCE =
                 new PostHandshakeResult(Type.KEY_UPDATE_HANDLED, null);
 
-        private PostHandshakeResult(Type type, byte[] nstBody) {
+        private PostHandshakeResult(Type type, TlsMessageParser.ParsedNewSessionTicket ticket) {
             this.type = type;
-            this.nstBody = nstBody;
+            this.ticket = ticket;
         }
 
         static PostHandshakeResult keyUpdateHandled() {
             return KEY_UPDATE_HANDLED_INSTANCE;
         }
 
-        static PostHandshakeResult newSessionTicket(byte[] body) {
-            return new PostHandshakeResult(Type.NEW_SESSION_TICKET, body);
+        static PostHandshakeResult newSessionTicket(
+                TlsMessageParser.ParsedNewSessionTicket ticket) {
+            return new PostHandshakeResult(Type.NEW_SESSION_TICKET, ticket);
         }
     }
 
@@ -140,9 +149,8 @@ public final class TlsHandshakeEngine {
         SERVER_WAIT_CLIENT_CERTIFICATE_VERIFY,
         SERVER_WAIT_CLIENT_FINISHED,
 
-        HANDSHAKE_DONE,
         /** Финальное состояние после handshake.
-         *  В отличие от HANDSHAKE_DONE, engine остаётся жив:
+         *  Engine остаётся жив:
          *  ctx уничтожен (транскрипт не нужен), но app traffic secrets
          *  сохранены для KeyUpdate. receive() принимает только
          *  post-handshake сообщения (KeyUpdate, NewSessionTicket). */
@@ -156,6 +164,10 @@ public final class TlsHandshakeEngine {
 
     private final Role role;
     private State state;
+
+    /** Стадия, на которой приём сообщения закончился отказом; {@code null}, пока отказа не было. */
+    private State failedStage;
+
     private State pendingNextState; // для SERVER_SEND_FLIGHT -> следующее состояние ожидания
     private TlsCiphersuite ciphersuite;
     private final int hashLen;
@@ -169,7 +181,8 @@ public final class TlsHandshakeEngine {
     /** true = wantClientAuth (пустой сертификат не фатален, только когда requestClientAuth=true) */
     private final boolean optionalClientAuth;
 
-    private final ArrayDeque<byte[]> outgoingQueue = new ArrayDeque<>();
+    // Упорядоченный выходной поток: сообщения и смены ключа записи на своих местах
+    private final ArrayDeque<HandshakeOutput> outgoingQueue = new ArrayDeque<>();
 
     /** Клиентский Finished, добавленный в очередь, но ещё НЕ в transcript.
      *  Добавляется в transcript в finishHandshake() ПОСЛЕ выработки app traffic keys,
@@ -182,10 +195,14 @@ public final class TlsHandshakeEngine {
     // Ключи
     private TlsTrafficKeys handshakeServerKeys;
     private TlsTrafficKeys handshakeClientKeys;
+    // Ключи чтения меняются при приёме сообщения: вызывающий применяет их сразу и проверяет
+    // границу записи. Ключи записи в поля не попадают: их смена стоит в выходном потоке
+    // (HandshakeOutput.WriteKeyChange) сразу за сообщением, после которого она действует.
     private TlsTrafficKeys readKeys;
-    private TlsTrafficKeys writeKeys;
     private boolean readKeysChanged;
-    private boolean writeKeysChanged;
+
+    /** Сервер: ключи чтения приложения, вступающие после проверки Finished клиента. */
+    private TlsTrafficKeys readKeysAfterPeerFinished;
 
     // Handshake traffic secrets (RFC 8446 §7.1: вычисляется из hash(CH+SH), необходимо для проверки
     // Finished)
@@ -196,9 +213,11 @@ public final class TlsHandshakeEngine {
     private List<GostCertificate> receivedCertificates;
     private boolean needsCertValidation;
 
-    // Результаты
-    private TlsCiphersuite negotiatedCiphersuite;
     private byte[] resumptionMasterSecret;
+
+    /** Секрет экспорта ключевого материала (RFC 8446 §7.5); null до завершения рукопожатия. */
+    private byte[] exporterMasterSecret;
+
     // Application traffic secrets для KeyUpdate (RFC 8446 §7.2)
     private byte[] serverAppTrafficSecret;
     private byte[] clientAppTrafficSecret;
@@ -214,7 +233,25 @@ public final class TlsHandshakeEngine {
 
     private boolean pskAccepted;
 
+    // Клиент предлагает ровно одну PSK identity
+    private static final int OFFERED_PSK_IDENTITIES = 1;
+
+    // Решение сервера по PSK в первом ClientHello, переносится во второй после HRR (RFC 8446
+    // §4.1.2):
+    // снимок всех identity CH1 одним массивом (null, если pre_shared_key не было или HRR не
+    // отправлен)
+    // и выбранная принятая (null, если PSK не принят). Выбор в CH2 не пересматривается и хранилище
+    // не
+    // опрашивается
+    private byte[] ch1PskIdentitiesSnapshot;
+    private byte[] ch1AcceptedPskIdentity;
+    // Номер принятой identity в списке клиента для selected_identity в ServerHello
+    private int acceptedPskIndex = TlsMessageBuilder.NO_SELECTED_PSK;
+
     private boolean pskOffered;
+    // PSK был задан, но в ClientHello не поместился: рукопожатие идёт без него, а владелец тикета
+    // обязан его убрать из кэша, иначе та же осечка повторялась бы на каждом соединении
+    private boolean pskOfferWithdrawn;
 
     private long obfuscatedTicketAge;
 
@@ -222,6 +259,12 @@ public final class TlsHandshakeEngine {
 
     // mTLS — сервер запросил клиентский сертификат, и клиент его отправит
     private boolean clientAuthRequested;
+
+    // Сервер: просить staple клиентского сертификата (status_request в CertificateRequest).
+    private boolean requestClientOcsp;
+
+    // Клиент: сервер запросил staple (status_request в CertificateRequest).
+    private boolean clientOcspRequested;
 
     // Транскрипт для app traffic keys (RFC 8446 §7.1 Table 2):
     // ClientHello...server Finished включительно, БЕЗ client Cert/CV/Finished.
@@ -235,6 +278,13 @@ public final class TlsHandshakeEngine {
 
     // ALPN (RFC 7301)
     private List<String> clientAlpnProtocols;
+
+    /**
+     * Типы расширений последнего отправленного ClientHello (второго, если был HRR).
+     * EncryptedExtensions отвечает именно на него; берутся из итоговых байт, а не из конфигурации.
+     */
+    private Set<Integer> sentExtensionTypes = Set.of();
+
     private List<String> serverAlpnProtocols;
     private String selectedAlpnProtocol;
 
@@ -259,25 +309,40 @@ public final class TlsHandshakeEngine {
      */
     private boolean interopAcceptGostBaseSigScheme;
 
-    // Post-handshake (KeyUpdate)
-    // Флаги и ключи для двухфазного подтверждения KeyUpdate:
-    // 1. engine выставляет pendingWriteUpdate -> caller отправляет KU-фрейм через старый
-    // writerRecord
-    // 2. caller вызывает confirmWriteUpdate() -> новые writeKeys вступают в силу
-    private boolean pendingWriteUpdate;
-    private TlsTrafficKeys pendingWriteKeys;
-    private byte[] pendingWriterSecret; // app traffic secret для замены после confirm
+    // Post-handshake (KeyUpdate): своё обновление стоит в потоке как [KeyUpdate][смена ключа] и
+    // ждёт отдачи из poll(). Второе обновление до отдачи первого вывелось бы из того же секрета
+    // записи, и пир сдвинул бы ключ чтения дважды, а мы — один раз
+    private boolean keyUpdateQueued;
 
-    // Счётчик KeyUpdate — защита от флуда (RFC 8446 §5 явно не задаёт лимит,
-    // но без него JSSE-путь уязвим к CPU-амплификации: каждый KU требует HKDF + MGM init)
-    private int keyUpdateCount;
-    private static final int MAX_KEY_UPDATES = 32;
+    // Скользящее окно чужих KeyUpdate - защита от потока сообщений (RFC 8446 §4.6.3 нормы не
+    // задаёт, но каждый KeyUpdate требует HKDF и инициализации MGM). Окно, а не абсолютный предел
+    // на соединение: приложение с периодической сменой ключа на долгом соединении естественно
+    // порождает много обновлений, и общий счётчик убил бы его на фиксированном по номеру
+    // обновлении.
+    // Собственные обновления не считаются: их выбирает доверенное приложение.
+    private boolean peerKeyUpdateWindowOpen;
+    private long peerKeyUpdateWindowStartNanos;
+    private int peerKeyUpdatesInWindow;
+    private LongSupplier nanoClock = System::nanoTime;
 
     private static final GostLogger LOG =
             GostLogger.getLogger("org.rssys.gost.tls13.engine.TlsHandshakeEngine");
 
-    private static final byte[] KU_NOT_REQUESTED = new byte[] {0};
-    private static final byte[] KU_REQUESTED = new byte[] {1};
+    /** Счётчик меток соединений процесса: метка нужна только журналу. */
+    private static final AtomicLong CONNECTION_IDS = new AtomicLong();
+
+    /**
+     * Диагностическая метка соединения: {@code conn#N}. Не session ID, в протокол не попадает.
+     * Объявлена до {@link #log}: инициализаторы выполняются в порядке объявления.
+     */
+    private final String connectionLabel = "conn#" + CONNECTION_IDS.incrementAndGet();
+
+    /** Логгер соединения: те же имя и уровень, плюс префикс {@code [conn#N]}. */
+    private final GostLogger log = LOG.withContext(connectionLabel);
+
+    private static final byte[] KU_NOT_REQUESTED =
+            new byte[] {TlsConstants.KEY_UPDATE_NOT_REQUESTED};
+    private static final byte[] KU_REQUESTED = new byte[] {TlsConstants.KEY_UPDATE_REQUESTED};
 
     // HRR (HelloRetryRequest): true после получения HRR (клиент, защита от цикла)
     private boolean hrrReceived;
@@ -285,6 +350,12 @@ public final class TlsHandshakeEngine {
     private boolean hrrSent;
     // Группа, запрошенная в HRR — для проверки CH2
     private int hrrRequestedGroup;
+    // Сервер должен отправить dummy change_cipher_spec после первого handshake-сообщения
+    // (RFC 8446 §D.4: клиент прислал непустой legacy_session_id). AtomicBoolean: флаг взводится
+    // при unwrap (под inboundLock GostSSLEngine), а читается и сбрасывается при wrap (под
+    // outboundLock); getAndSet(false) делает «взять» атомарным и не зависит от внешних блокировок
+    // вызывающего.
+    private final AtomicBoolean serverCcsPending = new AtomicBoolean();
 
     // true если мы уже инициировали KeyUpdate (для crossed-in-flight:
     // RFC 8446 §4.6.3: "If a party has already sent a KeyUpdate,
@@ -306,6 +377,7 @@ public final class TlsHandshakeEngine {
      * @param ocspResponse       OCSP-ответ для степплинга (сервер, null = без OCSP)
      * @param requestClientAuth  запрашивать сертификат клиента (сервер, mTLS)
      * @param sniSelector        селектор сертификата по SNI (сервер, может быть null)
+     * @throws IllegalArgumentException если {@code hashLen} не равен длине хеша набора шифров
      */
     public TlsHandshakeEngine(
             Role role,
@@ -345,6 +417,7 @@ public final class TlsHandshakeEngine {
      * @param sniSelector        селектор сертификата по SNI (сервер, может быть null)
      * @param optionalClientAuth true = пустой сертификат не фатален (wantClientAuth).
      *                           Читается только при requestClientAuth=true.
+     * @throws IllegalArgumentException если {@code hashLen} не равен длине хеша набора шифров
      */
     public TlsHandshakeEngine(
             Role role,
@@ -358,6 +431,12 @@ public final class TlsHandshakeEngine {
             boolean requestClientAuth,
             SniCertificateSelector sniSelector,
             boolean optionalClientAuth) {
+        // Длина хеша задаёт дайджест транскрипта и длины секретов, а ключи KeyUpdate выводятся
+        // по длине из набора: расхождение дало бы неверные ключи без единой ошибки
+        if (hashLen != ciphersuite.getHashLen()) {
+            throw new IllegalArgumentException(
+                    "hashLen " + hashLen + " does not match the ciphersuite hash length");
+        }
         this.role = role;
         this.ciphersuite = ciphersuite;
         this.messageBuilder = messageBuilder;
@@ -372,7 +451,6 @@ public final class TlsHandshakeEngine {
 
         this.ctx = new HandshakeContext(hashLen);
         this.state = (role == Role.CLIENT) ? State.CLIENT_START : State.SERVER_WAIT_CLIENT_HELLO;
-        this.negotiatedCiphersuite = ciphersuite;
     }
 
     /**
@@ -383,6 +461,21 @@ public final class TlsHandshakeEngine {
      */
     public void setOcspResponse(byte[] response) {
         this.ocspResponse = response;
+    }
+
+    /**
+     * Включает запрос OCSP-staple клиентского сертификата (сервер, RFC 8446 §4.4.2.1):
+     * в CertificateRequest добавляется пустое {@code status_request}, а присланный клиентом
+     * staple принимается. Действует только при {@code requestClientAuth}. Политика
+     * обязательности staple определяется вызывающим кодом при проверке сертификата,
+     * engine отвечает только за формат на проводе.
+     * <p>
+     * Вызывается до начала handshake.
+     *
+     * @param request true - запрашивать staple
+     */
+    public void setRequestClientOcsp(boolean request) {
+        this.requestClientOcsp = request;
     }
 
     /**
@@ -447,6 +540,7 @@ public final class TlsHandshakeEngine {
      *                       (пробрасывается из TlsMessageBuilder)
      */
     public void receive(byte[] handshakeFrame) throws TlsException, java.io.IOException {
+        final State stageBefore = state;
         try {
             switch (state) {
                 case CLIENT_WAIT_SERVER_HELLO:
@@ -487,11 +581,16 @@ public final class TlsHandshakeEngine {
                             TlsConstants.ALERT_UNEXPECTED_MESSAGE,
                             "Unexpected receive in state " + state);
             }
+            if (state != stageBefore) {
+                log.log(Level.DEBUG, "Handshake stage {0} -> {1}", stageBefore, state);
+            }
         } catch (IOException e) {
+            failedStage = stageBefore;
             state = State.ERROR;
             errorMessage = e.getMessage();
             throw e;
         } catch (RuntimeException e) {
+            failedStage = stageBefore;
             state = State.ERROR;
             errorMessage = "Unexpected error: " + e.getMessage();
             throw new TlsException(
@@ -502,23 +601,65 @@ public final class TlsHandshakeEngine {
     }
 
     /**
-     * Извлекает следующий исходящий handshake-фрейм из очереди.
+     * Извлекает следующий элемент выходного потока: сообщение рукопожатия или смену ключа записи.
+     * Получатель обязан обрабатывать элементы строго по порядку: сообщение — отправить текущим
+     * ключом записи (пока его нет — открытым), смену ключа — применить к следующим записям.
      *
-     * @return handshake-фрейм (type + length + body) или null, если очередь пуста
+     * @return элемент потока или null, если поток пуст
      */
-    public byte[] poll() {
-        if (!outgoingQueue.isEmpty()) {
-            return outgoingQueue.pollFirst();
+    public HandshakeOutput poll() {
+        HandshakeOutput next = outgoingQueue.pollFirst();
+        if (next != null) {
+            // Смена ключа после KeyUpdate отдана: своё обновление больше не ждёт отправки
+            // (RFC 8446 §4.6.3). Отдача, а не отправка: получатель отправляет поток по порядку,
+            // поэтому KeyUpdate уйдёт раньше всего, что встанет за ним
+            if (next instanceof HandshakeOutput.WriteKeyChange && state == State.POST_HANDSHAKE) {
+                keyUpdateQueued = false;
+                initiatedKeyUpdate = false;
+            }
+            return next;
         }
+        // Переходы при отдаче потока тоже пишутся: без них в журнале нет ни «сервер отправил
+        // свой полёт и ждёт клиента», ни завершения рукопожатия у клиента
+        final State stageBefore = state;
         // Сервер: после опустошения очереди переходим в состояние ожидания
         if (state == State.SERVER_SEND_FLIGHT) {
             state = pendingNextState;
         }
-        // Клиент: после отправки Finished переходим в HANDSHAKE_DONE
+        // Клиент: после отправки Finished завершаем handshake (переход в POST_HANDSHAKE)
         if (state == State.CLIENT_SEND_FINISHED) {
             finishHandshake();
         }
+        if (state != stageBefore) {
+            log.log(Level.DEBUG, "Handshake stage {0} -> {1}", stageBefore, state);
+        }
         return null;
+    }
+
+    /**
+     * Показывает, что сервер должен отправить dummy change_cipher_spec сразу после первого
+     * handshake-сообщения (RFC 8446 §D.4), но ещё не отправил его.
+     *
+     * <p>Не меняет состояние: транспорт использует метод, чтобы проверить место в выходном буфере
+     * до записи.</p>
+     *
+     * @return true, если клиент прислал непустой {@code legacy_session_id} и CCS не отправлен
+     */
+    public boolean isServerCompatCcsPending() {
+        return serverCcsPending.get();
+    }
+
+    /**
+     * Однократно подтверждает отправку dummy change_cipher_spec (RFC 8446 §D.4).
+     *
+     * <p>Вызывается транспортом сразу после записи в сеть первого handshake-сообщения сервера
+     * (HRR или ServerHello). Повторные вызовы возвращают false, поэтому после HRR CCS не
+     * отправляется второй раз вместе с ServerHello.</p>
+     *
+     * @return true, если CCS нужно отправить сейчас
+     */
+    public boolean takeServerCompatCcs() {
+        return serverCcsPending.getAndSet(false);
     }
 
     /** @return текущее состояние handshake */
@@ -526,9 +667,33 @@ public final class TlsHandshakeEngine {
         return state;
     }
 
+    /**
+     * Стадия, на которой рукопожатие закончилось отказом: состояние движка в момент приёма
+     * сообщения, не принятого из-за ошибки. Нужна журналу, потому что после отказа {@link
+     * #getState()} всегда {@link State#ERROR}.
+     *
+     * @return стадия отказа или {@code null}, если отказа приёма сообщения не было
+     */
+    public State getFailedStage() {
+        return failedStage;
+    }
+
+    /**
+     * Диагностическая метка соединения для журнала.
+     *
+     * <p>Монотонный номер, а не идентификатор сессии: в протокол не попадает, ключей и
+     * персональных данных не несёт. Владелец (TlsSession, GostSSLEngine) ставит её префиксом
+     * к своим записям.
+     *
+     * @return метка вида {@code conn#17}
+     */
+    public String getConnectionLabel() {
+        return connectionLabel;
+    }
+
     /** @return true если handshake успешно завершён (включая POST_HANDSHAKE) */
     public boolean isDone() {
-        return state == State.HANDSHAKE_DONE || state == State.POST_HANDSHAKE;
+        return state == State.POST_HANDSHAKE;
     }
 
     /** @return true если handshake в состоянии ошибки */
@@ -553,30 +718,66 @@ public final class TlsHandshakeEngine {
     }
 
     /**
-     * @return ключи для записи (шифрование) или null, если ещё не доступны
-     */
-    public TlsTrafficKeys getWriteKeys() {
-        return writeKeys;
-    }
-
-    /**
      * @return true если ключи чтения изменились с момента последнего acknowledge
      */
     public boolean hasReadKeysChanged() {
         return readKeysChanged;
     }
 
-    /**
-     * @return true если ключи записи изменились с момента последнего acknowledge
-     */
-    public boolean hasWriteKeysChanged() {
-        return writeKeysChanged;
+    /** Сбрасывает флаг смены ключей чтения (вызывается после их применения). */
+    public void acknowledgeReadKeyChange() {
+        readKeysChanged = false;
     }
 
-    /** Сбрасывает флаги смены ключей (вызывается после применения ключей). */
-    public void acknowledgeKeyChange() {
-        readKeysChanged = false;
-        writeKeysChanged = false;
+    /**
+     * Ставит новые ключи чтения. Ячейка одна: прежняя смена обязана быть применена вызывающим,
+     * иначе её ключи молча пропали бы и записи пира расшифровывались бы не тем ключом.
+     */
+    private void changeReadKeys(TlsTrafficKeys keys) {
+        if (readKeysChanged) {
+            throw new IllegalStateException("Previous read key change not acknowledged");
+        }
+        readKeys = keys;
+        readKeysChanged = true;
+    }
+
+    private void queueMessage(byte[] frame) {
+        outgoingQueue.addLast(new HandshakeOutput.Message(frame));
+    }
+
+    /** Ставит в поток смену ключа записи сразу за последним поставленным сообщением. */
+    private void queueWriteKeyChange(TlsTrafficKeys keys) {
+        // Набор шифров к этому моменту согласован: ключи выведены по нему же
+        outgoingQueue.addLast(new HandshakeOutput.WriteKeyChange(keys, ciphersuite));
+    }
+
+    /**
+     * Вырабатывает мастер-секрет, секрет экспорта и секреты трафика приложения по транскрипту
+     * ClientHello...Finished сервера (RFC 8446 §7.1, таблица 2). Секрет рукопожатия после этого не
+     * нужен: секреты трафика рукопожатия уже выработаны, а schedule затирает его здесь же.
+     *
+     * @return ключи приложения: [0] сервера, [1] клиента
+     */
+    private TlsTrafficKeys[] deriveApplicationKeys() throws TlsException {
+        // Хэш снимается сразу после Finished сервера; хэш, взятый позже, мог бы уже включать
+        // сообщения клиента и молча дал бы неверные секреты, поэтому его отсутствие — ошибка кода.
+        // TlsException, а не IllegalStateException: это обычный фатальный путь рукопожатия
+        if (appTranscriptHash == null) {
+            throw new TlsException(
+                    TlsConstants.ALERT_INTERNAL_ERROR, "Application transcript hash not captured");
+        }
+        ctx.getKeySchedule().deriveMasterSecret();
+        deriveExporterMasterSecret(appTranscriptHash);
+        this.serverAppTrafficSecret =
+                ctx.getKeySchedule().getServerApplicationTrafficSecret(appTranscriptHash);
+        this.clientAppTrafficSecret =
+                ctx.getKeySchedule().getClientApplicationTrafficSecret(appTranscriptHash);
+        TlsUtils.wipeArray(appTranscriptHash);
+        appTranscriptHash = null;
+        return new TlsTrafficKeys[] {
+            ctx.getKeySchedule().deriveTrafficKeys(serverAppTrafficSecret),
+            ctx.getKeySchedule().deriveTrafficKeys(clientAppTrafficSecret)
+        };
     }
 
     // ========================================================================
@@ -592,61 +793,16 @@ public final class TlsHandshakeEngine {
     }
 
     /**
-     * @return true если есть отложенная смена write-ключей.
-     *         Вызывается после KEY_UPDATE_HANDLED.
-     *         Caller должен: (1) отправить KU-фрейм через старый writerRecord,
-     *         (2) вызвать {@link #confirmWriteUpdate()}.
-     */
-    public boolean hasPendingWriteUpdate() {
-        return pendingWriteUpdate;
-    }
-
-    /**
-     * Подтверждает смену write-ключей.
-     * Вызывается ПОСЛЕ отправки KU-фрейма (который должен быть отправлен
-     * через старый writerRecord — RFC 8446 §4.6.3: ответный KU отправляется
-     * ДО обновления ключей записи).
+     * Инициирует KeyUpdate (RFC 8446 §4.6.3): ставит в поток сообщение KeyUpdate и сразу за ним
+     * смену ключа записи. Сообщение уходит прежним ключом, следующие записи — новым.
      * <p>
-     * После вызова {@link #hasWriteKeysChanged()} == true,
-     * caller создаёт новый writerRecord из {@link #getWriteKeys()}.
-     */
-    public void confirmWriteUpdate() {
-        if (!pendingWriteUpdate) return;
-
-        // Переносим pending keys в рабочие
-        writeKeys = pendingWriteKeys;
-        writeKeysChanged = true;
-
-        // Замена app traffic secret для будущих KeyUpdate
-        byte[] writerSecret = role == Role.SERVER ? serverAppTrafficSecret : clientAppTrafficSecret;
-        TlsUtils.wipeArray(writerSecret);
-        if (role == Role.SERVER) {
-            serverAppTrafficSecret = pendingWriterSecret;
-        } else {
-            clientAppTrafficSecret = pendingWriterSecret;
-        }
-
-        pendingWriteKeys = null;
-        pendingWriterSecret = null;
-        pendingWriteUpdate = false;
-
-        // Crossed-in-flight: если мы получили KU от пира после того, как сами
-        // инициировали, не отправляем дублирующий ответ
-        initiatedKeyUpdate = false;
-    }
-
-    /**
-     * Инициирует KeyUpdate (RFC 8446 §4.6.3).
-     * <p>
-     * Вырабатывает новые write-ключи (сохраняет как pending) и ставит в очередь
-     * KU-фрейм. Caller отправляет KU через старый writerRecord, затем вызывает
-     * {@link #confirmWriteUpdate()}.
-     * <p>
-     * Двухфазность: KU-фрейм должен быть отправлен ДО применения новых ключей,
-     * чтобы пир мог расшифровать его старыми ключами.
+     * Секрет записи сдвигается сразу (RFC 8446 §7.2): следующий KeyUpdate выводится уже из нового.
+     * Если своё обновление ещё стоит в потоке, новое не ставится, а объединяется с ним: запрос
+     * {@code update_requested} повышает стоящее сообщение и не теряется. Второе обновление вывелось
+     * бы из того же секрета, и пир сдвинул бы ключ чтения дважды, а мы — один раз.
      *
      * @param request true = update_requested (пир обязан ответить своим KeyUpdate)
-     * @throws TlsException если handshake не завершён или превышен лимит KU
+     * @throws TlsException если handshake не завершён
      */
     public void initiateKeyUpdate(boolean request) throws TlsException {
         if (state != State.POST_HANDSHAKE) {
@@ -654,43 +810,91 @@ public final class TlsHandshakeEngine {
                     TlsConstants.ALERT_UNEXPECTED_MESSAGE,
                     "Cannot initiate KeyUpdate before handshake completion");
         }
-        if (keyUpdateCount >= MAX_KEY_UPDATES) {
-            throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE, "Too many KeyUpdates");
-        }
-        keyUpdateCount++;
         initiatedKeyUpdate = true;
+        if (keyUpdateQueued) {
+            if (request) {
+                requestUpdateInQueuedKeyUpdate(outgoingQueue);
+            }
+            return;
+        }
+        queueKeyUpdate(request ? KU_REQUESTED : KU_NOT_REQUESTED);
+    }
 
-        // Вырабатываем новый writer secret из текущего (RFC 8446 §7.2)
+    /**
+     * Повышает стоящее в очереди сообщение KeyUpdate до {@code update_requested}. Тело KeyUpdate —
+     * один байт сразу за заголовком (RFC 8446 §4.6.3).
+     *
+     * @param queue очередь отправки (движка или получателя потока)
+     */
+    public static void requestUpdateInQueuedKeyUpdate(Iterable<HandshakeOutput> queue) {
+        for (HandshakeOutput item : queue) {
+            if (item instanceof HandshakeOutput.Message message
+                    && message.frame()[0] == TlsConstants.HT_KEY_UPDATE) {
+                message.frame()[TlsConstants.HANDSHAKE_HEADER_SIZE] =
+                        TlsConstants.KEY_UPDATE_REQUESTED;
+            }
+        }
+    }
+
+    /**
+     * @return {@code true}, пока своё обновление ключа (KeyUpdate и смена ключа за ним) стоит в
+     *     потоке и не отдано из {@link #poll()}. Получатель, который забирает поток только при
+     *     отправке, по этому признаку не инициирует второе обновление.
+     */
+    public boolean isKeyUpdateQueued() {
+        return keyUpdateQueued;
+    }
+
+    /**
+     * Ставит в поток KeyUpdate и смену ключа записи на следующий секрет (RFC 8446 §7.2). Общая
+     * часть собственного обновления и ответа на запрос пира.
+     * <p>
+     * Предусловие: прежнее обновление отдано ({@code keyUpdateQueued == false}).
+     */
+    private void queueKeyUpdate(byte[] kuBody) {
+        queueMessage(new TlsHandshakeMessage(TlsConstants.HT_KEY_UPDATE, kuBody).encode());
         byte[] writerSecret = role == Role.SERVER ? serverAppTrafficSecret : clientAppTrafficSecret;
-        this.pendingWriterSecret =
-                HkdfStreebog.expandLabel(
-                        writerSecret,
-                        HkdfStreebog.PREFIXED_TRAFFIC_UPD,
-                        HkdfStreebog.EMPTY_CONTEXT,
-                        hashLen,
-                        hashLen);
+        byte[] nextWriterSecret = TlsKeySchedule.nextTrafficSecret(writerSecret, hashLen);
+        TlsUtils.wipeArray(writerSecret);
+        if (role == Role.SERVER) {
+            serverAppTrafficSecret = nextWriterSecret;
+        } else {
+            clientAppTrafficSecret = nextWriterSecret;
+        }
+        TlsTrafficKeys nextWriteKeys =
+                TlsKeySchedule.deriveTrafficKeys(nextWriterSecret, ciphersuite);
+        queueWriteKeyChange(nextWriteKeys);
+        nextWriteKeys.destroy();
+        keyUpdateQueued = true;
+        log.log(Level.DEBUG, "KeyUpdate queued: update_requested={0}", kuBody[0] != 0);
+    }
 
-        byte[] newKey =
-                HkdfStreebog.expandLabel(
-                        pendingWriterSecret,
-                        HkdfStreebog.PREFIXED_KEY,
-                        HkdfStreebog.EMPTY_CONTEXT,
-                        ciphersuite.getKeyLen(),
-                        hashLen);
-        byte[] newIv =
-                HkdfStreebog.expandLabel(
-                        pendingWriterSecret,
-                        HkdfStreebog.PREFIXED_IV,
-                        HkdfStreebog.EMPTY_CONTEXT,
-                        ciphersuite.getIvLen(),
-                        hashLen);
-        this.pendingWriteKeys = new TlsTrafficKeys(newKey, newIv);
-        this.pendingWriteUpdate = true;
+    /**
+     * Ограничивает частоту KeyUpdate пира скользящим окном. При превышении fatal alert
+     * {@code unexpected_message}: поток обновлений это злоупотребление, а не расширяемость
+     * протокола (fail-closed). Собственные обновления окно не учитывает.
+     */
+    private void enforcePeerKeyUpdateRate() throws TlsException {
+        long now = nanoClock.getAsLong();
+        if (!peerKeyUpdateWindowOpen
+                || now - peerKeyUpdateWindowStartNanos
+                        > TlsConstants.KEY_UPDATE_RATE_WINDOW_NANOS) {
+            peerKeyUpdateWindowOpen = true;
+            peerKeyUpdateWindowStartNanos = now;
+            peerKeyUpdatesInWindow = 0;
+        }
+        if (++peerKeyUpdatesInWindow > TlsConstants.MAX_PEER_KEY_UPDATES_PER_WINDOW) {
+            throw new TlsException(
+                    TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                    "Peer KeyUpdate rate limit exceeded: "
+                            + peerKeyUpdatesInWindow
+                            + " within window");
+        }
+    }
 
-        // Формируем KU-фрейм (он пойдёт в очередь и будет отправлен через poll)
-        byte[] kuBody = request ? KU_REQUESTED : KU_NOT_REQUESTED;
-        byte[] kuMsg = new TlsHandshakeMessage(TlsConstants.HT_KEY_UPDATE, kuBody).encode();
-        outgoingQueue.addLast(kuMsg);
+    /** Для тестов: подменяет источник времени окна, чтобы не ждать реальную секунду. */
+    void setNanoClockForTest(LongSupplier clock) {
+        this.nanoClock = clock;
     }
 
     /**
@@ -699,10 +903,20 @@ public final class TlsHandshakeEngine {
      * <p>
      * Не использует transcript (ctx уже уничтожен) — KeyUpdate и NST
      * не добавляются в транскрипт после handshake (RFC 8446 §4.4.1).
+     * <p>
+     * Частота KeyUpdate пира ограничена скользящим окном
+     * ({@link TlsConstants#MAX_PEER_KEY_UPDATES_PER_WINDOW} за
+     * {@link TlsConstants#KEY_UPDATE_RATE_WINDOW_NANOS}); у прямых пользователей движка (не через
+     * {@code TlsSession.read()}) это единственная защита от потока KeyUpdate.
+     * <p>
+     * NewSessionTicket принимается только в роли CLIENT: по RFC 8446 §4.6.1
+     * его отправляет исключительно сервер. NST от клиента на сервере — это
+     * unexpected_message, иначе клиент смог бы инжектить тикеты в серверный
+     * PskStore в обход политики выдачи.
      *
      * @param handshakeFrame полный handshake-фрейм (type + length + body)
      * @return результат обработки: KEY_UPDATE_HANDLED или NEW_SESSION_TICKET
-     * @throws TlsException при нарушении протокола
+     * @throws TlsException при нарушении протокола, в том числе при превышении окна KeyUpdate
      * @throws IOException   при ошибке подписи/верификации
      */
     public PostHandshakeResult receivePostHandshake(byte[] handshakeFrame)
@@ -713,7 +927,16 @@ public final class TlsHandshakeEngine {
             return PostHandshakeResult.keyUpdateHandled();
         }
         if (hm.getType() == TlsConstants.HT_NEW_SESSION_TICKET) {
-            return PostHandshakeResult.newSessionTicket(hm.getBody());
+            if (isServer()) {
+                throw new TlsException(
+                        TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                        "NewSessionTicket is not allowed from client");
+            }
+            // Разбор здесь, до того как результат попадёт к вызывающему: искажённый NST (RFC 8446
+            // §4.6.1) фатален независимо от того, нужен ли тикет хранилищу, а правило одно для всех
+            // слоёв (TlsSession, jsse)
+            return PostHandshakeResult.newSessionTicket(
+                    TlsMessageParser.parseNewSessionTicket(hm.getBody()));
         }
         throw new TlsException(
                 TlsConstants.ALERT_UNEXPECTED_MESSAGE,
@@ -729,9 +952,8 @@ public final class TlsHandshakeEngine {
      *   инициировали свой KeyUpdate (crossed-in-flight — RFC: "already sent,
      *   does not need to send another")
      * <p>
-     * ВАЖНО: reader-ключи обновляются немедленно, writer-ключи становятся pending
-     * (двухфазное подтверждение: caller отправляет KU-ответ старыми ключами,
-     * затем confirmWriteUpdate).
+     * Ключи чтения обновляются немедленно; ответный KeyUpdate встаёт в поток вместе со сменой
+     * ключа записи сразу за ним, поэтому он уходит прежним ключом.
      */
     private void handlePostHandshakeKeyUpdate(byte[] body) throws TlsException {
         if (body.length != 1) {
@@ -739,43 +961,28 @@ public final class TlsHandshakeEngine {
                     TlsConstants.ALERT_DECODE_ERROR,
                     "KeyUpdate: invalid body length " + body.length);
         }
-        if (keyUpdateCount >= MAX_KEY_UPDATES) {
-            throw new TlsException(TlsConstants.ALERT_UNEXPECTED_MESSAGE, "Too many KeyUpdates");
+        // RFC 8446 §4.6.3: допустимы только 0 и 1, любое другое значение - illegal_parameter.
+        // Проверка до учёта частоты: некорректное сообщение не должно считаться штатным обновлением
+        if (body[0] != TlsConstants.KEY_UPDATE_NOT_REQUESTED
+                && body[0] != TlsConstants.KEY_UPDATE_REQUESTED) {
+            throw new TlsException(
+                    TlsConstants.ALERT_ILLEGAL_PARAMETER,
+                    "KeyUpdate: invalid request_update value");
         }
-        keyUpdateCount++;
+        enforcePeerKeyUpdateRate();
 
-        boolean requested = (body[0] & 0xFF) != 0;
+        boolean requested = body[0] == TlsConstants.KEY_UPDATE_REQUESTED;
+        log.log(Level.DEBUG, "KeyUpdate received: update_requested={0}", requested);
 
         // RFC 8446 §7.2: направление читатель/писатель зависит от роли
         // Сервер: читает client-ключи, пишет server-ключи
         // Клиент: читает server-ключи, пишет client-ключи
         byte[] readerSecret = role == Role.SERVER ? clientAppTrafficSecret : serverAppTrafficSecret;
 
-        // Деривация нового reader secret (RFC 8446 §7.2: "traffic upd" + пустой hash)
-        byte[] newReaderSecret =
-                HkdfStreebog.expandLabel(
-                        readerSecret,
-                        HkdfStreebog.PREFIXED_TRAFFIC_UPD,
-                        HkdfStreebog.EMPTY_CONTEXT,
-                        hashLen,
-                        hashLen);
-
-        // reader-ключи обновляются всегда — пир сменил свои write-ключи
-        byte[] newReaderKey =
-                HkdfStreebog.expandLabel(
-                        newReaderSecret,
-                        HkdfStreebog.PREFIXED_KEY,
-                        HkdfStreebog.EMPTY_CONTEXT,
-                        ciphersuite.getKeyLen(),
-                        hashLen);
-        byte[] newReaderIv =
-                HkdfStreebog.expandLabel(
-                        newReaderSecret,
-                        HkdfStreebog.PREFIXED_IV,
-                        HkdfStreebog.EMPTY_CONTEXT,
-                        ciphersuite.getIvLen(),
-                        hashLen);
-        TlsTrafficKeys newReadKeys = new TlsTrafficKeys(newReaderKey, newReaderIv);
+        // Новый reader secret и ключи (RFC 8446 §7.2); reader-ключи обновляются всегда: пир сменил
+        // свои write-ключи
+        byte[] newReaderSecret = TlsKeySchedule.nextTrafficSecret(readerSecret, hashLen);
+        TlsTrafficKeys newReadKeys = TlsKeySchedule.deriveTrafficKeys(newReaderSecret, ciphersuite);
 
         // Замена старого reader secret на новый (для цепочки будущих KU)
         TlsUtils.wipeArray(readerSecret);
@@ -785,53 +992,28 @@ public final class TlsHandshakeEngine {
             serverAppTrafficSecret = newReaderSecret;
         }
 
-        // Устанавливаем новые readKeys — все последующие записи расшифровываются новыми ключами
-        readKeys = newReadKeys;
-        readKeysChanged = true;
+        // Все последующие записи расшифровываются новыми ключами. Прежний объект затираем: записи
+        // получателя держат свои копии ключа
+        TlsTrafficKeys previousReadKeys = readKeys;
+        changeReadKeys(newReadKeys);
+        if (previousReadKeys != null) previousReadKeys.destroy();
 
         if (requested) {
             // RFC 8446 §4.6.3: "If a party has already sent a KeyUpdate,
             // it does not need to send another when it receives a KeyUpdate from the other peer."
-            if (!initiatedKeyUpdate) {
-                // Нормальный случай: пир запросил — готовим ответ KU(not_requested)
-                byte[] kuBody = KU_NOT_REQUESTED;
-                byte[] kuMsg = new TlsHandshakeMessage(TlsConstants.HT_KEY_UPDATE, kuBody).encode();
-                outgoingQueue.addLast(kuMsg);
-
-                // Деривация нового writer secret (pending — не применяем до отправки ответа)
-                byte[] writerSecret =
-                        role == Role.SERVER ? serverAppTrafficSecret : clientAppTrafficSecret;
-                this.pendingWriterSecret =
-                        HkdfStreebog.expandLabel(
-                                writerSecret,
-                                HkdfStreebog.PREFIXED_TRAFFIC_UPD,
-                                HkdfStreebog.EMPTY_CONTEXT,
-                                hashLen,
-                                hashLen);
-
-                byte[] newWriterKey =
-                        HkdfStreebog.expandLabel(
-                                pendingWriterSecret,
-                                HkdfStreebog.PREFIXED_KEY,
-                                HkdfStreebog.EMPTY_CONTEXT,
-                                ciphersuite.getKeyLen(),
-                                hashLen);
-                byte[] newWriterIv =
-                        HkdfStreebog.expandLabel(
-                                pendingWriterSecret,
-                                HkdfStreebog.PREFIXED_IV,
-                                HkdfStreebog.EMPTY_CONTEXT,
-                                ciphersuite.getIvLen(),
-                                hashLen);
-                this.pendingWriteKeys = new TlsTrafficKeys(newWriterKey, newWriterIv);
-                this.pendingWriteUpdate = true;
+            // Один ответ на несколько запросов: пока своё обновление стоит в потоке, оно и служит
+            // ответом
+            if (!initiatedKeyUpdate && !keyUpdateQueued) {
+                queueKeyUpdate(KU_NOT_REQUESTED);
             }
-            // Crossed-in-flight: мы уже инициировали KU, не отправляем дублирующий ответ.
-            // Собственный pendingWriteKeys (от initiateKeyUpdate) остаётся в силе.
+            // Crossed-in-flight: мы уже инициировали KU, дублирующий ответ не нужен
         }
     }
 
     /**
+     * Отдаёт копию Resumption Master Secret: оригинал остаётся в движке и затирается в
+     * {@link #destroy()}, а копию вызывающий обязан затереть сам сразу после использования.
+     *
      * @return Resumption Master Secret (defensive copy), или null если handshake не завершён
      */
     public byte[] getResumptionMasterSecret() {
@@ -839,10 +1021,52 @@ public final class TlsHandshakeEngine {
     }
 
     /**
+     * Экспорт ключевого материала (RFC 8446 §7.5) по секрету этого соединения.
+     * <p>
+     * Доступен только после завершения рукопожатия и до {@link #destroy()}. Результат секретный:
+     * вызывающий обязан затереть его после использования. Подробности аргументов см. в
+     * {@link TlsKeyExporter#export}.
+     *
+     * @param label метка назначения
+     * @param context контекст или {@code null}
+     * @param length длина результата в байтах
+     * @return экспортированное значение
+     * @throws IllegalStateException если рукопожатие не завершено или движок уничтожен
+     * @throws IllegalArgumentException если аргументы выходят за допустимые пределы
+     */
+    public byte[] exportKeyingMaterial(String label, byte[] context, int length) {
+        byte[] secret = exporterMasterSecret;
+        if (secret == null) {
+            throw new IllegalStateException("Exporter master secret not available");
+        }
+        // Derive-Secret даёт ровно hashLen байт согласованного хэша: длина секрета и есть
+        // длина хэша набора, поэтому она не может разойтись с реально использованным хэшем
+        return TlsKeyExporter.export(secret, label, context, length, secret.length);
+    }
+
+    /**
+     * @return true, если рукопожатие завершено и движок не уничтожен, то есть экспорт возможен
+     */
+    public boolean isExportAvailable() {
+        return exporterMasterSecret != null;
+    }
+
+    /**
+     * Выводит секрет экспорта из хэша транскрипта до server Finished. Вызывается там же, где
+     * этот хэш потребляется для application traffic secrets и до его затирания: после client
+     * Finished хэш другой (RFC 8446 §7.1), и значение разошлось бы с другими реализациями.
+     */
+    private void deriveExporterMasterSecret(byte[] appTranscript) {
+        this.exporterMasterSecret = ctx.getKeySchedule().getExporterMasterSecret(appTranscript);
+    }
+
+    /**
      * Для модульных тестов — инициализирует engine без полного handshake.
      * Устанавливает состояние POST_HANDSHAKE и app traffic secrets.
      * ResumptionMasterSecret получает значение по умолчанию (нули) —
-     * для тестов NewSessionTicket.
+     * для тестов NewSessionTicket. Секрет экспорта тоже нулевой: экспорт на такой сессии
+     * проверяет только проводку, а не корректность значения (её проверяют тесты на настоящем
+     * рукопожатии).
      * Вызывается из {@code TlsSession.setAppTrafficSecrets} и
      * {@code TlsSession.createForTest}.
      */
@@ -851,6 +1075,9 @@ public final class TlsHandshakeEngine {
         this.clientAppTrafficSecret = clientSecret;
         if (resumptionMasterSecret == null) {
             this.resumptionMasterSecret = new byte[hashLen];
+        }
+        if (exporterMasterSecret == null) {
+            this.exporterMasterSecret = new byte[hashLen];
         }
         if (state == State.CLIENT_START || state == State.SERVER_WAIT_CLIENT_HELLO) {
             this.state = State.POST_HANDSHAKE;
@@ -921,21 +1148,7 @@ public final class TlsHandshakeEngine {
      * @return согласованный cipher suite (может отличаться от переданного в конструктор)
      */
     public TlsCiphersuite getNegotiatedCiphersuite() {
-        return negotiatedCiphersuite;
-    }
-
-    /**
-     * @return server application traffic secret для KeyUpdate, или null
-     */
-    public byte[] getServerAppTrafficSecret() {
-        return serverAppTrafficSecret != null ? serverAppTrafficSecret.clone() : null;
-    }
-
-    /**
-     * @return client application traffic secret для KeyUpdate, или null
-     */
-    public byte[] getClientAppTrafficSecret() {
-        return clientAppTrafficSecret != null ? clientAppTrafficSecret.clone() : null;
+        return ciphersuite;
     }
 
     // ========================================================================
@@ -968,14 +1181,9 @@ public final class TlsHandshakeEngine {
                 messageBuilder.setClientAlpnProtocols(clientAlpnProtocols);
             }
 
-            byte[] clientHelloBody;
-            if (pskKey != null) {
-                clientHelloBody =
-                        messageBuilder.buildClientHelloWithPsk(
-                                keyShares,
-                                pskIdentity != null ? pskIdentity : new byte[0],
-                                obfuscatedTicketAge,
-                                serverHostname);
+            byte[] clientHelloBody =
+                    pskKey != null ? buildFirstClientHelloWithPsk(keyShares) : null;
+            if (clientHelloBody != null) {
                 // RFC 8446 §4.2.11.2: binder считается от полного handshake-фрейма
                 // (тип + длина + тело).
                 byte[] chFrameBeforeBinder =
@@ -992,15 +1200,48 @@ public final class TlsHandshakeEngine {
             } else {
                 clientHelloBody = messageBuilder.buildClientHello(keyShares, serverHostname);
             }
+            sentExtensionTypes = TlsMessageParser.extensionTypesOfClientHello(clientHelloBody);
             byte[] chFrame =
                     new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, clientHelloBody).encode();
             ctx.addToTranscript(chFrame);
             state = State.CLIENT_WAIT_SERVER_HELLO;
+            log.log(Level.DEBUG, "Handshake stage {0} -> {1}", State.CLIENT_START, state);
             return chFrame;
         } catch (RuntimeException e) {
             state = State.ERROR;
             errorMessage = "Failed to build ClientHello: " + e.getMessage();
             throw e;
+        }
+    }
+
+    /**
+     * Собирает первый ClientHello с PSK или возвращает null, если с ним блок расширений не
+     * помещается в uint16.
+     *
+     * <p>Размер остальных расширений известен только здесь, поэтому ранние проверки длины тикета
+     * (в {@link #setPsk}, при приёме NewSessionTicket) - лишь грубый фильтр. Не поместилось:
+     * предложение PSK снимается, рукопожатие идёт полным, а {@link #isPskOfferWithdrawn()}
+     * сообщает владельцу тикета, что его надо убрать из кэша.
+     */
+    private byte[] buildFirstClientHelloWithPsk(Map<Integer, byte[]> keyShares) {
+        try {
+            return messageBuilder.buildClientHelloWithPsk(
+                    keyShares,
+                    pskIdentity != null ? pskIdentity : new byte[0],
+                    obfuscatedTicketAge,
+                    serverHostname);
+        } catch (TlsMessageBuilder.ExtensionsOverflowException e) {
+            // Тикет принесён сервером прежнего соединения и по размеру не годится: полное
+            // рукопожатие штатно, оператору вмешиваться не нужно
+            log.log(
+                    Level.DEBUG,
+                    "PSK ticket does not fit into ClientHello, continuing with a full handshake");
+            wipePskKey();
+            pskIdentity = null;
+            obfuscatedTicketAge = 0;
+            pskOffered = false;
+            pskOfferWithdrawn = true;
+            return null;
         }
     }
 
@@ -1025,19 +1266,22 @@ public final class TlsHandshakeEngine {
                     "Expected ServerHello, got " + shMsg.getType());
         }
 
-        // Проверяем PSK-принятие: наличие pre_shared_key в ServerHello = PSK accepted
-        if (pskOffered) {
-            pskAccepted = TlsMessageParser.parseServerHelloHasPsk(shMsg.getBody());
-        }
-
         // Парсим ECDHE, cipher suite, random, requestedGroup
         TlsMessageParser.ParsedServerHello parsedSH;
         try {
-            parsedSH = TlsMessageParser.parseServerHello(shMsg.getBody(), selectedNamedGroup);
+            parsedSH = TlsMessageParser.parseServerHello(shMsg.getBody(), sentExtensionTypes);
         } catch (TlsException e) {
             state = State.ERROR;
             errorMessage = "Failed to parse ServerHello: " + e.getMessage();
             throw e;
+        }
+
+        // Эхо legacy_session_id должно совпасть с отправленным (RFC 8446 §4.1.3). Проверка до
+        // ветки HRR: правило одно и то же для HRR и для настоящего ServerHello
+        if (!Arrays.equals(parsedSH.legacySessionIdEcho, messageBuilder.getSentLegacySessionId())) {
+            state = State.ERROR;
+            errorMessage = "ServerHello: legacy_session_id_echo does not match ClientHello";
+            throw new TlsException(TlsConstants.ALERT_ILLEGAL_PARAMETER, errorMessage);
         }
 
         // Проверка HRR ДО добавления в транскрипт (RFC 8446 §4.1.3)
@@ -1046,6 +1290,20 @@ public final class TlsHandshakeEngine {
             return;
         }
 
+        // PSK принят, если в ServerHello есть pre_shared_key; selected_identity обязан указывать на
+        // предложенную identity (RFC 8446 §4.2.11). Клиент предлагает ровно одну identity
+        int selectedPsk = parsedSH.selectedPskIdentity;
+        if (selectedPsk >= 0) {
+            // pre_shared_key без предложенного PSK парсер уже отверг (unsupported_extension,
+            // RFC 8446 §4.2), здесь остаётся только проверка индекса
+            if (selectedPsk >= OFFERED_PSK_IDENTITIES) {
+                throw new TlsException(
+                        TlsConstants.ALERT_ILLEGAL_PARAMETER,
+                        "ServerHello: selected_identity " + selectedPsk + " was not offered");
+            }
+        }
+        pskAccepted = selectedPsk >= 0;
+
         // Downgrade-sentinel (RFC 8446 §4.1.3) не проверяется намеренно: клиент
         // предлагает только TLS 1.3 (см. SV_CLIENT) и не имеет кода для завершения
         // хендшейка TLS 1.2/1.1 — понижать версию некуда, атака неприменима.
@@ -1053,22 +1311,28 @@ public final class TlsHandshakeEngine {
         // Настоящий ServerHello — добавляем в транскрипт
         ctx.addToTranscript(frame);
 
+        // Набор из ServerHello должен быть из предложенных клиентом всегда, в том числе когда он
+        // совпадает с начальным: начальный набор не обязан быть предложенным (приложение могло
+        // отключить его), и без проверки сервер навязал бы отключённый набор
+        if (!messageBuilder.getOfferedCipherSuiteIds().contains(parsedSH.cipherSuiteId)) {
+            throw new TlsException(
+                    TlsConstants.ALERT_ILLEGAL_PARAMETER,
+                    "ServerHello: cipher suite "
+                            + parsedSH.cipherSuiteId
+                            + " не в списке предложенных");
+        }
         if (parsedSH.cipherSuiteId != ciphersuite.getId()) {
             // Сервер выбрал другой cipher suite из предложенных клиентом
-            if (!messageBuilder.getOfferedCipherSuiteIds().contains(parsedSH.cipherSuiteId)) {
-                throw new TlsException(
-                        TlsConstants.ALERT_ILLEGAL_PARAMETER,
-                        "ServerHello: cipher suite "
-                                + parsedSH.cipherSuiteId
-                                + " не в списке предложенных");
-            }
             TlsCiphersuite chosen = TlsCiphersuite.byId(parsedSH.cipherSuiteId);
             if (chosen == null) {
                 throw new TlsException(
                         TlsConstants.ALERT_ILLEGAL_PARAMETER,
                         "ServerHello: неподдерживаемый cipher suite " + parsedSH.cipherSuiteId);
             }
-            negotiatedCiphersuite = chosen;
+            // Одно поле набора у обеих ролей: по нему выводятся ключи и собираются эпохи записи
+            // (метки смены ключа, KeyUpdate). Отдельное поле «согласованного» набора расходилось
+            // с ним у клиента, и запись собиралась по первому предложенному набору
+            ciphersuite = chosen;
         }
 
         // ECDHE: декодируем публичный ключ сервера, вычисляем общий секрет
@@ -1088,13 +1352,13 @@ public final class TlsHandshakeEngine {
         try {
             PublicKeyParameters peerPub = TlsEncoding.decodePoint(pubKeyRaw, serverSelectedParams);
             ctx.setPeerEcdhePublicKey(peerPub);
-            sharedSecret = computeEcdheShared(priv, peerPub, serverSelectedParams.hlen);
+            sharedSecret = computeEcdheShared(priv, peerPub);
         } finally {
             ctx.destroyEcdheKeys();
         }
 
         // Key schedule: инициализация и derivation handshake secret
-        ctx.setKeySchedule(new TlsKeySchedule(negotiatedCiphersuite));
+        ctx.setKeySchedule(new TlsKeySchedule(ciphersuite));
         if (pskAccepted) {
             ctx.getKeySchedule().deriveEarlySecret(pskKey);
         }
@@ -1118,9 +1382,23 @@ public final class TlsHandshakeEngine {
         handshakeClientKeys = ctx.getKeySchedule().deriveTrafficKeys(clientHandshakeTrafficSecret);
 
         // Устанавливаем ключи чтения (расшифровка EE, Cert, CV, Finished от сервера)
-        readKeys = handshakeServerKeys;
-        readKeysChanged = true;
+        changeReadKeys(handshakeServerKeys);
 
+        // Ключ записи клиента тоже включается сразу (RFC 8446 приложение A.1: клиент SHOULD сначала
+        // сменить ключ на ключ рукопожатия, если возможно; ранних данных в библиотеке нет). Так
+        // alert клиента при отказе до Finished сервера уходит зашифрованным, а не открытым. До
+        // Finished сервера клиент ничего не отправляет, поэтому на проводе успешного рукопожатия
+        // ничего не меняется, а нумерация записей начинается с нуля на Certificate или Finished.
+        queueWriteKeyChange(handshakeClientKeys);
+
+        if (log.isLoggable(Level.DEBUG)) {
+            log.log(
+                    Level.DEBUG,
+                    "ServerHello accepted: cipher suite {0}, group 0x{1}, PSK accepted={2}",
+                    ciphersuite.forLog(),
+                    String.format("%04x", parsedSH.actualGroup),
+                    pskAccepted);
+        }
         state = State.CLIENT_WAIT_ENCRYPTED_EXTENSIONS;
     }
 
@@ -1132,7 +1410,7 @@ public final class TlsHandshakeEngine {
      * необходимости) и ставит его в очередь отправки. Транскрипт после выхода:
      * message_hash + HRR + CH2.
      *
-     * @param parsedSH распарсенный HRR (parsedSH.random == HRR_RANDOM)
+     * @param parsedSH распарсенный HRR (random равен значению HelloRetryRequest)
      * @param frame    полный handshake-фрейм HRR
      * @throws TlsException при нарушении протокола
      */
@@ -1172,13 +1450,20 @@ public final class TlsHandshakeEngine {
         // Добавляем HRR в новый транскрипт
         ctx.addToTranscript(frame);
 
-        // Префикс транскрипта для PSK binder (Hash(message_hash + HRR))
-        byte[] hrrPrefix = ctx.transcriptHash();
+        // Префикс транскрипта для PSK binder: message_hash || HRR в сыром виде. RFC 8446 §4.2.11.2
+        // хэширует префикс и усечённый CH2 одним проходом, готовый Hash(префикса) не подходит.
+        byte[] hrrPrefix = ctx.transcriptPrefix();
 
         // Затираем старый ECDHE-ключ (от первого CH)
         ctx.destroyEcdheKeys();
 
         // Генерируем новый ECDHE-ключ для запрошенной группы
+        if (log.isLoggable(Level.DEBUG)) {
+            log.log(
+                    Level.DEBUG,
+                    "HelloRetryRequest received: group 0x{0}",
+                    String.format("%04x", requestedGroup));
+        }
         ECParameters newParams = TlsCiphersuite.namedGroupToParams(requestedGroup);
         KeyPair kp = KeyGenerator.generateKeyPair(newParams);
         ctx.addEcdheKey(requestedGroup, kp.getPrivate());
@@ -1189,18 +1474,27 @@ public final class TlsHandshakeEngine {
         byte[] cookie = parsedSH.cookie;
         byte[] clientHelloBody;
         if (pskKey != null) {
-            clientHelloBody =
-                    messageBuilder.buildClientHelloWithPsk(
-                            keyShares,
-                            pskIdentity != null ? pskIdentity : new byte[0],
-                            obfuscatedTicketAge,
-                            serverHostname,
-                            cookie);
+            try {
+                clientHelloBody =
+                        messageBuilder.buildClientHelloWithPsk(
+                                keyShares,
+                                pskIdentity != null ? pskIdentity : new byte[0],
+                                obfuscatedTicketAge,
+                                serverHostname,
+                                cookie);
+            } catch (TlsMessageBuilder.ExtensionsOverflowException e) {
+                // PSK из CH1 снять нельзя (RFC 8446 §4.1.2 разрешает только обновить binder),
+                // а cookie сервера вытолкнула блок за предел: продолжать нечем
+                TlsUtils.wipeArray(hrrPrefix);
+                throw new TlsException(
+                        TlsConstants.ALERT_INTERNAL_ERROR,
+                        "ClientHello after HRR does not fit with the server cookie");
+            }
             // RFC 8446 §4.2.11.2: Через HMAC считаем от полного handshake-фрейма
             byte[] ch2BeforeBinder =
                     new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, clientHelloBody).encode();
             byte[] binder =
-                    TlsPskHelper.computeBinderForHrr(hrrPrefix, ch2BeforeBinder, pskKey, hashLen);
+                    TlsPskHelper.computeBinderAfterHrr(hrrPrefix, ch2BeforeBinder, pskKey, hashLen);
             System.arraycopy(
                     binder,
                     0,
@@ -1210,12 +1504,13 @@ public final class TlsHandshakeEngine {
         } else {
             clientHelloBody = messageBuilder.buildClientHello(keyShares, serverHostname, cookie);
         }
+        sentExtensionTypes = TlsMessageParser.extensionTypesOfClientHello(clientHelloBody);
         TlsUtils.wipeArray(hrrPrefix);
 
         byte[] ch2Frame =
                 new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, clientHelloBody).encode();
         ctx.addToTranscript(ch2Frame);
-        outgoingQueue.addLast(ch2Frame);
+        queueMessage(ch2Frame);
 
         hrrReceived = true;
     }
@@ -1238,26 +1533,29 @@ public final class TlsHandshakeEngine {
         }
         ctx.addToTranscript(frame);
 
-        // Парсим ALPN и max_fragment_length из EncryptedExtensions
+        // Парсим ALPN и max_fragment_length из EncryptedExtensions. Ответ на расширение, которого
+        // не было в последнем ClientHello, парсер отвергает сам (unsupported_extension, RFC 8446
+        // §4.2)
         TlsMessageParser.ParsedEncryptedExtensions parsedEE =
-                TlsMessageParser.parseEncryptedExtensions(eeMsg.getBody());
+                TlsMessageParser.parseEncryptedExtensions(eeMsg.getBody(), sentExtensionTypes);
 
         // ALPN: RFC 7301 §3.2 — клиент обязан проверить, что сервер выбрал протокол из нашего
-        // списка.
+        // списка. Если ALPN есть в ответе, парсер уже убедился, что мы его отправляли
         if (parsedEE.alpn != null) {
-            if (clientAlpnProtocols != null && !clientAlpnProtocols.contains(parsedEE.alpn)) {
+            if (clientAlpnProtocols == null || !clientAlpnProtocols.contains(parsedEE.alpn)) {
                 throw new TlsException(
                         TlsConstants.ALERT_ILLEGAL_PARAMETER,
-                        "Server selected ALPN protocol not offered: " + parsedEE.alpn);
+                        "Server selected ALPN protocol not offered: "
+                                + SafeText.printableAscii(
+                                        parsedEE.alpn, TlsConstants.LOG_PEER_STRING_LIMIT));
             }
             this.selectedAlpnProtocol = parsedEE.alpn;
         }
 
-        // max_fragment_length: RFC 6066 §4 + RFC 8446 §4.2
-        // Если сервер вернул расширение, клиент не запрашивал — abort (RFC 8446 §4.2).
-        // Если сервер вернул другое значение — abort (RFC 6066 §4.1).
+        // max_fragment_length: RFC 6066 §4.1 — значение в ответе обязано совпасть с запрошенным.
+        // Незапрошенное расширение отвергнуто парсером
         if (parsedEE.maxFragLen != 0) {
-            if (clientMaxFragLenRequest == 0 || parsedEE.maxFragLen != clientMaxFragLenRequest) {
+            if (parsedEE.maxFragLen != clientMaxFragLenRequest) {
                 throw new TlsException(
                         TlsConstants.ALERT_ILLEGAL_PARAMETER,
                         "Server returned unexpected max_fragment_length: requested "
@@ -1286,21 +1584,31 @@ public final class TlsHandshakeEngine {
         TlsHandshakeMessage msg = TlsHandshakeMessage.decode(frame);
         if (msg.getType() == TlsConstants.HT_CERTIFICATE_REQUEST) {
             ctx.addToTranscript(frame);
-            TlsMessageParser.CertificateRequestInfo cri =
-                    TlsMessageParser.parseCertificateRequest(msg.getBody());
-            ctx.setAcceptedCaDns(cri.caDns());
-            ctx.setOidFilters(cri.oidFilters());
+            ClientCertificateRequest cri = TlsMessageParser.parseCertificateRequest(msg.getBody());
             clientAuthRequested = true;
+            clientOcspRequested = cri.ocspRequested();
 
-            // Выбираем сертификат клиента по фильтрам, если задан селектор
-            if (clientCertificateSelector != null
-                    && (!cri.oidFilters().isEmpty() || !cri.caDns().isEmpty())) {
-                TlsClientCredentials selected =
-                        clientCertificateSelector.select(cri.caDns(), cri.oidFilters());
+            // Заданный селектор - единственный источник учётных данных клиента и вызывается на
+            // каждый CertificateRequest, в том числе без фильтров: схемы сервера он тоже учитывает.
+            // null от него - пустой Certificate, цепочка из конфигурации не подставляется
+            if (clientCertificateSelector != null) {
+                TlsClientCredentials selected;
+                try {
+                    selected = clientCertificateSelector.select(cri);
+                } catch (RuntimeException e) {
+                    // Сбой кода приложения - наша внутренняя ошибка, а не нарушение протокола
+                    // пиром: без перехвата receive() выдал бы её как decode_error. Текст
+                    // исключения в сообщение не попадает: там может быть что угодно.
+                    throw new TlsException(
+                            TlsConstants.ALERT_INTERNAL_ERROR,
+                            "Client certificate selector failed",
+                            e);
+                }
                 if (selected != null) {
                     if (selected.chain().isEmpty()
                             || selected.chain().get(0).getPublicKey() == null) {
-                        throw new IllegalArgumentException(
+                        throw new TlsException(
+                                TlsConstants.ALERT_INTERNAL_ERROR,
                                 "Selected client certificate chain leaf has no public key");
                     }
                     messageBuilder.setCertificateChain(selected.chain());
@@ -1310,13 +1618,18 @@ public final class TlsHandshakeEngine {
                                     TlsCertUtils.getNamedGroup(
                                             selected.chain().get(0).getPublicKey()));
                     messageBuilder.updateSigScheme(newScheme);
+                    // Staple относится к выбранному leaf; staple из конфигурации принадлежит
+                    // другому сертификату, поэтому заменяется (в том числе на null).
+                    this.ocspResponse = selected.ocspResponse();
                 } else {
                     // Ни один сертификат не подошёл -> пустой certificate_list
                     messageBuilder.setCertificateChain(null);
                     messageBuilder.setPrivateKey(null);
+                    this.ocspResponse = null;
                 }
             }
-            // Если селектор не задан или фильтров нет — используем дефолтный сертификат
+            // Если селектор не задан — используем цепочку из конфигурации
+            applyServerSignatureSchemes(cri.signatureSchemes(), cri.certificateSignatureSchemes());
             state = State.CLIENT_WAIT_CERTIFICATE;
             return;
         }
@@ -1327,6 +1640,52 @@ public final class TlsHandshakeEngine {
         throw new TlsException(
                 TlsConstants.ALERT_UNEXPECTED_MESSAGE,
                 "Expected Certificate or CertificateRequest, got " + msg.getType());
+    }
+
+    /**
+     * Единая точка решения о схеме подписи клиента после выбора сертификата (селектор мог заменить
+     * цепочку) и до сборки Certificate и CertificateVerify.
+     *
+     * <p>Схема ключа листа не в списке {@code signature_algorithms} сервера: RFC 8446 §4.4.3
+     * запрещает подписывать такой схемой, а §4.4.2.3 велит отправить пустой Certificate без
+     * CertificateVerify; staple относился к отвергнутому листу и сбрасывается. Схема подписи
+     * сертификата цепочки не в списке: сервер вправе отказать, но молча терять mTLS там, где он
+     * цепочку принял бы, хуже, поэтому отправляем нашу цепочку и пишем предупреждение. Это
+     * сознательное отступление от буквы §4.4.2.3 ради совместимости.</p>
+     *
+     * @param offered      схемы подписи CertificateVerify из signature_algorithms
+     * @param chainOffered схемы подписи сертификатов цепочки (signature_algorithms_cert, а без
+     *                     него тот же список)
+     */
+    private void applyServerSignatureSchemes(int[] offered, int[] chainOffered) {
+        List<GostCertificate> chain = messageBuilder.getCertificateChain();
+        if (chain == null || chain.isEmpty()) {
+            return;
+        }
+        int leafScheme = TlsCertUtils.leafSignatureScheme(chain);
+        if (!TlsCertUtils.isSchemeOffered(offered, leafScheme)) {
+            // Схемы подписи собеседника: отказ, если он последует, придёт alert сервера
+            log.log(
+                    Level.DEBUG,
+                    "Server did not offer the signature scheme 0x{0} of the client certificate,"
+                            + " sending an empty Certificate",
+                    String.format("%04x", leafScheme));
+            messageBuilder.setCertificateChain(null);
+            messageBuilder.setPrivateKey(null);
+            this.ocspResponse = null;
+            return;
+        }
+        messageBuilder.updateSigScheme(leafScheme);
+        List<Integer> unoffered = TlsCertUtils.unofferedChainSchemes(chain, chainOffered);
+        if (!unoffered.isEmpty()) {
+            log.log(
+                    Level.DEBUG,
+                    "Server did not offer the signature schemes of the client certificate chain"
+                            + " (codes {0}), sending the chain anyway",
+                    unoffered.stream()
+                            .map(code -> String.format("0x%04x", code))
+                            .collect(Collectors.joining(", ")));
+        }
     }
 
     /**
@@ -1347,7 +1706,10 @@ public final class TlsHandshakeEngine {
         }
         ctx.addToTranscript(frame);
 
-        List<GostCertificate> chain = TlsMessageParser.parseCertificate(certMsg.getBody());
+        // Расширения CertificateEntry - ответ на наш ClientHello: сверяем с тем, что реально
+        // отправили (status_request, если запрашивали staple), остальное парсер отвергает.
+        List<GostCertificate> chain =
+                TlsMessageParser.parseCertificate(certMsg.getBody(), sentExtensionTypes);
         if (chain.isEmpty()) {
             // RFC 8446 §4.4.2: сервер обязан прислать непустой certificate_list.
             // Пустой список — нарушение протокола, не certificate_required (этот алерт только для
@@ -1402,10 +1764,10 @@ public final class TlsHandshakeEngine {
      * Пересчитывает verify_data через handshake-транскрипт и serverHandshakeTrafficSecret,
      * сравнивает с полученным значением. При успехе:
      * <ul>
-     *   <li>устанавливает клиентские handshake-ключи записи для отправки Certificate/CV/Finished</li>
      *   <li>если mTLS (clientAuthRequested) — строит и ставит в очередь Certificate + CertificateVerify</li>
      *   <li>строит и ставит в очередь клиентский Finished</li>
      * </ul>
+     * Ключ записи рукопожатия клиента уже включён с ServerHello, здесь он не меняется.
      *
      * @param frame полный handshake-фрейм Finished
      * @throws TlsException при нарушении протокола
@@ -1429,16 +1791,12 @@ public final class TlsHandshakeEngine {
         TlsUtils.wipeArray(serverFinishedTranscript);
         if (!java.security.MessageDigest.isEqual(sfMsg.getBody(), expectedVerifyData)) {
             throw new TlsException(
-                    TlsConstants.ALERT_HANDSHAKE_FAILURE, "Server Finished verification failed");
+                    TlsConstants.ALERT_DECRYPT_ERROR, "Server Finished verification failed");
         }
 
         // RFC 8446 §7.1 Table 2: app transcript = ClientHello...server Finished (БЕЗ client
         // Cert/CV/CF)
         this.appTranscriptHash = ctx.transcriptHash();
-
-        // Устанавливаем ключи записи (клиентский Certificate + CertificateVerify + Finished)
-        writeKeys = handshakeClientKeys;
-        writeKeysChanged = true;
 
         // Строим клиентский Certificate + CertificateVerify (если mTLS)
         if (clientAuthRequested) {
@@ -1451,9 +1809,12 @@ public final class TlsHandshakeEngine {
                 byte[] emptyFrame =
                         new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE, emptyBody).encode();
                 ctx.addToTranscript(emptyFrame);
-                outgoingQueue.addLast(emptyFrame);
+                queueMessage(emptyFrame);
             } else {
-                byte[] certBody = messageBuilder.buildCertificateBody();
+                // RFC 8446 §4.2: staple допустим только в ответ на status_request сервера.
+                byte[] certBody =
+                        messageBuilder.buildCertificateBody(
+                                clientOcspRequested ? ocspResponse : null);
                 byte[] certFrame =
                         new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE, certBody).encode();
                 ctx.addToTranscript(certFrame);
@@ -1468,8 +1829,8 @@ public final class TlsHandshakeEngine {
                                 .encode();
                 ctx.addToTranscript(cvFrame);
 
-                outgoingQueue.addLast(certFrame);
-                outgoingQueue.addLast(cvFrame);
+                queueMessage(certFrame);
+                queueMessage(cvFrame);
             }
         }
 
@@ -1486,59 +1847,37 @@ public final class TlsHandshakeEngine {
                 new TlsHandshakeMessage(TlsConstants.HT_FINISHED, clientFinishedBody).encode();
         this.pendingClientFinished = cfFrame;
 
-        outgoingQueue.addLast(cfFrame);
+        queueMessage(cfFrame);
+
+        // Ключи приложения вырабатываются после сборки ответа клиента: его Certificate,
+        // CertificateVerify и Finished опираются на секреты рукопожатия. Читать ключами приложения
+        // клиент начинает сразу: за Finished сервера идут уже его данные (RFC 8446 §4.4.4). Писать
+        // — после своего Finished: смена ключа стоит в потоке сразу за ним
+        TlsTrafficKeys[] appKeys = deriveApplicationKeys();
+        changeReadKeys(appKeys[0]);
+        queueWriteKeyChange(appKeys[1]);
+        appKeys[1].destroy();
         state = State.CLIENT_SEND_FINISHED;
     }
 
     /**
-     * Завершает handshake: вырабатывает Master Secret и application traffic keys.
+     * Клиент: завершает рукопожатие, когда его Finished отдан из очереди ({@link #poll()}).
      * <p>
-     * После вызова {@link #receiveFinished} клиент отправляет свой Finished,
-     * после чего вызывается этот метод для финализации key schedule:
-     * <ul>
-     *   <li>deriveMasterSecret() — общий мастер-секрет из handshake secret</li>
-     *   <li>getServerApplicationTrafficKeys / getClientApplicationTrafficKeys — ключи защищённого канала</li>
-     *   <li>устанавливает readKeys и writeKeys для прикладных данных</li>
-     *   <li>уничтожает контекст handshake (транскрипт, промежуточные ключи)</li>
-     * </ul>
+     * Предусловие: ключи приложения выработаны в {@link #receiveFinished}, ключ чтения уже сменён,
+     * смена ключа записи отдана из потока вслед за Finished. Постусловие: Resumption Master Secret
+     * выработан по полному транскрипту, контекст рукопожатия уничтожен.
      */
     private void finishHandshake() {
-        ctx.getKeySchedule().deriveMasterSecret();
-        // RFC 8446 §7.1 Table 2: app transcript без client Finished
-        byte[] appTranscript = appTranscriptHash != null ? appTranscriptHash : ctx.transcriptHash();
-
-        // Capture app traffic secrets для KeyUpdate до ctx.destroy()
-        this.serverAppTrafficSecret =
-                ctx.getKeySchedule().getServerApplicationTrafficSecret(appTranscript);
-        this.clientAppTrafficSecret =
-                ctx.getKeySchedule().getClientApplicationTrafficSecret(appTranscript);
-
-        TlsTrafficKeys appServerKeys =
-                ctx.getKeySchedule().deriveTrafficKeys(serverAppTrafficSecret);
-        TlsTrafficKeys appClientKeys =
-                ctx.getKeySchedule().deriveTrafficKeys(clientAppTrafficSecret);
-
-        TlsUtils.wipeArray(appTranscript);
-        appTranscriptHash = null;
-
-        // Добавляем клиентский Finished в транскрипт для RMS
-        // (RFC 8446 §4.6.1 — res_master требует полный транскрипт включая client Finished)
+        // RFC 8446 §4.6.1: res_master требует транскрипт вместе с Finished клиента
         if (pendingClientFinished != null) {
             ctx.addToTranscript(pendingClientFinished);
             pendingClientFinished = null;
         }
-
-        // RMS = Derive-Secret(MS, "res master", Transcript-Hash) ПОСЛЕ client Finished
         byte[] hsTranscript = ctx.transcriptHash();
         this.resumptionMasterSecret = ctx.getKeySchedule().getResumptionMasterSecret(hsTranscript);
         TlsUtils.wipeArray(hsTranscript);
 
-        readKeys = appServerKeys;
-        readKeysChanged = true;
-        writeKeys = appClientKeys;
-        writeKeysChanged = true;
-
-        // POST_HANDSHAKE вместо HANDSHAKE_DONE — engine остаётся жив
+        // После handshake engine остаётся жив (POST_HANDSHAKE)
         // для обработки KeyUpdate и NewSessionTicket. ctx уничтожается
         // (транскрипт после handshake не нужен), но app traffic secrets
         // сохранены в полях экземпляра.
@@ -1562,28 +1901,46 @@ public final class TlsHandshakeEngine {
     }
 
     /**
-     * Выбирает группу для HRR из supported_groups клиента.
-     * <p>
-     * Сначала проверяет selectedNamedGroup (предпочтение сервера).
-     * Если клиент её не поддерживает — ищет первую совместимую.
+     * Выбирает группу для HRR из supported_groups клиента: первую поддерживаемую сервером,
+     * которой нет ни в одной записи key_share (RFC 8446 §4.2.8: selected_group в HRR не должна
+     * совпадать с группой, для которой клиент уже прислал key_share; иначе клиент обязан
+     * прервать handshake с illegal_parameter).
      *
-     * @param clientGroups список групп, поддерживаемых клиентом
-     * @param preferred    предпочтительная группа сервера
-     * @return NamedGroup для HRR, или 0 если нет совместимой
+     * @param clientGroups   группы из supported_groups клиента
+     * @param keyShareGroups группы всех записей key_share клиента
+     * @return NamedGroup для HRR или 0, если подходящей нет
      */
-    private static int selectHrrGroup(int[] clientGroups, int preferred) {
+    private static int selectHrrGroup(int[] clientGroups, int[] keyShareGroups) {
         for (int cg : clientGroups) {
-            if (cg == preferred) return preferred;
-        }
-        for (int cg : clientGroups) {
+            if (containsGroup(keyShareGroups, cg)) {
+                continue;
+            }
             try {
                 TlsCiphersuite.namedGroupToParams(cg);
                 return cg;
             } catch (IllegalArgumentException e) {
-                // Группа не поддерживается сервером — пропускаем
+                // Группа не поддерживается сервером - пропускаем
             }
         }
         return 0;
+    }
+
+    private static boolean containsGroup(int[] groups, int group) {
+        for (int g : groups) {
+            if (g == group) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isServerSupportedGroup(int group) {
+        try {
+            TlsCiphersuite.namedGroupToParams(group);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     /**
@@ -1592,22 +1949,274 @@ public final class TlsHandshakeEngine {
      * Заменяет транскрипт на message_hash(CH1), добавляет HRR-сообщение
      * в новый транскрипт и ставит HRR-фрейм в очередь отправки.
      * Key schedule НЕ создаётся — он будет инициализирован при получении CH2.
+     *
+     * @param requestedGroup группа, которую запрашивает HRR
+     * @param clientPsk      разобранные PSK-расширения первого ClientHello или null
      */
-    private void sendHelloRetryRequest(int requestedGroup) throws TlsException {
+    private void sendHelloRetryRequest(
+            int requestedGroup, TlsMessageParser.ParsedClientPsk clientPsk) throws TlsException {
+        // Второй ClientHello сверяется с первым по списку identity (RFC 8446 §4.1.2); снимок нужен
+        // только на пути HRR и одним массивом, а не по массиву на каждую identity
+        if (clientPsk != null) {
+            ch1PskIdentitiesSnapshot = clientPsk.identitiesSnapshot();
+        }
         // Замена транскрипта: CH1 -> message_hash (RFC 8446 §4.4.1)
         ctx.replaceTranscriptWithMessageHash();
 
         byte[] hrrBody = messageBuilder.buildHelloRetryRequest(requestedGroup, ciphersuite.getId());
         byte[] hrrFrame = new TlsHandshakeMessage(TlsConstants.HT_SERVER_HELLO, hrrBody).encode();
         ctx.addToTranscript(hrrFrame);
-        outgoingQueue.addLast(hrrFrame);
+        queueMessage(hrrFrame);
 
+        if (log.isLoggable(Level.DEBUG)) {
+            log.log(
+                    Level.DEBUG,
+                    "HelloRetryRequest sent: group 0x{0}",
+                    String.format("%04x", requestedGroup));
+        }
         hrrSent = true;
     }
 
     // ========================================================================
     // Реализация серверного handshake
     // ========================================================================
+
+    /**
+     * Принимает или отвергает PSK в первом ClientHello (RFC 8446 §4.2.11).
+     * <p>
+     * Просматривает в хранилище не больше {@link TlsConstants#MAX_PSK_IDENTITIES} первых identity
+     * (явный PSK сервера хранилища не требует и привязан к первой identity) и выбирает первую
+     * известную: есть в хранилище, не просрочена, привязана к этому имени сервера. Binder
+     * проверяется только у выбранной (§4.2.11); к следующей identity после отказа по возрасту
+     * сервер не переходит. Итог запоминается для второго ClientHello: после HRR решение не
+     * пересматривается. Непринятый PSK затирается сразу, чтобы он не дожил до CH2.
+     *
+     * @param chBody тело ClientHello
+     * @param frame  полный handshake-фрейм ClientHello
+     * @param psk    разобранные расширения PSK или null, если pre_shared_key нет
+     * @param clientServerName проверенное имя из SNI или null, если расширения нет
+     * @throws TlsException при неверном binder выбранной identity
+     */
+    private void resolvePskInFirstClientHello(
+            byte[] chBody,
+            byte[] frame,
+            TlsMessageParser.ParsedClientPsk psk,
+            String clientServerName)
+            throws TlsException {
+        wipeCh1PskState();
+        if (psk == null) {
+            wipePskKey();
+            return;
+        }
+
+        int selected = -1;
+        boolean pskKeyFromStore = false;
+        long pskEntryIssueTime = 0;
+        long pskEntryTicketAgeAdd = 0;
+        if (!requestClientAuth && psk.dheKeOffered()) {
+            if (pskKey != null) {
+                // Явный PSK сервера: identity для поиска не нужна, binder проверяется у первой
+                selected = 0;
+            } else if (serverPskStore != null) {
+                // peek() - lookup без удаления из стора. Верификация binder ниже.
+                // Если binder провалится, тикет останется в сторе для повторных попыток.
+                // Неатомарность peek->verify->get не является проблемой безопасности:
+                //   - если другой поток успел забрать тикет между peek и get,
+                //     get() вернёт null -> PSK не принят -> full handshake;
+                //   - при TCP-ретрансмите второй remove() вернёт null безвредно.
+                // Атомарная синхронизация здесь избыточна и ударила бы по горячему пути.
+                // RFC 6066 §3: возобновление при другом имени SNI недопустимо, сервер переходит к
+                // полному рукопожатию. Несовпадение не расходует тикет: запись остаётся в
+                // хранилище для соединения со своим именем.
+                PskBinding serverBinding = PskBinding.forServer(clientServerName);
+                long now = System.currentTimeMillis();
+                int scanned = Math.min(psk.count(), TlsConstants.MAX_PSK_IDENTITIES);
+                for (int i = 0; i < scanned; i++) {
+                    byte[] identity = psk.identity(i);
+                    PskEntry entry = serverPskStore.peek(identity);
+                    TlsUtils.wipeArray(identity);
+                    if (entry == null || entry.isExpired(now)) {
+                        continue;
+                    }
+                    if (!serverBinding.equals(entry.getBinding())) {
+                        // Решение библиотеки пропустить тикет по имени сервера: штатно
+                        log.log(
+                                Level.DEBUG,
+                                "PSK ticket was issued for a different server name, skipping it");
+                        continue;
+                    }
+                    // Параллельное соединение с тем же тикетом могло успеть забрать запись и
+                    // затереть
+                    // ключ между peek и этим местом: getPsk() тогда возвращает null. Для нас это
+                    // как неизвестная identity: берём следующую или идём полным рукопожатием
+                    byte[] storedPsk = entry.getPsk();
+                    if (storedPsk == null) {
+                        continue;
+                    }
+                    pskKey = storedPsk;
+                    pskKeyFromStore = true;
+                    pskEntryIssueTime = entry.getIssueTime();
+                    pskEntryTicketAgeAdd = entry.getTicketAgeAdd();
+                    selected = i;
+                    break;
+                }
+            }
+        }
+
+        if (selected >= 0) {
+            // Все шифронаборы библиотеки на Стрибоге-256. Появление шифронабора с другим хэшем
+            // потребует здесь сверки хэша шифронабора и PSK (RFC 8446 §4.2.11).
+            // RFC 8446 §4.2.11.2: binder считается от полного handshake-фрейма
+            boolean binderOk =
+                    TlsPskHelper.verifyBinder(
+                            frame,
+                            frameOffset(psk.bindersVectorOffset()),
+                            frameOffset(psk.binderOffset(selected)),
+                            pskKey,
+                            hashLen);
+            if (!binderOk) {
+                // Причина целиком в TlsException и в alert decrypt_error; запись не дублируется
+                wipePskKey();
+                wipeCh1PskState();
+                throw new TlsException(
+                        TlsConstants.ALERT_DECRYPT_ERROR, "PSK binder verification failed");
+            }
+            if (!pskKeyFromStore) {
+                pskAccepted = true;
+            } else {
+                byte[] identity = psk.identity(selected);
+                PskEntry consumed = serverPskStore.get(identity);
+                TlsUtils.wipeArray(identity);
+                if (consumed != null) {
+                    boolean ageOk =
+                            validatePskTicketAge(
+                                    psk.obfuscatedTicketAge(selected),
+                                    pskEntryIssueTime,
+                                    pskEntryTicketAgeAdd);
+                    consumed.destroy();
+                    if (ageOk) {
+                        pskAccepted = true;
+                    } else {
+                        log.log(
+                                Level.DEBUG,
+                                "PSK ticket age mismatch, falling back to full handshake");
+                    }
+                }
+            }
+        }
+
+        log.log(
+                Level.DEBUG,
+                "PSK offered: {0} identity(ies), accepted={1}",
+                psk.count(),
+                pskAccepted);
+
+        // Решение CH1 переносится в CH2 (при HRR): иначе тикет, отвергнутый здесь по возрасту
+        // или из-за гонки peek->get, мог бы быть принят во втором ClientHello.
+        if (pskAccepted) {
+            ch1AcceptedPskIdentity = psk.identity(selected);
+            acceptedPskIndex = selected;
+        } else {
+            wipePskKey();
+        }
+    }
+
+    /**
+     * Определяет судьбу PSK во втором ClientHello после HRR (RFC 8446 §4.1.2, §4.2.11).
+     * <p>
+     * Хранилище не опрашивается: решение целиком берётся из первого ClientHello. Identity второго
+     * ClientHello обязаны быть подмножеством identity первого с тем же порядком (клиент вправе
+     * только удалять записи); добавление, замена и перестановка - {@code illegal_parameter}.
+     * Принятая в CH1 identity ищется в CH2 по байтам, не по номеру: после удалений номер меняется.
+     * Её нет - полное рукопожатие, к другой identity сервер не переходит. Известная identity за
+     * пределом просмотра в CH1 не становится выбранной в CH2, сколько бы записей клиент ни удалил.
+     *
+     * @param psk   разобранные расширения PSK второго ClientHello или null
+     * @param frame полный handshake-фрейм второго ClientHello
+     * @throws TlsException при нарушении подмножества или неверном binder
+     */
+    private void resolvePskAfterHrr(TlsMessageParser.ParsedClientPsk psk, byte[] frame)
+            throws TlsException {
+        pskAccepted = false;
+        acceptedPskIndex = TlsMessageBuilder.NO_SELECTED_PSK;
+        try {
+            if (psk == null) {
+                return;
+            }
+            if (ch1PskIdentitiesSnapshot == null) {
+                throw new TlsException(
+                        TlsConstants.ALERT_ILLEGAL_PARAMETER,
+                        "ClientHello after HRR: pre_shared_key was absent in the first ClientHello");
+            }
+            // Подпоследовательность с сохранением порядка: клиент вправе только удалять записи
+            if (!psk.isOrderedSubsetOf(ch1PskIdentitiesSnapshot)) {
+                throw new TlsException(
+                        TlsConstants.ALERT_ILLEGAL_PARAMETER,
+                        "ClientHello after HRR: PSK identities were added, replaced or reordered");
+            }
+            if (ch1AcceptedPskIdentity == null || pskKey == null || !psk.dheKeOffered()) {
+                // PSK отвергнут в CH1: игнорируем и идём полным рукопожатием
+                return;
+            }
+            int accepted = -1;
+            for (int i = 0; i < psk.count(); i++) {
+                if (psk.identityEquals(i, ch1AcceptedPskIdentity)) {
+                    accepted = i;
+                    break;
+                }
+            }
+            if (accepted < 0) {
+                // Клиент убрал принятую identity: PSK не используется
+                return;
+            }
+            // Префикс транскрипта (message_hash || HRR) - до добавления CH2
+            byte[] transcriptPrefix = ctx.transcriptPrefix();
+            boolean binderOk;
+            try {
+                binderOk =
+                        TlsPskHelper.verifyBinderAfterHrr(
+                                transcriptPrefix,
+                                frame,
+                                frameOffset(psk.bindersVectorOffset()),
+                                frameOffset(psk.binderOffset(accepted)),
+                                pskKey,
+                                hashLen);
+            } finally {
+                TlsUtils.wipeArray(transcriptPrefix);
+            }
+            if (!binderOk) {
+                throw new TlsException(
+                        TlsConstants.ALERT_DECRYPT_ERROR,
+                        "PSK binder verification failed for CH2 after HRR");
+            }
+            // Тикет потреблён в CH1, возраст там же проверен и не пересчитывается
+            pskAccepted = true;
+            acceptedPskIndex = accepted;
+        } finally {
+            if (!pskAccepted) {
+                wipePskKey();
+            }
+            wipeCh1PskState();
+        }
+    }
+
+    /** Смещение во фрейме handshake по смещению в теле сообщения (фрейм = заголовок + тело). */
+    private static int frameOffset(int bodyOffset) {
+        return TlsConstants.HANDSHAKE_HEADER_SIZE + bodyOffset;
+    }
+
+    private void wipePskKey() {
+        TlsUtils.wipeArray(pskKey);
+        pskKey = null;
+    }
+
+    /** Затирает запомненное решение первого ClientHello: identity - это тикеты, их не держим дольше нужного. */
+    private void wipeCh1PskState() {
+        TlsUtils.wipeArray(ch1PskIdentitiesSnapshot);
+        ch1PskIdentitiesSnapshot = null;
+        TlsUtils.wipeArray(ch1AcceptedPskIdentity);
+        ch1AcceptedPskIdentity = null;
+    }
 
     /**
      * Обрабатывает ClientHello на стороне сервера.
@@ -1622,6 +2231,19 @@ public final class TlsHandshakeEngine {
      * @param frame полный handshake-фрейм ClientHello
      * @throws TlsException при нарушении протокола
      */
+    /**
+     * Сервер: ключи приложения вырабатываются, как только Finished сервера стоит в очереди. Смена
+     * ключа записи встаёт в поток сразу за ним: дальше сервер пишет ключами приложения (RFC 8446
+     * §4.4.4), ими защищён и alert при отказе клиентскому сертификату. Ключ чтения вступает после
+     * проверки Finished клиента: до неё клиент пишет ключами рукопожатия.
+     */
+    private void scheduleServerApplicationKeys() throws TlsException {
+        TlsTrafficKeys[] appKeys = deriveApplicationKeys();
+        queueWriteKeyChange(appKeys[0]);
+        appKeys[0].destroy();
+        readKeysAfterPeerFinished = appKeys[1];
+    }
+
     private void receiveClientHello(byte[] frame) throws TlsException {
         TlsHandshakeMessage chMsg = TlsHandshakeMessage.decode(frame);
         if (chMsg.getType() != TlsConstants.HT_CLIENT_HELLO) {
@@ -1631,106 +2253,28 @@ public final class TlsHandshakeEngine {
         }
 
         byte[] chBody = chMsg.getBody();
-        // PSK
+        // Имя разбирается один раз и строго, до PSK-привязки и выбора сертификата: недопустимое
+        // имя не должно дойти ни до хранилища тикетов, ни до sniSelector (NUL в имени)
+        String clientServerName = TlsMessageParser.parseClientHelloSni(chBody);
+        // PSK. Структурная проверка расширений идёт до поиска в хранилище и независимо от него
         pskAccepted = false;
-        long[] ageOut = new long[1];
-        byte[] pskIdentityRaw = TlsMessageParser.parseClientHelloPskIdentityAndAge(chBody, ageOut);
-        long obfuscatedTicketAge = ageOut[0];
-        // Авто-поиск PSK в серверном сторе, если явный pskKey не задан
-        boolean pskKeyFromStore = false;
-        long pskEntryIssueTime = 0;
-        long pskEntryTicketAgeAdd = 0;
-        if (pskIdentityRaw != null && pskKey == null && serverPskStore != null) {
-            // peek() — lookup без удаления из стора. Верификация binder ниже.
-            // Если binder провалится, тикет останется в сторе для повторных попыток.
-            // Неатомарность peek→verify→get не является проблемой безопасности:
-            //   - если другой поток успел забрать тикет между peek и get,
-            //     get() вернёт null → pskAccepted останется false → full handshake;
-            //   - при TCP-ретрансмите второй remove() вернёт null безвредно.
-            // Атомарная синхронизация здесь избыточна и ударила бы по горячему пути.
-            PskEntry entry = serverPskStore.peek(pskIdentityRaw);
-            if (entry != null && !entry.isExpired(System.currentTimeMillis())) {
-                pskKey = entry.getPsk();
-                pskKeyFromStore = true;
-                pskEntryIssueTime = entry.getIssueTime();
-                pskEntryTicketAgeAdd = entry.getTicketAgeAdd();
-            }
+        acceptedPskIndex = TlsMessageBuilder.NO_SELECTED_PSK;
+        TlsMessageParser.ParsedClientPsk clientPsk =
+                TlsMessageParser.parseClientHelloPsk(chBody, hashLen);
+        // PSK несовместим с запросом клиентского сертификата (need и want): принятый PSK
+        // пропускает CertificateRequest. Сеттеры такой ключ не допускают; проверка здесь
+        // — второй барьер на случай появления нового пути установки pskKey.
+        if (requestClientAuth && pskKey != null) {
+            TlsUtils.wipeArray(pskKey);
+            pskKey = null;
+            throw new TlsException(
+                    TlsConstants.ALERT_HANDSHAKE_FAILURE,
+                    "PSK is not allowed with client certificate authentication");
         }
-        if (pskIdentityRaw != null && pskKey != null) {
-            if (hrrSent) {
-                // CH2 после HRR: binder считается от Hash(message_hash + HRR + Truncated_CH2)
-                byte[] hrrPrefix = ctx.transcriptHash(); // Hash(message_hash + HRR)
-                boolean binderOk =
-                        TlsPskHelper.verifyBinderForHrr(hrrPrefix, frame, pskKey, hashLen);
-                TlsUtils.wipeArray(hrrPrefix);
-                if (!binderOk) {
-                    LOG.log(Level.WARNING, "PSK binder verification failed for CH2 after HRR");
-                    throw new TlsException(
-                            TlsConstants.ALERT_HANDSHAKE_FAILURE,
-                            "PSK binder verification failed for CH2 after HRR");
-                }
-                // Тикет потреблён в CH1; CH2 только верифицирует binder
-                // (RFC 8446 §4.2.11: PSK в CH2 присутствует только если был в CH1
-                // с корректным binder-ом). Повторный get() не нужен.
-                //
-                // KNOWN EDGE-CASE (не компрометация ключей, но семантически — баг):
-                // При гонке peek->get в CH1 (другое соединение забрало тикет между
-                // peek() и get()) consumed==null -> pskAccepted=false в CH1, но pskKey
-                // уже установлен. Если дополнительно сработал HRR, CH2 завершается
-                // в PSK-режиме без повторного get(). Следствие: два соединения
-                // деривируют сессию из одного тикета — нарушение single-use семантики
-                // RFC 8446 §4.6.1, но сессионные ключи не компрометированы
-                // (разные ECDHE shared secrets -> разные application keys).
-                // Добавление get() здесь сломает штатный HRR+PSK:
-                // при нормальном потоке тикет уже потреблён в CH1 и get() вернёт null.
-                // Правильное исправление — instance-флаги pskConsumedInCh1 + pskFromStore:
-                // CH1 сохраняет факт потребления в pskConsumedInCh1, CH2 проверяет оба флага
-                // и при consumed==null откатывает к full handshake.
-                // Отложено: сценарий требует shared PskStore между соединениями +
-                // узкое окно гонки + HRR. InMemoryPskStore не шарится между JVM.
-                // реализовать при появлении production PskStore (Redis, etc.)
-                boolean ageOk = true;
-                if (pskKeyFromStore) {
-                    ageOk =
-                            validatePskTicketAge(
-                                    obfuscatedTicketAge, pskEntryIssueTime, pskEntryTicketAgeAdd);
-                    if (!ageOk) {
-                        LOG.log(
-                                Level.WARNING,
-                                "PSK ticket age mismatch, falling back to full handshake");
-                    }
-                }
-                pskAccepted = ageOk;
-            } else {
-                // RFC 8446 §4.2.11.2: binder считается от полного handshake-фрейма
-                boolean binderOk = TlsPskHelper.verifyBinder(frame, pskKey, hashLen);
-                if (binderOk) {
-                    if (pskKeyFromStore) {
-                        PskEntry consumed = serverPskStore.get(pskIdentityRaw);
-                        if (consumed != null) {
-                            boolean ageOk =
-                                    validatePskTicketAge(
-                                            obfuscatedTicketAge,
-                                            pskEntryIssueTime,
-                                            pskEntryTicketAgeAdd);
-                            consumed.destroy();
-                            if (ageOk) {
-                                pskAccepted = true;
-                            } else {
-                                LOG.log(
-                                        Level.WARNING,
-                                        "PSK ticket age mismatch, falling back to full handshake");
-                            }
-                        }
-                    } else {
-                        pskAccepted = true;
-                    }
-                } else {
-                    LOG.log(Level.WARNING, "PSK binder verification failed");
-                    throw new TlsException(
-                            TlsConstants.ALERT_HANDSHAKE_FAILURE, "PSK binder verification failed");
-                }
-            }
+        if (hrrSent) {
+            resolvePskAfterHrr(clientPsk, frame);
+        } else {
+            resolvePskInFirstClientHello(chBody, frame, clientPsk, clientServerName);
         }
 
         // Добавляем в транскрипт ПОСЛЕ PSK верификации (для CH2
@@ -1742,22 +2286,19 @@ public final class TlsHandshakeEngine {
         // --- SNI certificate selection (RFC 6066 §3, RFC 8446 §4.4.2) ---
         byte[] ocspForCert = this.ocspResponse;
         if (!pskAccepted && sniSelector != null) {
-            String sni = TlsMessageParser.parseClientHelloSni(chBody);
-            if (sni != null) {
-                TlsServerCredentials creds = sniSelector.select(sni);
+            if (clientServerName != null) {
+                TlsServerCredentials creds = sniSelector.select(clientServerName);
                 if (creds != null) {
                     List<GostCertificate> newChain = creds.getCertificateChain();
                     int newScheme =
                             TlsCiphersuite.namedGroupToSignatureScheme(
                                     TlsCertUtils.getNamedGroup(newChain.get(0).getPublicKey()));
+                    // Список наборов остаётся прежним: новый сборщик не должен вернуть наборы,
+                    // которые приложение отключило
                     this.messageBuilder =
                             new TlsMessageBuilder(
                                     ciphersuite,
-                                    List.of(
-                                            TlsConstants
-                                                    .TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                                            TlsConstants
-                                                    .TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S),
+                                    messageBuilder.getOfferedCipherSuiteIds(),
                                     selectedNamedGroup,
                                     newScheme,
                                     creds.getPrivateKey(),
@@ -1766,6 +2307,13 @@ public final class TlsHandshakeEngine {
                     ocspForCert = creds.getOcspResponse();
                 }
             }
+        }
+
+        // RFC 8446 §4.2: staple допустим только как ответ на status_request клиента.
+        // Здесь chBody — итоговый ClientHello (CH2 после HRR), поэтому решение
+        // принимается по тому сообщению, на которое сервер реально отвечает.
+        if (ocspForCert != null && !TlsMessageParser.clientHelloRequestsOcsp(chBody)) {
+            ocspForCert = null;
         }
 
         // Определяем схему подписи по кривой сертификата (RFC 9367 §5.2)
@@ -1786,8 +2334,35 @@ public final class TlsHandshakeEngine {
         TlsMessageParser.ParsedKeyShare parsedCH =
                 TlsMessageParser.parseClientHello(chBody, selectedNamedGroup, acceptableSchemes, 0);
 
+        // RFC 8446 §9.2: без signature_algorithms рукопожатие возможно только по принятому PSK.
+        // При отвергнутом PSK сервер перешёл бы к сертификату и подписал бы CertificateVerify без
+        // согласия клиента, поэтому fail-closed
+        if (!parsedCH.signatureAlgorithmsPresent && !pskAccepted) {
+            throw new TlsException(
+                    TlsConstants.ALERT_MISSING_EXTENSION,
+                    "ClientHello: signature_algorithms required when the PSK is not accepted");
+        }
+
+        // RFC 8446 §4.4.2.2 требует схему из списка клиента, а §4.4.3 допускает схему вне списка,
+        // если цепочку без неподдерживаемых алгоритмов составить нельзя: у сервера одна цепочка
+        // на имя. Рукопожатие продолжается, а оператору остаётся строка в журнале: клиент со
+        // строгой проверкой сам отвергнет подпись. Список схем клиента не пишется (до 64 КБ).
+        if (!pskAccepted
+                && acceptableSchemes != null
+                && parsedCH.signatureAlgorithmsPresent
+                && parsedCH.matchedSigScheme == 0) {
+            log.log(
+                    Level.DEBUG,
+                    "Client did not offer the signature scheme 0x{0} of the server certificate,"
+                            + " continuing the handshake (sni={1}, after HelloRetryRequest={2})",
+                    String.format("%04x", acceptableSchemes[0]),
+                    TlsUtils.peerTextForLog(parsedCH.serverName),
+                    hrrSent);
+        }
+
         // Определяем согласованный ciphersuite по пересечению списков
-        TlsCiphersuite matchedSuite = messageBuilder.negotiateCiphersuite(chBody, this.ciphersuite);
+        TlsCiphersuite matchedSuite =
+                messageBuilder.negotiateCiphersuite(chBody, this.ciphersuite, hashLen);
         if (matchedSuite == null) {
             throw new TlsException(
                     TlsConstants.ALERT_HANDSHAKE_FAILURE,
@@ -1795,12 +2370,13 @@ public final class TlsHandshakeEngine {
         }
         if (matchedSuite != this.ciphersuite) {
             this.ciphersuite = matchedSuite;
-            this.negotiatedCiphersuite = matchedSuite;
         }
         if (parsedCH.matchedSigScheme != 0 && parsedCH.matchedSigScheme != selectedSigScheme) {
             messageBuilder.updateSigScheme(parsedCH.matchedSigScheme);
         }
-        this.requestedServerName = parsedCH.serverName;
+        // То же проверенное значение, что получили привязка PSK и селектор: полный разбор
+        // повторяет проверку имени (parseClientHello самодостаточен), но результат берётся один
+        this.requestedServerName = clientServerName;
         this.maxFragmentLength = parsedCH.clientMaxFragLen;
 
         // Эхо-отражение legacy_session_id из ClientHello (RFC 8446 §4.1.3)
@@ -1811,53 +2387,110 @@ public final class TlsHandshakeEngine {
             byte[] sid = new byte[sidLen];
             System.arraycopy(chBody, 35, sid, 0, sidLen);
             messageBuilder.setClientSessionId(sid);
-        }
-
-        // Определяем ECParams по фактической группе клиента
-        int actualGroup = parsedCH.actualGroup;
-        ECParameters actualEcParams;
-        if (actualGroup == selectedNamedGroup) {
-            actualEcParams = ecParams;
-        } else {
-            try {
-                actualEcParams = TlsCiphersuite.namedGroupToParams(actualGroup);
-            } catch (IllegalArgumentException e) {
-                // RFC 8701 §3.1 — клиент вправе включать GREASE-значения
-                // (0xAAAA, 0xBABA...) в key_share. Сервер обязан их игнорировать,
-                // не прерывая handshake. Неизвестная группа -> actualEcParams=null ->
-                // далее selectHrrGroup() найдёт ГОСТ-группу и отправит HRR,
-                // либо бросит HANDSHAKE_FAILURE если пересечения нет.
-                actualEcParams = null;
+            // Только CH1: dummy CCS отправляется один раз, после первого сообщения сервера
+            // (HRR или ServerHello). На CH2 после HRR он уже отправлен.
+            if (!hrrSent) {
+                serverCcsPending.set(true);
             }
         }
 
-        // Проверка: совпадает ли группа клиента с предпочтительной?
-        // Если нет — отправляем HRR с подходящей группой (RFC 8446 §4.1.3, §4.2.8).
-        if (actualGroup != selectedNamedGroup) {
-            if (hrrSent) {
-                if (actualGroup != hrrRequestedGroup) {
-                    throw new TlsException(
-                            TlsConstants.ALERT_ILLEGAL_PARAMETER,
-                            "ClientHello after HRR: wrong key_share group 0x"
-                                    + Integer.toHexString(actualGroup));
+        // Выбор группы по ВСЕМ записям key_share (RFC 8446 §4.1.4, §4.2.8). Парсер записи не
+        // выбирает: иначе HRR мог бы запросить группу, для которой клиент уже прислал key_share.
+        List<TlsMessageParser.KeyShareEntry> shares = parsedCH.keyShareEntries;
+        TlsMessageParser.KeyShareEntry chosen;
+        if (hrrSent) {
+            // CH2 после HRR: ровно одна запись с запрошенной группой (§4.1.2, §4.2.8)
+            if (!parsedCH.keySharePresent
+                    || shares.size() != 1
+                    || shares.get(0).group() != hrrRequestedGroup) {
+                throw new TlsException(
+                        TlsConstants.ALERT_ILLEGAL_PARAMETER,
+                        "ClientHello after HRR: key_share must contain exactly one entry for"
+                                + " group 0x"
+                                + Integer.toHexString(hrrRequestedGroup));
+            }
+            chosen = shares.get(0);
+        } else {
+            if (!parsedCH.keySharePresent) {
+                throw new TlsException(
+                        TlsConstants.ALERT_MISSING_EXTENSION,
+                        "ClientHello: key_share extension required");
+            }
+            // Пустой client_shares - запрос выбора группы у сервера (RFC 8446 §4.2.8). Выбирать
+            // группу можно только из supported_groups, а он обязателен при key_share (§9.2).
+            if (shares.isEmpty() && !parsedCH.supportedGroupsDeclared) {
+                throw new TlsException(
+                        TlsConstants.ALERT_MISSING_EXTENSION,
+                        "ClientHello: supported_groups required with empty key_share");
+            }
+            int[] shareGroups = new int[shares.size()];
+            for (int i = 0; i < shareGroups.length; i++) {
+                shareGroups[i] = shares.get(i).group();
+            }
+            chosen = null;
+            // 1. Предпочтение сервера есть среди записей key_share
+            for (TlsMessageParser.KeyShareEntry e : shares) {
+                if (e.group() == selectedNamedGroup) {
+                    chosen = e;
+                    break;
                 }
-                // Клиент ответил на HRR запрошенной группой — принимаем,
-                // переключаемся на фактическую группу
-            } else {
-                int hrrGroup = selectHrrGroup(parsedCH.supportedGroups, selectedNamedGroup);
+            }
+            // 2. Предпочтение сервера есть у клиента, но без key_share: HRR на него
+            if (chosen == null
+                    && parsedCH.supportedGroupsDeclared
+                    && containsGroup(parsedCH.supportedGroups, selectedNamedGroup)) {
+                hrrRequestedGroup = selectedNamedGroup;
+                sendHelloRetryRequest(selectedNamedGroup, clientPsk);
+                return;
+            }
+            // 3. Первая поддерживаемая сервером запись key_share: принимаем без HRR
+            if (chosen == null) {
+                for (TlsMessageParser.KeyShareEntry e : shares) {
+                    // RFC 8701 §3.1: GREASE и другие неизвестные группы игнорируются
+                    if (isServerSupportedGroup(e.group())) {
+                        chosen = e;
+                        break;
+                    }
+                }
+            }
+            // 4. Иначе HRR на поддерживаемую группу клиента, отсутствующую в key_share
+            if (chosen == null) {
+                int hrrGroup =
+                        parsedCH.supportedGroupsDeclared
+                                ? selectHrrGroup(parsedCH.supportedGroups, shareGroups)
+                                : 0;
+                // 5. Общей группы нет
                 if (hrrGroup == 0) {
                     throw new TlsException(
                             TlsConstants.ALERT_HANDSHAKE_FAILURE,
                             "No compatible group between client and server");
                 }
                 hrrRequestedGroup = hrrGroup;
-                sendHelloRetryRequest(hrrGroup);
+                sendHelloRetryRequest(hrrGroup, clientPsk);
                 return;
             }
         }
 
+        int actualGroup = chosen.group();
+        // SNI пишется только на DEBUG и только очищенным: имя узла приходит от клиента
+        if (log.isLoggable(Level.DEBUG)) {
+            log.log(
+                    Level.DEBUG,
+                    "ClientHello accepted: cipher suite {0}, group 0x{1}, PSK accepted={2},"
+                            + " sni={3}, after HelloRetryRequest={4}",
+                    ciphersuite.forLog(),
+                    String.format("%04x", actualGroup),
+                    pskAccepted,
+                    TlsUtils.peerTextForLog(clientServerName),
+                    hrrSent);
+        }
+        ECParameters actualEcParams =
+                actualGroup == selectedNamedGroup
+                        ? ecParams
+                        : TlsCiphersuite.namedGroupToParams(actualGroup);
+
         // Декодируем публичный ключ клиента
-        byte[] peerKeyRaw = parsedCH.ecdhePublicKeyRaw;
+        byte[] peerKeyRaw = chosen.key();
         PublicKeyParameters peerPub = TlsEncoding.decodePoint(peerKeyRaw, actualEcParams);
         ctx.setPeerEcdhePublicKey(peerPub);
 
@@ -1866,11 +2499,16 @@ public final class TlsHandshakeEngine {
         ctx.setEcdhePrivateKey(ecdheKp.getPrivate());
         byte[] ecdhePoint = TlsEncoding.encodePoint(ecdheKp.getPublic());
 
-        // Shared secret
-        byte[] sharedSecret =
-                computeEcdheShared(
-                        ctx.getEcdhePrivateKey(), ctx.getPeerEcdhePublicKey(), actualEcParams.hlen);
-        ctx.setEcdhePrivateKey(null);
+        // Shared secret. Эфемерный ключ после расчёта не нужен (forward secrecy): затираем сам
+        // ключ, а не только ссылку на него. Уже затёртый объект остаётся в контексте до его
+        // уничтожения в конце рукопожатия: нулевые байты секрета не несут
+        byte[] sharedSecret;
+        try {
+            sharedSecret =
+                    computeEcdheShared(ctx.getEcdhePrivateKey(), ctx.getPeerEcdhePublicKey());
+        } finally {
+            ctx.getEcdhePrivateKey().destroy();
+        }
 
         ctx.setKeySchedule(new TlsKeySchedule(ciphersuite));
         if (pskAccepted) {
@@ -1878,6 +2516,7 @@ public final class TlsHandshakeEngine {
         }
         TlsUtils.wipeArray(pskKey);
         pskKey = null;
+        wipeCh1PskState();
         try {
             ctx.getKeySchedule().deriveHandshakeSecret(sharedSecret);
         } finally {
@@ -1885,10 +2524,10 @@ public final class TlsHandshakeEngine {
         }
 
         // ServerHello: key_share с той же группой, что у клиента
-        byte[] shBody = messageBuilder.buildServerHello(ecdhePoint, pskAccepted, actualGroup);
+        byte[] shBody = messageBuilder.buildServerHello(ecdhePoint, acceptedPskIndex, actualGroup);
         byte[] shFrame = new TlsHandshakeMessage(TlsConstants.HT_SERVER_HELLO, shBody).encode();
         ctx.addToTranscript(shFrame);
-        outgoingQueue.addLast(shFrame);
+        queueMessage(shFrame);
 
         // Вырабатываем handshake traffic keys
         byte[] hsTranscript = ctx.transcriptHash();
@@ -1901,24 +2540,28 @@ public final class TlsHandshakeEngine {
         handshakeServerKeys = ctx.getKeySchedule().deriveTrafficKeys(serverHandshakeTrafficSecret);
         handshakeClientKeys = ctx.getKeySchedule().deriveTrafficKeys(clientHandshakeTrafficSecret);
 
-        // Сервер может сразу писать (SH уже отправлен в открытом виде,
-        // остальное — через writerRecord) и читать (Finished от клиента)
-        readKeys = handshakeClientKeys;
-        readKeysChanged = true;
-        writeKeys = handshakeServerKeys;
-        writeKeysChanged = true;
+        // Читать ключами рукопожатия сервер начинает сразу (следующая запись клиента зашифрована),
+        // а писать — после ServerHello: он уходит открытым, смена ключа стоит в потоке сразу за ним
+        // (RFC 8446 §4.1.3, §5.1)
+        changeReadKeys(handshakeClientKeys);
+        queueWriteKeyChange(handshakeServerKeys);
 
         // ALPN (RFC 7301 §3.2): selector или auto-select.
-        // Если задан alpnSelector — JSSE решает; null от selector = no ALPN.
+        // Контракт селектора совпадает с JDK (SSLEngine.setHandshakeApplicationProtocolSelector):
+        // null - отказ, рукопожатие завершается алертом no_application_protocol; пустая строка -
+        // протокол не выбран, продолжаем без ALPN. Молчаливое превращение отказа в успех
+        // позволило бы пиру обойти политику сервера.
         // Иначе auto-select по serverAlpnProtocols (как в фазе 3).
         List<String> clientAlpn = TlsMessageParser.parseClientHelloAlpn(chBody);
         if (clientAlpn != null && !clientAlpn.isEmpty()) {
             if (alpnSelector != null) {
                 String selected = alpnSelector.apply(clientAlpn);
-                // JDK-конвенция — JdkAlpnSslEngine возвращает "" при
-                // отсутствии согласованного протокола (не null). Пустая строка
-                // означает "ALPN не согласован" — продолжаем без него.
-                if (selected != null && !selected.isEmpty()) {
+                if (selected == null) {
+                    throw new TlsException(
+                            TlsConstants.ALERT_NO_APPLICATION_PROTOCOL,
+                            "ALPN selector rejected the client protocol list");
+                }
+                if (!selected.isEmpty()) {
                     if (!clientAlpn.contains(selected)) {
                         throw new TlsException(
                                 TlsConstants.ALERT_NO_APPLICATION_PROTOCOL,
@@ -1926,8 +2569,6 @@ public final class TlsHandshakeEngine {
                     }
                     this.selectedAlpnProtocol = selected;
                 }
-                // null / "" от selector = ALPN не использовать, EE без extension
-                // null от selector = ALPN не использовать, EE без extension
             } else if (serverAlpnProtocols != null) {
                 String selected = TlsMessageParser.selectAlpn(serverAlpnProtocols, clientAlpn);
                 if (selected == null) {
@@ -1945,20 +2586,18 @@ public final class TlsHandshakeEngine {
         byte[] eeFrame =
                 new TlsHandshakeMessage(TlsConstants.HT_ENCRYPTED_EXTENSIONS, eeBody).encode();
         ctx.addToTranscript(eeFrame);
-        outgoingQueue.addLast(eeFrame);
+        queueMessage(eeFrame);
 
         if (!pskAccepted) {
             // CertificateRequest (если требуется mTLS)
             if (requestClientAuth) {
                 byte[] crBody =
-                        oidFilters != null && !oidFilters.isEmpty()
-                                ? TlsMessageBuilder.buildCertificateRequest(oidFilters)
-                                : TlsMessageBuilder.buildCertificateRequest();
+                        TlsMessageBuilder.buildCertificateRequest(oidFilters, requestClientOcsp);
                 byte[] crFrame =
                         new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE_REQUEST, crBody)
                                 .encode();
                 ctx.addToTranscript(crFrame);
-                outgoingQueue.addLast(crFrame);
+                queueMessage(crFrame);
             }
 
             // Certificate
@@ -1969,7 +2608,7 @@ public final class TlsHandshakeEngine {
             byte[] certFrame =
                     new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE, certBody).encode();
             ctx.addToTranscript(certFrame);
-            outgoingQueue.addLast(certFrame);
+            queueMessage(certFrame);
 
             // CertificateVerify
             byte[] cvTranscript = ctx.transcriptHash();
@@ -1978,7 +2617,7 @@ public final class TlsHandshakeEngine {
             byte[] cvFrame =
                     new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE_VERIFY, cvBody).encode();
             ctx.addToTranscript(cvFrame);
-            outgoingQueue.addLast(cvFrame);
+            queueMessage(cvFrame);
 
             // Server Finished
             byte[] sfTranscript = ctx.transcriptHash();
@@ -1990,7 +2629,8 @@ public final class TlsHandshakeEngine {
             ctx.addToTranscript(sfFrame);
             // RFC 8446 §7.1 Table 2: app transcript = ClientHello...server Finished
             this.appTranscriptHash = ctx.transcriptHash();
-            outgoingQueue.addLast(sfFrame);
+            queueMessage(sfFrame);
+            scheduleServerApplicationKeys();
 
             pendingNextState =
                     requestClientAuth
@@ -2006,7 +2646,8 @@ public final class TlsHandshakeEngine {
             byte[] sfFrame = new TlsHandshakeMessage(TlsConstants.HT_FINISHED, sfBody).encode();
             ctx.addToTranscript(sfFrame);
             this.appTranscriptHash = ctx.transcriptHash();
-            outgoingQueue.addLast(sfFrame);
+            queueMessage(sfFrame);
+            scheduleServerApplicationKeys();
 
             pendingNextState = State.SERVER_WAIT_CLIENT_FINISHED;
         }
@@ -2033,7 +2674,13 @@ public final class TlsHandshakeEngine {
         }
         ctx.addToTranscript(frame);
 
-        List<GostCertificate> chain = TlsMessageParser.parseCertificate(certMsg.getBody());
+        // status_request в CertificateEntry допустим, только если мы запросили его в
+        // CertificateRequest; иначе это незапрошенное расширение (RFC 8446 §4.2).
+        // Неизвестные расширения парсер игнорирует по §4.2.
+        List<GostCertificate> chain =
+                TlsMessageParser.parseCertificate(
+                        certMsg.getBody(),
+                        requestClientOcsp ? Set.of(TlsConstants.EXT_STATUS_REQUEST) : Set.of());
         if (chain.isEmpty()) {
             // RFC 8446 §4.4.2: клиент может прислать пустой certificate_list если нет сертификата.
             // Решение о том, обязателен ли сертификат, принимается на уровне engine
@@ -2082,37 +2729,27 @@ public final class TlsHandshakeEngine {
         if (!java.security.MessageDigest.isEqual(cfMsg.getBody(), expectedVerifyData)) {
             TlsUtils.wipeArray(clientFinishedTranscript);
             throw new TlsException(
-                    TlsConstants.ALERT_HANDSHAKE_FAILURE, "Client Finished verification failed");
+                    TlsConstants.ALERT_DECRYPT_ERROR, "Client Finished verification failed");
         }
 
-        ctx.getKeySchedule().deriveMasterSecret();
-        // RMS = Derive-Secret(MS, "res master", Transcript-Hash) после включения CF
+        // RMS = Derive-Secret(MS, "res master", Transcript-Hash) после включения CF; мастер-секрет
+        // выработан вместе с ключами приложения, когда Finished сервера встал в очередь
         byte[] hsTranscript = ctx.transcriptHash();
         this.resumptionMasterSecret = ctx.getKeySchedule().getResumptionMasterSecret(hsTranscript);
         TlsUtils.wipeArray(hsTranscript);
-        // Используем транскрипт ДО client Cert/CV/CF — RFC 8446 §7.1 Table 2
-        byte[] appTranscript =
-                appTranscriptHash != null ? appTranscriptHash : clientFinishedTranscript;
-
-        // Capture app traffic secrets для KeyUpdate до ctx.destroy()
-        this.serverAppTrafficSecret =
-                ctx.getKeySchedule().getServerApplicationTrafficSecret(appTranscript);
-        this.clientAppTrafficSecret =
-                ctx.getKeySchedule().getClientApplicationTrafficSecret(appTranscript);
-
-        TlsTrafficKeys appServerKeys =
-                ctx.getKeySchedule().deriveTrafficKeys(serverAppTrafficSecret);
-        TlsTrafficKeys appClientKeys =
-                ctx.getKeySchedule().deriveTrafficKeys(clientAppTrafficSecret);
-
-        TlsUtils.wipeArray(appTranscript);
-        TlsUtils.wipeArray(appTranscriptHash);
-        appTranscriptHash = null;
-
-        readKeys = appClientKeys;
-        readKeysChanged = true;
-        writeKeys = appServerKeys;
-        writeKeysChanged = true;
+        TlsUtils.wipeArray(clientFinishedTranscript);
+        // Ключи приложения выработаны обеими серверными ветками (полной и PSK) при постановке
+        // Finished сервера; их отсутствие значит ошибку кода
+        if (readKeysAfterPeerFinished == null) {
+            // TlsException, а не IllegalStateException: это обычный фатальный путь рукопожатия
+            // (alert, закрытие, затирание ключей), а в jsse IllegalStateException читается как
+            // «движок закрыт» и ошибку кода не выдаёт
+            throw new TlsException(
+                    TlsConstants.ALERT_INTERNAL_ERROR, "Application keys not derived");
+        }
+        // Ключ записи приложения уже действует с конца полёта сервера; меняется только ключ чтения
+        changeReadKeys(readKeysAfterPeerFinished);
+        readKeysAfterPeerFinished = null;
 
         // Handshake-ключи больше не нужны — соединение перешло на app traffic keys
         if (handshakeServerKeys != null) {
@@ -2142,8 +2779,13 @@ public final class TlsHandshakeEngine {
      * Вызывать до {@link #start()}.
      *
      * @param serverHostname DNS-имя сервера (null = без SNI)
+     * @throws IllegalArgumentException если имя нельзя отправить в SNI: управляющие символы,
+     *                                  не-ASCII, длина больше
+     *                                  {@link TlsConstants#MAX_SERVER_NAME_LENGTH}, пустые метки
      */
     public void setServerHostname(String serverHostname) {
+        // Ошибка в момент вызова, а не внутри start() и не как internal_error рукопожатия
+        ServerNameCheck.requireValidForSni(serverHostname);
         this.serverHostname = serverHostname;
     }
 
@@ -2165,6 +2807,7 @@ public final class TlsHandshakeEngine {
      * @param protocols список протоколов ALPN в порядке убывания предпочтения
      */
     public void setClientAlpnProtocols(List<String> protocols) {
+        TlsUtils.validateAlpnProtocolsIfPresent(protocols);
         this.clientAlpnProtocols = protocols;
     }
 
@@ -2177,6 +2820,7 @@ public final class TlsHandshakeEngine {
      * @param protocols список протоколов ALPN в порядке убывания предпочтения
      */
     public void setServerAlpnProtocols(List<String> protocols) {
+        TlsUtils.validateAlpnProtocolsIfPresent(protocols);
         this.serverAlpnProtocols = protocols;
     }
 
@@ -2192,7 +2836,9 @@ public final class TlsHandshakeEngine {
      * <p>
      * Если задан, вызывается после парсинга ClientHello для выбора ALPN.
      * Избранный протокол проверяется на вхождение в список клиента.
-     * null от selector = ALPN не использовать (EE без extension).
+     * null от selector = отказ: рукопожатие завершается фатальным алертом
+     * no_application_protocol (120); пустая строка = ALPN не использовать
+     * (EE без extension), как в контракте JDK.
      * <p>
      * Используется {@code javax.net.ssl.SSLParameters.setHandshakeApplicationProtocolSelector}
      * из JSSE.
@@ -2209,14 +2855,39 @@ public final class TlsHandshakeEngine {
     /**
      * Устанавливает PSK-параметры для клиента.
      * Вызывать до {@link #start()}.
+     * <p>Только путь возобновления: binder считается с меткой {@code res binder}. Внешние PSK
+     * (метка {@code ext binder}, RFC 8446 §4.2.11.2) не поддерживаются.</p>
      *
      * @param psk                PSK-ключ
      * @param identity           тикет (opaque ticket)
      * @param obfuscatedTicketAge obfuscated_ticket_age
+     * @throws IllegalStateException если engine работает в роли сервера: у сервера PSK
+     *                               задаётся через {@link #setServerPsk} или
+     *                               {@link #setServerPskStore}
+     * @throws IllegalArgumentException если {@code psk} равен null или {@code identity} равна null,
+     *                                  пуста или заведомо не помещается в расширение pre_shared_key
+     *                                  ({@link TlsPskHelper#maxIdentityLength}). Проверка грубая:
+     *                                  принятая identity всё же может не поместиться в ClientHello
+     *                                  вместе с другими расширениями, тогда PSK снимается
+     *                                  ({@link #isPskOfferWithdrawn()})
      */
     public void setPsk(byte[] psk, byte[] identity, long obfuscatedTicketAge) {
+        // Клиентский PSK на сервере принимался бы binder-ом и молча отключал
+        // CertificateRequest, то есть клиентскую аутентификацию (mTLS).
+        if (role != Role.CLIENT) {
+            throw new IllegalStateException("setPsk is a client-only operation");
+        }
         if (psk == null) {
             throw new IllegalArgumentException("psk must not be null");
+        }
+        // Строгий сервер отвергает пустую identity (opaque identity<1..2^16-1>, RFC 8446 §4.2.11):
+        // лучше отказать при настройке, чем получить decode_error от пира посреди рукопожатия
+        // Верхняя граница - размер расширения, а не 2^16-1 из синтаксиса identity: длиннее тикет в
+        // ClientHello не помещается
+        int maxIdentityLength = TlsPskHelper.maxIdentityLength(hashLen);
+        if (identity == null || identity.length == 0 || identity.length > maxIdentityLength) {
+            throw new IllegalArgumentException(
+                    "PSK identity must be 1.." + maxIdentityLength + " bytes");
         }
         this.pskKey = psk.clone();
         this.pskIdentity = identity;
@@ -2227,10 +2898,25 @@ public final class TlsHandshakeEngine {
     /**
      * Устанавливает PSK-ключ для сервера (для верификации binder'а).
      * Вызывать до {@link #start()}.
+     * <p>Только путь возобновления: binder проверяется с меткой {@code res binder}. Внешние PSK
+     * (метка {@code ext binder}, RFC 8446 §4.2.11.2) не поддерживаются.</p>
      *
      * @param psk PSK-ключ
+     * @throws IllegalStateException если engine не серверный или запрошен клиентский сертификат
+     * @throws IllegalArgumentException если {@code psk} равен null
      */
     public void setServerPsk(byte[] psk) {
+        if (role != Role.SERVER) {
+            throw new IllegalStateException("setServerPsk is a server-only operation");
+        }
+        if (psk == null) {
+            throw new IllegalArgumentException("psk must not be null");
+        }
+        if (requestClientAuth) {
+            throw new IllegalStateException(
+                    "Explicit server PSK is not allowed when client certificate authentication"
+                            + " is requested");
+        }
         this.pskKey = psk.clone();
     }
 
@@ -2238,14 +2924,55 @@ public final class TlsHandshakeEngine {
      * Устанавливает PskStore для автоматического PSK-lookup на сервере.
      * При получении ClientHello engine сам извлекает PSK identity, ищет в store
      * и устанавливает pskKey — без необходимости внешнего парсинга ClientHello.
+     *
+     * <p>При запросе клиентского сертификата (need и want) хранилище принимается, но не
+     * используется: PSK несовместим с mTLS, поэтому handshake идёт полным.</p>
+     *
+     * @throws IllegalStateException если engine не серверный
      */
     public void setServerPskStore(PskStore store) {
+        if (role != Role.SERVER) {
+            throw new IllegalStateException("setServerPskStore is a server-only operation");
+        }
         this.serverPskStore = store;
+    }
+
+    /**
+     * @return true, если клиентский PSK был задан, но в ClientHello не поместился и снят: тикет
+     *         предъявить нельзя, его следует убрать из кэша. Рукопожатие идёт полным.
+     */
+    public boolean isPskOfferWithdrawn() {
+        return pskOfferWithdrawn;
     }
 
     /** @return true если PSK был принят */
     public boolean isPskAccepted() {
         return pskAccepted;
+    }
+
+    /**
+     * @return true если сервер запрашивает сертификат клиента (mTLS) или клиент
+     *         получил CertificateRequest
+     */
+    public boolean isClientAuthRequested() {
+        return requestClientAuth || clientAuthRequested;
+    }
+
+    /**
+     * Цепочка клиентского сертификата, которая реально уходит серверу (клиентская роль).
+     * <p>
+     * Читать после получения CertificateRequest: селектор или сверка схем подписи могли заменить
+     * цепочку из конфигурации или обнулить её. Пустой результат означает пустой Certificate.
+     *
+     * @return неизменяемая цепочка (лист первым), пустой список при пустом Certificate или
+     *         {@code null}, если сервер не присылал CertificateRequest (сертификат не запрашивался)
+     */
+    public List<GostCertificate> getSentClientCertificateChain() {
+        if (!clientAuthRequested) {
+            return null;
+        }
+        List<GostCertificate> chain = messageBuilder.getCertificateChain();
+        return chain == null ? List.of() : List.copyOf(chain);
     }
 
     /**
@@ -2268,17 +2995,13 @@ public final class TlsHandshakeEngine {
      * Вызывается владельцем engine после завершения или ошибки.
      */
     public void destroy() {
+        serverCcsPending.set(false);
         if (handshakeServerKeys != null) handshakeServerKeys.destroy();
         if (handshakeClientKeys != null) handshakeClientKeys.destroy();
         if (readKeys != null
                 && readKeys != handshakeServerKeys
                 && readKeys != handshakeClientKeys) {
             readKeys.destroy();
-        }
-        if (writeKeys != null
-                && writeKeys != handshakeServerKeys
-                && writeKeys != handshakeClientKeys) {
-            writeKeys.destroy();
         }
         if (serverHandshakeTrafficSecret != null) {
             TlsUtils.wipeArray(serverHandshakeTrafficSecret);
@@ -2300,78 +3023,67 @@ public final class TlsHandshakeEngine {
             TlsUtils.wipeArray(appTranscriptHash);
             appTranscriptHash = null;
         }
-        if (pendingWriteKeys != null) {
-            pendingWriteKeys.destroy();
-            pendingWriteKeys = null;
-        }
-        if (pendingWriterSecret != null) {
-            TlsUtils.wipeArray(pendingWriterSecret);
-            pendingWriterSecret = null;
+        // Отложенная смена ключа чтения: при срыве рукопожатия до Finished клиента ключи
+        // приложения уже выработаны и иначе остались бы в памяти
+        if (readKeysAfterPeerFinished != null) {
+            readKeysAfterPeerFinished.destroy();
+            readKeysAfterPeerFinished = null;
         }
         if (ctx != null) ctx.destroy();
         if (resumptionMasterSecret != null) {
             TlsUtils.wipeArray(resumptionMasterSecret);
             resumptionMasterSecret = null;
         }
+        if (exporterMasterSecret != null) {
+            TlsUtils.wipeArray(exporterMasterSecret);
+            exporterMasterSecret = null;
+        }
         TlsUtils.wipeArray(pskKey);
         pskKey = null;
+        wipeCh1PskState();
+        acceptedPskIndex = TlsMessageBuilder.NO_SELECTED_PSK;
         pskIdentity = null;
         obfuscatedTicketAge = 0;
-        byte[] frame;
-        while ((frame = outgoingQueue.pollFirst()) != null) {
-            TlsUtils.wipeArray(frame);
+        // Неотданный поток: сообщения и ключи в метках смены ключа записи
+        HandshakeOutput item;
+        while ((item = outgoingQueue.pollFirst()) != null) {
+            if (item instanceof HandshakeOutput.Message message) {
+                TlsUtils.wipeArray(message.frame());
+            } else if (item instanceof HandshakeOutput.WriteKeyChange change) {
+                change.destroy();
+            }
         }
         receivedCertificates = null;
     }
 
     /**
-     * Вычисляет ECDHE shared secret (RFC 6090, RFC 9367 §4.1).
+     * Вычисляет ECDHE shared secret по RFC 9367 §6.1.1.1 (шаг 6, сторона клиента) и
+     * §6.1.1.2 (шаг 5, сторона сервера): {@code Q = (h · d) · Q_peer}, где {@code h} — кофактор
+     * кривой. Результат — координата X точки {@code Q} в little-endian длиной
+     * {@code coordinate_length} (шаг 8 и шаг 7 соответственно).
      * <p>
-     * Выполняет скалярное умножение {@code myPriv * peerPub} на эллиптической кривой.
-     * Кофактор НЕ применяется — приватный ключ уже в подгруппе порядка q,
-     * RFC 9367 §4.1 требует обычный ECDH, без cofactor ECDH.
-     * Результат — X-координата точки (BigInteger), переведённая в bytes big-endian
-     * фиксированной длины через {@link #toFixedLengthBytes}.
+     * Кофактор обязателен: на кривых с {@code h = 4} (GC256A, GC512C) секрет без него не совпадёт
+     * с секретом пира, а свои клиент и сервер ошибались бы одинаково и расхождение не обнаружили
+     * бы. Вычисление делегировано в {@link KeyAgreement#computeSharedSecret}, где кофактор
+     * учтён и проверяется совпадение кривых ключей.
      * <p>
-     * Метод static и не сохращает shared secret в полях экземпляра — безопасность:
+     * Метод static и не сохраняет shared secret в полях экземпляра — безопасность:
      * вызывающий код обязан занулить результат через {@code TlsUtils.wipeArray}.
      *
-     * @return shared secret (X-координата, hashLen байт)
-     * @throws TlsException если общая точка — бесконечность
+     * @return shared secret (X-координата в LE, {@code coordinate_length} байт)
+     * @throws TlsException handshake_failure, если кривые ключей различаются или общая точка —
+     *     бесконечность
      */
-    private static byte[] computeEcdheShared(
-            PrivateKeyParameters myPriv, PublicKeyParameters peerPub, int hashLen)
+    static byte[] computeEcdheShared(PrivateKeyParameters myPriv, PublicKeyParameters peerPub)
             throws TlsException {
-        ECPoint shared = peerPub.getQ().multiply(myPriv.getD());
-        shared = shared.normalize();
-        if (shared.isInfinity()) {
+        try {
+            return KeyAgreement.computeSharedSecret(myPriv, peerPub);
+        } catch (IllegalArgumentException | IllegalStateException e) {
             throw new TlsException(
                     TlsConstants.ALERT_HANDSHAKE_FAILURE,
-                    "ECDHE shared secret is point at infinity");
+                    "ECDHE shared secret computation failed: " + e.getMessage(),
+                    e);
         }
-        BigInteger x = shared.getX();
-        byte[] xRawBe = toFixedLengthBytes(x, hashLen);
-        byte[] xRawLe = Pack.reverseBytes(xRawBe);
-        return xRawLe;
-    }
-
-    /**
-     * Приводит BigInteger к массиву байт фиксированной длины.
-     * <p>
-     * {@code BigInteger.toByteArray()} может вернуть массив короче (нулевой старший байт
-     * удалён) или длиннее (добавлен знаковый байт) — этот метод дополняет нулями слева
-     * или обрезает слева до нужной длины. Используется для ECDHE X-координаты (hashLen байт).
-     */
-    private static byte[] toFixedLengthBytes(BigInteger value, int len) {
-        byte[] raw = value.toByteArray();
-        if (raw.length == len) return raw;
-        byte[] result = new byte[len];
-        if (raw.length < len) {
-            System.arraycopy(raw, 0, result, len - raw.length, raw.length);
-        } else {
-            System.arraycopy(raw, raw.length - len, result, 0, len);
-        }
-        return result;
     }
 
     /**

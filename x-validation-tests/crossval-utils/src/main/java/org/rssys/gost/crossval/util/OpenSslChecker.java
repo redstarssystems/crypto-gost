@@ -96,6 +96,36 @@ public final class OpenSslChecker {
     }
 
     /**
+     * Возвращает версию заданной сборки OpenSSL: первую строку вывода {@code openssl version}
+     * (например, {@code OpenSSL 3.5.7 9 Jun 2026 (Library: OpenSSL 3.5.7 9 Jun 2026)}).
+     * <p>
+     * Нужна, чтобы кросс-тест явно фиксировал, на какой сборке он выполнен: на машине их несколько,
+     * а умения сборок различаются.
+     *
+     * @param binary путь к бинарнику openssl
+     * @param env    переменные окружения сборки (могут быть пустыми)
+     * @return первая строка вывода {@code openssl version}
+     * @throws Exception если бинарник не запускается или завершился с ошибкой
+     */
+    public static String versionOf(String binary, Map<String, String> env) throws Exception {
+        ProcessBuilder pb = new ProcessBuilder(binary, "version");
+        pb.redirectErrorStream(true);
+        pb.environment().putAll(env);
+        Process p = pb.start();
+        String out =
+                new String(
+                                p.getInputStream().readAllBytes(),
+                                java.nio.charset.StandardCharsets.UTF_8)
+                        .trim();
+        int exitCode = p.waitFor();
+        if (exitCode != 0 || out.isEmpty()) {
+            throw new IllegalStateException(
+                    "openssl version failed (exit=" + exitCode + ") for " + binary + ": " + out);
+        }
+        return out.lines().findFirst().orElse(out);
+    }
+
+    /**
      * Проверяет, что {@code openssl version} выполняется успешно.
      */
     public static void assumeOpenSslAvailable() {

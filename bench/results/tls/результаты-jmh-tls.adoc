@@ -30,6 +30,10 @@
 
 Цифры стабильные, относительная погрешность ±1-4 %.
 
+NOTE: Замеры выполнены с `TlsClientConfig.withCaPublicKey(...)`. В 0.8.0
+этот API заменён на `withTrustAnchorCertificate(...)`; имена методов и цифры
+ниже оставлены как исторические.
+
 == Что измеряет этот прогон
 
 Уровень `crypto-gost-tls13` — *чистый протокол*, без JSSE-обёртки. Замеры идут через `TlsSession` напрямую, обмен — через `InMemoryTlsTransport` (in-memory blocking-канал). Сети нет, JCA нет.

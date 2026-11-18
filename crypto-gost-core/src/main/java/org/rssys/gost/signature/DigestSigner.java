@@ -16,6 +16,15 @@ import org.rssys.gost.digest.Digest;
  * <p>
  * Подпись кодируется как конкатенация s и r в big-endian (X.509-формат), каждая длиной rolen байт,
  * где rolen = ceil(n.bitLength() / 8). Итоговая длина: 2 * rolen.
+ * <p>
+ * Класс не предназначен для общего использования несколькими потоками: у него изменяемый
+ * {@link Digest} и изменяемый {@link ECDSASigner}. Для параллельной работы создавайте
+ * подписанта на поток или на вызов. Нельзя вызывать {@code init} или {@code destroy}
+ * вложенного {@link ECDSASigner} во время подписи или проверки, в том числе повторным входом из
+ * того же потока. Если состояние вложенного подписанта изменилось во время операции, подпись или
+ * вердикт проверки не выдаются: бросается {@link IllegalStateException}, а не {@code false} при
+ * проверке. Если уничтожение началось позже последней внутренней проверки, выданная подпись
+ * валидна под копией прежнего ключа, снятой в начале операции.
  */
 public final class DigestSigner implements Signer {
     private final ECDSASigner signer;
@@ -58,8 +67,14 @@ public final class DigestSigner implements Signer {
 
     @Override
     public boolean verify(byte[] signature) {
+        checkInitialized();
+        // Хэш выработан до проверки длины: doFinal сбрасывает дайджест, и вызов с подписью
+        // неверной длины не оставляет в нём хвост сообщения
         byte[] hash = new byte[digest.getDigestSize()];
         digest.doFinal(hash, 0);
+        if (!SignatureCodec.hasValidLength(signature, params)) {
+            return false;
+        }
         BigInteger[] sig = decode(signature);
         return signer.verifySignature(hash, sig[0], sig[1]);
     }
@@ -67,6 +82,12 @@ public final class DigestSigner implements Signer {
     @Override
     public void reset() {
         digest.reset();
+    }
+
+    @Override
+    public void destroy() {
+        signer.destroy();
+        digest.destroy();
     }
 
     private void checkInitialized() {

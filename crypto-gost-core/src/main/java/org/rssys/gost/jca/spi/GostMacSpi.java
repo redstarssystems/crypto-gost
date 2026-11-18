@@ -5,7 +5,6 @@ import java.security.InvalidKeyException;
 import java.security.Key;
 import java.security.spec.AlgorithmParameterSpec;
 import javax.crypto.MacSpi;
-import javax.crypto.SecretKey;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.digest.Streebog256;
@@ -49,10 +48,23 @@ public abstract class GostMacSpi extends MacSpi {
     protected abstract int getMacLength();
 
     /**
+     * Требуемая длина ключа в байтах. По умолчанию любая непустая (HMAC-Стрибог принимает ключ
+     * произвольной длины); подкласс с фиксированной длиной ключа переопределяет метод, чтобы
+     * неверная длина давала {@link InvalidKeyException}, а не исключение из шифра.
+     */
+    protected int requiredKeyLength() {
+        return SymmetricKeyExtractor.ANY_LENGTH;
+    }
+
+    /**
      * Инициализирует MAC ключом.
      * <p>
      * Принимает {@link GostSecretKey} или {@link javax.crypto.spec.SecretKeySpec}
      * с форматом {@code "RAW"}.
+     *
+     * <p>После неудачного {@code init} MAC считается неинициализированным: прежний ключ
+     * не сохраняется, {@code update} и {@code doFinal} бросают {@link IllegalStateException}
+     * до успешной повторной инициализации.
      *
      * @param key   ключ аутентификации
      * @param params параметры алгоритма (не используются, должны быть {@code null})
@@ -62,17 +74,34 @@ public abstract class GostMacSpi extends MacSpi {
     @Override
     protected void engineInit(Key key, AlgorithmParameterSpec params)
             throws InvalidKeyException, InvalidAlgorithmParameterException {
+        // Старый делегат уничтожается до любых проверок: неудачный init не должен оставлять
+        // рабочим прежний ключ (fail-closed).
+        if (delegate != null) {
+            delegate.destroy();
+            delegate = null;
+        }
         if (params != null) {
             throw new InvalidAlgorithmParameterException(
                     "No algorithm parameters supported for GOST MAC");
         }
-        SymmetricKey keyParam = extractSymmetricKey(key);
-        if (delegate != null) {
-            delegate.destroy();
+        SymmetricKey keyParam = SymmetricKeyExtractor.forMac(key, requiredKeyLength(), "GOST MAC");
+        // Свежий делегат при каждой инициализации; полю присваивается только после успеха,
+        // чтобы не оставить неинициализированный делегат.
+        Mac newDelegate = null;
+        boolean initialized = false;
+        try {
+            newDelegate = createDelegate();
+            newDelegate.init(keyParam);
+            initialized = true;
+        } finally {
+            // Копия ключа нужна только на время init; делегат хранит собственные pads.
+            // Создание делегата внутри try: сбой в нём тоже не оставляет копию ключа в куче.
+            keyParam.destroy();
+            if (!initialized && newDelegate != null) {
+                newDelegate.destroy();
+            }
         }
-        // Создаём свежий делегат при каждой инициализации
-        delegate = createDelegate();
-        delegate.init(keyParam);
+        delegate = newDelegate;
     }
 
     /** Добавляет один байт к вычислению MAC. */
@@ -113,30 +142,6 @@ public abstract class GostMacSpi extends MacSpi {
     @Override
     protected int engineGetMacLength() {
         return getMacLength();
-    }
-
-    /**
-     * Извлекает {@link SymmetricKey} из JCA-ключа.
-     * Принимает {@link GostSecretKey} или любой {@link SecretKey} с форматом RAW.
-     */
-    private static SymmetricKey extractSymmetricKey(Key key) throws InvalidKeyException {
-        if (key == null) {
-            throw new InvalidKeyException("Key must not be null");
-        }
-        if (key instanceof GostSecretKey) {
-            return ((GostSecretKey) key).toSymmetricKey();
-        }
-        if (key instanceof SecretKey && "RAW".equals(key.getFormat())) {
-            byte[] encoded = key.getEncoded();
-            if (encoded == null || encoded.length == 0) {
-                throw new InvalidKeyException("Key encoding is null or empty");
-            }
-            return new SymmetricKey(encoded);
-        }
-        throw new InvalidKeyException(
-                "Unsupported key type: "
-                        + key.getClass().getName()
-                        + ". Expected GostSecretKey or SecretKey with RAW format");
     }
 
     private void checkInitialized() {
@@ -195,6 +200,11 @@ public abstract class GostMacSpi extends MacSpi {
         @Override
         protected int getMacLength() {
             return Kuznyechik.BLOCK_SIZE;
+        }
+
+        @Override
+        protected int requiredKeyLength() {
+            return Kuznyechik.KEY_SIZE;
         }
     }
 }

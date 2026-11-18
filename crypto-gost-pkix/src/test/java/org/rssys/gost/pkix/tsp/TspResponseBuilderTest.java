@@ -82,6 +82,25 @@ class TspResponseBuilderTest {
         assertTrue(response.isSignatureVerified());
     }
 
+    @Test
+    @DisplayName("verify без TSA-якорей отклоняется")
+    void verifyWithoutTrustAnchorsRejected() throws Exception {
+        byte[] req =
+                TspRequestBuilder.create().messageImprint(testHash256, GostOids.DIGEST_256).build();
+        byte[] resp =
+                TspResponseBuilder.create(req)
+                        .signer(tsaKey256.getPrivate(), tsaCert256)
+                        .policyOid(DUMMY_POLICY_OID)
+                        .serialNumber(BigInteger.ONE)
+                        .buildGranted();
+        TspResponse response = TspResponse.fromDer(resp);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> response.verify(testHash256, GostOids.DIGEST_256, null),
+                "пустой список TSA-якорей должен отклоняться");
+    }
+
     // ========================================================================
     // Эхо nonce
     // ========================================================================

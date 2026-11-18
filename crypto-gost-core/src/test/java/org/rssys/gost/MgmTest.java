@@ -2,6 +2,7 @@ package org.rssys.gost;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.cipher.Kuznyechik;
@@ -151,67 +152,6 @@ class MgmTest {
     }
 
     // -----------------------------------------------------------------------
-    // Тесты GF(2^128) умножения
-    // -----------------------------------------------------------------------
-
-    @Test
-    @DisplayName("gf128Mul: X * 0 = 0")
-    void testGf128MulByZero() {
-        byte[] x16 = h("8899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899");
-        byte[] x = java.util.Arrays.copyOf(x16, 16);
-        byte[] zero = new byte[16];
-        assertArrayEquals(zero, Mgm.gf128Mul(x, zero));
-    }
-
-    @Test
-    @DisplayName("gf128Mul: коммутативность X*Y == Y*X")
-    void testGf128MulCommutative() {
-        byte[] xFull = h("8899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF001122334455667788");
-        byte[] yFull = h("FFEEDDCCBBAA998877665544332211000F0E0D0C0B0A090807060504030201FF");
-        byte[] x = java.util.Arrays.copyOf(xFull, 16);
-        byte[] y = java.util.Arrays.copyOf(yFull, 16);
-        byte[] xy = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), java.util.Arrays.copyOf(y, 16));
-        byte[] yx = Mgm.gf128Mul(java.util.Arrays.copyOf(y, 16), java.util.Arrays.copyOf(x, 16));
-        assertArrayEquals(xy, yx, "GF(2^128) умножение должно быть коммутативным");
-    }
-
-    @Test
-    @DisplayName("gf128Mul: X * X вычисляется детерминированно")
-    void testGf128MulSquareDeterministic() {
-        byte[] xFull = h("8899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF001122334455667788");
-        byte[] x = java.util.Arrays.copyOf(xFull, 16);
-        byte[] sq1 = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), java.util.Arrays.copyOf(x, 16));
-        byte[] sq2 = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), java.util.Arrays.copyOf(x, 16));
-        assertArrayEquals(sq1, sq2, "X^2 должен быть детерминированным");
-    }
-
-    @Test
-    @DisplayName("gf128Mul: нейтральный элемент — X * 1 = X")
-    void testGf128MulByOne() {
-        byte[] x = java.util.Arrays.copyOf(h("8899AABBCCDDEEFF0011223344556677"), 16);
-        byte[] one = new byte[16];
-        one[15] = 1; // w^0 = 1 в big-endian
-        assertArrayEquals(
-                x, Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), one), "X * 1 должен равняться X");
-    }
-
-    @Test
-    @DisplayName("gf128Mul: дистрибутивность X*(Y^Z) == X*Y ^ X*Z")
-    void testGf128MulDistributive() {
-        byte[] x = java.util.Arrays.copyOf(h("8899AABBCCDDEEFF0011223344556677"), 16);
-        byte[] y = java.util.Arrays.copyOf(h("FFEEDDCCBBAA99887766554433221100"), 16);
-        byte[] z = java.util.Arrays.copyOf(h("0F0E0D0C0B0A09080706050403020100"), 16);
-        byte[] yz = new byte[16];
-        for (int i = 0; i < 16; i++) yz[i] = (byte) (y[i] ^ z[i]);
-        byte[] lhs = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), yz);
-        byte[] xy = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), java.util.Arrays.copyOf(y, 16));
-        byte[] xz = Mgm.gf128Mul(java.util.Arrays.copyOf(x, 16), java.util.Arrays.copyOf(z, 16));
-        byte[] rhs = new byte[16];
-        for (int i = 0; i < 16; i++) rhs[i] = (byte) (xy[i] ^ xz[i]);
-        assertArrayEquals(lhs, rhs, "GF(2^128) должен быть дистрибутивен: X*(Y^Z) == X*Y ^ X*Z");
-    }
-
-    // -----------------------------------------------------------------------
     // Roundtrip-тесты
     // -----------------------------------------------------------------------
 
@@ -273,6 +213,91 @@ class MgmTest {
     }
 
     @Test
+    @DisplayName(
+            "finishEncryption: тег не умещается в буфер - IllegalArgumentException, шифрование не завершается")
+    void finishEncryptionRejectsShortOrNegativeRange() {
+        byte[] key = new byte[32];
+        byte[] icn = new byte[16];
+        CryptoRandom.INSTANCE.nextBytes(key);
+        CryptoRandom.INSTANCE.nextBytes(icn);
+        icn[0] &= 0x7F;
+        byte[] data = "данные".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        Mgm enc = new Mgm(new Kuznyechik());
+        enc.init(true, new ParametersWithIV(new SymmetricKey(key), icn));
+        byte[] ct = new byte[data.length];
+        enc.processBytes(data, 0, data.length, ct, 0);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> enc.finishEncryption(new byte[15], 0),
+                "буфер короче 16 байт");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> enc.finishEncryption(new byte[16], 1),
+                "смещение сдвигает тег за границу");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> enc.finishEncryption(new byte[16], -1),
+                "отрицательное смещение");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> enc.finishEncryption(null, 0),
+                "null вместо буфера");
+        // Ошибка аргумента не завершила шифрование: с верным буфером тег записывается.
+        byte[] tag = new byte[16];
+        assertEquals(
+                16, enc.finishEncryption(tag, 0), "после ошибки аргумента тег должен записываться");
+    }
+
+    @Test
+    @DisplayName(
+            "finishDecryption: тег не умещается в буфер - IllegalArgumentException, расшифрование не завершается")
+    void finishDecryptionRejectsShortOrNegativeRange() throws AuthenticationException {
+        byte[] key = new byte[32];
+        byte[] icn = new byte[16];
+        CryptoRandom.INSTANCE.nextBytes(key);
+        CryptoRandom.INSTANCE.nextBytes(icn);
+        icn[0] &= 0x7F;
+        SymmetricKey kp = new SymmetricKey(key);
+        byte[] data = "данные".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        Mgm enc = new Mgm(new Kuznyechik());
+        enc.init(true, new ParametersWithIV(kp, icn));
+        byte[] ct = new byte[data.length];
+        enc.processBytes(data, 0, data.length, ct, 0);
+        byte[] tag = new byte[16];
+        enc.finishEncryption(tag, 0);
+
+        Mgm dec = new Mgm(new Kuznyechik());
+        dec.init(false, new ParametersWithIV(kp, icn));
+        byte[] pt = new byte[ct.length];
+        dec.processBytes(ct, 0, ct.length, pt, 0);
+
+        byte[] shortTag = new byte[15];
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> dec.finishDecryption(shortTag, 0),
+                "тег короче 16 байт");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> dec.finishDecryption(tag, 1),
+                "смещение сдвигает тег за границу");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> dec.finishDecryption(tag, -1),
+                "отрицательное смещение");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> dec.finishDecryption(null, 0),
+                "null вместо тега");
+        // Ошибка аргумента не завершила расшифрование: верный тег после неё принимается.
+        assertDoesNotThrow(
+                () -> dec.finishDecryption(tag, 0),
+                "верный тег после ошибки аргумента должен приниматься");
+    }
+
+    @Test
     @DisplayName("Неверный тег: finishDecryption бросает AuthenticationException")
     void testInvalidTag() {
         byte[] key = new byte[32];
@@ -299,8 +324,8 @@ class MgmTest {
     }
 
     @Test
-    @DisplayName("reset(): повторное шифрование даёт тот же результат")
-    void testReset() {
+    @DisplayName("init() повторно: тот же ключ и ICN дают тот же шифртекст и тег")
+    void initTwiceProducesSameResult() {
         byte[] key = new byte[32];
         byte[] icn = new byte[16];
         byte[] data = new byte[32];
@@ -318,16 +343,14 @@ class MgmTest {
         mgm.processBytes(data, 0, data.length, ct1, 0);
         mgm.finishEncryption(tag1, 0);
 
-        //        mgm.reset();
-
         mgm.init(true, new ParametersWithIV(kp, icn));
         byte[] ct2 = new byte[data.length];
         byte[] tag2 = new byte[16];
         mgm.processBytes(data, 0, data.length, ct2, 0);
         mgm.finishEncryption(tag2, 0);
 
-        assertArrayEquals(ct1, ct2, "После reset шифртекст должен совпасть");
-        assertArrayEquals(tag1, tag2, "После reset тег должен совпасть");
+        assertArrayEquals(ct1, ct2, "После повторного init шифртекст должен совпасть");
+        assertArrayEquals(tag1, tag2, "После повторного init тег должен совпасть");
     }
 
     // -----------------------------------------------------------------------
@@ -335,8 +358,11 @@ class MgmTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("reinitICN: encrypt с тем же ICN даёт тот же CT+tag что init")
-    void reinitICN_sameIcn_matchesInit() {
+    @DisplayName("reinitICN: сбрасывает счётчики (тот же ICN даёт тот же CT+tag, что init)")
+    void reinitICN_resetsState_deterministic() {
+        // Совпадение CT/tag здесь — только проверка сброса счётчиков и аккумулятора MAC.
+        // Повтор ICN под одним ключом в работе запрещён (RFC 9058 §4.1): уникальность ICN
+        // обеспечивает вызывающий, см. Javadoc Mgm.reinitICN.
         byte[] key = new byte[32];
         byte[] icn = new byte[16];
         byte[] data = new byte[32];
@@ -461,7 +487,7 @@ class MgmTest {
     }
 
     @Test
-    @DisplayName("reinitICN после finishDecryption: decrypt + подмена тега ловится")
+    @DisplayName("reinitICN после finishDecryption: decrypt + изменение тега ловится")
     void reinitICN_afterFinishDecryption() throws AuthenticationException {
         byte[] key = new byte[32];
         byte[] icn = new byte[16];
@@ -499,18 +525,18 @@ class MgmTest {
         mgm.finishDecryption(tag, 0);
         assertArrayEquals(data, pt2, "Повторный decrypt после reinitICN должен работать");
 
-        // Сброс и повторный decrypt с ПОДМЕНЁННЫМ тегом — AuthenticationException
+        // Сброс и повторный decrypt с ИЗМЕНЁННЫМ тегом — AuthenticationException
         // Это доказывает что sum/aadBitLen/ctBitLen реально сброшены, а не просто
-        // не мешают decrypt-у (иначе подмена tag-а могла бы пройти молча).
+        // не мешают decrypt-у (иначе изменение tag-а могло бы пройти молча).
         mgm.reinitICN(icn);
         byte[] pt3 = new byte[ct.length];
         mgm.processBytes(ct, 0, ct.length, pt3, 0);
-        byte[] tampered = tag.clone();
-        tampered[0] ^= 0xFF;
+        byte[] corrupted = tag.clone();
+        corrupted[0] ^= 0xFF;
         assertThrows(
                 AuthenticationException.class,
-                () -> mgm.finishDecryption(tampered, 0),
-                "Подменённый тег после reinitICN должен вызывать AuthenticationException");
+                () -> mgm.finishDecryption(corrupted, 0),
+                "Изменённый тег после reinitICN должен вызывать AuthenticationException");
     }
 
     @Test
@@ -791,5 +817,90 @@ class MgmTest {
             r[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
         }
         return r;
+    }
+
+    // -----------------------------------------------------------------------
+    // Пустые открытый текст и AAD (RFC 9058 §6)
+    // -----------------------------------------------------------------------
+
+    private static Mgm initMgm(boolean forEncryption, byte[] icn) {
+        byte[] key = new byte[32];
+        Arrays.fill(key, (byte) 0x42);
+        Mgm mgm = new Mgm(new Kuznyechik());
+        mgm.init(forEncryption, new ParametersWithIV(new SymmetricKey(key), icn));
+        return mgm;
+    }
+
+    @Test
+    @DisplayName(
+            "пустой открытый текст и пустой AAD: шифрование отвергается, повтор даёт «Already finished»")
+    void emptyPlaintextAndEmptyAadRejectedOnEncryption() {
+        Mgm mgm = initMgm(true, new byte[16]);
+        byte[] tag = new byte[16];
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> mgm.finishEncryption(tag, 0),
+                "Пустые P и A одновременно должны отвергаться (RFC 9058 §6)");
+        assertEquals(
+                0, Arrays.compare(new byte[16], tag), "Тег пустого сообщения не должен быть выдан");
+        assertThrows(
+                IllegalStateException.class,
+                () -> mgm.finishEncryption(tag, 0),
+                "После отказа объект завершён: повтор должен давать «Already finished»");
+    }
+
+    @Test
+    @DisplayName(
+            "пустой шифртекст и пустой AAD: расшифрование не аутентифицирует тег E_K(0) ни под каким ICN")
+    void emptyCiphertextAndEmptyAadRejectedOnDecryption() {
+        // Тег пустого сообщения без AAD равен E_K(0) и не зависит от ICN (RFC 9058 §6): без защиты
+        // один перехваченный тег принимался бы под любым ICN
+        byte[] key = new byte[32];
+        Arrays.fill(key, (byte) 0x42);
+        Kuznyechik kuznyechik = new Kuznyechik();
+        kuznyechik.init(true, new SymmetricKey(key));
+        byte[] tagIndependentOfIcn = new byte[16];
+        kuznyechik.processBlock(new byte[16], 0, tagIndependentOfIcn, 0);
+
+        byte[] icnA = new byte[16];
+        byte[] icnB = new byte[16];
+        icnB[15] = 1;
+        for (byte[] icn : new byte[][] {icnA, icnB}) {
+            Mgm mgm = initMgm(false, icn);
+            assertThrows(
+                    AuthenticationException.class,
+                    () -> mgm.finishDecryption(tagIndependentOfIcn, 0),
+                    "Пустое сообщение без AAD не должно аутентифицироваться");
+            assertThrows(
+                    IllegalStateException.class,
+                    () -> mgm.finishDecryption(tagIndependentOfIcn, 0),
+                    "После отказа объект завершён");
+        }
+    }
+
+    @Test
+    @DisplayName("пустой открытый текст с AAD работает: тег зависит от ICN")
+    void emptyPlaintextWithAadStillWorks() throws AuthenticationException {
+        byte[] icnA = new byte[16];
+        byte[] icnB = new byte[16];
+        icnB[15] = 1;
+        byte[] aad = {1, 2, 3};
+
+        byte[] tagA = new byte[16];
+        Mgm encryptorA = initMgm(true, icnA);
+        encryptorA.updateAAD(aad, 0, aad.length);
+        encryptorA.finishEncryption(tagA, 0);
+
+        byte[] tagB = new byte[16];
+        Mgm encryptorB = initMgm(true, icnB);
+        encryptorB.updateAAD(aad, 0, aad.length);
+        encryptorB.finishEncryption(tagB, 0);
+
+        assertFalse(Arrays.equals(tagA, tagB), "Тег должен зависеть от ICN при непустом AAD");
+
+        Mgm decryptor = initMgm(false, icnA);
+        decryptor.updateAAD(aad, 0, aad.length);
+        decryptor.finishDecryption(tagA, 0);
     }
 }

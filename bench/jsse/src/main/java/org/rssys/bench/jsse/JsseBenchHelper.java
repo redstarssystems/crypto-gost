@@ -1,25 +1,24 @@
 package org.rssys.bench.jsse;
 
-import org.rssys.gost.jca.RssysGostProvider;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jca.key.GostECPrivateKey;
-import org.rssys.gost.jsse.GostJsseConstants;
-
-import javax.net.ssl.SSLContext;
-import javax.net.ssl.SSLEngine;
-import javax.net.ssl.SSLEngineResult;
-import javax.net.ssl.X509ExtendedKeyManager;
-import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.security.PrivateKey;
 import java.security.Security;
 import java.security.cert.X509Certificate;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLEngineResult;
+import javax.net.ssl.X509ExtendedKeyManager;
+import org.rssys.gost.jca.RssysGostProvider;
+import org.rssys.gost.jca.key.GostECPrivateKey;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
 /**
  * Helper для JMH-бенчмарков JSSE-модуля: генерация сертификатов,
@@ -49,8 +48,8 @@ class JsseBenchHelper {
 
     static Bundle createBundle() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle root = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle serverCert = TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle root = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle serverCert = PkixCertTestHelper.createCertSignedBy(
                 params, root.priv,
                 root.cert.getPublicKey(), root.subjectDn,
                 "240501120000Z", "290501120000Z",
@@ -68,15 +67,8 @@ class JsseBenchHelper {
     static SSLContext createSslContext(Bundle serverBundle) throws Exception {
         SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, new org.rssys.gost.jsse.RssysGostJsseProvider());
         ctx.init(new javax.net.ssl.KeyManager[]{serverBundle.keyManager},
-                 new javax.net.ssl.TrustManager[]{new javax.net.ssl.X509ExtendedTrustManager() {
-                     @Override public void checkClientTrusted(X509Certificate[] chain, String authType, Socket s) {}
-                     @Override public void checkClientTrusted(X509Certificate[] chain, String authType, javax.net.ssl.SSLEngine e) {}
-                     @Override public void checkServerTrusted(X509Certificate[] chain, String authType, Socket s) {}
-                     @Override public void checkServerTrusted(X509Certificate[] chain, String authType, javax.net.ssl.SSLEngine e) {}
-                     @Override public void checkClientTrusted(X509Certificate[] chain, String authType) {}
-                     @Override public void checkServerTrusted(X509Certificate[] chain, String authType) {}
-                     @Override public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                 }}, null);
+                 new javax.net.ssl.TrustManager[]{GostX509TrustManager.insecureTrustAll()},
+                 null);
         return ctx;
     }
 
@@ -141,5 +133,5 @@ class JsseBenchHelper {
                 + engine.getHandshakeStatus());
     }
 
-    // createBundle заменён на TlsTestHelper.createRootCA() — DER-хелперы удалены
+    // createBundle заменён на PkixCertTestHelper.createRootCA() — DER-хелперы удалены
 }

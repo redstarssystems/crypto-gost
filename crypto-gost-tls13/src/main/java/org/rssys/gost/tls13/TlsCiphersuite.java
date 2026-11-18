@@ -1,5 +1,6 @@
 package org.rssys.gost.tls13;
 
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.signature.ECParameters;
 
 /**
@@ -28,6 +29,7 @@ public final class TlsCiphersuite {
                     TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
                     TlsConstants.IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
                     TlsConstants.STREEBOG_256_HASH_LEN,
+                    Digest.Algorithm.STREEBOG_256,
                     TlsConstants.KUZNYECHIK_KEY_SIZE,
                     TlsConstants.MGM_IV_SIZE,
                     TlsConstants.MGM_TAG_SIZE,
@@ -41,6 +43,7 @@ public final class TlsCiphersuite {
                     TlsConstants.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
                     TlsConstants.IANA_TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S,
                     TlsConstants.STREEBOG_256_HASH_LEN,
+                    Digest.Algorithm.STREEBOG_256,
                     TlsConstants.KUZNYECHIK_KEY_SIZE,
                     TlsConstants.MGM_IV_SIZE,
                     TlsConstants.MGM_TAG_SIZE,
@@ -56,6 +59,7 @@ public final class TlsCiphersuite {
     private final int id;
     private final String ianaName;
     private final int hashLen;
+    private final Digest.Algorithm kdfHashAlgorithm;
     private final int keyLen;
     private final int ivLen;
     private final int tagLen;
@@ -68,6 +72,7 @@ public final class TlsCiphersuite {
             int id,
             String ianaName,
             int hashLen,
+            Digest.Algorithm kdfHashAlgorithm,
             int keyLen,
             int ivLen,
             int tagLen,
@@ -78,6 +83,7 @@ public final class TlsCiphersuite {
         this.id = id;
         this.ianaName = ianaName;
         this.hashLen = hashLen;
+        this.kdfHashAlgorithm = kdfHashAlgorithm;
         this.keyLen = keyLen;
         this.ivLen = ivLen;
         this.tagLen = tagLen;
@@ -99,8 +105,29 @@ public final class TlsCiphersuite {
         return ianaName;
     }
 
+    /**
+     * Набор шифров для журнала: IANA-имя и код.
+     *
+     * <p>Имя нужно человеку, код - для сверки с RFC 9367 и разбором записей. Формат:
+     * {@code TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L (0xc103)}.
+     *
+     * @return имя и код набора шифров
+     */
+    public String forLog() {
+        return ianaName + " (0x" + String.format("%04x", id) + ")";
+    }
+
     public int getHashLen() {
         return hashLen;
+    }
+
+    /**
+     * Алгоритм хэша KDF набора шифров. Длина хэша алгоритм не определяет (разные хэши
+     * бывают одной длины), а RFC 8446 §4.6.1 требует возобновлять тикет только с набором
+     * шифров с тем же хэшем KDF.
+     */
+    public Digest.Algorithm getKdfHashAlgorithm() {
+        return kdfHashAlgorithm;
     }
 
     public int getKeyLen() {
@@ -254,124 +281,6 @@ public final class TlsCiphersuite {
             default:
                 throw new IllegalArgumentException(
                         "Unknown named group: 0x" + Integer.toHexString(namedGroup));
-        }
-    }
-
-    // ========================================================================
-    // Отображение IANA-имён <-> числовые ID
-    // ========================================================================
-
-    /**
-     * Отображает IANA-имя именованной группы на числовой ID.
-     *
-     * @param name IANA-имя (например, "GC256A")
-     * @return числовой ID именованной группы
-     * @throws IllegalArgumentException если имя неизвестно
-     */
-    public static int ianaNameToNamedGroup(String name) {
-        if (name == null) throw new IllegalArgumentException("name must not be null");
-        switch (name) {
-            case TlsConstants.IANA_GC256A:
-                return TlsConstants.GRP_GC256A;
-            case TlsConstants.IANA_GC256B:
-                return TlsConstants.GRP_GC256B;
-            case TlsConstants.IANA_GC256C:
-                return TlsConstants.GRP_GC256C;
-            case TlsConstants.IANA_GC256D:
-                return TlsConstants.GRP_GC256D;
-            case TlsConstants.IANA_GC512A:
-                return TlsConstants.GRP_GC512A;
-            case TlsConstants.IANA_GC512B:
-                return TlsConstants.GRP_GC512B;
-            case TlsConstants.IANA_GC512C:
-                return TlsConstants.GRP_GC512C;
-        }
-        throw new IllegalArgumentException("Unknown named group IANA name: " + name);
-    }
-
-    /**
-     * Отображает числовой ID именованной группы на IANA-имя.
-     *
-     * @param namedGroup числовой ID именованной группы
-     * @return IANA-имя (например, "GC256A")
-     * @throws IllegalArgumentException если ID неизвестен
-     */
-    public static String namedGroupToIanaName(int namedGroup) {
-        switch (namedGroup) {
-            case TlsConstants.GRP_GC256A:
-                return TlsConstants.IANA_GC256A;
-            case TlsConstants.GRP_GC256B:
-                return TlsConstants.IANA_GC256B;
-            case TlsConstants.GRP_GC256C:
-                return TlsConstants.IANA_GC256C;
-            case TlsConstants.GRP_GC256D:
-                return TlsConstants.IANA_GC256D;
-            case TlsConstants.GRP_GC512A:
-                return TlsConstants.IANA_GC512A;
-            case TlsConstants.GRP_GC512B:
-                return TlsConstants.IANA_GC512B;
-            case TlsConstants.GRP_GC512C:
-                return TlsConstants.IANA_GC512C;
-            default:
-                throw new IllegalArgumentException(
-                        "Unknown named group: 0x" + Integer.toHexString(namedGroup));
-        }
-    }
-
-    /**
-     * Отображает IANA-имя схемы подписи на числовой ID.
-     *
-     * @param name IANA-имя (например, "gostr34102012_256a")
-     * @return числовой ID схемы подписи
-     * @throws IllegalArgumentException если имя неизвестно
-     */
-    public static int ianaNameToSignatureScheme(String name) {
-        if (name == null) throw new IllegalArgumentException("name must not be null");
-        switch (name) {
-            case TlsConstants.IANA_SIG_GOST_TC26_A_256:
-                return TlsConstants.SIG_GOST_TC26_A_256;
-            case TlsConstants.IANA_SIG_GOST_CRYPTOPRO_A:
-                return TlsConstants.SIG_GOST_CRYPTOPRO_A;
-            case TlsConstants.IANA_SIG_GOST_CRYPTOPRO_B:
-                return TlsConstants.SIG_GOST_CRYPTOPRO_B;
-            case TlsConstants.IANA_SIG_GOST_CRYPTOPRO_C:
-                return TlsConstants.SIG_GOST_CRYPTOPRO_C;
-            case TlsConstants.IANA_SIG_GOST_TC26_512_A:
-                return TlsConstants.SIG_GOST_TC26_512_A;
-            case TlsConstants.IANA_SIG_GOST_TC26_512_B:
-                return TlsConstants.SIG_GOST_TC26_512_B;
-            case TlsConstants.IANA_SIG_GOST_TC26_512_C:
-                return TlsConstants.SIG_GOST_TC26_512_C;
-        }
-        throw new IllegalArgumentException("Unknown signature scheme IANA name: " + name);
-    }
-
-    /**
-     * Отображает числовой ID схемы подписи на IANA-имя.
-     *
-     * @param sigScheme числовой ID схемы подписи
-     * @return IANA-имя (например, "gostr34102012_256a")
-     * @throws IllegalArgumentException если ID неизвестен
-     */
-    public static String signatureSchemeToIanaName(int sigScheme) {
-        switch (sigScheme) {
-            case TlsConstants.SIG_GOST_TC26_A_256:
-                return TlsConstants.IANA_SIG_GOST_TC26_A_256;
-            case TlsConstants.SIG_GOST_CRYPTOPRO_A:
-                return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_A;
-            case TlsConstants.SIG_GOST_CRYPTOPRO_B:
-                return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_B;
-            case TlsConstants.SIG_GOST_CRYPTOPRO_C:
-                return TlsConstants.IANA_SIG_GOST_CRYPTOPRO_C;
-            case TlsConstants.SIG_GOST_TC26_512_A:
-                return TlsConstants.IANA_SIG_GOST_TC26_512_A;
-            case TlsConstants.SIG_GOST_TC26_512_B:
-                return TlsConstants.IANA_SIG_GOST_TC26_512_B;
-            case TlsConstants.SIG_GOST_TC26_512_C:
-                return TlsConstants.IANA_SIG_GOST_TC26_512_C;
-            default:
-                throw new IllegalArgumentException(
-                        "Unknown signature scheme: 0x" + Integer.toHexString(sigScheme));
         }
     }
 }

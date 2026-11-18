@@ -20,6 +20,7 @@ import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.GostDnParser;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
@@ -377,7 +378,7 @@ public final class JsseDemoAndroidTest {
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKm,
-                new GostX509TrustManager(caPubKey, false),
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                 "localhost", 0, false);
         serverEngine.setNeedClientAuth(true);
 
@@ -386,7 +387,7 @@ public final class JsseDemoAndroidTest {
 
         GostSSLEngine clientEngine = GostSSLEngine.createForClient(
                 clientKm,
-                new GostX509TrustManager(caPubKey, false),
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                 "localhost", 0, null);
 
         doLoopback(clientEngine, serverEngine, pair);
@@ -549,16 +550,16 @@ public final class JsseDemoAndroidTest {
 
         // Shared PskStore — одно хранилище для сервера и клиента.
         // В production у клиента и сервера — разные хранилища.
-        GostSSLSessionContext sessionCtx = new GostSSLSessionContext(CS, CS.getHashLen());
+        GostSSLSessionContext sessionCtx = new GostSSLSessionContext(CS);
 
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
         GostX509KeyManager serverKm = new GostX509KeyManager();
         serverKm.addKeyEntry("default", serverJcaChain, serverKey);
 
         GostSSLEngine server1 = GostSSLEngine.createForServer(
-                serverKm, new GostX509TrustManager(null, false), "localhost", 0, sessionCtx);
+                serverKm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, sessionCtx);
         GostSSLEngine client1 = GostSSLEngine.createForClient(
-                new GostX509KeyManager(), new GostX509TrustManager(caPubKey, false),
+                new GostX509KeyManager(), GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                 "localhost", 0, sessionCtx);
 
         doLoopback(client1, server1, pair1);
@@ -569,9 +570,9 @@ public final class JsseDemoAndroidTest {
         InMemoryTlsTransport.Pair pair2 = InMemoryTlsTransport.newPair();
 
         GostSSLEngine server2 = GostSSLEngine.createForServer(
-                serverKm, new GostX509TrustManager(null, false), "localhost", 0, sessionCtx);
+                serverKm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, sessionCtx);
         GostSSLEngine client2 = GostSSLEngine.createForClient(
-                new GostX509KeyManager(), new GostX509TrustManager(caPubKey, false),
+                new GostX509KeyManager(), GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                 "localhost", 0, sessionCtx);
 
         doLoopback(client2, server2, pair2);
@@ -605,13 +606,13 @@ public final class JsseDemoAndroidTest {
 
         GostSSLEngine serverEngine = new GostSSLEngine(
                 serverKm,
-                new GostX509TrustManager(null, false),
+                GostX509TrustManager.insecureTrustAll(),
                 "localhost", 0, false);
 
         GostX509KeyManager clientKm = new GostX509KeyManager();
         GostSSLEngine clientEngine = GostSSLEngine.createForClient(
                 clientKm,
-                new GostX509TrustManager(caPubKey, false),
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)),
                 "localhost", 0, null);
 
         doLoopback(clientEngine, serverEngine, pair);
@@ -675,9 +676,9 @@ public final class JsseDemoAndroidTest {
 
         InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
         GostSSLEngine server = new GostSSLEngine(
-                serverKm, new GostX509TrustManager(null, false), "localhost", 0, false);
+                serverKm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, false);
         GostSSLEngine client = GostSSLEngine.createForClient(
-                clientKm, new GostX509TrustManager(caPubKey, false), "localhost", 0, null);
+                clientKm, GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert)), "localhost", 0, null);
 
         doLoopback(client, server, pair);
 

@@ -29,10 +29,33 @@ public class PkixException extends Exception {
         IDP_NOT_SUPPORTED,
         DELTA_CRL_NOT_SUPPORTED,
         REVOKED,
+        REVOCATION_EVIDENCE_OUT_OF_WINDOW,
         INCOMPLETE_CHAIN,
         CHAIN_LOOP,
         CHAIN_TOO_LONG,
         ROOT_NOT_TRUSTED,
+        /** Статус отзыва не удалось установить: нет подходящего CRL при обязательной проверке. */
+        REVOCATION_STATUS_UNKNOWN,
+        /**
+         * Размер или число записей CRL больше настроенного предела ({@link CrlLimits}). CRL может
+         * быть подлинным: это отказ, а не признак порчи, и он не равносилен недоступному адресу.
+         */
+        CRL_LIMIT_EXCEEDED,
+        /**
+         * В CRL нет {@code nextUpdate}: такой CRL не устаревает, и его можно предъявлять
+         * бесконечно, поэтому проверяющая сторона его не принимает.
+         */
+        NEXT_UPDATE_MISSING,
+        /**
+         * Контейнер CMS не защищён имитовставкой (OMAC), а вызывающая сторона её требует. Режим CTR
+         * не обеспечивает целостность: подмену шифртекста или режима иначе не отличить от успеха.
+         */
+        INTEGRITY_REQUIRED,
+        /**
+         * У сертификата издателя CRL задан KeyUsage без {@code cRLSign}: такой издатель не вправе
+         * подписывать CRL (RFC 5280 §4.2.1.3), даже если подпись верна.
+         */
+        MISSING_CRL_SIGN,
         OTHER
     }
 

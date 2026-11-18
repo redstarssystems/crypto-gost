@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.examples;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import org.rssys.gost.api.KeyGenerator;
@@ -13,8 +14,10 @@ import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.GostDnParser;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.cms.CAdESExtender;
 import org.rssys.gost.pkix.cms.CAdESSignerResult;
+import org.rssys.gost.pkix.cms.CAdESVerifier;
 import org.rssys.gost.pkix.cms.CmsSignedDataBuilder;
 import org.rssys.gost.pkix.cms.VerifiedCAdESData;
 import org.rssys.gost.pkix.tsp.JdkHttpTspTransport;
@@ -89,9 +92,11 @@ public final class CAdESXLongRealServerDemo {
                         cadesBes, TSA_URL, new JdkHttpTspTransport(), tsaTrusted);
         System.out.println("CAdES-T: " + cadesT.length + " байт");
 
+        // thisUpdate(Instant.now()), а не thisUpdateNow(): время штампа задаёт чужой сервер по
+        // своим часам, и откат на 5 минут при малейшем их опережении выводит CRL из окна STRICT
         byte[] crlDer =
                 GostCrlBuilder.create(rootCert.getSubjectDnBytes())
-                        .thisUpdateNow()
+                        .thisUpdate(Instant.now())
                         .nextUpdateDays(30)
                         .withCrlNumber(1)
                         .sign(rootKp.getPrivate());
@@ -112,12 +117,20 @@ public final class CAdESXLongRealServerDemo {
         List<GostOcspResponse> ocspList = Arrays.asList(ocsp, null, null);
 
         byte[] cadesXLong =
-                CAdESExtender.embedXLongType1(cadesT, chain, crls, ocspList, null, null);
+                CAdESExtender.embedXLongType1(
+                        cadesT,
+                        chain,
+                        crls,
+                        ocspList,
+                        TSA_URL,
+                        new JdkHttpTspTransport(),
+                        tsaTrusted);
         System.out.println("CAdES-XL: " + cadesXLong.length + " байт");
 
         VerifiedCAdESData result =
-                CAdESExtender.verifyCAdESXLong(cadesXLong, rootCert, sertumCa, guc2022);
-        System.out.println("verifyCAdESXLong: пройдена");
+                CAdESVerifier.verifyXLong(
+                        cadesXLong, TrustAnchors.ofCertificates(rootCert, sertumCa, guc2022));
+        System.out.println("verifyXLong: пройдена");
         System.out.println("Данные: " + new String(result.data(), StandardCharsets.UTF_8));
 
         for (CAdESSignerResult sr : result.signers()) {

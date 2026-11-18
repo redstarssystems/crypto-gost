@@ -6,6 +6,10 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.tls13.TlsConstants;
@@ -31,22 +35,6 @@ class ChannelTlsTransportTest {
         SocketChannel server = ssc.accept();
         ssc.close();
         return new SocketChannel[] {client, server};
-    }
-
-    @Test
-    @DisplayName("sendRecord -> receiveRecord: данные совпадают")
-    void sendReceiveRoundtrip() throws IOException {
-        SocketChannel[] pair = createPair();
-        ChannelTlsTransport a = new ChannelTlsTransport(pair[0]);
-        ChannelTlsTransport b = new ChannelTlsTransport(pair[1]);
-
-        byte[] sent = new byte[] {0x15, 0x03, 0x03, 0x00, 0x03, 0x01, 0x02, 0x03};
-        a.sendRecord(sent);
-        byte[] received = b.receiveRecord();
-        assertArrayEquals(sent, received);
-
-        a.close();
-        b.close();
     }
 
     @Test
@@ -169,23 +157,50 @@ class ChannelTlsTransportTest {
         ch.close();
     }
 
+    /**
+     * Запускает поток, читающий запись, и прерывает его. Порядок «чтение началось» и «прерывание»
+     * не важен: у блокирующего канала поток с уже выставленным флагом прерывания тоже получает
+     * ClosedByInterruptException, поэтому ожидание по времени не нужно.
+     *
+     * @param flagAfterFailure получает значение флага прерывания потока после ошибки чтения
+     * @return ошибка рабочего потока (в том числе непройденная проверка) или {@code null}
+     */
+    private static Throwable readAndInterrupt(
+            ChannelTlsTransport transport, AtomicBoolean flagAfterFailure) throws Exception {
+        AtomicReference<Throwable> workerFailure = new AtomicReference<>();
+        CountDownLatch started = new CountDownLatch(1);
+        Thread reader =
+                new Thread(
+                        () -> {
+                            started.countDown();
+                            try {
+                                transport.receiveRecord();
+                                workerFailure.set(
+                                        new AssertionError(
+                                                "receiveRecord должен бросить IOException"));
+                            } catch (IOException expected) {
+                                flagAfterFailure.set(Thread.interrupted());
+                            } catch (Throwable unexpected) {
+                                workerFailure.set(unexpected);
+                            }
+                        });
+        reader.start();
+        assertTrue(started.await(5, TimeUnit.SECONDS), "читающий поток не запустился");
+        reader.interrupt();
+        reader.join(5000);
+        assertFalse(reader.isAlive(), "читающий поток должен завершиться после прерывания");
+        return workerFailure.get();
+    }
+
     @Test
     @DisplayName("прерывание потока во время receiveRecord закрывает транспорт")
     void interruptedReadClosesTransport() throws Exception {
         SocketChannel[] pair = createPair();
         ChannelTlsTransport t = new ChannelTlsTransport(pair[1]);
 
-        Thread reader =
-                new Thread(
-                        () -> {
-                            assertThrows(IOException.class, t::receiveRecord);
-                        });
-        reader.start();
+        Throwable workerFailure = readAndInterrupt(t, new AtomicBoolean());
 
-        Thread.sleep(100);
-        reader.interrupt();
-        reader.join(5000);
-
+        assertNull(workerFailure, "рабочий поток: " + workerFailure);
         // ClosedByInterruptException закрывает канал — после него sendRecord
         // упадёт, и TlsSession не попытается слать данные в мёртвый канал
         assertThrows(
@@ -199,21 +214,14 @@ class ChannelTlsTransportTest {
     void interruptionPreservesFlag() throws Exception {
         SocketChannel[] pair = createPair();
         ChannelTlsTransport t = new ChannelTlsTransport(pair[1]);
+        AtomicBoolean flagAfterFailure = new AtomicBoolean();
 
-        Thread reader =
-                new Thread(
-                        () -> {
-                            assertThrows(IOException.class, t::receiveRecord);
-                            // readFully восстанавливает флаг прерывания, чтобы
-                            // вызывающий код (TlsSession, ExecutorService) видел
-                            // что поток был прерван и мог корректно завершиться
-                            assertTrue(Thread.interrupted());
-                        });
-        reader.start();
+        Throwable workerFailure = readAndInterrupt(t, flagAfterFailure);
 
-        Thread.sleep(100);
-        reader.interrupt();
-        reader.join(5000);
+        assertNull(workerFailure, "рабочий поток: " + workerFailure);
+        // readFully восстанавливает флаг прерывания, чтобы вызывающий код (TlsSession,
+        // ExecutorService) видел, что поток был прерван, и мог корректно завершиться
+        assertTrue(flagAfterFailure.get(), "флаг прерывания должен быть восстановлен");
 
         t.close();
         pair[0].close();

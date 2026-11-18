@@ -1,32 +1,19 @@
 package org.rssys.gost.jsse;
 
-import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
-import java.security.Security;
-import java.security.cert.CertificateFactory;
-import java.security.cert.X509Certificate;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.*;
 import org.rssys.gost.jca.spec.GostDerCodec;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.crl.CrlFetcher;
-import org.rssys.gost.jsse.crl.CrlPolicy;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.jsse.ocsp.OcspFetcher;
-import org.rssys.gost.jsse.ocsp.OcspPolicy;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
-import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Статический фасад для создания {@link SSLContext} с ГОСТ TLS 1.3.
@@ -37,7 +24,7 @@ import org.rssys.gost.signature.PublicKeyParameters;
  * Поддерживаемые форматы входных данных:
  * <ul>
  *   <li>PKCS12 ({@code .p12}) + PEM/DER CA — самый удобный для пользователя
- *   <li>PKCS12 + PKCS12 CA — через {@link #builder()}.{@link GostSslBuilder#trustCa(byte[], char[]) trustCa(pfx, pwd)}
+ *   <li>PKCS12 + PKCS12 CA — через {@link #builder()}.{@link GostSslBuilder#trustCaBundle(byte[], char[]) trustCaBundle(pfx, pwd)} или {@link GostSslBuilder#trustCaChain(byte[], char[]) trustCaChain(pfx, pwd)}
  *   <li>PEM-строки (сертификаты и ключи) — openssl-совместимый
  *   <li>DER-байты (X.509 сертификаты, PKCS#8 PrivateKeyInfo)
  * </ul>
@@ -78,74 +65,49 @@ public final class GostSsl {
 
     /** Серверный SSLContext из PKCS12 + CA-сертификат (DER). */
     public static SSLContext serverContext(byte[] p12Data, char[] password, byte[] caDer) {
-        return buildContext(
-                null, null, p12Data, password, new byte[][] {caDer}, false, -1, false, true);
+        return builder().certificate(p12Data, password).trustCa(caDer).buildServerContext();
     }
 
     /** Клиентский SSLContext из PKCS12 + CA-сертификат (DER) — mTLS. */
     public static SSLContext clientContext(byte[] p12Data, char[] password, byte[] caDer) {
-        return buildContext(
-                null, null, p12Data, password, new byte[][] {caDer}, false, -1, false, false);
+        return builder().certificate(p12Data, password).trustCa(caDer).buildClientContext();
     }
 
     /** Клиентский SSLContext только с CA — без собственного сертификата. */
     public static SSLContext clientContext(byte[] caDer) {
-        return buildContext(null, null, null, null, new byte[][] {caDer}, false, -1, false, false);
+        return builder().trustCa(caDer).buildClientContext();
     }
 
     // ========================================================================
     // SSLContext: PEM
     // ========================================================================
 
-    /** Серверный SSLContext из PEM-строк (cert, private key, CA). */
+    /**
+     * Серверный SSLContext из PEM-строк (cert, private key, CA).
+     *
+     * <p>{@code certPem} и {@code keyPem} - ровно один PEM-блок; {@code caPem} - один сертификат
+     * или набор корней (как {@code --cacert} у curl): доверять естественно нескольким УЦ.</p>
+     */
     public static SSLContext serverContext(String certPem, String keyPem, String caPem) {
-        return buildContext(
-                GostCertificate.pemToDer(certPem.getBytes(StandardCharsets.US_ASCII)),
-                GostCertificate.pemToDer(keyPem.getBytes(StandardCharsets.US_ASCII)),
-                null,
-                null,
-                new byte[][] {
-                    GostCertificate.fromPemOrDer(caPem.getBytes(StandardCharsets.US_ASCII))
-                            .getEncoded()
-                },
-                false,
-                -1,
-                false,
-                true);
+        return pemBuilder(certPem, keyPem, caPem).buildServerContext();
     }
 
     /** Клиентский SSLContext из PEM-строк — mTLS. */
     public static SSLContext clientContext(String certPem, String keyPem, String caPem) {
-        return buildContext(
-                GostCertificate.pemToDer(certPem.getBytes(StandardCharsets.US_ASCII)),
-                GostCertificate.pemToDer(keyPem.getBytes(StandardCharsets.US_ASCII)),
-                null,
-                null,
-                new byte[][] {
-                    GostCertificate.fromPemOrDer(caPem.getBytes(StandardCharsets.US_ASCII))
-                            .getEncoded()
-                },
-                false,
-                -1,
-                false,
-                false);
+        return pemBuilder(certPem, keyPem, caPem).buildClientContext();
     }
 
     /** Клиентский SSLContext из CA-сертификата PEM — без собственного сертификата. */
     public static SSLContext clientContext(String caPem) {
-        return buildContext(
-                null,
-                null,
-                null,
-                null,
-                new byte[][] {
-                    GostCertificate.fromPemOrDer(caPem.getBytes(StandardCharsets.US_ASCII))
-                            .getEncoded()
-                },
-                false,
-                -1,
-                false,
-                false);
+        return builder().trustCa(pemBytes(caPem)).buildClientContext();
+    }
+
+    private static GostSslBuilder pemBuilder(String certPem, String keyPem, String caPem) {
+        return builder().certificate(pemBytes(certPem), pemBytes(keyPem)).trustCa(pemBytes(caPem));
+    }
+
+    private static byte[] pemBytes(String pem) {
+        return pem.getBytes(StandardCharsets.US_ASCII);
     }
 
     // ========================================================================
@@ -160,8 +122,7 @@ public final class GostSsl {
      * @param caDer   CA-сертификат X.509 DER
      */
     public static SSLContext serverContext(byte[] certDer, byte[] keyDer, byte[] caDer) {
-        return buildContext(
-                certDer, keyDer, null, null, new byte[][] {caDer}, false, -1, false, true);
+        return builder().certificate(certDer, keyDer).trustCa(caDer).buildServerContext();
     }
 
     /**
@@ -172,8 +133,7 @@ public final class GostSsl {
      * @param caDer   CA-сертификат X.509 DER
      */
     public static SSLContext clientContext(byte[] certDer, byte[] keyDer, byte[] caDer) {
-        return buildContext(
-                certDer, keyDer, null, null, new byte[][] {caDer}, false, -1, false, false);
+        return builder().certificate(certDer, keyDer).trustCa(caDer).buildClientContext();
     }
 
     // ========================================================================
@@ -223,7 +183,9 @@ public final class GostSsl {
             GostPkcs12Parser.EncryptedPrivateKeyInfo epki =
                     GostPkcs12Parser.parseEncryptedPrivateKeyInfo(der);
             return GostOids.PBES2.equals(epki.getEncryptionAlgorithmOid());
-        } catch (Exception e) {
+        } catch (IllegalArgumentException e) {
+            // Обычный PrivateKeyInfo по структуре не EncryptedPrivateKeyInfo: разбор отказывает.
+            // Сообщение о неверном формате ключа даст следующий шаг (decodePrivateKey).
             return false;
         }
     }
@@ -233,46 +195,65 @@ public final class GostSsl {
     // ========================================================================
 
     /** Создаёт SSLSocket с проверкой hostname (RFC 6125) и выполняет handshake. */
-    public static SSLSocket socket(String host, int port, SSLContext ctx) throws GostSslException {
+    public static SSLSocket socket(String host, int port, SSLContext ctx) {
+        SSLSocket socket = null;
         try {
-            SSLSocket s = (SSLSocket) ctx.getSocketFactory().createSocket(host, port);
-            SSLParameters params = s.getSSLParameters();
-            params.setEndpointIdentificationAlgorithm("HTTPS");
-            s.setSSLParameters(params);
-            s.startHandshake();
-            return s;
+            socket = (SSLSocket) ctx.getSocketFactory().createSocket(host, port);
+            startHttpsHandshake(socket);
+            return socket;
         } catch (Exception e) {
+            closeAfterFailure(socket);
             throw new GostSslException("Failed to create SSLSocket: " + e.getMessage(), e);
         }
     }
 
     /** Создаёт SSLServerSocket на указанном порту. */
-    public static SSLServerSocket serverSocket(int port, SSLContext ctx) throws GostSslException {
-        try {
-            return (SSLServerSocket) ctx.getServerSocketFactory().createServerSocket(port);
-        } catch (Exception e) {
-            throw new GostSslException("Failed to create SSLServerSocket: " + e.getMessage(), e);
-        }
+    public static SSLServerSocket serverSocket(int port, SSLContext ctx) {
+        return openServerSocket(ctx, factory -> factory.createServerSocket(port));
     }
 
     /** Создаёт SSLServerSocket на указанном порту с backlog. */
-    public static SSLServerSocket serverSocket(int port, int backlog, SSLContext ctx)
-            throws GostSslException {
-        try {
-            return (SSLServerSocket) ctx.getServerSocketFactory().createServerSocket(port, backlog);
-        } catch (Exception e) {
-            throw new GostSslException("Failed to create SSLServerSocket: " + e.getMessage(), e);
-        }
+    public static SSLServerSocket serverSocket(int port, int backlog, SSLContext ctx) {
+        return openServerSocket(ctx, factory -> factory.createServerSocket(port, backlog));
     }
 
     /** Создаёт SSLServerSocket на указанном порту с backlog и адресом. */
     public static SSLServerSocket serverSocket(
-            int port, int backlog, InetAddress bindAddr, SSLContext ctx) throws GostSslException {
+            int port, int backlog, InetAddress bindAddr, SSLContext ctx) {
+        return openServerSocket(
+                ctx, factory -> factory.createServerSocket(port, backlog, bindAddr));
+    }
+
+    @FunctionalInterface
+    private interface ServerSocketOpener {
+        ServerSocket open(SSLServerSocketFactory factory) throws IOException;
+    }
+
+    private static SSLServerSocket openServerSocket(SSLContext ctx, ServerSocketOpener opener) {
         try {
-            return (SSLServerSocket)
-                    ctx.getServerSocketFactory().createServerSocket(port, backlog, bindAddr);
+            return (SSLServerSocket) opener.open(ctx.getServerSocketFactory());
         } catch (Exception e) {
             throw new GostSslException("Failed to create SSLServerSocket: " + e.getMessage(), e);
+        }
+    }
+
+    /** Включает проверку hostname (HTTPS) и выполняет handshake. */
+    private static void startHttpsHandshake(SSLSocket socket) throws IOException {
+        SSLParameters params = socket.getSSLParameters();
+        params.setEndpointIdentificationAlgorithm(GostJsseConstants.ENDPOINT_ID_HTTPS);
+        socket.setSSLParameters(params);
+        socket.startHandshake();
+    }
+
+    /** Закрывает сокет после неудачного handshake: вызывающий его не получит и не закроет сам. */
+    private static void closeAfterFailure(SSLSocket socket) {
+        if (socket == null) {
+            return;
+        }
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+            // основная ошибка уже известна и будет передана вызывающему
         }
     }
 
@@ -300,31 +281,33 @@ public final class GostSsl {
             String serverKeyPem,
             String clientCertPem,
             String clientKeyPem,
-            String caPem)
-            throws GostSslException {
+            String caPem) {
+        // Сервер обязан запросить сертификат клиента: иначе клиентская цепочка не проверялась бы
+        // вовсе, и verify() «подтвердил» бы mTLS с любым сертификатом клиента
         verifyImpl(
                 serverContext(serverCertPem, serverKeyPem, caPem),
-                clientContext(clientCertPem, clientKeyPem, caPem));
+                clientContext(clientCertPem, clientKeyPem, caPem),
+                true);
     }
 
     /**
      * Loopback-проверка одностороннего TLS: сервер с сертификатом,
-     * клиент только проверяет сервер по CA.
+     * клиент проверяет сервер по CA или по закреплённому leaf-сертификату.
      *
      * @throws GostSslException если handshake не удался
      */
-    public static void verifyServer(String serverCertPem, String serverKeyPem, String caPem)
-            throws GostSslException {
-        verifyImpl(serverContext(serverCertPem, serverKeyPem, caPem), clientContext(caPem));
+    public static void verifyServer(String serverCertPem, String serverKeyPem, String caPem) {
+        verifyImpl(serverContext(serverCertPem, serverKeyPem, caPem), clientContext(caPem), false);
     }
 
-    private static void verifyImpl(SSLContext serverCtx, SSLContext clientCtx)
-            throws GostSslException {
+    private static void verifyImpl(
+            SSLContext serverCtx, SSLContext clientCtx, boolean needClientAuth) {
         AtomicReference<Exception> serverError = new AtomicReference<>();
         CountDownLatch serverDone = new CountDownLatch(1);
 
         try (SSLServerSocket ss =
                 (SSLServerSocket) serverCtx.getServerSocketFactory().createServerSocket(0)) {
+            ss.setNeedClientAuth(needClientAuth);
             int port = ss.getLocalPort();
 
             new Thread(
@@ -341,10 +324,7 @@ public final class GostSsl {
 
             try (SSLSocket s =
                     (SSLSocket) clientCtx.getSocketFactory().createSocket("localhost", port)) {
-                SSLParameters params = s.getSSLParameters();
-                params.setEndpointIdentificationAlgorithm("HTTPS");
-                s.setSSLParameters(params);
-                s.startHandshake();
+                startHttpsHandshake(s);
             }
 
             if (!serverDone.await(10, TimeUnit.SECONDS)) {
@@ -357,152 +337,11 @@ public final class GostSsl {
             throw e;
         } catch (SSLException e) {
             throw new GostSslException("TLS handshake failed (client side)", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new GostSslException("TLS verify interrupted", e);
         } catch (Exception e) {
             throw new GostSslException("TLS verify failed: " + e.getMessage(), e);
         }
-    }
-
-    // ========================================================================
-    // Внутренние
-    // ========================================================================
-
-    static SSLContext buildContext(
-            byte[] certDer,
-            byte[] keyDer,
-            byte[] p12Data,
-            char[] p12Password,
-            byte[][] trustedCaDers,
-            boolean ocspEnabled,
-            int sessionCacheSize,
-            boolean trustAll,
-            boolean serverMode) {
-        return buildContext(
-                certDer,
-                keyDer,
-                p12Data,
-                p12Password,
-                trustedCaDers,
-                ocspEnabled,
-                sessionCacheSize,
-                trustAll,
-                CrlPolicy.DISABLED,
-                null,
-                GostCrl.DEFAULT_MAX_CRL_SIZE,
-                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES,
-                null,
-                GostOids.MAX_OCSP_AGE_MS,
-                serverMode);
-    }
-
-    /**
-     * Полный сборщик {@link SSLContext} с конфигурацией проверки CRL/OCSP.
-     * <p>
-     * Дефолтные значения CRL/OCSP-параметров сохраняют поведение упрощённых
-     * перегрузок (CRL выключен, лимиты по умолчанию).
-     *
-     * @param crlPolicy         политика проверки CRL
-     * @param crlFetcher        fetcher для CRL по CDP URI (может быть null)
-     * @param maxCrlSize        максимальный размер CRL в байтах
-     * @param maxRevokedEntries максимальное число отозванных записей
-     * @param ocspFetcher       fetcher для client-side OCSP (может быть null)
-     * @param maxOcspAgeMs      максимальный возраст OCSP-ответа без nextUpdate в мс
-     */
-    static SSLContext buildContext(
-            byte[] certDer,
-            byte[] keyDer,
-            byte[] p12Data,
-            char[] p12Password,
-            byte[][] trustedCaDers,
-            boolean ocspEnabled,
-            int sessionCacheSize,
-            boolean trustAll,
-            CrlPolicy crlPolicy,
-            CrlFetcher crlFetcher,
-            int maxCrlSize,
-            int maxRevokedEntries,
-            OcspFetcher ocspFetcher,
-            long maxOcspAgeMs,
-            boolean serverMode) {
-        try {
-            if (Security.getProvider(GostJsseConstants.PROVIDER_NAME) == null) {
-                Security.addProvider(new RssysGostJsseProvider());
-            }
-
-            // KeyManager
-            GostX509KeyManager km = null;
-            if (certDer != null && keyDer != null) {
-                km = createKeyManager(certDer, keyDer);
-            } else if (p12Data != null) {
-                GostPkcs12Loader.Result result = GostPkcs12Loader.load(p12Data, p12Password, true);
-                km = new GostX509KeyManager();
-                List<GostCertificate> gostChain = result.getCertificateChain();
-                X509Certificate[] chain = new X509Certificate[gostChain.size()];
-                for (int i = 0; i < gostChain.size(); i++) {
-                    chain[i] = CertificateBridge.toJca(gostChain.get(i));
-                }
-                km.addKeyEntry("default", chain, result.getPrivateKey());
-            }
-
-            // TrustManager
-            GostX509TrustManager tm;
-            if (trustAll) {
-                tm = new GostX509TrustManager(null, false);
-            } else if (trustedCaDers != null && trustedCaDers.length > 0) {
-                // Распаковываем все доверенные CA в список ключей
-                List<PublicKeyParameters> caKeys = new ArrayList<>(trustedCaDers.length);
-                for (byte[] caDer : trustedCaDers) {
-                    caKeys.add(new GostCertificate(caDer).getPublicKey());
-                }
-                OcspPolicy policy =
-                        ocspEnabled ? OcspPolicy.STAPLING_REQUIRED : OcspPolicy.IF_PRESENT;
-                tm =
-                        new GostX509TrustManager(
-                                caKeys,
-                                policy,
-                                ocspFetcher,
-                                crlPolicy != null ? crlPolicy : CrlPolicy.DISABLED,
-                                crlFetcher,
-                                maxCrlSize,
-                                maxRevokedEntries,
-                                maxOcspAgeMs);
-            } else {
-                throw new GostSslException("No CA certificate provided for trust verification");
-            }
-
-            // SSLContext
-            SSLContext ctx =
-                    SSLContext.getInstance(
-                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
-            ctx.init(
-                    km != null ? new javax.net.ssl.KeyManager[] {km} : null,
-                    new javax.net.ssl.TrustManager[] {tm},
-                    null);
-
-            // Session cache
-            if (sessionCacheSize >= 0) {
-                ctx.getClientSessionContext().setSessionCacheSize(sessionCacheSize);
-                ctx.getServerSessionContext().setSessionCacheSize(sessionCacheSize);
-            }
-
-            return ctx;
-        } catch (GostSslException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new GostSslException("Failed to create SSLContext: " + e.getMessage(), e);
-        }
-    }
-
-    private static GostX509KeyManager createKeyManager(byte[] certDer, byte[] keyDer) {
-        X509Certificate cert;
-        try {
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            cert = (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(certDer));
-        } catch (Exception e) {
-            throw new GostSslException("Failed to parse certificate DER", e);
-        }
-        GostX509KeyManager km = new GostX509KeyManager();
-        km.addKeyEntry(
-                "default", new X509Certificate[] {cert}, GostDerCodec.decodePrivateKey(keyDer));
-        return km;
     }
 }

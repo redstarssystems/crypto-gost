@@ -62,15 +62,15 @@ final class OpenSslPkcs12Helper {
     }
 
     /**
-     * Проверяет, что OpenSSL может разобрать структуру PFX-файла.
-     * Использует -nomacver, так как gost-engine при -export генерирует MAC
-     * на старом алгоритме MD и кросс-верификация HMAC-Streebog-512 работает
-     * не во всех версиях. MAC верификация выполняется нашим
-     * GostPkcs12Mac.verify() в самом тесте.
+     * Проверяет, что OpenSSL эталонной сборки может разобрать структуру PFX-файла.
      * <p>
-     * Не выполняет извлечение ключа/сертификата через OpenSSL, так как
-     * gost-provider может не поддерживать разбор PBES2-GOST-параметров.
-     * Полный roundtrip проверяется через GostPkcs12Loader.
+     * Использует {@code -nomacver}: эталонная сборка {@code /opt/openssl-3.6.0-gost} с её gostprov
+     * не проверяет ГОСТ MAC в PKCS#12 (на корректном файле даёт {@code Mac verify error}),
+     * тогда как системная 3.5.7 проверяет. Проверка MAC выполняется в
+     * {@link OpenSslPkcs12GostMacCrossValidationTest} на тех сборках, которые её умеют, и нашим
+     * {@code GostPkcs12Mac.verify}.
+     * <p>
+     * Извлечение ключа здесь не выполняется: эта сборка не расшифровывает наши PBES2-параметры.
      */
     static void verifyPfxStructureWithOpenSsl(Path pfxFile, String password) throws Exception {
         String[] eng = OpenSslChecker.resolveEngineFlag();

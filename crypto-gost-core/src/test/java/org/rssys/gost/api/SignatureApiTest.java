@@ -8,10 +8,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
+import org.rssys.gost.signature.NonceMode;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
-@DisplayName("Signature API Tests")
+@DisplayName("Signature (api): тесты")
 class SignatureApiTest {
 
     private static final byte[] MSG =
@@ -22,7 +23,7 @@ class SignatureApiTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("cryptoProA: sign/verify roundtrip")
+    @DisplayName("cryptoProA: подпись и проверка")
     void testRoundtripCryptoProA() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
@@ -52,7 +53,7 @@ class SignatureApiTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("tc26a256: sign/verify roundtrip")
+    @DisplayName("tc26a256: подпись и проверка")
     void testRoundtripTc26a256() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
         try {
@@ -68,7 +69,7 @@ class SignatureApiTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("tc26a512: sign/verify roundtrip")
+    @DisplayName("tc26a512: подпись и проверка")
     void testRoundtripTc26a512() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.tc26a512());
         try {
@@ -98,12 +99,12 @@ class SignatureApiTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("sign: детерминированность — одни данные + один ключ -> одна подпись")
+    @DisplayName("sign в детерминированном режиме: одни данные + один ключ -> одна подпись")
     void testSignDeterministic() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
-            byte[] sig1 = Signature.sign(MSG, pair.getPrivate());
-            byte[] sig2 = Signature.sign(MSG, pair.getPrivate());
+            byte[] sig1 = Signature.sign(MSG, pair.getPrivate(), NonceMode.DETERMINISTIC);
+            byte[] sig2 = Signature.sign(MSG, pair.getPrivate(), NonceMode.DETERMINISTIC);
             assertArrayEquals(sig1, sig2, "RFC 6979: подпись должна быть детерминированной");
         } finally {
             pair.getPrivate().destroy();
@@ -115,32 +116,32 @@ class SignatureApiTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("verify: подменённые данные -> false")
-    void testVerifyTamperedData() {
+    @DisplayName("verify: изменённые данные -> false")
+    void testVerifyChangedData() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
             byte[] sig = Signature.sign(MSG, pair.getPrivate());
-            byte[] tampered = MSG.clone();
-            tampered[0] ^= 0x01;
+            byte[] corrupted = MSG.clone();
+            corrupted[0] ^= 0x01;
             assertFalse(
-                    Signature.verify(tampered, sig, pair.getPublic()),
-                    "Подменённые данные должны отвергаться");
+                    Signature.verify(corrupted, sig, pair.getPublic()),
+                    "Изменённые данные должны отвергаться");
         } finally {
             pair.getPrivate().destroy();
         }
     }
 
     @Test
-    @DisplayName("verify: подменённая подпись -> false")
-    void testVerifyTamperedSignature() {
+    @DisplayName("verify: изменённая подпись -> false")
+    void testVerifyChangedSignature() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
             byte[] sig = Signature.sign(MSG, pair.getPrivate());
-            byte[] tampered = sig.clone();
-            tampered[0] ^= 0x01;
+            byte[] corrupted = sig.clone();
+            corrupted[0] ^= 0x01;
             assertFalse(
-                    Signature.verify(MSG, tampered, pair.getPublic()),
-                    "Подменённая подпись должна отвергаться");
+                    Signature.verify(MSG, corrupted, pair.getPublic()),
+                    "Изменённая подпись должна отвергаться");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -174,10 +175,7 @@ class SignatureApiTest {
         KeyPair pair = KeyGenerator.generateKeyPair(params);
         try {
             PublicKeyParameters derived = Signature.derivePublicKey(pair.getPrivate());
-            ECPoint q1 = pair.getPublic().getQ().normalize();
-            ECPoint q2 = derived.getQ().normalize();
-            assertEquals(q1.getX(), q2.getX(), "Qx должен совпадать");
-            assertEquals(q1.getY(), q2.getY(), "Qy должен совпадать");
+            assertEquals(pair.getPublic(), derived, "Q должен совпадать");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -258,8 +256,9 @@ class SignatureApiTest {
         try {
             byte[] hash = Digest.digest256(MSG);
 
-            byte[] sigFromData = Signature.sign(MSG, pair.getPrivate());
-            byte[] sigFromHash = Signature.signHash(hash, pair.getPrivate());
+            byte[] sigFromData = Signature.sign(MSG, pair.getPrivate(), NonceMode.DETERMINISTIC);
+            byte[] sigFromHash =
+                    Signature.signHash(hash, pair.getPrivate(), NonceMode.DETERMINISTIC);
 
             assertArrayEquals(
                     sigFromData,
@@ -318,18 +317,18 @@ class SignatureApiTest {
     }
 
     @Test
-    @DisplayName("verifyHash: подменённый хэш -> false")
-    void testVerifyHashTamperedHash() {
+    @DisplayName("verifyHash: изменённый хэш -> false")
+    void testVerifyHashChangedHash() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
         try {
             byte[] hash = Digest.digest256(MSG);
             byte[] sig = Signature.signHash(hash, pair.getPrivate());
-            byte[] tampered = hash.clone();
-            tampered[0] ^= 0x01;
+            byte[] corrupted = hash.clone();
+            corrupted[0] ^= 0x01;
 
             assertFalse(
-                    Signature.verifyHash(tampered, sig, pair.getPublic()),
-                    "Подменённый хэш должен отвергаться");
+                    Signature.verifyHash(corrupted, sig, pair.getPublic()),
+                    "Изменённый хэш должен отвергаться");
         } finally {
             pair.getPrivate().destroy();
         }
@@ -357,7 +356,7 @@ class SignatureApiTest {
     // ========================================================================
 
     @Test
-    @DisplayName("d=1: sign/verify roundtrip (Q=G)")
+    @DisplayName("d=1: подпись и проверка (Q=G)")
     void testSignVerifyEdgeD1() {
         ECParameters params = ECParameters.cryptoProA();
         PrivateKeyParameters priv = new PrivateKeyParameters(BigInteger.ONE, params);
@@ -376,7 +375,7 @@ class SignatureApiTest {
     }
 
     @Test
-    @DisplayName("d=n-1: sign/verify roundtrip (Q=-G)")
+    @DisplayName("d=n-1: подпись и проверка (Q=-G)")
     void testSignVerifyEdgeDNminus1() {
         ECParameters params = ECParameters.cryptoProA();
         BigInteger d = params.n.subtract(BigInteger.ONE);

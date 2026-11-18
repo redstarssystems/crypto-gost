@@ -3,12 +3,15 @@ package org.rssys.gost.pkix.cert;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.ByteArrayOutputStream;
+import java.util.List;
+import java.util.logging.Level;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.LogCapture;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -113,11 +116,26 @@ class OcspVerifierDelegatedCertTest {
                         .withDelegatedCerts(responder.cert.getEncoded())
                         .sign(responder.priv);
 
-        PkixException ex =
-                assertThrows(
-                        PkixException.class,
-                        () -> OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert),
-                        "Делегированный responder без id-kp-OCSPSigning должен быть отвергнут");
+        PkixException ex;
+        try (LogCapture log = LogCapture.start(LogCapture.PKIX)) {
+            ex =
+                    assertThrows(
+                            PkixException.class,
+                            () -> OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert),
+                            "Делегированный responder без id-kp-OCSPSigning должен быть отвергнут");
+            // Итоговое исключение не называет причину отказа кандидата: она пишется на DEBUG
+            assertTrue(
+                    log.messages(Level.FINE).stream()
+                            .anyMatch(
+                                    m ->
+                                            m.contains("candidate")
+                                                    && m.contains("skipped: no id-kp-OCSPSigning")),
+                    "причина пропуска кандидата на DEBUG: " + log.messages(Level.FINE));
+            assertEquals(
+                    List.of(),
+                    log.messagesAtOrAbove(Level.WARNING),
+                    "отказ несёт исключение, WARNING не нужен");
+        }
         assertTrue(
                 ex.getMessage().contains("signature verification failed"),
                 "Ожидалась ошибка подписи, получено: " + ex.getMessage());
@@ -154,11 +172,26 @@ class OcspVerifierDelegatedCertTest {
                         .withDelegatedCerts(responder.cert.getEncoded())
                         .sign(responder.priv);
 
-        PkixException ex =
-                assertThrows(
-                        PkixException.class,
-                        () -> OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert),
-                        "Делегированный responder без EKU должен быть отвергнут (fail-closed)");
+        PkixException ex;
+        try (LogCapture log = LogCapture.start(LogCapture.PKIX)) {
+            ex =
+                    assertThrows(
+                            PkixException.class,
+                            () -> OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert),
+                            "Делегированный responder без EKU должен быть отвергнут (fail-closed)");
+            // Итоговое исключение не называет причину отказа кандидата: она пишется на DEBUG
+            assertTrue(
+                    log.messages(Level.FINE).stream()
+                            .anyMatch(
+                                    m ->
+                                            m.contains("candidate")
+                                                    && m.contains("skipped: no id-kp-OCSPSigning")),
+                    "причина пропуска кандидата на DEBUG: " + log.messages(Level.FINE));
+            assertEquals(
+                    List.of(),
+                    log.messagesAtOrAbove(Level.WARNING),
+                    "отказ несёт исключение, WARNING не нужен");
+        }
         assertTrue(
                 ex.getMessage().contains("signature verification failed"),
                 "Ожидалась ошибка подписи, получено: " + ex.getMessage());
@@ -192,11 +225,27 @@ class OcspVerifierDelegatedCertTest {
                         .withDelegatedCerts(responder.cert.getEncoded())
                         .sign(responder.priv);
 
-        PkixException ex =
-                assertThrows(
-                        PkixException.class,
-                        () -> OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert),
-                        "Просроченный delegated responder должен быть отвергнут");
+        PkixException ex;
+        try (LogCapture log = LogCapture.start(LogCapture.PKIX)) {
+            ex =
+                    assertThrows(
+                            PkixException.class,
+                            () -> OcspVerifier.verify(ocsp, leaf.cert.getSerialNumber(), ca.cert),
+                            "Просроченный delegated responder должен быть отвергнут");
+            // Итоговое исключение не называет причину отказа кандидата: она пишется на DEBUG
+            assertTrue(
+                    log.messages(Level.FINE).stream()
+                            .anyMatch(
+                                    m ->
+                                            m.contains("candidate")
+                                                    && m.contains(
+                                                            "skipped: expired or not yet valid")),
+                    "причина пропуска кандидата на DEBUG: " + log.messages(Level.FINE));
+            assertEquals(
+                    List.of(),
+                    log.messagesAtOrAbove(Level.WARNING),
+                    "отказ несёт исключение, WARNING не нужен");
+        }
         assertTrue(
                 ex.getMessage().contains("signature verification failed"),
                 "Ожидалась ошибка подписи, получено: " + ex.getMessage());

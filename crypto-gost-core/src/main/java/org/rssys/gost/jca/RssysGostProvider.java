@@ -40,13 +40,20 @@ import org.rssys.gost.jca.spi.GostVkoKeyAgreementSpi;
  *   <li>{@code Kuznyechik/CTR/NoPadding}    — режим гаммирования, IV = 8 байт
  *       (nonce); авто-nonce 64-бит безопасен до ~2^16 сообщений на ключ,
  *       далее — birthday-риск коллизии (см. ADR-06)</li>
- *   <li>{@code Kuznyechik/CFB/NoPadding}    — режим ОС по шифртексту, IV = 16 байт</li>
- *   <li>{@code Kuznyechik/OFB/NoPadding}    — режим ОС по выходу, IV = 16 байт</li>
- *   <li>{@code Kuznyechik/CBC/PKCS5Padding}  — режим CBC с PKCS#7, IV = 16 байт</li>
- *   <li>{@code Kuznyechik/CBC/NoPadding}    — режим CBC без padding, IV = 16 байт</li>
- *   <li>{@code Kuznyechik/MGM/NoPadding}    — AEAD-режим MGM (RFC 9058), ICN = 16 байт,
- *       совместим с OpenSSL {@code kuznyechik-mgm}</li>
+ *   <li>{@code Kuznyechik/CFB/NoPadding}    — режим ОС по шифртексту, IV кратен 16 байт
+ *       (по умолчанию 16)</li>
+ *   <li>{@code Kuznyechik/OFB/NoPadding}    — режим ОС по выходу, IV кратен 16 байт
+ *       (по умолчанию 16)</li>
+ *   <li>{@code Kuznyechik/CBC/PKCS5Padding} (PKCS#7) и {@code Kuznyechik/CBC/NoPadding} — режим
+ *       CBC, IV кратен 16 байт (по умолчанию 16)</li>
+ *   <li>{@code Kuznyechik-MGM} (также {@code Kuznyechik/MGM/NoPadding}) — AEAD-режим MGM
+ *       (RFC 9058), ICN = 16 байт, тег 128 бит, совместим с OpenSSL {@code kuznyechik-mgm}</li>
+ *   <li>{@code Kuznyechik/CTR-ACPKM/NoPadding} (OID {@code 1.2.643.7.1.1.5.2.1}) и
+ *       {@code Kuznyechik/CTR-ACPKM-OMAC/NoPadding} (OID {@code 1.2.643.7.1.1.5.2.2}) —
+ *       режимы для PBES2 (RFC 9337 §5)</li>
  * </ul>
+ * Режимы {@code WRAP_MODE} и {@code UNWRAP_MODE} шифры не поддерживают. Алиас {@code GOST3412-2015}
+ * действует для Cipher, KeyGenerator и SecretKeyFactory.
  *
  * <b>KeyGenerator — генерация симметричных ключей:</b>
  * <ul>
@@ -59,9 +66,19 @@ import org.rssys.gost.jca.spi.GostVkoKeyAgreementSpi;
  *       OID {@code 1.2.643.7.1.1.1.2} (512-бит)</li>
  * </ul>
  *
- * <b>SecretKeyFactory — конвертация симметричных ключей:</b>
+ * <b>SecretKeyFactory — конвертация и выработка симметричных ключей:</b>
  * <ul>
- *   <li>{@code Kuznyechik}</li>
+ *   <li>{@code Kuznyechik} — ключи Кузнечика</li>
+ *   <li>{@code PBKDF2WithHmacStreebog512} — выработка ключа из пароля (RFC 9337 §4)</li>
+ * </ul>
+ *
+ * <b>KeyAgreement — согласование ключей:</b>
+ * <ul>
+ *   <li>{@code ECDHGOST2012} — сырой ECDH без UKM и хэширования</li>
+ *   <li>{@code VKOGOST3410-2012-256}, OID {@code 1.2.643.7.1.1.6.1} — VKO (RFC 7836 §4.3.1),
+ *       результат 32 байта</li>
+ *   <li>{@code VKOGOST3410-2012-512}, OID {@code 1.2.643.7.1.1.6.2} — VKO (RFC 7836 §4.3.2),
+ *       результат 64 байта, только ключи 512 бит</li>
  * </ul>
  *
  * <b>Signature — электронная подпись (ГОСТ Р 34.10-2012 / RFC 7091):</b>
@@ -82,7 +99,12 @@ public final class RssysGostProvider extends Provider {
     /** Имя провайдера. */
     public static final String PROVIDER_NAME = "RssysGostProvider";
 
-    /** Версия провайдера. */
+    /**
+     * Версия провайдера. Тип {@code double} оставлен намеренно: единственный конструктор
+     * {@link Provider}, объявленный в Android 14 (API 34), принимает версию числом
+     * ({@code Provider(String, String, String)} там не объявлен). Предупреждение об устаревании
+     * этого конструктора принято как цена совместимости.
+     */
     private static final double VERSION = 1.0;
 
     /** Описание провайдера. */
@@ -171,11 +193,10 @@ public final class RssysGostProvider extends Provider {
         put("Cipher.Kuznyechik", spi);
         put("Alg.Alias.Cipher.GOST3412-2015", "Kuznyechik");
 
-        // MGM — AEAD-режим (RFC 9058), отдельный SPI с полной обработкой тега
-        // OID: id-tc26-cipher-gostr3412-2015-kuznyechik-ctracpkm-omac = 1.2.643.7.1.1.5.1
-        // (kuznyechik-mgm в нотации OpenSSL)
+        // MGM — AEAD-режим (RFC 9058), отдельный SPI с полной обработкой тега.
+        // Алиас по OID не регистрируется: подтверждённого OID у этого шифра нет, а
+        // 1.2.643.7.1.1.5.1 — дуга Magma (Кузнечик — 1.2.643.7.1.1.5.2, см. CTR-ACPKM ниже).
         put("Cipher.Kuznyechik-MGM", mgmSpi);
-        put("Alg.Alias.Cipher.1.2.643.7.1.1.5.1", "Kuznyechik-MGM");
         // Алиас в стандартной JCA-нотации алгоритм/режим/padding
         put("Alg.Alias.Cipher.Kuznyechik/MGM/NoPadding", "Kuznyechik-MGM");
 
@@ -244,21 +265,24 @@ public final class RssysGostProvider extends Provider {
     private void registerKeyAgreements() {
         String spi = GostKeyAgreementSpi.class.getName();
 
+        // Алиасы по OID согласования (1.2.643.7.1.1.6.1 и .6.2) принадлежат VKO: здесь сырой ECDH
+        // без UKM и без хеширования, и его результат отличается от согласования по этим OID.
         put("KeyAgreement.ECDHGOST2012", spi);
-        put("Alg.Alias.KeyAgreement.1.2.643.7.1.1.6.2", "ECDHGOST2012");
     }
 
     /**
-     * Согласование ключей VKO_GOSTR3410_2012_256 (RFC 7836 §4.3.1).
+     * Согласование ключей VKO_GOSTR3410_2012 (RFC 7836 §4.3).
      *
-     * <p>JCA-имя: {@code VKOGOST3410-2012-256}.
-     * OID: 1.2.643.7.1.1.6.1 (перенесён с ECDHGOST2012).
+     * <p>JCA-имена: {@code VKOGOST3410-2012-256} (OID 1.2.643.7.1.1.6.1, результат 32 байта) и
+     * {@code VKOGOST3410-2012-512} (OID 1.2.643.7.1.1.6.2, результат 64 байта, только ключи
+     * 512 бит).
      */
     private void registerVkoKeyAgreements() {
-        String vkoSpi = GostVkoKeyAgreementSpi.class.getName();
-
-        put("KeyAgreement.VKOGOST3410-2012-256", vkoSpi);
+        put("KeyAgreement.VKOGOST3410-2012-256", GostVkoKeyAgreementSpi.Vko256.class.getName());
         put("Alg.Alias.KeyAgreement.1.2.643.7.1.1.6.1", "VKOGOST3410-2012-256");
+
+        put("KeyAgreement.VKOGOST3410-2012-512", GostVkoKeyAgreementSpi.Vko512.class.getName());
+        put("Alg.Alias.KeyAgreement.1.2.643.7.1.1.6.2", "VKOGOST3410-2012-512");
     }
 
     /**

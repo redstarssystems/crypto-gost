@@ -2,6 +2,7 @@ package org.rssys.gost.api;
 
 import java.security.MessageDigest;
 import java.util.Arrays;
+import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.AuthenticationException;
 
@@ -49,13 +50,10 @@ import org.rssys.gost.util.AuthenticationException;
 public final class KeyExport {
 
     /** Размер блока Кузнечика (и тега CMAC) в байтах. */
-    static final int BLOCK_SIZE = 16;
+    static final int BLOCK_SIZE = Kuznyechik.BLOCK_SIZE;
 
     /** Длина IV в байтах (n/2). */
     static final int IV_LENGTH = 8;
-
-    /** Размер ключа Кузнечика в байтах. */
-    static final int KEY_LENGTH = 32;
 
     private KeyExport() {}
 
@@ -87,9 +85,11 @@ public final class KeyExport {
         }
 
         byte[] cekMac = null;
+        CmacApi cmac = null;
         try {
             // CMAC: OMAC(K_MAC, IV || secret)
-            cekMac = new CmacApi(kMac).update(iv).update(secret).digest();
+            cmac = new CmacApi(kMac);
+            cekMac = cmac.update(iv).update(secret).digest();
 
             // CTR-Encrypt(K_ENC, IV, secret || CEK_MAC)
             byte[] plaintext = concat(secret, cekMac);
@@ -99,6 +99,9 @@ public final class KeyExport {
                 Arrays.fill(plaintext, (byte) 0);
             }
         } finally {
+            if (cmac != null) {
+                cmac.destroy();
+            }
             if (cekMac != null) {
                 Arrays.fill(cekMac, (byte) 0);
             }
@@ -140,6 +143,7 @@ public final class KeyExport {
         byte[] secret = null;
         byte[] cekMac = null;
         byte[] expected = null;
+        CmacApi cmac = null;
         boolean success = false;
         try {
             plain = Cipher.decrypt(sExp, kEnc, iv, Cipher.Mode.CTR);
@@ -150,7 +154,8 @@ public final class KeyExport {
             cekMac = Arrays.copyOfRange(plain, secretLen, sExp.length);
 
             // OMAC(K_MAC, IV || S)
-            expected = new CmacApi(kMac).update(iv).update(secret).digest();
+            cmac = new CmacApi(kMac);
+            expected = cmac.update(iv).update(secret).digest();
 
             if (!MessageDigest.isEqual(expected, cekMac)) {
                 Arrays.fill(secret, (byte) 0);
@@ -161,6 +166,9 @@ public final class KeyExport {
             success = true;
             return secret;
         } finally {
+            if (cmac != null) {
+                cmac.destroy();
+            }
             if (plain != null) {
                 Arrays.fill(plain, (byte) 0);
             }

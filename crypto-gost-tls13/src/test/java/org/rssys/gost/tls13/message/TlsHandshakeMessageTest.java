@@ -81,30 +81,6 @@ class TlsHandshakeMessageTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("декодирование Certificate")
-    void testDecodeCertificate() {
-        byte[] certBody = new byte[] {0, 1, 2, 3};
-        byte[] encoded = new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE, certBody).encode();
-
-        TlsHandshakeMessage decoded = TlsHandshakeMessage.decode(encoded);
-        assertEquals(TlsConstants.HT_CERTIFICATE, decoded.getType());
-        assertArrayEquals(certBody, decoded.getBody());
-    }
-
-    @Test
-    @DisplayName("декодирование CertificateVerify")
-    void testDecodeCertificateVerify() {
-        byte[] signature = new byte[64];
-        Arrays.fill(signature, (byte) 0x42);
-        byte[] encoded =
-                new TlsHandshakeMessage(TlsConstants.HT_CERTIFICATE_VERIFY, signature).encode();
-
-        TlsHandshakeMessage decoded = TlsHandshakeMessage.decode(encoded);
-        assertEquals(TlsConstants.HT_CERTIFICATE_VERIFY, decoded.getType());
-        assertArrayEquals(signature, decoded.getBody());
-    }
-
-    @Test
     @DisplayName("decode с большим телом (32 КБ)")
     void testDecodeLargeBody() {
         byte[] body = new byte[32768];

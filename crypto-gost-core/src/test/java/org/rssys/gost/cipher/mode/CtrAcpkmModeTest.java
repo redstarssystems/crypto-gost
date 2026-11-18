@@ -18,9 +18,9 @@ import org.rssys.gost.util.CryptoRandom;
 /**
  * Тесты CTR-ACPKM для PBES2 (RFC 9337 §7.3) для Кузнечика.
  * <p>
- * Два варианта: без OMAC (чистый CTR) и с OMAC (Encrypt-then-MAC).
+ * Два варианта: без OMAC (чистый CTR) и с OMAC (MAC-then-Encrypt по RFC 9337 §5.1.1).
  */
-@DisplayName("CtrAcpkmMode — roundtrip encrypt/decrypt")
+@DisplayName("CtrAcpkmMode: шифрование и расшифрование")
 class CtrAcpkmModeTest {
 
     private static final int KEY_LEN = 32;
@@ -214,46 +214,160 @@ class CtrAcpkmModeTest {
     // ========================================================================
 
     @Test
-    @DisplayName("С OMAC: тег вычисляется под MAC-ключом K(2), а не под ключом шифрования K(1)")
-    void testOmacTagUsesMacKey() {
-        // Независимый пересчёт тега через проверенные KDF_TREE + Cmac.
-        // Если CMAC использует расписание ключа шифрования (баг shared-instance),
-        // ожидаемый тег под macKey не совпадёт с реальным.
-        for (int len : new int[] {0, 16, 31, 1024}) {
-            byte[] data = randomBytes(len);
-            byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, data);
-
-            byte[] cipherText = Arrays.copyOf(ct, ct.length - TAG_LEN);
-            byte[] tag = Arrays.copyOfRange(ct, ct.length - TAG_LEN, ct.length);
-
-            byte[] expected = independentOmacTag(key.getKey(), ukm, cipherText);
-            assertArrayEquals(expected, tag, "тег под MAC-ключом K(2) не совпал (len=" + len + ")");
+    @DisplayName(
+            "С OMAC: результат совпадает с независимым оракулом RFC 9337 (MAC по открытому тексту)")
+    void testOmacMatchesIndependentOracle() {
+        // Оракул: K(1), K(2) из KDF_TREE; tag = CMAC(K(2), M); CTR(K(1)) по M || tag.
+        // Размеры секции подобраны так, чтобы тег попадал на границу и за границу секции.
+        int[] sections = {64, 4096};
+        int[] lengths = {0, 1, 16, 31, 48, 49, 63, 64, 65, 80, 4080, 4096, 4097, 9000};
+        for (int section : sections) {
+            for (int len : lengths) {
+                byte[] data = randomBytes(len);
+                byte[] actual = CtrAcpkmMode.encryptWithMac(key, ukm, data, section);
+                byte[] expected = oracleOmac(key.getKey(), ukm, data, section);
+                assertArrayEquals(
+                        expected,
+                        actual,
+                        "OMAC не совпал с оракулом (len=" + len + ", section=" + section + ")");
+            }
         }
     }
 
     @Test
-    @DisplayName("С OMAC: ключи разделены — тег под ключом шифрования K(1) НЕ совпадает с реальным")
-    void testOmacKeysAreSeparated() {
-        byte[] data = randomBytes(64);
-        byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, data);
-        byte[] cipherText = Arrays.copyOf(ct, ct.length - TAG_LEN);
-        byte[] tag = Arrays.copyOfRange(ct, ct.length - TAG_LEN, ct.length);
+    @DisplayName("С OMAC: тег считается по открытому тексту и зашифрован, под K(2), не под K(1)")
+    void testOmacTagIsOverPlaintextUnderMacKey() {
+        byte[] data = randomBytes(100);
+        byte[] out = CtrAcpkmMode.encryptWithMac(key, ukm, data);
+        assertEquals(data.length + TAG_LEN, out.length, "Длина: данные + 16 байт тега");
 
-        // Пересчёт под K(1) (encKey) — должен отличаться от настоящего тега под K(2)
         byte[] derived = deriveKeys(key.getKey(), ukm);
-        byte[] encKey = Arrays.copyOfRange(derived, 0, KEY_LEN);
-        byte[] tagUnderEncKey = cmacTag(encKey, cipherText);
+        byte[] k1 = Arrays.copyOfRange(derived, 0, KEY_LEN);
+        byte[] k2 = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
+        byte[] all = CtrAcpkmMode.decryptOnly(new SymmetricKey(k1), ukm, out);
+        byte[] plain = Arrays.copyOf(all, data.length);
+        byte[] tag = Arrays.copyOfRange(all, data.length, all.length);
 
+        assertArrayEquals(data, plain, "Открытый текст после расшифрования потоком K(1)");
+        assertArrayEquals(cmacTag(k2, data), tag, "Тег = CMAC(K(2), открытый текст)");
+        assertFalse(Arrays.equals(cmacTag(k1, data), tag), "Ключи K(1) и K(2) разделены");
         assertFalse(
-                Arrays.equals(tagUnderEncKey, tag),
-                "тег не должен совпадать с CMAC под ключом шифрования — ключи обязаны быть разделены");
+                Arrays.equals(cmacTag(k2, Arrays.copyOf(out, data.length)), tag),
+                "Тег не должен совпадать с CMAC по шифртексту (старая схема)");
     }
 
-    /** Независимо вычисляет OMAC-тег: восстанавливает K(2) и считает CMAC над шифртекстом. */
-    private static byte[] independentOmacTag(byte[] dk, byte[] u, byte[] cipherText) {
+    @Test
+    @DisplayName("С OMAC: roundtrip на границах секции и сообщения больше секции")
+    void testOmacRoundtripAcrossSections() throws Exception {
+        for (int section : new int[] {64, 4096}) {
+            for (int len : new int[] {0, 47, 48, 49, 63, 64, 65, 200, 4097, 10000}) {
+                byte[] data = randomBytes(len);
+                byte[] out = CtrAcpkmMode.encryptWithMac(key, ukm, data, section);
+                assertArrayEquals(
+                        data,
+                        CtrAcpkmMode.decryptWithMac(key, ukm, out, section),
+                        "roundtrip len=" + len + ", section=" + section);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("С OMAC: сообщение 256 КБ + хвост (секция CMS) совпадает с оракулом")
+    void testOmacLargeMessageCmsSection() throws Exception {
+        byte[] data = randomBytes(AcpkmSectionSize.CMS + 100);
+        byte[] actual = CtrAcpkmMode.encryptWithMac(key, ukm, data, AcpkmSectionSize.CMS);
+        assertArrayEquals(
+                oracleOmac(key.getKey(), ukm, data, AcpkmSectionSize.CMS),
+                actual,
+                "Большое сообщение должно совпасть с оракулом");
+        assertArrayEquals(
+                data, CtrAcpkmMode.decryptWithMac(key, ukm, actual, AcpkmSectionSize.CMS));
+    }
+
+    @Test
+    @DisplayName("С OMAC: input == output при шифровании и расшифровании")
+    void testOmacInPlace() throws Exception {
+        for (int len : new int[] {0, 5, 16, 100, 4100}) {
+            byte[] data = randomBytes(len);
+            byte[] expected = CtrAcpkmMode.encryptWithMac(key, ukm, data);
+
+            byte[] buf = Arrays.copyOf(data, len + TAG_LEN);
+            CtrAcpkmMode enc = new CtrAcpkmMode(new Kuznyechik(), true);
+            enc.init(true, new ParametersWithIV(key, ukm));
+            enc.processBytes(buf, 0, len, buf, 0);
+            byte[] tag = enc.finishEncryption();
+            System.arraycopy(tag, 0, buf, len, TAG_LEN);
+            assertArrayEquals(expected, buf, "Шифрование на месте, len=" + len);
+
+            CtrAcpkmMode dec = new CtrAcpkmMode(new Kuznyechik(), true);
+            dec.init(false, new ParametersWithIV(key, ukm));
+            byte[] inPlace = expected.clone();
+            dec.processBytes(inPlace, 0, len, inPlace, 0);
+            dec.verifyEncryptedTag(Arrays.copyOfRange(inPlace, len, len + TAG_LEN));
+            assertArrayEquals(
+                    data, Arrays.copyOf(inPlace, len), "Расшифрование на месте, len=" + len);
+        }
+    }
+
+    @Test
+    @DisplayName("С OMAC: чужой UKM (seed) -> AuthenticationException")
+    void testOmacWrongUkm() {
+        byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, randomBytes(40));
+        byte[] other = ukm.clone();
+        other[12] ^= 0x01;
+        assertThrows(
+                AuthenticationException.class, () -> CtrAcpkmMode.decryptWithMac(key, other, ct));
+    }
+
+    @Test
+    @DisplayName("С OMAC: изменение любого байта шифртекста или тега -> AuthenticationException")
+    void testOmacAnyByteChangeRejected() {
+        byte[] out = CtrAcpkmMode.encryptWithMac(key, ukm, randomBytes(40));
+        for (int i = 0; i < out.length; i++) {
+            byte[] bad = out.clone();
+            bad[i] ^= 0x01;
+            assertThrows(
+                    AuthenticationException.class,
+                    () -> CtrAcpkmMode.decryptWithMac(key, ukm, bad),
+                    "Изменение байта " + i + " должно обнаруживаться");
+        }
+    }
+
+    @Test
+    @DisplayName("С OMAC: вход ровно 16 байт (пустое сообщение) расшифровывается, короче - отказ")
+    void testOmacBoundarySizes() throws Exception {
+        byte[] empty = CtrAcpkmMode.encryptWithMac(key, ukm, new byte[0]);
+        assertEquals(TAG_LEN, empty.length, "Пустое сообщение даёт только тег");
+        assertEquals(0, CtrAcpkmMode.decryptWithMac(key, ukm, empty).length);
+        assertThrows(
+                AuthenticationException.class,
+                () -> CtrAcpkmMode.decryptWithMac(key, ukm, new byte[0]));
+        assertThrows(
+                AuthenticationException.class,
+                () -> CtrAcpkmMode.decryptWithMac(key, ukm, new byte[TAG_LEN - 1]));
+    }
+
+    @Test
+    @DisplayName("С OMAC: verifyEncryptedTag с тегом неверной длины -> AuthenticationException")
+    void testVerifyTagWrongLength() {
+        CtrAcpkmMode dec = new CtrAcpkmMode(new Kuznyechik(), true);
+        dec.init(false, new ParametersWithIV(key, ukm));
+        assertThrows(AuthenticationException.class, () -> dec.verifyEncryptedTag(new byte[15]));
+        assertThrows(AuthenticationException.class, () -> dec.verifyEncryptedTag(null));
+    }
+
+    /**
+     * Независимый оракул RFC 9337 §5.1.1: K(1), K(2) из KDF_TREE;
+     * {@code tag = CMAC(K(2), M)}; результат - CTR по {@code M || tag} ключом K(1).
+     * CTR берётся из не-OMAC режима, CMAC - из отдельного экземпляра.
+     */
+    private static byte[] oracleOmac(byte[] dk, byte[] u, byte[] data, int sectionSize) {
         byte[] derived = deriveKeys(dk, u);
-        byte[] macKey = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
-        return cmacTag(macKey, cipherText);
+        byte[] k1 = Arrays.copyOfRange(derived, 0, KEY_LEN);
+        byte[] k2 = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
+        byte[] body = Arrays.copyOf(data, data.length + TAG_LEN);
+        System.arraycopy(cmacTag(k2, data), 0, body, data.length, TAG_LEN);
+        return CtrAcpkmMode.encryptOnly(new SymmetricKey(k1), u, body, sectionSize);
     }
 
     /** KDF_TREE(DK, "kdf tree", ukm[8..16], 2, 32) -> K(1)||K(2) (RFC 9337 §5.1.1). */
@@ -535,5 +649,30 @@ class CtrAcpkmModeTest {
             pos += len;
         }
         return ct;
+    }
+
+    @Test
+    @DisplayName(
+            "С OMAC: после затирания при ошибке тега успешный roundtrip возвращает исходные данные")
+    void decryptWithMacKeepsPlaintextOnSuccessAndFailsOnBadTag() throws Exception {
+        byte[] data = randomBytes(100);
+        byte[] ct = CtrAcpkmMode.encryptWithMac(key, ukm, data);
+
+        assertArrayEquals(
+                data,
+                CtrAcpkmMode.decryptWithMac(key, ukm, ct),
+                "Успешное расшифрование должно вернуть исходный открытый текст, а не нули");
+
+        byte[] corrupted = ct.clone();
+        corrupted[ct.length - 1] ^= 0x01;
+        assertThrows(
+                AuthenticationException.class,
+                () -> CtrAcpkmMode.decryptWithMac(key, ukm, corrupted),
+                "Изменённый тег должен отвергаться");
+
+        assertArrayEquals(
+                data,
+                CtrAcpkmMode.decryptWithMac(key, ukm, ct),
+                "После ошибки расшифрование корректных данных по-прежнему работает");
     }
 }

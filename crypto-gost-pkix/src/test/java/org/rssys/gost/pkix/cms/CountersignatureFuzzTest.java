@@ -6,11 +6,12 @@ import org.junit.jupiter.api.BeforeAll;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 
 /**
- * Fuzz-тесты для {@link CAdESExtender.embedCountersignature} и
- * {@link CAdESExtender.verifyCountersignature}.
+ * Fuzz-тесты для {@link CAdESExtender#embedCountersignature} и
+ * {@link CAdESVerifier#verifyCountersignature}.
  *
  * <p>Покрывает мутации DER на входе verifyCountersignature: contentInfo,
  * SignedData, SignerInfo, unsignedAttrs, countersignature.
@@ -38,7 +39,7 @@ class CountersignatureFuzzTest {
         byte[] der = data.consumeRemainingAsBytes();
         if (der.length == 0) return;
         try {
-            CAdESExtender.verifyCountersignature(der, cert, csCert);
+            CAdESVerifier.verifyCountersignature(der, TrustAnchors.ofCertificates(cert, csCert));
         } catch (PkixException e) {
             // Ожидаемое поведение для мусорного DER — не падаем
         } catch (Exception e) {
@@ -77,7 +78,8 @@ class CountersignatureFuzzTest {
             byte[] countersigned = CAdESExtender.embedCountersignature(cadesBes, csKey, csCert);
 
             // Верифицируем тем же набором trusted (signer + cs)
-            CAdESExtender.verifyCountersignature(countersigned, signerCert, csCert);
+            CAdESVerifier.verifyCountersignature(
+                    countersigned, TrustAnchors.ofCertificates(signerCert, csCert));
         } catch (PkixException e) {
             // Ошибка построения/верификации — ожидаемо для fuzz
         } catch (Exception e) {

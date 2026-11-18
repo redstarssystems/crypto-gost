@@ -11,7 +11,9 @@ toc::[]
 
 *crypto-gost* — криптографическая библиотека алгоритмов ГОСТ на Java, а также сопутствующая обвязка вокруг них, позволяющая в полной мере внедрить ГОСТ в инфраструктуру Java.
 
-WARNING: *Данная библиотека не является сертифицированной и не предназначена для работы там, где требуются сертифицированные средства криптографии. Библиотека ничего не гарантирует, включая отсутствие ошибок и правильной реализации стандартов. Библиотека написана мной для личных проектов и в академических целях. Лицензия полностью разрешительная. Использование библиотеки для любых проектов лицензия не запрещает, но каждому разработчику необходимо руководствоваться юридическими нормами для вашей конкретной организации, ситуации и проекта.*
+WARNING: *Данная библиотека не является сертифицированной и не предназначена для работы там, где требуются сертифицированные средства криптографии. Библиотека ничего не гарантирует, включая отсутствие ошибок и правильной реализации стандартов. Библиотека написана мной для личных проектов и в академических целях. Лицензия полностью разрешительная. Использование библиотеки для любых проектов лицензия не запрещает, но каждому разработчику необходимо руководствоваться рисками, а также юридическими нормами для вашей конкретной организации и проекта.*
+
+WARNING: *Библиотека до версии 0.7.1 включительно имеет критические уязвимости! Необходимо обновиться как минимум до 0.8.0. Смотри CHANGELOG за подробностями.*
 
 
 .Библиотека состоит из модулей:
@@ -21,7 +23,7 @@ WARNING: *Данная библиотека не является сертифи
 * `crypto-gost-pkix` - ГОСТ-инфраструктура PKIX: OID-реестр, CMS SignedData/EnvelopedData/SignedAndEnvelopedData, извлечение и формирование сертификатов из PKCS#7/.p7b (`GostPkcs7`), X.509-сертификаты, OCSP, CRL, CSR (PKCS#10), PKCS#12, CAdES-BES/T/C/X-Long Type 1, TSP, Countersignature.
 * `crypto-gost-core` - криптографическое ядро алгоритмов ГОСТ: Стрибог, Кузнечик, ГОСТ Р 34.10-2012, JCA-провайдер.
 
-*Целевая JDK при сборке модулей библиотеки: JDK 21 и Android 12+ (кроме Netty)*.
+*Целевая JDK при сборке модулей библиотеки: JDK 21 и Android 14+ (кроме Netty)*.
 
 Основной репозиторий хранения исходного кода и артефактов: https://gitflic.ru/project/red-stars-systems/crypto-gost[GitFlic]. Зеркало на https://github.com/redstarssystems/crypto-gost[GitHub]
 
@@ -78,25 +80,25 @@ WARNING: *Данная библиотека не является сертифи
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-core</artifactId>
-    <version>0.7.1</version>
+    <version>0.8.0</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-tls13</artifactId>
-    <version>0.7.1</version>
+    <version>0.8.0</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-jsse</artifactId>
-    <version>0.7.1</version>
+    <version>0.8.0</version>
 </dependency>
 
 <dependency>
     <groupId>org.rssys</groupId>
     <artifactId>crypto-gost-pkix</artifactId>
-    <version>0.7.1</version>
+    <version>0.8.0</version>
 </dependency>
 ----
 
@@ -118,10 +120,10 @@ repositories {
 
 [source,kotlin]
 ----
-implementation("org.rssys:crypto-gost-core-android:0.7.1")
-implementation("org.rssys:crypto-gost-pkix-android:0.7.1")
-implementation("org.rssys:crypto-gost-tls13-android:0.7.1")
-implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
+implementation("org.rssys:crypto-gost-core-android:0.8.0")
+implementation("org.rssys:crypto-gost-pkix-android:0.8.0")
+implementation("org.rssys:crypto-gost-tls13-android:0.8.0")
+implementation("org.rssys:crypto-gost-jsse-android:0.8.0")
 ----
 
 - *Способ 2.* Клонируйте репозиторий и выполните сборку и установку
@@ -136,7 +138,7 @@ implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
 [source,bash]
 ----
 gpg --import KEYS
-gpg -v v0.7.1
+gpg -v v0.8.0
 ----
 
 == Методики кросс-валидации
@@ -190,7 +192,7 @@ gpg -v v0.7.1
 
 SecureRandom в Java сегодня — криптографически надёжный. Основная угроза — не алгоритм, а окружение (энтропия в VM), которую использует BouncyCastle.
 
-Код данной библиотеки разработан с учетом текущих требований по безопасности. Реализация претендует на соответствие стандартам ГОСТ и RFC, но это никто не проверял. Арифметика эллиптических кривых приведена в сторону безопасности, число `k` выполнено детерминированным (не путать с константным) по RFC 6979 вместо `SecureRandom`, ускорены алгоритмы шифрования. Устранены все найденные утечки по сторонним каналам, намколько это возможно на чистой Java.  В данной реализации библиотеке упала скорость электронной подписи в угоду безопасности.
+Код данной библиотеки разработан с учетом текущих требований по безопасности. Реализация претендует на соответствие стандартам ГОСТ и RFC, но это никто не проверял. Арифметика эллиптических кривых приведена в сторону безопасности, число `k` по умолчанию вырабатывается гибридно: HMAC-DRBG по схеме RFC 6979 с затравкой из числа `e` уравнения подписи плюс свежие случайные байты (воспроизводимый детерминированный режим включается явно), без опоры на качество `SecureRandom`, ускорены алгоритмы шифрования. Устранены все найденные утечки по сторонним каналам, насколько это возможно на чистой Java.  В данной реализации библиотеке упала скорость электронной подписи в угоду безопасности.
 
 === Улучшения в безопасности электронной подписи в crypto-gost
 
@@ -244,14 +246,14 @@ wNAF / `FixedPointCombMultiplier` +
 
 |Генерация эфемерного ключа _k_
 |Защищено +
-RFC 6979 (детерминированный HMAC-DRBG)
+RFC 6979 (HMAC-DRBG) + свежие случайные байты (гибридный режим по умолчанию)
 |
 `SecureRandom` +
 (зависит от ГСЧ и окружения)
 
 |Устойчивость к атакам на RNG
 |Защищено +
-(_k_ не зависит от ГСЧ/RNG)
+(слабый или повторяющийся ГСЧ даёт подпись не хуже детерминированной: ключ и _e_ остаются во входе _k_)
 |Зависит от качества источника энтропии в окружении.
 
 |Интерпретация хэша (RFC 7091 §5.3)
@@ -307,7 +309,7 @@ IMPORTANT: С учетом https://www.cve.org/CVERecord?id=CVE-2025-14813[CVE-2
 
 В каталоге _examples/_ находятся интеграционные тесты и примеры использования.
 
-В каталоге _android-demo/_ находится тестовое Android-приложение (instrumented tests) для проверки библиотеки на реальном ART (Android Runtime). Запускается на эмуляторе API 31+ или физическом устройстве.
+В каталоге _android-demo/_ находится тестовое Android-приложение (instrumented tests) для проверки библиотеки на реальном ART (Android Runtime). Запускается на эмуляторе API 34+ или физическом устройстве.
 
 === Работа с Android
 
@@ -349,7 +351,7 @@ adb devices
 
 [source,bash]
 ----
-emulator -avd test_api31 -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim &
+emulator -avd test_api34 -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim &
 ----
 
 ==== Сборка и установка APK
@@ -409,10 +411,10 @@ adb logcat | grep -i gost
 
 [source,kotlin]
 ----
-implementation("org.rssys:crypto-gost-core-android:0.7.1")
-implementation("org.rssys:crypto-gost-pkix-android:0.7.1")
-implementation("org.rssys:crypto-gost-tls13-android:0.7.1")
-implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
+implementation("org.rssys:crypto-gost-core-android:0.8.0")
+implementation("org.rssys:crypto-gost-pkix-android:0.8.0")
+implementation("org.rssys:crypto-gost-tls13-android:0.8.0")
+implementation("org.rssys:crypto-gost-jsse-android:0.8.0")
 ----
 
 и выполните сборку:

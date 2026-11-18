@@ -1,16 +1,15 @@
 package org.rssys.gost.cipher.mode;
 
+import java.util.Arrays;
 import org.rssys.gost.cipher.CipherParameters;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
-import org.rssys.gost.cipher.StreamCipher;
-import org.rssys.gost.util.DataLengthException;
 
 /**
  * Режим гаммирования (CTR/GCTR — Gamma, Counter Mode) по ГОСТ Р 34.13-2015
  * Режим симметричен: encrypt = decrypt.
  */
-public class Ctr extends AbstractStreamMode implements StreamCipher {
+public final class Ctr extends AbstractStreamCipherMode {
 
     /** Текущее значение счётчика (blockSize байт). */
     private final byte[] CTR;
@@ -49,7 +48,7 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
         System.arraycopy(iv, 0, IV, 0, expectedIvLen);
         // Счётчик: первые blockSize/2 байт = IV, остальные = 0
         System.arraycopy(IV, 0, CTR, 0, expectedIvLen);
-        java.util.Arrays.fill(CTR, expectedIvLen, blockSize, (byte) 0);
+        Arrays.fill(CTR, expectedIvLen, blockSize, (byte) 0);
         // CTR симметричен — направление не имеет значения для генерации гаммы
         cipher.init(true, ivParams.getParameters());
         this.initialized = true;
@@ -62,16 +61,6 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
 
     @Override
     public int getBlockSize() {
-        return blockSize;
-    }
-
-    @Override
-    public int processBlock(byte[] in, int inOff, byte[] out, int outOff)
-            throws DataLengthException, IllegalStateException {
-        checkInitialized();
-        checkInputBounds(in, inOff, blockSize);
-        checkOutputBounds(out, outOff, blockSize);
-        processBytes(in, inOff, blockSize, out, outOff);
         return blockSize;
     }
 
@@ -104,10 +93,6 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
         }
         LONG_BE.set(CTR, 8, ctrLo);
         return limit;
-    }
-
-    public byte returnByte(byte in) {
-        return calculateByte(in);
     }
 
     /**
@@ -149,21 +134,21 @@ public class Ctr extends AbstractStreamMode implements StreamCipher {
     public void reset() {
         if (IV != null) {
             System.arraycopy(IV, 0, CTR, 0, IV.length);
-            java.util.Arrays.fill(CTR, IV.length, blockSize, (byte) 0);
+            Arrays.fill(CTR, IV.length, blockSize, (byte) 0);
         }
-        java.util.Arrays.fill(buf, (byte) 0);
+        Arrays.fill(buf, (byte) 0);
         byteCount = 0;
         cipher.reset();
     }
 
     @Override
     public void destroy() {
-        java.util.Arrays.fill(CTR, (byte) 0);
+        Arrays.fill(CTR, (byte) 0);
         if (IV != null) {
-            java.util.Arrays.fill(IV, (byte) 0);
+            Arrays.fill(IV, (byte) 0);
             IV = null;
         }
-        java.util.Arrays.fill(buf, (byte) 0);
+        Arrays.fill(buf, (byte) 0);
         byteCount = 0;
         super.destroy();
     }

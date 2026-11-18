@@ -18,7 +18,9 @@ import org.rssys.gost.signature.PrivateKeyParameters;
  * <p>
  * Реализует {@link Destroyable}: вызов {@link #destroy()} делегирует
  * {@link PrivateKeyParameters#destroy()}, обнуляя ключевой материал d.
- * После уничтожения {@link #getEncoded()} возвращает {@code null}.
+ * После уничтожения {@link #getEncoded()} и {@link #toPrivateKeyParameters()} бросают
+ * {@link IllegalStateException}, как {@code GostSecretKey} и прецедент JDK ({@code KerberosKey}):
+ * {@code null} уводил бы ошибку далеко от причины.
  * <p>
  * <b>Безопасность:</b> сериализация объекта запрещена — {@link #writeObject} и
  * {@link #readObject} бросают {@link NotSerializableException}.
@@ -68,16 +70,20 @@ public final class GostECPrivateKey implements PrivateKey, Destroyable {
      * }
      * </pre>
      *
-     * @return DER-байты, или {@code null} если ключ уничтожен или произошла ошибка
+     * @return DER-байты, или {@code null}, если кривая ключа не зарегистрирована и ключ нельзя
+     *         закодировать
+     * @throws IllegalStateException если ключ уничтожен
      */
     @Override
     public byte[] getEncoded() {
         if (params.isDestroyed()) {
-            return null;
+            throw new IllegalStateException("GostECPrivateKey has been destroyed");
         }
         try {
             return GostDerCodec.encodePrivateKey(params);
-        } catch (Exception e) {
+        } catch (IllegalArgumentException e) {
+            // Контракт Key.getEncoded: null, если ключ не поддерживает кодирование. Единственная
+            // причина здесь - кривая вне реестра провайдера (нет OID); прочие сбои не скрываются.
             return null;
         }
     }

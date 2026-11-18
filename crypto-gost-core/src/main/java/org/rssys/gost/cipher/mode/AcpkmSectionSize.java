@@ -3,7 +3,7 @@ package org.rssys.gost.cipher.mode;
 /**
  * Размеры секций ACPKM для разных профилей использования.
  *
- * <p>Секционная смена ключа (ACPKM) по ГОСТ Р 34.13-2015 §6.2:
+ * <p>Секционная смена ключа (ACPKM) по Р 1323565.1.017-2018, RFC 8645:
  * каждые {@code sectionSize} байт ключ переразвёртывается через
  * {@code E_K(D[0..15]) || E_K(D[16..31])}.
  *
@@ -15,7 +15,7 @@ public final class AcpkmSectionSize {
 
     /**
      * Базовый размер секции для Кузнечика — 4096 байт.
-     * ГОСТ Р 34.13-2015 §6.2; RFC 9189 (TLS 1.2 GOST);
+     * Р 1323565.1.017-2018, RFC 8645; RFC 9189 (TLS 1.2 GOST);
      * gost-engine (не-CMS дефолт).
      */
     public static final int DEFAULT = 4096;

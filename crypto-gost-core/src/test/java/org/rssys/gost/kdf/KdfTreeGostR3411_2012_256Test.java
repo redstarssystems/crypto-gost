@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.TestHex;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.mac.Hmac;
 
@@ -89,11 +90,7 @@ class KdfTreeGostR3411_2012_256Test {
     }
 
     private static byte[] hex(String s) {
-        byte[] out = new byte[s.length() / 2];
-        for (int i = 0; i < out.length; i++) {
-            out[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
-        }
-        return out;
+        return TestHex.bytes(s);
     }
 
     // ========================================================================

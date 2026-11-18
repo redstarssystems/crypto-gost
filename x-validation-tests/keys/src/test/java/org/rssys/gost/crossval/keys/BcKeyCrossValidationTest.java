@@ -47,7 +47,7 @@ class BcKeyCrossValidationTest {
         PublicKeyParameters pub = pair.getPublic();
         PrivateKeyParameters priv = pair.getPrivate();
 
-        ECPoint q = pub.getQ().normalize();
+        ECPoint q = pub.getQ();
         BigInteger qx = q.getX();
         BigInteger qy = q.getY();
         BigInteger d = priv.getD();
@@ -58,7 +58,7 @@ class BcKeyCrossValidationTest {
         PublicKeyParameters pubDecoded = GostDerCodec.decodePublicKey(pubDer);
         PrivateKeyParameters privDecoded = GostDerCodec.decodePrivateKey(privDer);
 
-        ECPoint qRestored = pubDecoded.getQ().normalize();
+        ECPoint qRestored = pubDecoded.getQ();
         assertTrue(qRestored.getX().equals(qx) && qRestored.getY().equals(qy),
                 spec.name() + ": координата Q после кодирования/декодирования DER изменилась");
         assertTrue(privDecoded.getD().equals(d),
@@ -74,7 +74,7 @@ class BcKeyCrossValidationTest {
         PublicKeyParameters gostPub = pair.getPublic();
         PrivateKeyParameters gostPriv = pair.getPrivate();
 
-        ECPoint q = gostPub.getQ().normalize();
+        ECPoint q = gostPub.getQ();
         BigInteger qx = q.getX();
         BigInteger qy = q.getY();
         BigInteger d = gostPriv.getD();
@@ -119,7 +119,7 @@ class BcKeyCrossValidationTest {
         ECPoint gostQ = ECPoint.affine(qx, qy, params);
         PublicKeyParameters gostPub = new PublicKeyParameters(gostQ, params);
 
-        ECPoint qNorm = gostPub.getQ().normalize();
+        ECPoint qNorm = gostPub.getQ();
         assertTrue(qNorm.getX().equals(qx) && qNorm.getY().equals(qy),
                 spec.name() + ": Q BC->crypto-gost не совпадает");
         assertTrue(gostPriv.getD().equals(d),

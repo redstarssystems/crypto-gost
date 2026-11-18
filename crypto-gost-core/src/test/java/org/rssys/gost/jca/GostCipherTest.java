@@ -2,15 +2,15 @@ package org.rssys.gost.jca;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.security.Security;
 import java.util.Arrays;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.spec.IvParameterSpec;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.rssys.gost.JcaTestSupport;
 import org.rssys.gost.api.Cipher;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.cipher.SymmetricKey;
@@ -18,6 +18,7 @@ import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.util.CryptoRandom;
 
 @DisplayName("GostCipherSpi — Кузнечик через JCA Cipher")
+@ExtendWith(JcaTestSupport.class)
 class GostCipherTest {
 
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
@@ -26,13 +27,6 @@ class GostCipherTest {
             "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF".getBytes();
     private static final byte[] DATA_ODD =
             "нечётное число байт".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
-    @BeforeAll
-    static void registerProvider() {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Параметризованные roundtrip-тесты всех режимов

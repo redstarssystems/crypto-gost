@@ -4,19 +4,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.ByteBuffer;
 import java.security.Security;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLEngineResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.jsse.testkit.EngineServerPki;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
 /**
@@ -25,35 +22,20 @@ import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
  * Фокус на DATA state — именно здесь были упущены проверки Status.CLOSED
  * и HandshakeStatus в существующих тестах.
  */
+@DisplayName("GostSSLEngine: граф состояний")
 class GostSSLEngineStateGraphTest {
 
-    private static TlsTestHelper.CertBundle rootCa;
-    private static TlsTestHelper.CertBundle serverCert;
+    private static PkixCertTestHelper.CertBundle rootCa;
+    private static PkixCertTestHelper.CertBundle serverCert;
     private static GostX509KeyManager serverKm;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        ECParameters params = ECParameters.tc26a256();
-        rootCa = TlsTestHelper.createRootCA(params);
-        serverCert =
-                TlsTestHelper.createCertSignedBy(
-                        params,
-                        rootCa.priv,
-                        rootCa.cert.getPublicKey(),
-                        rootCa.subjectDn,
-                        "240501120000Z",
-                        "290501120000Z",
-                        new String[] {"localhost"},
-                        new byte[] {(byte) 0x80},
-                        null,
-                        false,
-                        null);
-        serverKm = new GostX509KeyManager();
-        serverKm.addKeyEntry(
-                "default",
-                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
-                serverCert.priv);
+        EngineServerPki pki = EngineServerPki.create();
+        rootCa = pki.rootCa();
+        serverCert = pki.serverCert();
+        serverKm = pki.serverKm();
     }
 
     // ========================================================================
@@ -112,7 +94,7 @@ class GostSSLEngineStateGraphTest {
     }
 
     @Test
-    @DisplayName("DATA: closeOutbound() -> wrap возвращает OK с close_notify")
+    @DisplayName("DATA: closeOutbound() -> wrap отдаёт close_notify со статусом CLOSED")
     void testDataStateCloseOutbound() throws Exception {
         GostSSLEngine server = dataStateEngineServer();
         ByteBuffer dst =
@@ -120,33 +102,44 @@ class GostSSLEngineStateGraphTest {
                         TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
 
         server.closeOutbound();
+        assertFalse(
+                server.isOutboundDone(),
+                "close_notify собран, но не отдан: выходная сторона ещё не закрыта");
         SSLEngineResult r = server.wrap(ByteBuffer.allocate(0), dst);
 
-        // closeOutbound() только инициирует отправку close_notify.
-        // wrap() возвращает OK с произведённым close_notify (bytesProduced > 0).
-        // CLOSED возвращается только при closeReceived.
+        // Как в JDK: после отдачи закрывающей записи статус CLOSED
         assertEquals(
-                SSLEngineResult.Status.OK,
+                SSLEngineResult.Status.CLOSED,
                 r.getStatus(),
-                "wrap после closeOutbound возвращает OK (close_notify произведён)");
+                "wrap после closeOutbound отдаёт close_notify со статусом CLOSED");
         assertTrue(r.bytesProduced() > 0, "close_notify запись должна быть произведена");
         assertEquals(SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING, r.getHandshakeStatus());
-        assertTrue(server.isOutboundDone(), "isOutboundDone после closeOutbound");
+        assertTrue(server.isOutboundDone(), "isOutboundDone после отдачи close_notify");
+
+        SSLEngineResult repeated = server.wrap(ByteBuffer.allocate(0), dst);
+        assertEquals(SSLEngineResult.Status.CLOSED, repeated.getStatus(), "повторный wrap");
+        assertEquals(0, repeated.bytesProduced(), "close_notify отдаётся ровно один раз");
     }
 
     @Test
-    @DisplayName("DATA: closeInbound() — isInboundDone() = true")
+    @DisplayName("DATA: closeInbound() завершает входную сторону, wrap() больше нечего отдавать")
     void testDataStateCloseInbound() throws Exception {
         GostSSLEngine server = dataStateEngineServer();
 
         server.closeInbound();
         assertTrue(server.isInboundDone(), "isInboundDone после closeInbound");
-        assertFalse(server.isOutboundDone(), "isOutboundDone должен оставаться false");
+        // Инвариант: isOutboundDone истинно ровно тогда, когда wrap() нечего отдавать. После
+        // closeInbound() ключи записи разрушены, wrap() возвращает CLOSED без байтов, поэтому
+        // цикл «пока не isOutboundDone() - wrap()» завершается
+        assertTrue(server.isOutboundDone(), "wrap() больше нечего отдавать");
+        assertEquals(
+                SSLEngineResult.Status.CLOSED,
+                server.wrap(ByteBuffer.allocate(0), ByteBuffer.allocate(64)).getStatus());
     }
 
     @Test
     @DisplayName(
-            "DATA: closeOutbound + closeInbound -> wrap/unwrap бросают SSLException (engine closed)")
+            "DATA: closeOutbound + closeInbound -> wrap/unwrap возвращают CLOSED (штатное закрытие)")
     void testDataStateBothClosed() throws Exception {
         GostSSLEngine server = dataStateEngineServer();
         ByteBuffer dst =
@@ -159,21 +152,18 @@ class GostSSLEngineStateGraphTest {
         server.wrap(ByteBuffer.allocate(0), dst);
         server.closeInbound();
 
-        // Когда engineState = CLOSED, wrap выкидывает SSLException, а не CLOSED
-        // (checkNotClosed срабатывает до формирования результата)
-        assertThrows(
-                javax.net.ssl.SSLException.class,
-                () -> server.wrap(ByteBuffer.allocate(0), dst),
-                "wrap при engine closed — SSLException");
-        assertThrows(
-                javax.net.ssl.SSLException.class,
-                () -> server.unwrap(ByteBuffer.allocate(0), appBuf),
-                "unwrap при engine closed — SSLException");
+        // Штатное закрытие не ошибка: как в JDK, циклы контейнеров получают CLOSED. Исключение
+        // остаётся только после отказа (см. GostSSLEngineFatalAlertTest).
+        SSLEngineResult wrapped = server.wrap(ByteBuffer.allocate(0), dst);
+        assertEquals(SSLEngineResult.Status.CLOSED, wrapped.getStatus(), "wrap при закрытии");
+        assertEquals(0, wrapped.bytesProduced(), "писать нечего");
+        SSLEngineResult unwrapped = server.unwrap(ByteBuffer.allocate(0), appBuf);
+        assertEquals(SSLEngineResult.Status.CLOSED, unwrapped.getStatus(), "unwrap при закрытии");
     }
 
     @Test
     @DisplayName(
-            "DATA: closeOutbound (closeReceived==false) не зануляет record-ключи; closeInbound — зануляет (P2-3)")
+            "DATA: closeOutbound (closeReceived==false) не зануляет record-ключи; closeInbound — зануляет")
     void testCloseInboundWipesRecordKeys() throws Exception {
         GostSSLEngine server = dataStateEngineServer();
 
@@ -201,7 +191,7 @@ class GostSSLEngineStateGraphTest {
         GostSSLEngine client =
                 new GostSSLEngine(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         true);
@@ -214,31 +204,14 @@ class GostSSLEngineStateGraphTest {
                         TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
         ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
 
-        assertThrows(
-                javax.net.ssl.SSLException.class,
-                () -> client.wrap(ByteBuffer.allocate(0), dst),
-                "wrap в CLOSED — SSLException");
-        assertThrows(
-                javax.net.ssl.SSLException.class,
-                () -> client.unwrap(ByteBuffer.allocate(0), appBuf),
-                "unwrap в CLOSED — SSLException");
-    }
-
-    @Test
-    @DisplayName("CLOSED: isInboundDone / isOutboundDone — true")
-    void testClosedStateDone() throws Exception {
-        GostSSLEngine engine =
-                new GostSSLEngine(
-                        new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
-                        "localhost",
-                        0,
-                        true);
-        engine.closeOutbound();
-        engine.closeInbound();
-
-        assertTrue(engine.isInboundDone());
-        assertTrue(engine.isOutboundDone());
+        assertEquals(
+                SSLEngineResult.Status.CLOSED,
+                client.wrap(ByteBuffer.allocate(0), dst).getStatus(),
+                "wrap в CLOSED возвращает CLOSED");
+        assertEquals(
+                SSLEngineResult.Status.CLOSED,
+                client.unwrap(ByteBuffer.allocate(0), appBuf).getStatus(),
+                "unwrap в CLOSED возвращает CLOSED");
     }
 
     // ========================================================================
@@ -253,13 +226,13 @@ class GostSSLEngineStateGraphTest {
         GostSSLEngine client =
                 new GostSSLEngine(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         true);
         GostSSLEngine server =
                 new GostSSLEngine(
-                        serverKm, new GostX509TrustManager(null, false), "localhost", 0, false);
+                        serverKm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, false);
         doHandshake(client, server, pair);
 
         ByteBuffer net =
@@ -276,13 +249,13 @@ class GostSSLEngineStateGraphTest {
         GostSSLEngine client =
                 new GostSSLEngine(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         true);
         GostSSLEngine server =
                 new GostSSLEngine(
-                        serverKm, new GostX509TrustManager(null, false), "localhost", 0, false);
+                        serverKm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, false);
         doHandshake(client, server, pair);
         return server;
     }
@@ -293,13 +266,13 @@ class GostSSLEngineStateGraphTest {
         GostSSLEngine client =
                 new GostSSLEngine(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "localhost",
                         0,
                         true);
         GostSSLEngine server =
                 new GostSSLEngine(
-                        serverKm, new GostX509TrustManager(null, false), "localhost", 0, false);
+                        serverKm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, false);
         doHandshake(client, server, pair);
         return client;
     }
@@ -307,78 +280,6 @@ class GostSSLEngineStateGraphTest {
     private static void doHandshake(
             GostSSLEngine client, GostSSLEngine server, InMemoryTlsTransport.Pair pair)
             throws Exception {
-        client.beginHandshake();
-        server.beginHandshake();
-        AtomicReference<Throwable> ce = new AtomicReference<>();
-        AtomicReference<Throwable> se = new AtomicReference<>();
-
-        Thread ct =
-                new Thread(
-                        () -> {
-                            try {
-                                hsLoop(client, pair.getClientTransport());
-                            } catch (Exception e) {
-                                ce.set(e);
-                            }
-                        });
-        Thread st =
-                new Thread(
-                        () -> {
-                            try {
-                                hsLoop(server, pair.getServerTransport());
-                            } catch (Exception e) {
-                                se.set(e);
-                            }
-                        });
-        ct.start();
-        st.start();
-        ct.join(10000);
-        st.join(10000);
-        if (ce.get() != null) throw new RuntimeException(ce.get());
-        if (se.get() != null) throw new RuntimeException(se.get());
-    }
-
-    private static void hsLoop(GostSSLEngine engine, InMemoryTlsTransport transport)
-            throws Exception {
-        ByteBuffer netBuf =
-                ByteBuffer.allocate(
-                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
-        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
-        for (int i = 0; i < 80; i++) {
-            SSLEngineResult.HandshakeStatus hs = engine.getHandshakeStatus();
-            if (hs == SSLEngineResult.HandshakeStatus.FINISHED
-                    || hs == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) return;
-            switch (hs) {
-                case NEED_WRAP:
-                    netBuf.clear();
-                    engine.wrap(ByteBuffer.allocate(0), netBuf);
-                    netBuf.flip();
-                    if (netBuf.hasRemaining()) {
-                        byte[] out = new byte[netBuf.remaining()];
-                        netBuf.get(out);
-                        transport.sendRecord(out);
-                    }
-                    break;
-                case NEED_UNWRAP:
-                    {
-                        byte[] in = transport.receiveRecord();
-                        if (in != null) {
-                            netBuf.clear();
-                            netBuf.put(in);
-                            netBuf.flip();
-                            appBuf.clear();
-                            engine.unwrap(netBuf, appBuf);
-                        } else Thread.sleep(10);
-                        break;
-                    }
-                case NEED_TASK:
-                    {
-                        Runnable t = engine.getDelegatedTask();
-                        if (t != null) t.run();
-                        break;
-                    }
-            }
-        }
-        throw new RuntimeException("Тайм-аут рукопожатия " + engine.getHandshakeStatus());
+        GostSSLEngineLoopbackTest.doLoopback(client, server, pair);
     }
 }

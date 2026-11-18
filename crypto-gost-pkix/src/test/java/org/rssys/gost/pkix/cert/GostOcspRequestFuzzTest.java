@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 
 /**
  * Fuzz-тест для {@link GostOcspRequest#fromDer}.
@@ -13,10 +14,8 @@ import com.code_intelligence.jazzer.junit.FuzzTest;
  * <p>Конструктор оборачивает {@code IllegalArgumentException | ArrayIndexOutOfBoundsException}
  * в {@code PkixException("Malformed OCSP request DER")} — это ожидаемая реакция на битый DER.
  * {@code NullPointerException} и {@code NegativeArraySizeException} не оборачиваются и
- * долетают как {@code RuntimeException} — их {@code rethrowIfBug} перебрасывает как баги.
- *
- * <p>ПОЧЕМУ rethrowIfBug локально, а не import из другого модуля:
- * crypto-gost-core не публикует test-jar — кросс-модульный импорт невозможен.
+ * долетают как {@code RuntimeException} — их {@code FuzzTestUtils.rethrowIfBug}
+ * перебрасывает как баги.
  */
 class GostOcspRequestFuzzTest {
 
@@ -29,20 +28,7 @@ class GostOcspRequestFuzzTest {
         } catch (PkixException e) {
             // Ожидаемо: битый DER, структурная ошибка
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    /**
-     * Перебрасывает RuntimeException, если это баг (AIOOBE, NPE,
-     * NegativeArraySizeException). Иначе — проглатывает.
-     */
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

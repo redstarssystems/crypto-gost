@@ -199,7 +199,7 @@ public final class FileReceiveServer {
 
         if (caPath != null) {
             byte[] caPfx = Files.readAllBytes(Path.of(caPath));
-            builder.trustCa(caPfx, caPassword.toCharArray());
+            builder.trustCaChain(caPfx, caPassword.toCharArray());
         } else {
             System.out.println("WARNING: no --ca specified — trust-all mode (development only)");
             builder.trustAll();

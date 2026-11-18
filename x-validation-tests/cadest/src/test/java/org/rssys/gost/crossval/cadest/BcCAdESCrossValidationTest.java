@@ -7,12 +7,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.security.MessageDigest;
 import java.security.Security;
-import java.security.cert.X509Certificate;
 import java.util.Arrays;
 import org.bouncycastle.asn1.ASN1Encodable;
 import org.bouncycastle.asn1.ASN1ObjectIdentifier;
 import org.bouncycastle.asn1.ASN1OctetString;
-import org.bouncycastle.asn1.ASN1Primitive;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.cms.Attribute;
 import org.bouncycastle.asn1.cms.AttributeTable;
@@ -34,13 +32,16 @@ import org.rssys.gost.crossval.cadest.TestData.CertPair;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
-import org.rssys.gost.pkix.cms.CAdESAttributes;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.cms.CAdESExtender;
+import org.rssys.gost.pkix.cms.CAdESVerifier;
 import org.rssys.gost.pkix.cms.CmsSignedDataVerifier;
 import org.rssys.gost.pkix.cms.CmsTestUtils;
+import org.rssys.gost.pkix.cms.Revocation;
+import org.rssys.gost.pkix.cms.SignerSelection;
 import org.rssys.gost.pkix.cms.VerifiedCAdESData;
 import org.rssys.gost.pkix.cms.VerifiedSignedData;
-import org.rssys.gost.pkix.tsp.TspRequestBuilder;
+import org.rssys.gost.pkix.cms.VerifyOptions;
 import org.rssys.gost.pkix.tsp.TspResponse;
 import org.rssys.gost.pkix.tsp.TspTransport;
 import org.rssys.gost.util.DerCodec;
@@ -57,8 +58,7 @@ class BcCAdESCrossValidationTest {
         Security.addProvider(new BouncyCastleProvider());
         pair256 = TestData.generateCaAndLeaf(TestData.PARAMS_256);
         tsaKp256 = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
-        tsaCert256 = CmsTestUtils.createSelfSignedCert(
-                tsaKp256.getPrivate(), tsaKp256.getPublic());
+        tsaCert256 = CmsTestUtils.createSelfSignedCert(tsaKp256.getPrivate(), tsaKp256.getPublic());
     }
 
     // ========================================================================
@@ -79,21 +79,22 @@ class BcCAdESCrossValidationTest {
 
         // Получаем сертификат подписанта из CMS
         X509CertificateHolder certHolder =
-                (X509CertificateHolder) sd.getCertificates().getMatches(si.getSID()).iterator().next();
+                (X509CertificateHolder)
+                        sd.getCertificates().getMatches(si.getSID()).iterator().next();
 
         // Верификация подписи через JCA (требует BouncyCastleProvider в Security)
-        boolean verified = si.verify(
-                new JcaSimpleSignerInfoVerifierBuilder()
-                        .setProvider(BouncyCastleProvider.PROVIDER_NAME)
-                        .build(certHolder));
+        boolean verified =
+                si.verify(
+                        new JcaSimpleSignerInfoVerifierBuilder()
+                                .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                                .build(certHolder));
         assertTrue(verified, "BC должен подтвердить подпись CAdES-BES");
 
         // Проверяем signed-атрибуты: content-type, message-digest
         AttributeTable signed = si.getSignedAttributes();
         assertNotNull(signed, "signedAttrs должны присутствовать");
 
-        Attribute contentType = signed.get(
-                new ASN1ObjectIdentifier(GostOids.ATTR_CONTENT_TYPE));
+        Attribute contentType = signed.get(new ASN1ObjectIdentifier(GostOids.ATTR_CONTENT_TYPE));
         assertNotNull(contentType, "contentType должен быть в signedAttrs");
     }
 
@@ -108,8 +109,7 @@ class BcCAdESCrossValidationTest {
         AttributeTable signed = si.getSignedAttributes();
 
         // Извлекаем signingCertificateV2
-        Attribute scv2 = signed.get(
-                new ASN1ObjectIdentifier(GostOids.SIGNING_CERTIFICATE_V2));
+        Attribute scv2 = signed.get(new ASN1ObjectIdentifier(GostOids.SIGNING_CERTIFICATE_V2));
         assertNotNull(scv2, "signingCertificateV2 должен быть в signedAttrs");
 
         ASN1Encodable[] vals = scv2.getAttrValues().toArray();
@@ -118,18 +118,20 @@ class BcCAdESCrossValidationTest {
         // Парсим ESSCertIDv2 через BC ASN.1
         // Структура: signingCertificateV2 ::= SEQUENCE { certs SEQUENCE OF ESSCertIDv2 }
         //   где ESSCertIDv2 ::= SEQUENCE { hashAlgorithm, certHash, issuerSerial }
-        ASN1Sequence scv2Seq = ASN1Sequence.getInstance(vals[0]);    // outer
+        ASN1Sequence scv2Seq = ASN1Sequence.getInstance(vals[0]); // outer
         ASN1Sequence certsSeq = ASN1Sequence.getInstance(scv2Seq.getObjectAt(0)); // certs
         ASN1Sequence essCertIdV2 = ASN1Sequence.getInstance(certsSeq.getObjectAt(0)); // ESSCertIDv2
-        ASN1Encodable certHashEnc = essCertIdV2.getObjectAt(1);     // certHash
+        ASN1Encodable certHashEnc = essCertIdV2.getObjectAt(1); // certHash
         ASN1OctetString certHashOs = ASN1OctetString.getInstance(certHashEnc);
 
         // Вычисляем хэш DER сертификата через BC MessageDigest (JCA)
-        MessageDigest md256 = MessageDigest.getInstance("GOST3411-2012-256",
-                BouncyCastleProvider.PROVIDER_NAME);
+        MessageDigest md256 =
+                MessageDigest.getInstance("GOST3411-2012-256", BouncyCastleProvider.PROVIDER_NAME);
         byte[] actualHash = md256.digest(pair256.leafCert().getEncoded());
 
-        assertArrayEquals(certHashOs.getOctets(), actualHash,
+        assertArrayEquals(
+                certHashOs.getOctets(),
+                actualHash,
                 "certHash в ESSCertIDv2 должен совпадать с хэшем DER сертификата");
     }
 
@@ -144,26 +146,34 @@ class BcCAdESCrossValidationTest {
         byte[] bcReencoded = sd.toASN1Structure().getEncoded();
 
         // crypto-gost верифицирует перекодированный DER
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(bcReencoded, pair256.caCert());
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        bcReencoded,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(pair256.caCert()),
+                                SignerSelection.ANY,
+                                Revocation.none()));
         assertNotNull(result, "crypto-gost должен верифицировать CMS после BC перекодировки");
     }
 
     @Test
-    @DisplayName("CAdES-BES: verifyCAdESBES() проходит валидную подпись")
-    void verifyCAdESBESValid() throws Exception {
-        byte[] data = "verifyCAdESBES test".getBytes();
+    @DisplayName("CAdES-BES: verifyBES() проходит валидную подпись")
+    void verifyBESValid() throws Exception {
+        byte[] data = "verifyBES test".getBytes();
         byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdESBES(cadesBes, pair256.caCert());
-        assertNotNull(result, "verifyCAdESBES должен принять валидный CAdES-BES");
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyBES(cadesBes, TrustAnchors.ofCertificates(pair256.caCert()));
+        assertNotNull(result, "verifyBES должен принять валидный CAdES-BES");
         assertNotNull(result.signers().get(0).signerCertificate());
-        assertTrue(result.signers().get(0).timestamps().isEmpty(),
+        assertTrue(
+                result.signers().get(0).timestamps().isEmpty(),
                 "CAdES-BES не содержит меток времени");
     }
 
     @Test
-    @DisplayName("Negative: verifyCAdESBES() бросает PkixException без signingCertificateV2")
-    void verifyCAdESBESFailsWithoutScv2() throws Exception {
+    @DisplayName("Negative: verifyBES() бросает PkixException без signingCertificateV2")
+    void verifyBESFailsWithoutScv2() throws Exception {
         byte[] data = "bes no scv2".getBytes();
         // Строим CMS без withCAdES() — нет signingCertificateV2
         byte[] cmsWithoutCAdES =
@@ -173,12 +183,13 @@ class BcCAdESCrossValidationTest {
                         .build();
 
         try {
-            CAdESExtender.verifyCAdESBES(cmsWithoutCAdES, pair256.caCert());
+            CAdESVerifier.verifyBES(cmsWithoutCAdES, TrustAnchors.ofCertificates(pair256.caCert()));
             throw new AssertionError("Ожидался PkixException при отсутствии signingCertificateV2");
         } catch (PkixException e) {
-            assertTrue(e.getMessage().contains("signingCertificateV2"),
+            assertTrue(
+                    e.getMessage().contains("signingCertificateV2"),
                     "Сообщение должно указывать на отсутствие signingCertificateV2: "
-                    + e.getMessage());
+                            + e.getMessage());
         }
     }
 
@@ -194,8 +205,8 @@ class BcCAdESCrossValidationTest {
 
         byte[] sigHash = TestData.hashFirstSignature(cadesBes);
         String hashOid = TestData.hashOidForParams(TestData.PARAMS_256);
-        byte[] tsToken = TestData.buildTimeStampToken(sigHash, hashOid,
-                tsaKp256.getPrivate(), tsaCert256);
+        byte[] tsToken =
+                TestData.buildTimeStampToken(sigHash, hashOid, tsaKp256.getPrivate(), tsaCert256);
         byte[] cadesT = TestData.buildCAdEST(cadesBes, tsToken);
 
         // BC парсит CAdES-T (CMS SignedData с unsigned-атрибутами)
@@ -206,8 +217,7 @@ class BcCAdESCrossValidationTest {
         AttributeTable unsigned = si.getUnsignedAttributes();
         assertNotNull(unsigned, "unsignedAttrs должны быть в CAdES-T");
 
-        Attribute tsAttr = unsigned.get(
-                new ASN1ObjectIdentifier(GostOids.SIGNATURE_TIME_STAMP));
+        Attribute tsAttr = unsigned.get(new ASN1ObjectIdentifier(GostOids.SIGNATURE_TIME_STAMP));
         assertNotNull(tsAttr, "signatureTimeStampToken должен быть в unsignedAttrs");
 
         // Извлекаем TimeStampToken из атрибута через BC
@@ -216,12 +226,13 @@ class BcCAdESCrossValidationTest {
 
         // ASN1Primitive -> DER байты -> BC TimeStampToken
         byte[] tsTokenDer = tsVals[0].toASN1Primitive().getEncoded();
-        TimeStampToken tsTokenParsed = new TimeStampToken(
-                new CMSSignedData(tsTokenDer));
+        TimeStampToken tsTokenParsed = new TimeStampToken(new CMSSignedData(tsTokenDer));
 
         // Сверяем messageImprint
         byte[] imprintHash = tsTokenParsed.getTimeStampInfo().getMessageImprintDigest();
-        assertArrayEquals(sigHash, imprintHash,
+        assertArrayEquals(
+                sigHash,
+                imprintHash,
                 "messageImprint в TimeStampToken должен совпадать с хэшем подписи");
     }
 
@@ -233,22 +244,24 @@ class BcCAdESCrossValidationTest {
         GostCertificate signerCert =
                 CmsTestUtils.createSelfSignedCert(signerKp.getPrivate(), signerKp.getPublic());
         KeyPair tsaKp = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
-        GostCertificate tsaCert =
-                CmsTestUtils.createTsaCert(tsaKp.getPrivate(), tsaKp.getPublic());
+        GostCertificate tsaCert = CmsTestUtils.createTsaCert(tsaKp.getPrivate(), tsaKp.getPublic());
 
         byte[] data = "CAdES-T full verify".getBytes();
         byte[] cadesBes = TestData.buildCAdESBES(data, signerKp.getPrivate(), signerCert);
 
         byte[] sigHash = TestData.hashFirstSignature(cadesBes);
         String hashOid = TestData.hashOidForParams(TestData.PARAMS_256);
-        byte[] tsToken = TestData.buildTimeStampToken(sigHash, hashOid,
-                tsaKp.getPrivate(), tsaCert);
+        byte[] tsToken =
+                TestData.buildTimeStampToken(sigHash, hashOid, tsaKp.getPrivate(), tsaCert);
         byte[] cadesT = TestData.buildCAdEST(cadesBes, tsToken);
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdEST(cadesT, signerCert, tsaCert);
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyT(cadesT, TrustAnchors.ofCertificates(signerCert, tsaCert));
         assertNotNull(result);
         assertNotNull(result.signers().get(0).signerCertificate());
-        assertTrue(result.signers().get(0).timestamps().size() > 0, "Должна быть хотя бы одна метка времени");
+        assertTrue(
+                result.signers().get(0).timestamps().size() > 0,
+                "Должна быть хотя бы одна метка времени");
     }
 
     // ========================================================================
@@ -270,7 +283,8 @@ class BcCAdESCrossValidationTest {
         assertArrayEquals(hash, bcImprint, "messageImprint должен совпадать");
 
         // Сверяем hashAlgorithm OID
-        assertEquals(new ASN1ObjectIdentifier(GostOids.DIGEST_256),
+        assertEquals(
+                new ASN1ObjectIdentifier(GostOids.DIGEST_256),
                 bcReq.getMessageImprintAlgOID(),
                 "OID хэш-функции должен совпадать");
     }
@@ -281,14 +295,16 @@ class BcCAdESCrossValidationTest {
         byte[] hash = Digest.digest256("BC TSP token data".getBytes());
         String hashOid = GostOids.DIGEST_256;
 
-        byte[] tsToken = TestData.buildTimeStampToken(hash, hashOid,
-                tsaKp256.getPrivate(), tsaCert256);
+        byte[] tsToken =
+                TestData.buildTimeStampToken(hash, hashOid, tsaKp256.getPrivate(), tsaCert256);
 
         // crypto-gost парсит TimeStampToken
         TspResponse tspResponse = TspResponse.parseTimeStampToken(tsToken);
         assertEquals(GostOids.PKI_STATUS_GRANTED, tspResponse.status());
         assertNotNull(tspResponse.tstInfo());
-        assertArrayEquals(hash, tspResponse.tstInfo().messageImprintHash(),
+        assertArrayEquals(
+                hash,
+                tspResponse.tstInfo().messageImprintHash(),
                 "messageImprint должен совпадать");
     }
 
@@ -335,12 +351,14 @@ class BcCAdESCrossValidationTest {
         CMSSignedData sd = new CMSSignedData(tampered);
         SignerInformation si = sd.getSignerInfos().iterator().next();
         X509CertificateHolder certHolder =
-                (X509CertificateHolder) sd.getCertificates().getMatches(si.getSID()).iterator().next();
+                (X509CertificateHolder)
+                        sd.getCertificates().getMatches(si.getSID()).iterator().next();
 
-        boolean verified = si.verify(
-                new JcaSimpleSignerInfoVerifierBuilder()
-                        .setProvider(BouncyCastleProvider.PROVIDER_NAME)
-                        .build(certHolder));
+        boolean verified =
+                si.verify(
+                        new JcaSimpleSignerInfoVerifierBuilder()
+                                .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                                .build(certHolder));
         assertTrue(!verified, "BC должен отвергнуть tampered подпись");
     }
 
@@ -355,22 +373,21 @@ class BcCAdESCrossValidationTest {
         AttributeTable signed = si.getSignedAttributes();
 
         // Извлекаем certHash и сравниваем с хэшем ЧУЖОГО сертификата
-        Attribute scv2 = signed.get(
-                new ASN1ObjectIdentifier(GostOids.SIGNING_CERTIFICATE_V2));
+        Attribute scv2 = signed.get(new ASN1ObjectIdentifier(GostOids.SIGNING_CERTIFICATE_V2));
         ASN1Encodable[] vals = scv2.getAttrValues().toArray();
         ASN1Sequence scv2Seq = ASN1Sequence.getInstance(vals[0]);
         ASN1Sequence certsSeq = ASN1Sequence.getInstance(scv2Seq.getObjectAt(0));
         ASN1Sequence essCertIdV2 = ASN1Sequence.getInstance(certsSeq.getObjectAt(0));
-        ASN1OctetString certHashOs =
-                ASN1OctetString.getInstance(essCertIdV2.getObjectAt(1));
+        ASN1OctetString certHashOs = ASN1OctetString.getInstance(essCertIdV2.getObjectAt(1));
 
         // Хэш чужого сертификата (CA вместо leaf)
-        MessageDigest md256 = MessageDigest.getInstance("GOST3411-2012-256",
-                BouncyCastleProvider.PROVIDER_NAME);
+        MessageDigest md256 =
+                MessageDigest.getInstance("GOST3411-2012-256", BouncyCastleProvider.PROVIDER_NAME);
         byte[] caHash = md256.digest(pair256.caCert().getEncoded());
 
         boolean hashesMatch = Arrays.equals(certHashOs.getOctets(), caHash);
-        assertTrue(!hashesMatch,
+        assertTrue(
+                !hashesMatch,
                 "certHash в signingCertificateV2 не должен совпадать с хэшем CA (там leaf)");
     }
 
@@ -388,7 +405,7 @@ class BcCAdESCrossValidationTest {
     }
 
     @Test
-    @DisplayName("Negative: verify() без доверенных сертификатов → PkixException")
+    @DisplayName("Negative: verifyT() без доверенных якорей → IllegalArgumentException")
     void verifyWithoutTrustedCertsThrows() throws Exception {
         // Самоподписанные сертификаты для минимального CAdES-T
         KeyPair signerKp = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
@@ -398,20 +415,21 @@ class BcCAdESCrossValidationTest {
         GostCertificate tsaCert =
                 CmsTestUtils.createSelfSignedCert(tsaKp.getPrivate(), tsaKp.getPublic());
 
-        byte[] cadesBes = TestData.buildCAdESBES("no trust".getBytes(),
-                signerKp.getPrivate(), signerCert);
+        byte[] cadesBes =
+                TestData.buildCAdESBES("no trust".getBytes(), signerKp.getPrivate(), signerCert);
         byte[] sigHash = TestData.hashFirstSignature(cadesBes);
         String hashOid = TestData.hashOidForParams(TestData.PARAMS_256);
-        byte[] tsToken = TestData.buildTimeStampToken(sigHash, hashOid,
-                tsaKp.getPrivate(), tsaCert);
+        byte[] tsToken =
+                TestData.buildTimeStampToken(sigHash, hashOid, tsaKp.getPrivate(), tsaCert);
         byte[] cadesT = TestData.buildCAdEST(cadesBes, tsToken);
 
         try {
-            CAdESExtender.verifyCAdEST(cadesT); // без trustedCerts
-            throw new AssertionError("Ожидался PkixException при verify() без trustedCerts");
-        } catch (PkixException e) {
-            assertTrue(e.getMessage().contains("trusted certificate"),
-                    "Сообщение должно указывать на отсутствие доверенных сертификатов");
+            CAdESVerifier.verifyT(cadesT, TrustAnchors.empty()); // без доверенных якорей
+            throw new AssertionError("Ожидался IllegalArgumentException при verifyT() без якорей");
+        } catch (IllegalArgumentException e) {
+            assertTrue(
+                    e.getMessage().contains("anchors"),
+                    "Сообщение должно указывать на отсутствие доверенных якорей");
         }
     }
 
@@ -421,20 +439,20 @@ class BcCAdESCrossValidationTest {
         KeyPair signerKp = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
         GostCertificate signerCert =
                 CmsTestUtils.createSelfSignedCert(signerKp.getPrivate(), signerKp.getPublic());
-        byte[] cadesBes = TestData.buildCAdESBES("no tsa trust".getBytes(),
-                signerKp.getPrivate(), signerCert);
+        byte[] cadesBes =
+                TestData.buildCAdESBES(
+                        "no tsa trust".getBytes(), signerKp.getPrivate(), signerCert);
 
         TspTransport dummyTransport = (req, url) -> new byte[0];
 
         try {
             CAdESExtender.addTimestamp(cadesBes, "http://test", dummyTransport); // без tsaTrusted
-            throw new AssertionError(
-                    "Ожидался PkixException при addTimestamp() без tsaTrusted");
+            throw new AssertionError("Ожидался PkixException при addTimestamp() без tsaTrusted");
         } catch (PkixException e) {
-            assertTrue(e.getMessage().contains("TSA")
-                            || e.getMessage().contains("TSA signature"),
+            assertTrue(
+                    e.getMessage().contains("TSA") || e.getMessage().contains("TSA signature"),
                     "Сообщение должно указывать на отсутствие доверенных сертификатов TSA: "
-                    + e.getMessage());
+                            + e.getMessage());
         }
     }
 
@@ -447,12 +465,12 @@ class BcCAdESCrossValidationTest {
     void bCConfirmsMissingScv2() throws Exception {
         byte[] data = "missing-scv2".getBytes();
         // CAdES-BES без withCAdES() — signingCertificateV2 отсутствует
-        byte[] cadesBesNoAttr = TestData.buildCAdESBESNoAttr(data,
-                pair256.leafKey(), pair256.leafCert());
+        byte[] cadesBesNoAttr =
+                TestData.buildCAdESBESNoAttr(data, pair256.leafKey(), pair256.leafCert());
         byte[] sigHash = TestData.hashFirstSignature(cadesBesNoAttr);
         String hashOid = TestData.hashOidForParams(TestData.PARAMS_256);
-        byte[] tsToken = TestData.buildTimeStampToken(sigHash, hashOid,
-                tsaKp256.getPrivate(), tsaCert256);
+        byte[] tsToken =
+                TestData.buildTimeStampToken(sigHash, hashOid, tsaKp256.getPrivate(), tsaCert256);
         byte[] cadesT = TestData.buildCAdEST(cadesBesNoAttr, tsToken);
 
         // BC парсит — подпись CMS валидна, но signingCertificateV2 отсутствует
@@ -461,39 +479,37 @@ class BcCAdESCrossValidationTest {
         AttributeTable signed = si.getSignedAttributes();
         assertNotNull(signed, "signedAttrs должны присутствовать");
 
-        Attribute scv2 = signed.get(
-                new ASN1ObjectIdentifier(GostOids.SIGNING_CERTIFICATE_V2));
-        assertTrue(scv2 == null,
-                "signingCertificateV2 должен отсутствовать в CAdES без withCAdES()");
+        Attribute scv2 = signed.get(new ASN1ObjectIdentifier(GostOids.SIGNING_CERTIFICATE_V2));
+        assertTrue(
+                scv2 == null, "signingCertificateV2 должен отсутствовать в CAdES без withCAdES()");
     }
 
     @Test
     @DisplayName("BC: certHash в signingCertificateV2 совпадает — BC подтверждает целостность")
     void bCConfirmsCertHashMatches() throws Exception {
         byte[] data = "hash-ok".getBytes();
-        byte[] cadesBes = TestData.buildCAdESBES(data,
-                pair256.leafKey(), pair256.leafCert());
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
 
         CMSSignedData sd = new CMSSignedData(cadesBes);
         SignerInformation si = sd.getSignerInfos().iterator().next();
         AttributeTable signed = si.getSignedAttributes();
-        Attribute scv2 = signed.get(
-                new ASN1ObjectIdentifier(GostOids.SIGNING_CERTIFICATE_V2));
+        Attribute scv2 = signed.get(new ASN1ObjectIdentifier(GostOids.SIGNING_CERTIFICATE_V2));
         assertNotNull(scv2, "signingCertificateV2 должен присутствовать");
 
         ASN1Encodable[] vals = scv2.getAttrValues().toArray();
         ASN1Sequence scv2Seq = ASN1Sequence.getInstance(vals[0]);
         ASN1Sequence certsSeq = ASN1Sequence.getInstance(scv2Seq.getObjectAt(0));
         ASN1Sequence essCertIdV2 = ASN1Sequence.getInstance(certsSeq.getObjectAt(0));
-        byte[] certHash = ASN1OctetString.getInstance(
-                essCertIdV2.getObjectAt(1)).getOctets();
+        byte[] certHash = ASN1OctetString.getInstance(essCertIdV2.getObjectAt(1)).getOctets();
 
         // Хэш DER сертификата подписанта
-        MessageDigest md256 = MessageDigest.getInstance("GOST3411-2012-256",
-                BouncyCastleProvider.PROVIDER_NAME);
+        MessageDigest md256 =
+                MessageDigest.getInstance("GOST3411-2012-256", BouncyCastleProvider.PROVIDER_NAME);
         byte[] actualHash = md256.digest(pair256.leafCert().getEncoded());
 
-        assertArrayEquals(certHash, actualHash,
+        assertArrayEquals(
+                certHash,
+                actualHash,
                 "BC подтверждает: certHash совпадает с хэшем DER сертификата");
     }
 }

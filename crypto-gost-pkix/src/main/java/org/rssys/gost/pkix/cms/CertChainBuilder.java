@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.Set;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Построение цепочки сертификатов leaf→root из неупорядоченного набора.
@@ -26,18 +26,27 @@ public final class CertChainBuilder {
     private CertChainBuilder() {}
 
     /**
-     * Строит цепочку leaf-first от листового сертификата до доверенного корня.
+     * Строит цепочку leaf-first, останавливаясь на локальном сертификате-якоре.
      *
-     * <p>Алгоритм:
+     * <p>Алгоритм на каждом уровне строго в таком порядке:
      * <ol>
-     *   <li>Начать с {@code leaf}</li>
-     *   <li>Собрать всех кандидатов-issuer по совпадению
-     *       {@link GostCertificate#getIssuerDnBytes()} → {@link GostCertificate#getSubjectDnBytes()}
-     *       в {@code pool}, затем в {@code trustedRoots}</li>
-     *   <li>Выбрать issuer среди кандидатов (приоритет по AKI/SKI, см. ниже), проверяя
-     *       подпись {@code current.verifySignature(issuer.getPublicKey())}</li>
-     *   <li>Остановиться на self-signed или последнем из {@code trustedRoots}</li>
+     *   <li>{@code current} побайтово равен якорю — цепочка завершена;</li>
+     *   <li>{@code current} выпущен якорем — локальный якорь добавляется в конец,
+     *       всё присланное выше игнорируется;</li>
+     *   <li>только затем выбирается issuer из {@code pool} (и якорей) с приоритетом
+     *       AKI/SKI и проверкой подписи.</li>
      * </ol>
+     *
+     * <p>Порядок важен: если сертификат из подписи и доверенный якорь имеют один
+     * subject DN (перевыпущенный корень, закреплённый промежуточный CA), якорь
+     * обязан выиграть. Иначе вложенный старый корень с тем же ключом перекрыл бы
+     * перевыпущенный и его ограничения/срок перестали бы применяться.</p>
+     *
+     * <p>Любой сертификат в {@code trustedRoots} — самостоятельный якорь.
+     * Ограничения и срок вышестоящих сертификатов для него не наследуются.</p>
+     *
+     * <p>Поддельный корень с тем же DN/ключом, но чужой подписью не проходит:
+     * проверка подписи якорем не удаётся, и цепочка отклоняется.</p>
      *
      * <p>Защита от DoS:
      * <ul>
@@ -49,8 +58,6 @@ public final class CertChainBuilder {
      * (ротация ключей CA), кандидаты приоритизируются по совпадению их SKI с AKI
      * подписываемого сертификата (RFC 5280 §4.2.1.1), затем пробуются остальные с тем
      * же DN — до первого, чью подпись удаётся проверить.
-     * {@link PkixException.Reason#SIGNATURE_INVALID} бросается только если ни один
-     * кандидат уровня не подошёл.
      *
      * <p><b>Ограничение (non-goal):</b> это не полный backtracking по нескольким путям.
      * Если кандидат проходит проверку подписи, но выше по цепочке упирается в
@@ -60,8 +67,8 @@ public final class CertChainBuilder {
      *
      * @param leaf         листовой сертификат (подписант)
      * @param pool         промежуточные сертификаты из SignedData.certificates
-     * @param trustedRoots доверенные корневые сертификаты
-     * @return цепочка [leaf, intermediate..., trustedRoot], leaf-first
+     * @param trustedRoots доверенные сертификаты-якоря (корни или промежуточные CA)
+     * @return цепочка [leaf, intermediate..., trustedAnchor], leaf-first
      * @throws PkixException при обрыве, цикле или превышении глубины
      */
     public static List<GostCertificate> buildChain(
@@ -85,11 +92,22 @@ public final class CertChainBuilder {
         GostCertificate current = leaf;
         int maxDepth = CmsConstants.MAX_CERT_CHAIN_LENGTH;
 
-        while (!current.isSelfSigned()) {
-            if (chain.size() >= maxDepth) {
-                throw new PkixException(
-                        PkixException.Reason.CHAIN_TOO_LONG,
-                        "Certificate chain exceeds maximum depth of " + maxDepth);
+        while (true) {
+            // Якорь имеет приоритет над любым сертификатом из подписи. DER-сравнение
+            // исключает подмену якоря сертификатом с тем же DN/ключом, но другим DER.
+            if (trustedRoots.contains(current)) {
+                return chain;
+            }
+
+            GostCertificate anchor = findAnchorIssuer(current, trustedRoots);
+            if (anchor != null) {
+                if (chain.size() >= maxDepth) {
+                    throw new PkixException(
+                            PkixException.Reason.CHAIN_TOO_LONG,
+                            "Certificate chain exceeds maximum depth of " + maxDepth);
+                }
+                chain.add(anchor);
+                return chain;
             }
 
             byte[] issuerDn = current.getIssuerDnBytes();
@@ -106,6 +124,9 @@ public final class CertChainBuilder {
             }
 
             List<GostCertificate> candidates = collectBySubjectDn(issuerDn, pool, trustedRoots);
+            // Сам сертификат не может быть своим издателем; иначе self-signed
+            // непроверенный корень замкнул бы цепочку на себя.
+            candidates.removeIf(current::equals);
             if (candidates.isEmpty()) {
                 throw new PkixException(
                         PkixException.Reason.INCOMPLETE_CHAIN,
@@ -117,28 +138,60 @@ public final class CertChainBuilder {
                 LOG.log(
                         Level.DEBUG,
                         "No candidate issuer verified for subject={0} ({1} candidate(s) tried)",
-                        current.getSubjectDnForLog(128),
+                        current.getSubjectDnForLog(GostCertificate.DN_LOG_MAX_CHARS),
                         candidates.size());
                 throw new PkixException(
                         PkixException.Reason.SIGNATURE_INVALID,
                         "Certificate chain: signature verification failed for issuer");
             }
 
+            if (chain.size() >= maxDepth) {
+                throw new PkixException(
+                        PkixException.Reason.CHAIN_TOO_LONG,
+                        "Certificate chain exceeds maximum depth of " + maxDepth);
+            }
             chain.add(issuer);
             current = issuer;
         }
+    }
 
-        // Последний сертификат цепочки должен быть среди доверенных корней.
-        // Сравнение по полному DER (GostCertificate.equals), а не по subject DN,
-        // чтобы исключить подмену корня сертификатом с тем же DN, но чужим ключом.
-        GostCertificate last = chain.get(chain.size() - 1);
-        if (!trustedRoots.contains(last)) {
-            throw new PkixException(
-                    PkixException.Reason.ROOT_NOT_TRUSTED,
-                    "Certificate chain: root certificate is not among trusted roots");
+    /**
+     * Ищет якорь, выпустивший {@code cert}.
+     *
+     * <p>AKI/SKI задаёт только приоритет среди якорей с одинаковым subject DN:
+     * при перевыпуске корня SKI может измениться, поэтому окончательное решение
+     * принимает проверка подписи.</p>
+     */
+    private static GostCertificate findAnchorIssuer(
+            GostCertificate cert, List<GostCertificate> anchors) {
+        byte[] issuerDn = cert.getIssuerDnBytes();
+        byte[] aki = cert.getAuthorityKeyIdentifier();
+        if (aki != null) {
+            for (GostCertificate anchor : anchors) {
+                if (!Arrays.equals(issuerDn, anchor.getSubjectDnBytes())) {
+                    continue;
+                }
+                byte[] ski = anchor.getSubjectKeyIdentifier();
+                if (ski != null
+                        && Arrays.equals(ski, aki)
+                        && cert.verifySignature(anchor.getPublicKey())) {
+                    return anchor;
+                }
+            }
         }
-
-        return chain;
+        for (GostCertificate anchor : anchors) {
+            if (!Arrays.equals(issuerDn, anchor.getSubjectDnBytes())) {
+                continue;
+            }
+            byte[] ski = anchor.getSubjectKeyIdentifier();
+            if (aki != null && ski != null && Arrays.equals(ski, aki)) {
+                continue;
+            }
+            if (cert.verifySignature(anchor.getPublicKey())) {
+                return anchor;
+            }
+        }
+        return null;
     }
 
     private static List<GostCertificate> collectBySubjectDn(

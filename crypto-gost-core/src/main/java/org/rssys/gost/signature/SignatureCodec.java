@@ -2,6 +2,7 @@ package org.rssys.gost.signature;
 
 import java.math.BigInteger;
 import java.util.Arrays;
+import org.rssys.gost.util.Pack;
 
 /**
  * Утилита кодирования/декодирования подписи ГОСТ Р 34.10-2012.
@@ -21,24 +22,34 @@ public final class SignatureCodec {
      * @param s      компонента s подписи
      * @param params параметры кривой (используется {@code n} для вычисления rolen)
      * @return байты подписи s ∥ r, длина {@code 2 * rolen}
+     * @throws IllegalArgumentException если компонента отрицательна или не помещается в
+     *     {@code rolen} байт (то есть не меньше {@code 2^(8*rolen)})
      */
     public static byte[] encode(BigInteger r, BigInteger s, ECParameters params) {
-        int rolen = (params.n.bitLength() + 7) / 8;
+        int rolen = componentLength(params);
         byte[] out = new byte[2 * rolen];
-        byte[] rBytes = r.toByteArray();
-        byte[] sBytes = s.toByteArray();
-        // Fail-closed: валидная компонента (0 < x < n) укладывается в rolen байт;
-        // BigInteger.toByteArray() добавляет не более одного знакового байта (rolen+1).
-        // Больший размер означает x >= 2^(8*rolen) -> тихое усечение исказило бы кодировку.
-        if (rBytes.length > rolen + 1 || sBytes.length > rolen + 1) {
-            throw new IllegalArgumentException(
-                    "signature component exceeds " + rolen + "-byte field width");
-        }
-        int rLen = Math.min(rBytes.length, rolen);
-        int sLen = Math.min(sBytes.length, rolen);
-        System.arraycopy(sBytes, Math.max(0, sBytes.length - sLen), out, rolen - sLen, sLen);
-        System.arraycopy(rBytes, Math.max(0, rBytes.length - rLen), out, 2 * rolen - rLen, rLen);
+        // Fail-closed: значение, не помещающееся в rolen байт, отвергается, а не усекается
+        Pack.writeFixedLengthBigEndian(s, out, 0, rolen);
+        Pack.writeFixedLengthBigEndian(r, out, rolen, rolen);
         return out;
+    }
+
+    /**
+     * Проверяет, что подпись имеет длину {@code 2 * rolen} для заданной кривой. Длина подписи не
+     * секрет, а подпись приходит из недоверенного источника, поэтому проверяющий получает
+     * {@code false}, а не исключение (как для {@code r} и {@code s} вне диапазона).
+     *
+     * @param signature байты подписи или {@code null}
+     * @param params    параметры кривой
+     * @return {@code true} если подпись не {@code null} и её длина равна {@code 2 * rolen}
+     */
+    public static boolean hasValidLength(byte[] signature, ECParameters params) {
+        return signature != null && signature.length == 2 * componentLength(params);
+    }
+
+    /** Длина одной компоненты подписи {@code rolen = ceil(n.bitLength() / 8)} в байтах. */
+    private static int componentLength(ECParameters params) {
+        return (params.n.bitLength() + 7) / 8;
     }
 
     /**
@@ -51,8 +62,8 @@ public final class SignatureCodec {
      *         или {@code signature} равен {@code null}
      */
     public static BigInteger[] decode(byte[] signature, ECParameters params) {
-        int rolen = (params.n.bitLength() + 7) / 8;
-        if (signature == null || signature.length != 2 * rolen) {
+        int rolen = componentLength(params);
+        if (!hasValidLength(signature, params)) {
             throw new IllegalArgumentException(
                     "Invalid signature length: expected "
                             + (2 * rolen)

@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 
 /**
  * Fuzz-тесты для {@link GostPkcs12Parser} и {@link GostPkcs12Loader}.
@@ -33,7 +34,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parsePfx(input);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -48,7 +49,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parseSafeContents(input);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -63,7 +64,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parseEncryptedPrivateKeyInfo(input);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -79,7 +80,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parsePbes2Params(input);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -94,16 +95,7 @@ class GostPkcs12FuzzTest {
         try {
             GostPkcs12Parser.parseCertBag(input);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

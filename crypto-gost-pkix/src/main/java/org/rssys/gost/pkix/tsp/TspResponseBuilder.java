@@ -291,7 +291,9 @@ public final class TspResponseBuilder {
 
         // messageImprint: SEQUENCE { hashAlgorithm AlgorithmIdentifier, hashedMessage OCTET STRING
         // }
-        byte[] hashAlgId = CmsAlgorithmIdentifier.encode(messageImprintAlgOid);
+        // КриптоПро кодирует hashAlgorithm только OID (без NULL) и проверяет эту
+        // форму при валидации штампа времени. Декодер принимает оба варианта.
+        byte[] hashAlgId = CmsAlgorithmIdentifier.encodeOnlyOid(messageImprintAlgOid);
         byte[] hashedMessage = DerCodec.encodeOctetString(messageImprintHash);
         byte[] messageImprint = DerCodec.encodeSequence(hashAlgId, hashedMessage);
 

@@ -1,187 +1,62 @@
 package org.rssys.gost.jsse.ocsp;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
-import org.rssys.gost.pkix.util.SsrfGuard;
+import java.util.function.Predicate;
+import org.rssys.gost.pkix.internal.net.FetchRequest;
+import org.rssys.gost.pkix.internal.net.JdkHttpFetch;
+import org.rssys.gost.pkix.util.Deadline;
 
 /**
  * Реализация {@link OcspFetcher} на JDK HttpClient с SSRF-защитой.
- * <p>
- * <p>JVM only. Для Android используйте {@link UrlConnectionOcspFetcher}.</p>
- * <p>vthread-совместимость не валидирована JFR.</p>
- * Используется как singleton поверх TrustManager.
- * SSRF-защита: только http:// схема, блокировка private/reserved IP
- * после DNS-разрешения (проверяются все резолвнутые адреса, fail-closed).
- * <p>
- * <b>Остаточный риск (простыми словами):</b> адрес проверяется до запроса, но
- * само соединение делает {@code HttpClient}, который заново обращается к DNS —
- * между этими моментами атакующий с контролем DNS может подменить публичный
- * адрес на внутренний (DNS-rebinding TOCTOU). Штатными средствами HttpClient не
- * закрывается. Риск ограничен: украсть данные нельзя (ответ OCSP проверяется по
- * подписи), возможно лишь probing внутренней сети. Полное закрытие требует
- * ручного HTTP (raw socket + SNI), которое мы пока не планируем делать.
+ *
+ * <p>JVM only. Для Android используйте {@link UrlConnectionOcspFetcher}. vthread-совместимость не
+ * валидирована JFR.
+ *
+ * <p><b>Срок.</b> Один общий срок на весь запрос: соединение, заголовки, тело и перенаправления.
+ * Запрос идёт асинхронно, вызывающий поток ждёт не дольше остатка срока, по истечении запрос
+ * отменяется и соединение закрывается. Медленный сервер, присылающий тело по байту, срок не
+ * продлевает.
+ *
+ * <p><b>Ответ.</b> Принимается только 200; тело больше предела (по заявленному
+ * {@code Content-Length} или фактически) отвергается. Перенаправления следуют только для POST
+ * 307 и 308, не более 5 запросов; SSRF и схема проверяются на каждом переходе. Принимается только
+ * {@code http://}. Метод {@code fetch} никогда не бросает исключений: любая ошибка даёт {@code null}.
+ *
+ * <p><b>SSRF.</b> Адрес проверяется до запроса (блокировка private/reserved IP после
+ * DNS-разрешения, fail-closed). <b>Остаточный риск:</b> само соединение делает {@code HttpClient},
+ * который заново обращается к DNS, поэтому тот, кто контролирует ответы DNS, может подменить публичный
+ * адрес на внутренний между проверкой и соединением (DNS-rebinding). Штатными средствами
+ * HttpClient не закрывается; риск ограничен: содержимое внутренних ресурсов не раскрывается
+ * (ответ OCSP проверяется по подписи), возможно лишь зондирование внутренней сети. Само разрешение имени в срок не входит.
  * Подробнее — {@link org.rssys.gost.pkix.util.SsrfGuard}.
  */
-public final class JdkHttpOcspFetcher implements OcspFetcher {
+public final class JdkHttpOcspFetcher extends AbstractOcspFetcher {
 
-    private static final GostLogger LOG =
-            GostLogger.getLogger("org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher");
-
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(5);
-    private static final int DEFAULT_MAX_RESPONSE_SIZE = 262_144; // 256 KB
-
-    private final HttpClient client;
-    private final Duration timeout;
-    private final int maxResponseSize;
-    private final boolean skipSsrfCheck;
-
-    /**
-     * Создаёт fetcher с таймаутом 5 с и лимитом ответа 256 КБ.
-     */
+    /** Создаёт fetcher с таймаутом 5 с и лимитом ответа 256 КБ. */
     public JdkHttpOcspFetcher() {
-        this(DEFAULT_TIMEOUT, DEFAULT_MAX_RESPONSE_SIZE, false);
+        this(DEFAULT_TIMEOUT, DEFAULT_MAX_RESPONSE_SIZE);
     }
 
     /**
-     * @param timeout          таймаут HTTP-запроса
-     * @param maxResponseSize  максимальный размер OCSP-ответа в байтах (защита от OOM)
+     * @param timeout         общий срок запроса, от 1 мс до {@link Deadline#MAX_FETCH_TIMEOUT}
+     * @param maxResponseSize максимальный размер OCSP-ответа в байтах (защита от OOM), больше нуля
+     * @throws IllegalArgumentException если срок или предел размера недопустимы
      */
     public JdkHttpOcspFetcher(Duration timeout, int maxResponseSize) {
-        this(timeout, maxResponseSize, false);
+        this(timeout, maxResponseSize, FetchRequest.BLOCK_PRIVATE_ADDRESSES);
     }
 
     /** Для тестов — отключает SSRF-проверку (localhost mock). */
     JdkHttpOcspFetcher(Duration timeout, int maxResponseSize, boolean skipSsrfCheck) {
-        this.client = HttpClient.newHttpClient();
-        this.timeout = timeout;
-        this.maxResponseSize = maxResponseSize;
-        this.skipSsrfCheck = skipSsrfCheck;
-    }
-
-    @Override
-    public byte[] fetch(byte[] certDer, byte[] issuerDer, String ocspResponderUri) {
-        if (certDer == null || issuerDer == null || ocspResponderUri == null) {
-            return null;
-        }
-        if (!ocspResponderUri.startsWith("http://")) {
-            LOG.log(
-                    Level.WARNING,
-                    "OCSP fetch skipped: URI scheme not supported: {0} — only http:// is supported",
-                    ocspResponderUri);
-            return null;
-        }
-        try {
-            byte[] ocspRequest =
-                    OcspRequestBuilder.create()
-                            .targetCert(certDer)
-                            .issuerCert(issuerDer)
-                            .build()
-                            .der();
-            return doHttpPost(ocspResponderUri, ocspRequest);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
-        } catch (IOException e) {
-            return null;
-        }
+        this(timeout, maxResponseSize, blockedTarget(skipSsrfCheck));
     }
 
     /**
-     * Отправляет предварительно построенный OCSP-запрос и возвращает ответ вместе с nonce.
+     * Для тестов — собственная проверка адреса ({@code true} - заблокировать), в том числе на
+     * переходах.
      */
-    @Override
-    public OcspFetchResult fetchWithNonce(
-            byte[] certDer, byte[] issuerDer, String ocspResponderUri) {
-        if (certDer == null || issuerDer == null || ocspResponderUri == null) {
-            return new OcspFetchResult(null, null);
-        }
-        if (!ocspResponderUri.startsWith("http://")) {
-            LOG.log(
-                    Level.WARNING,
-                    "OCSP fetch (with nonce) skipped: URI scheme not supported: {0} — only http:// is supported",
-                    ocspResponderUri);
-            return new OcspFetchResult(null, null);
-        }
-        try {
-            OcspRequest ocspReq =
-                    OcspRequestBuilder.create().targetCert(certDer).issuerCert(issuerDer).build();
-            byte[] response = doHttpPost(ocspResponderUri, ocspReq.der());
-            return new OcspFetchResult(response, ocspReq.nonce());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return new OcspFetchResult(null, null);
-        } catch (IOException e) {
-            return new OcspFetchResult(null, null);
-        }
-    }
-
-    /**
-     * Выполняет HTTP POST на OCSP-responder.
-     */
-    private byte[] doHttpPost(String uri, byte[] ocspRequest)
-            throws IOException, InterruptedException {
-        URI requestUri;
-        try {
-            requestUri = URI.create(uri);
-        } catch (RuntimeException e) {
-            return null;
-        }
-
-        if (!skipSsrfCheck && SsrfGuard.isPrivateAddress(requestUri)) {
-            LOG.log(
-                    Level.WARNING,
-                    "OCSP fetch skipped: private/reserved IP resolved from {0}",
-                    uri);
-            return null;
-        }
-
-        HttpRequest request =
-                HttpRequest.newBuilder()
-                        .uri(requestUri)
-                        .header("Content-Type", "application/ocsp-request")
-                        .timeout(timeout)
-                        .POST(HttpRequest.BodyPublishers.ofByteArray(ocspRequest))
-                        .build();
-
-        HttpResponse<InputStream> response =
-                client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-
-        if (response.statusCode() != 200) {
-            response.body().close();
-            LOG.log(
-                    Level.WARNING,
-                    "OCSP fetch failed: HTTP {0} for {1}",
-                    response.statusCode(),
-                    uri);
-            return null;
-        }
-
-        try (InputStream is = response.body();
-                ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            byte[] buf = new byte[4096];
-            int total = 0;
-            int n;
-            while ((n = is.read(buf)) != -1) {
-                if (total > maxResponseSize - n) {
-                    LOG.log(
-                            Level.WARNING,
-                            "OCSP fetch aborted: response exceeds {0} bytes for {1}",
-                            maxResponseSize,
-                            uri);
-                    return null;
-                }
-                total += n;
-                baos.write(buf, 0, n);
-            }
-            return baos.toByteArray();
-        }
+    JdkHttpOcspFetcher(Duration timeout, int maxResponseSize, Predicate<URI> blockedTarget) {
+        super(timeout, maxResponseSize, blockedTarget, new JdkHttpFetch());
     }
 }

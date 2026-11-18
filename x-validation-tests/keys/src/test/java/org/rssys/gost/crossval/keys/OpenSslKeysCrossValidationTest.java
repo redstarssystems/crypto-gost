@@ -13,6 +13,7 @@ import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -54,10 +56,11 @@ class OpenSslKeysCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("opensslCurveParams")
-    @DisplayName("OpenSSL gen->crypto-gost: genpkey -> gost decode -> Q = d·G")
+    @DisplayName("OpenSSL gen->crypto-gost: Q = d·G совпадает с открытым ключом, выданным OpenSSL")
     void crossValidateGenToGost(TestData.CurveSpec spec) throws Exception {
         TempDirUtils.withTempDir("ossl-key-", tmpDir -> {
             Path privFile = tmpDir.resolve("priv.der");
+            Path pubFile = tmpDir.resolve("pub.der");
 
             exec(OPENSSL_BIN, "genpkey",
                     "-algorithm", spec.opensslAlgo(),
@@ -71,6 +74,18 @@ class OpenSslKeysCrossValidationTest {
             ECPoint g = ECPoint.affine(decodedParams.gx, decodedParams.gy, decodedParams);
             ECPoint q = g.multiply(priv.getD()).normalize();
             priv.destroy();
+
+            // Открытый ключ выдаёт сам OpenSSL из того же закрытого: сверяем его с нашим d·G,
+            // иначе вычисленный q ничем не проверялся бы
+            exec(OPENSSL_BIN, "pkey",
+                    "-in", privFile.toAbsolutePath().toString(),
+                    "-inform", "DER",
+                    "-pubout", "-outform", "DER",
+                    "-out", pubFile.toAbsolutePath().toString());
+            PublicKeyParameters osslPub = GostDerCodec.decodePublicKey(Files.readAllBytes(pubFile));
+            assertEquals(osslPub.getQ().getX(), q.getX(), "x открытого ключа OpenSSL и d·G");
+            assertEquals(osslPub.getQ().getY(), q.getY(), "y открытого ключа OpenSSL и d·G");
+            assertEquals(decodedParams, osslPub.getParams(), "кривая открытого ключа OpenSSL");
             return null;
         });
     }

@@ -76,7 +76,7 @@ public final class PfxServerExample {
 
         if (caPath != null) {
             byte[] caPfx = Files.readAllBytes(Path.of(caPath));
-            builder.trustCa(caPfx, caPassword.toCharArray());
+            builder.trustCaChain(caPfx, caPassword.toCharArray());
         } else {
             System.out.println("WARNING: no CA specified, trust-all mode");
             builder.trustAll();

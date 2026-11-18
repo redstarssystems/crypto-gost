@@ -23,6 +23,7 @@ import org.rssys.gost.jsse.socket.GostSSLServerSocket;
 import org.rssys.gost.jsse.socket.GostSSLSocket;
 import org.rssys.gost.jsse.testkit.GostTestCerts;
 import org.rssys.gost.jsse.testkit.GostTestCerts.CertChain;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.tls13.TlsCiphersuite;
 
 /**
@@ -62,16 +63,18 @@ class ConcurrentHandshakeTest {
         // Серверные key/trust менеджеры
         GostX509KeyManager serverKm = new GostX509KeyManager();
         serverKm.addKeyEntry("server", certs.toJca(), certs.key());
-        GostX509TrustManager serverTm = new GostX509TrustManager(certs.caKey(), false);
+        GostX509TrustManager serverTm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(certs.caCert()));
 
         // Клиентские менеджеры без сертификата (mTLS не требуется)
         clientKm = new GostX509KeyManager();
-        clientTm = new GostX509TrustManager(certs.caKey(), false);
+        clientTm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(certs.caCert()));
 
         // Раздельные session context'ы для сервера и клиентов
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        serverCtx = new GostSSLSessionContext(cs, cs.getHashLen());
-        clientCtx = new GostSSLSessionContext(cs, cs.getHashLen());
+        serverCtx = new GostSSLSessionContext(cs);
+        clientCtx = new GostSSLSessionContext(cs);
 
         serverSocket = new GostSSLServerSocket(0, serverKm, serverTm, serverCtx);
         port = serverSocket.getLocalPort();

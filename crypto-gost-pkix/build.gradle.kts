@@ -13,7 +13,7 @@ android {
     }
 
     defaultConfig {
-        minSdk = 31
+        minSdk = 34
     }
 
     compileOptions {
@@ -34,7 +34,9 @@ android {
         getByName("main") {
             java.apply {
                 (this as org.gradle.api.tasks.util.PatternFilterable).exclude(
-                    "**/JdkHttpTspTransport.java"
+                    "**/JdkHttpTspTransport.java",
+                    // движок на java.net.http, которого нет на Android 14
+                    "**/internal/net/JdkHttpFetch.java"
                 )
             }
         }

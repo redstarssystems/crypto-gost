@@ -16,7 +16,7 @@ import org.rssys.crypto.util.SCrypt;
  * <p>Вектор 3 (N=1024, r=8, p=16) пропущен из-за объёма памяти (~128 МБ),
  * необходимого для выполнения в стандартном тестовом окружении.
  */
-@DisplayName("SCrypt (RFC 7914) Tests")
+@DisplayName("SCrypt (RFC 7914): тесты")
 class SCryptTest {
 
     /** Вспомогательный метод: hex-строка -> byte[]. */

@@ -1,83 +1,86 @@
 # JSSE-провайдер для криптографических алгоритмов ГОСТ — crypto-gost-jsse
 
-Модуль `crypto-gost-jsse` реализует JSSE (Java Secure Socket Extension)
-провайдера для ГОСТ-криптографии на основе модуля `crypto-gost-tls13`:
+Модуль `crypto-gost-jsse` реализует JSSE-провайдера для
+ГОСТ-криптографии на основе модуля `crypto-gost-tls13`.
 
-1.  **Классы JSSE:**
+**Классы JSSE:**
 
-    - **`RssysGostJsseProvider`** — регистрация провайдера через
-      `Security.addProvider()`.
+- **`GostSsl` / `GostSslBuilder`** — упрощённый фасад: контекст сервера
+  или клиента одной цепочкой вызовов.
 
-    - **`GostSSLContextSpi`** — `SSLContext` для `TLSv1.3` /
-      `GOST-TLSv1.3`.
+- **`RssysGostJsseProvider`** — регистрация провайдера через
+  `Security.addProvider()`.
 
-    - **`GostSSLEngine`** — full `SSLEngine`: handshake, wrap/unwrap,
-      ALPN (RFC 7301), SNI (RFC 6066), mTLS, OCSP stapling.
+- **`GostSSLContextSpi`** — `SSLContext` для `TLSv1.3` / `GOST-TLSv1.3`.
 
-    - **`GostX509KeyManager`** — `X509ExtendedKeyManager` для
-      ГОСТ-ключей; SNI-селектор.
+- **`GostSSLEngine`** — полный `SSLEngine`: рукопожатие,
+  `wrap`/`unwrap`, ALPN (RFC 7301), SNI (RFC 6066), mTLS, OCSP stapling,
+  PSK, обновление ключа, экспорт ключевого материала.
 
-    - **`GostX509TrustManager`** — `X509ExtendedTrustManager` для
-      ГОСТ-сертификатов; валидация цепочки, OCSP (stapling + client-side
-      fetch), CRL (client-side fetch), hostname verification.
+- **`GostX509KeyManager`** — `X509ExtendedKeyManager` для ГОСТ-ключей:
+  SNI и выбор клиентского сертификата по `CertificateRequest`.
 
-    - **`GostSSLSocketFactory` / `GostSSLServerSocketFactory`** — socket
-      factories.
+- **`GostX509TrustManager`** — `X509ExtendedTrustManager`: цепочка,
+  OCSP, CRL, проверка имени узла.
 
-    - **`GostSSLSocket` / `GostSSLServerSocket`** — socket-реализации.
+- **`GostSSLSocketFactory` / `GostSSLServerSocketFactory`** — фабрики
+  сокетов.
 
-    - **`GostSSLSession` / `GostSSLSessionContext`** — управление
-      сессиями, PSK resumption.
+- **`GostSSLSocket` / `GostSSLServerSocket`** — сокеты.
 
-2.  **Возможности:**
+- **`GostSSLSession` / `GostSSLSessionContext`** — сессии,
+  PSK-возобновление, экспорт ключевого материала.
 
-    - **Handshake**: полный (client/server), сокращённый (`PSK`),
-      взаимный (`mTLS`).
+**Возможности:**
 
-    - **ALPN** — согласование протокола прикладного уровня (HTTP/2,
-      HTTP/1.1).
+- Рукопожатие: полное, сокращённое (PSK), взаимное (mTLS).
 
-    - **SNI** — выбор сертификата по имени сервера (multi-tenant).
+- ALPN — согласование протокола прикладного уровня (HTTP/2, HTTP/1.1).
 
-    - **OCSP**: stapling (сервер прикладывает OCSP-ответ), client-side
-      fetch (через `JdkHttpOcspFetcher`), кэширование.
+- SNI — выбор сертификата по имени сервера (multi-tenant).
 
-    - **CRL**: client-side fetch (через `JdkHttpCrlFetcher`), политики
-      `DISABLED` / `IF_CDP_PRESENT` / `REQUIRE`, SSRF-защита.
+- OCSP: stapling серверного и клиентского сертификата, client-side
+  fetch, кэш.
 
-    - **Session resumption**: PSK через `NewSessionTicket`.
+- CRL: client-side fetch, политики `DISABLED` / `IF_CDP_PRESENT` /
+  `REQUIRE`, кэш проверенных CRL.
 
-    - **Cipher suites**: `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L/S`
-      (RFC 9367 §3.1.2).
+- `max_fragment_length`: клиент может запросить фрагменты 512, 1024,
+  2048 или 4096 байт.
 
-    - **Защита записей**: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446
-      §5.3, per-record TLSTREE re-keying.
+- Экспорт ключевого материала (RFC 8446 §7.5) для привязки к каналу.
 
-3.  **Безопасность реализации:**
+- Наборы шифров `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L/S` (RFC 9367
+  §3.1.2); защита записей MGM-AEAD с nonce по RFC 8446 §5.3 и per-record
+  TLSTREE re-keying.
 
-    - Constant-time сравнения для verify\_data и PSK binders.
+- Логирование через `java.util.logging`; записи соединения помечаются
+  префиксом `[conn#N]`.
 
-    - Затирание ключевого материала при close, fatal alert, exception.
+**Безопасность реализации:**
 
-    - Защита от DoS: лимиты на размер записей, цепочку сертификатов,
-      post-handshake сообщения.
+- Constant-time сравнения для `verify_data` и PSK binders.
 
-    - Lock discipline: отдельные `ReentrantLock` для inbound/outbound
-      (SSLEngine-контракт), отдельные блокировки для read/write на
-      socket.
+- Затирание ключевого материала при закрытии, fatal alert и исключении.
 
-4.  **Ограничения:**
+- Защита от DoS: лимиты на размер записей, цепочку сертификатов,
+  post-handshake сообщения.
 
-    - Только TLS 1.3 (TLS 1.2 и ниже не поддерживаются).
+- Один `ReentrantLock` на движок, как в JDK; у сокета три замка
+  (handshake, read, write), замки сокета берутся раньше замка движка.
 
-    - Только ГОСТ-наборы (non-GOST cipher suites не поддерживаются).
+**Ограничения:**
 
-    - `HelloRetryRequest` (RFC 8446 §4.1.3) поддерживается — смена
-      ECDHE-группы при несовпадении с сервером. Дефолтная группа GC256B,
-      конфигурируется через `GostSSLEngine.setClientNamedGroup()`.
+- Только TLS 1.3.
 
-    Все криптографические операции выполняются встроенными средствами
-    библиотеки — без внешних зависимостей.
+- Только ГОСТ-наборы шифров.
+
+- `HelloRetryRequest` (RFC 8446 §4.1.3) поддерживается: смена
+  ECDHE-группы при несовпадении с сервером. Группа по умолчанию GC256B,
+  задаётся `GostSSLEngine.setClientNamedGroup()`.
+
+\+ Все криптографические операции выполняются средствами библиотеки, без
+внешних зависимостей.
 
 ## Быстрый старт
 
@@ -93,6 +96,7 @@ PKCS12 (см. ниже).
     import org.rssys.gost.api.KeyGenerator;
     import org.rssys.gost.signature.ECParameters;
     import org.rssys.gost.pkix.cert.*;
+    import org.rssys.gost.pkix.GostOids;
     import org.rssys.gost.jca.spec.GostDerCodec;
 
     ECParameters params = ECParameters.tc26a256();
@@ -102,9 +106,8 @@ PKCS12 (см. ниже).
     byte[] caDn = GostDnParser.encodeDn("CN=Test CA");
     GostCertificate ca = GostCertificateBuilder.create(params, caDn)
         .publicKey(caKp.getPublic())
-        // Удобный способ: .notBeforeNow().validForYears(100)
-        .notBefore("20250101120000Z").notAfter("21250101120000Z")
-        .basicConstraints(true, null)   // 
+        .notBeforeNow().validForYears(100)   // 
+        .basicConstraints(true, null)        // 
         .randomSerial()
         .sign(caKp.getPrivate());
 
@@ -113,19 +116,24 @@ PKCS12 (см. ниже).
     byte[] srvDn = GostDnParser.encodeDn("CN=localhost");
     GostCertificate server = GostCertificateBuilder.create(params, srvDn)
         .publicKey(srvKp.getPublic())
-        .issuerDn(caDn)                  // 
-        // Удобный способ: .notBeforeNow().validForYears(100)
-        .notBefore("20250101120000Z").notAfter("21250101120000Z")
-        .sanDns("localhost")             // 
+        .issuerDn(caDn)                      // 
+        .notBeforeNow().validForYears(100)
+        .extendedKeyUsage(GostOids.EXT_SERVER_AUTH)  // 
+        .sanDns("localhost")                 // 
         .randomSerial()
         .sign(caKp.getPrivate());
+
+- `notBeforeNow()` задаёт начало срока, `validForYears` считает конец от
+  него.
 
 - `isCA=true, pathLen=null` — CA без ограничения длины цепочки.
 
 - Издатель — наш CA, а не сам субъект.
 
-- Subject Alternative Name `dNSName=localhost` для совместимости с
-  браузерами.
+- EKU `serverAuth`: явно разрешает серверную аутентификацию.
+
+- Subject Alternative Name `dNSName=localhost`: по нему клиент проверяет
+  имя узла.
 
 Экспорт в PEM-файлы для использования в `GostSsl.builder()`:
 
@@ -154,7 +162,6 @@ PKCS12 (см. ниже).
         .certificate(                             // 
             Files.readAllBytes(Paths.get("server.pem")),
             Files.readAllBytes(Paths.get("server-key.pem")))
-        .trustCa(Files.readAllBytes(Paths.get("ca.pem"))) // 
         .buildServerContext();
 
     try (SSLServerSocket ss = GostSsl.serverSocket(8443, ctx)) {
@@ -173,11 +180,12 @@ PKCS12 (см. ниже).
 - `.certificate(byte[], byte[])` — авто-определение PEM/DER для
   сертификата и ключа.
 
-- `.trustCa(byte[])` — авто-определение формата: одиночный PEM,
-  PEM-цепочка или DER.
-
-- Для `SSLSocket` handshake запускается автоматически при первом
+- Для `SSLSocket` рукопожатие запускается автоматически при первом
   read/write. Явный `startHandshake()` — идиоматичный контроль.
+
+Серверу без mTLS доверенные якоря не нужны: клиентские сертификаты он не
+проверяет. Добавьте `trustCa` с CA клиентов, когда включите
+`needClientAuth` (см. «Взаимная аутентификация»).
 
 ### Клиент
 
@@ -185,14 +193,16 @@ PKCS12 (см. ниже).
         .trustCa(Files.readAllBytes(Paths.get("ca.pem")))
         .buildClientContext();
 
-    SSLSocket s = GostSsl.socket("localhost", 8443, ctx); // 
-    s.getOutputStream().write("PING".getBytes(StandardCharsets.UTF_8));
-    byte[] buf = new byte[1024];
-    int n = s.getInputStream().read(buf);
-    System.out.println(new String(buf, 0, n, StandardCharsets.UTF_8)); // ECHO: PING
-    s.close();
+    try (SSLSocket s = GostSsl.socket("localhost", 8443, ctx)) {  // 
+        s.getOutputStream().write("PING".getBytes(StandardCharsets.UTF_8));
+        byte[] buf = new byte[1024];
+        int n = s.getInputStream().read(buf);
+        System.out.println(new String(buf, 0, n, StandardCharsets.UTF_8)); // ECHO: PING
+    }
 
-- `GostSsl.socket()` создаёт `SSLSocket` и выполняет handshake.
+- `GostSsl.socket()` создаёт `SSLSocket`, выполняет рукопожатие и
+  проверяет имя узла (HTTPS). Имя должно быть в SAN сертификата; для
+  подключения по IP задайте `sanIp` и используйте IP.
 
 ### Взаимная аутентификация (mTLS)
 
@@ -204,10 +214,10 @@ CA. Переменные `params`, `caDn`, `caKp` — из раздела «Ге
     // Сервер: требует клиентский сертификат
     SSLContext srv = GostSsl.builder()
         .certificate(serverPem, serverKeyPem)
-        .trustCa(caPem)               // CA, выпустивший клиентские сертификаты
+        .trustCa(caPem)               // CA, которым проверяются клиентские сертификаты
+        .needClientAuth(true)         // 
         .buildServerContext();
     SSLServerSocket ss = GostSsl.serverSocket(8443, srv);
-    ss.setNeedClientAuth(true);       // сервер требует клиентский сертификат
 
     // Клиент: предоставляет свой сертификат
     var clientKp = KeyGenerator.generateKeyPair(params);
@@ -215,8 +225,8 @@ CA. Переменные `params`, `caDn`, `caKp` — из раздела «Ге
             GostDnParser.encodeDn("CN=Test Client"))
         .publicKey(clientKp.getPublic())
         .issuerDn(caDn)
-        // Удобный способ: .notBeforeNow().validForYears(100)
-        .notBefore("20250101120000Z").notAfter("21250101120000Z")
+        .notBeforeNow().validForYears(100)
+        .extendedKeyUsage(GostOids.EXT_CLIENT_AUTH)  // 
         .randomSerial()
         .sign(caKp.getPrivate());
 
@@ -227,17 +237,32 @@ CA. Переменные `params`, `caDn`, `caKp` — из раздела «Ге
         .buildClientContext();
     SSLSocket s = GostSsl.socket("localhost", 8443, cli);
 
+- `needClientAuth(true)` — клиентский сертификат обязателен.
+  `wantClientAuth(true)` запрашивает сертификат, но клиент вправе его не
+  предъявлять; тогда приложение само проверяет
+  `SSLSession.getPeerCertificates()`.
+
+- EKU `clientAuth`: сервер принимает сертификат только с этим
+  назначением (или без EKU).
+
 ### PKCS12 (production)
 
 В production сертификаты и ключи хранятся в PKCS12-контейнере.
+Доверенные якоря нужны только для mTLS: без них сервер клиентов не
+проверяет.
 
     byte[] p12 = Files.readAllBytes(Paths.get("server.p12"));
     SSLContext ctx = GostSsl.builder()
         .certificate(p12, "password".toCharArray())
-        .trustCa(p12Ca, "password".toCharArray())  // 
         .buildServerContext();
 
-- `.trustCa(pfx, pwd)` извлекает все CA-сертификаты (isCA=true) из PFX.
+Если сервер проверяет клиентов, CA берут из PFX одним из двух явных
+методов; оба требуют проверенного MAC: `trustCaChain(pfx, pwd)` — CA из
+цепочки ключа контейнера (isCA=true); независимые сертификаты контейнера
+якорями не становятся. `trustCaBundle(pfx, pwd)` — все сертификаты
+контейнера, который обязан состоять только из CA (ключ УЦ и несколько
+независимых корней); защиту обеспечивает только MAC. Если в контейнере
+есть не-CA сертификат, метод бросает `IllegalArgumentException`.
 
 ### Режим разработки
 
@@ -262,15 +287,16 @@ production.
 
 - `trustAll()` — только для разработки и изолированных сетей.
 
-- `withoutHostnameVerification()` — отключает проверку hostname,
-  MITM-риск. Применимо только к `buildClientContext()`.
+- `withoutHostnameVerification()` — отключает проверку hostname:
+  сертификат любого доверенного узла будет принят для любого имени.
+  Применимо только к `buildClientContext()`.
 
 ### Loopback-проверка
 
 Проверка работоспособности TLS без написания серверного и клиентского
 кода.
 
-    // mTLS: обе стороны с сертификатами
+    // mTLS: обе стороны с сертификатами; сервер требует и проверяет сертификат клиента
     GostSsl.verify(serverCertPem, serverKeyPem, clientCertPem, clientKeyPem, caPem);
     // Односторонний TLS: сервер с сертификатом, клиент только проверяет сервер
     GostSsl.verifyServer(serverCertPem, serverKeyPem, caPem);
@@ -282,8 +308,7 @@ KeyManagerFactory, TrustManagerFactory, JKS.
 
 ### Статические методы
 
-Все методы возвращают `SSLContext` или создают сокет. Каждый метод —
-одна строка.
+Все методы возвращают `SSLContext` или создают сокет.
 
 Серверные контексты:
 
@@ -329,49 +354,14 @@ KeyManagerFactory, TrustManagerFactory, JKS.
 
 ### GostSslBuilder
 
-Полный перечень методов строителя. Терминальные методы —
+Строитель контекста. Все методы возвращают `this`; терминальные —
 `buildServerContext()` и `buildClientContext()`.
 
-    SSLContext ctx = GostSsl.builder()
-        .certificate(certData, keyData)     // сертификат + ключ (авто PEM/DER)
-        .certificate(p12Data, password)     // или из PKCS12 (только один вариант)
-        .trustCa(caData)                    // CA: PEM, PEM-цепочка или DER (можно многократно)
-        .trustCa(pfxData, pfxPassword)      // CA из PKCS12 (извлекает isCA=true)
-        .trustCaFromPem(pemChain)           // CA из PEM-цепочки
-        .ocsp(true)                         // включить OCSP-степплинг
-        .ocspFetcher(new JdkHttpOcspFetcher())         // client-side OCSP-fetcher (JVM)
-        .maxOcspAgeMs(6 * 3600_000L)        // макс. возраст OCSP-ответа без nextUpdate (RFC 6960)
-        .crlPolicy(CrlPolicy.IF_CDP_PRESENT)     // политика CRL (по умолчанию DISABLED)
-        .crlFetcher(new JdkHttpCrlFetcher())           // fetcher CRL по CDP URI (JVM)
-        .maxCrlSize(16 * 1024 * 1024)       // лимит размера CRL в байтах
-        .maxRevokedEntries(500_000)         // лимит числа отозванных записей
-        .sessionCacheSize(5000)             // размер кэша сессий (0=без ограничения)
-        .interopAcceptGostBaseSigScheme(true) // обход openssl-gost-provider v3.6.0
-        .trustAll()                         // отключить проверку (только dev)
-        .buildServerContext();              // или buildClientContext()
+Типовые наборы:
 
-Лимиты `maxCrlSize`/`maxRevokedEntries`/`maxOcspAgeMs` имеют безопасные
-дефолты и нужны только для тюнинга под конкретную PKI. При
-`crlPolicy(null)` CRL-проверка трактуется как `DISABLED`. Для OCSP и CRL
-доступны две реализации: `JdkHttp*` (JVM, HttpClient) и `UrlConnection*`
-(Android, HttpURLConnection). Лимит `maxResponseSize` у \*CrlFetcher
-должен быть ≥ `maxCrlSize`, иначе CRL не дойдёт до парсера.
-
-`interopAcceptGostBaseSigScheme` (default=false) — обход
-openssl-gost-provider v3.6.0: он всегда шлёт базовые signature scheme
-(0x0709 для 256-bit, 0x070D для 512-bit) независимо от реальной кривой
-сертификата (GC256B/C/D, GC512B/C). RFC 9367 §5 формально требует
-точного соответствия, поэтому флаг выключен по умолчанию и включается
-только осознанно разработчиком. При срабатывании логирует warning с
-деталями несоответствия. В большинстве соединений с другими реализациями
-GOST TLS 1.3 флаг не требуется и должен оставаться выключенным.
-
-Примеры:
-
-    // Минимальный сервер
+    // Минимальный сервер без mTLS
     SSLContext srv = GostSsl.builder()
         .certificate(serverPem, serverKeyPem)
-        .trustCa(caPem)
         .buildServerContext();
 
     // Клиент без своего сертификата
@@ -379,16 +369,14 @@ GOST TLS 1.3 флаг не требуется и должен оставатьс
         .trustCa(caPem)
         .buildClientContext();
 
-    // Сервер с OCSP и большим кэшем сессий
-    SSLContext srv = GostSsl.builder()
+    // Сервер из PKCS12 с большим кэшем сессий
+    SSLContext srvP12 = GostSsl.builder()
         .certificate(serverP12, "pwd".toCharArray())
-        .trustCa(caP12, "pwd".toCharArray())
-        .ocsp(true)
         .sessionCacheSize(5000)
         .buildServerContext();
 
     // Клиент с CRL-проверкой и настроенными лимитами
-    SSLContext cli = GostSsl.builder()
+    SSLContext cliCrl = GostSsl.builder()
         .trustCa(caPem)
         .crlPolicy(CrlPolicy.IF_CDP_PRESENT)
         .crlFetcher(new JdkHttpCrlFetcher())
@@ -396,21 +384,241 @@ GOST TLS 1.3 флаг не требуется и должен оставатьс
         .maxOcspAgeMs(12 * 3600_000L)
         .buildClientContext();
 
+<table>
+<caption>Полный перечень:</caption>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<tbody>
+<tr>
+<td style="text-align: left;"><p>Метод</p></td>
+<td style="text-align: left;"><p>Назначение</p></td>
+<td style="text-align: left;"><p>По умолчанию</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>certificate(cert, key)</code></p></td>
+<td style="text-align: left;"><p>сертификат и ключ, PEM или DER</p></td>
+<td style="text-align: left;"><p>—</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>certificate(p12, password)</code></p></td>
+<td style="text-align: left;"><p>сертификат и ключ из PKCS12</p></td>
+<td style="text-align: left;"><p>—</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>trustCa(ca)</code></p></td>
+<td style="text-align: left;"><p>якоря: PEM, PEM-цепочка или DER; можно
+многократно</p></td>
+<td style="text-align: left;"><p>для mTLS</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>trustCaChain(pfx, pwd)</code></p></td>
+<td style="text-align: left;"><p>CA из цепочки ключа PFX (нужен
+MAC)</p></td>
+<td style="text-align: left;"><p>—</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>trustCaBundle(pfx, pwd)</code></p></td>
+<td style="text-align: left;"><p>все CA PFX-бандла, только CA (нужен
+MAC)</p></td>
+<td style="text-align: left;"><p>—</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>ocsp(true)</code></p></td>
+<td style="text-align: left;"><p>клиент: требовать OCSP-статус
+серверного сертификата</p></td>
+<td style="text-align: left;"><p>выключено</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>ocspFetcher(fetcher)</code></p></td>
+<td style="text-align: left;"><p>клиент: сетевой запрос, если staple не
+пришёл</p></td>
+<td style="text-align: left;"><p>—</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>maxOcspAgeMs(ms)</code></p></td>
+<td style="text-align: left;"><p>предел возраста ответа без
+<code>nextUpdate</code></p></td>
+<td style="text-align: left;"><p>24 ч</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>maxThisUpdateAge(d)</code></p></td>
+<td style="text-align: left;"><p>предел возраста <code>thisUpdate</code>
+для всех ответов</p></td>
+<td style="text-align: left;"><p>не задан</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>crlPolicy(policy)</code></p></td>
+<td style="text-align: left;"><p><code>DISABLED</code>,
+<code>IF_CDP_PRESENT</code>, <code>REQUIRE</code></p></td>
+<td style="text-align: left;"><p><code>DISABLED</code></p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>crlFetcher(fetcher)</code></p></td>
+<td style="text-align: left;"><p>загрузчик CRL по CDP</p></td>
+<td style="text-align: left;"><p>—</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>maxCrlSize(bytes)</code></p></td>
+<td style="text-align: left;"><p>предел размера CRL</p></td>
+<td style="text-align: left;"><p>64 МиБ</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>maxRevokedEntries(n)</code></p></td>
+<td style="text-align: left;"><p>предел числа отозванных
+записей</p></td>
+<td style="text-align: left;"><p>1 000 000</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>crlCacheMaxBytes(bytes)</code></p></td>
+<td style="text-align: left;"><p>бюджет кэша проверенных CRL</p></td>
+<td style="text-align: left;"><p>512 МиБ</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>crlMaxAge(d)</code></p></td>
+<td style="text-align: left;"><p>возраст записи до перепроверки</p></td>
+<td style="text-align: left;"><p>6 ч</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>sessionCacheSize(n)</code></p></td>
+<td style="text-align: left;"><p>размер кэша сессий, 0 — без
+предела</p></td>
+<td style="text-align: left;"><p>20 480</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>needClientAuth(true)</code></p></td>
+<td style="text-align: left;"><p>клиентский сертификат
+обязателен</p></td>
+<td style="text-align: left;"><p>выключено</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>wantClientAuth(true)</code></p></td>
+<td style="text-align: left;"><p>сертификат запрашивается, не
+обязателен</p></td>
+<td style="text-align: left;"><p>выключено</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>clientOcspPolicy(p)</code></p></td>
+<td style="text-align: left;"><p>staple клиента: <code>OFF</code>,
+<code>REQUEST</code>, <code>REQUIRE</code></p></td>
+<td style="text-align: left;"><p><code>OFF</code></p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>withoutHostnameVerification()</code></p></td>
+<td style="text-align: left;"><p>клиент: не проверять имя узла,
+опасно</p></td>
+<td style="text-align: left;"><p>выключено</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>interopAcceptGostBaseSigScheme(true)</code></p></td>
+<td style="text-align: left;"><p>обход openssl-gost-provider
+v3.6.0</p></td>
+<td style="text-align: left;"><p>выключено</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>trustAll()</code></p></td>
+<td style="text-align: left;"><p>не проверять сертификат, только
+dev</p></td>
+<td style="text-align: left;"><p>выключено</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>buildServerContext()</code> /
+<code>buildClientContext()</code></p></td>
+<td style="text-align: left;"><p>терминальные методы</p></td>
+<td style="text-align: left;"><p>—</p></td>
+</tr>
+</tbody>
+</table>
+
+`ocsp*` — клиентские настройки проверки серверного сертификата; на
+серверном контексте они не используются. Свой staple сервер задаёт
+`GostSSLEngine.setOcspResponse()` до `beginHandshake()`; сокеты этот
+способ не поддерживают.
+
+`ocspFetcher` работает только вместе с `ocsp(true)`, а вместе с
+`trustAll()` обе настройки отклоняются при сборке
+(`IllegalStateException`). С `ocsp(true)` и загрузчиком статус
+запрашивается по сети, если staple не пришёл; недоступность ответчика
+для серверного сертификата — отказ, а не пропуск проверки. Сетевые
+ответы OCSP и CRL кэшируются только после проверки.
+
+Для клиентских сертификатов сетевой OCSP дополнительно требует
+`clientOcspPolicy`, отличную от `OFF`: по умолчанию сервер не обращается
+по AIA из сертификатов клиентов. Политики и staple — в разделе «OCSP
+API».
+
+С включённым сетевым OCSP сервер ходит по AIA из сертификата клиента:
+число URI не ограничено, DNS-rebinding штатным `HttpClient` не закрыт.
+Риск — отказ в обслуживании и сканирование сети.
+
+При умолчаниях `clientOcspPolicy(OFF)` и `crlPolicy(DISABLED)` отзыв
+клиентского сертификата не проверяется: отозванный клиент с валидной
+цепочкой будет принят. CRL проверяется по `crlPolicy` независимо от
+политики OCSP.
+
+`CrlPolicy.REQUIRE` требует CRL только при отсутствии OCSP-ответа. Если
+OCSP получен и валиден, CRL не проверяется; ошибка OCSP — отказ без
+повторной проверки по CRL.
+
+`maxThisUpdateAge` по умолчанию выключен: возраст `thisUpdate` задаёт
+регламент стороны. Предел должен быть больше интервала публикации
+ответов, иначе служба с заранее выпущенными ответами получит отказы. Для
+ответа без `nextUpdate` действует меньший из двух пределов; кэш не
+хранит ответ дольше предела. Устаревший stapled-ответ — отказ сразу, без
+запроса по сети; с `trustAll()` несовместим.
+
+`maxCrlSize`, `maxRevokedEntries` и `maxOcspAgeMs` имеют безопасные
+значения по умолчанию; `crlPolicy(null)` равносилен `DISABLED`, значения
+≤ 0 отвергаются при создании (`IllegalStateException` в builder,
+`IllegalArgumentException` в `fromTrustAnchors(...)` и
+`GostTrustManagerParameters.Builder`). Предел `maxResponseSize`
+загрузчика должен быть не меньше `maxCrlSize` и проверяется при
+построении; своя реализация `CrlFetcher` может переопределить
+`maxResponseSize()`, иначе её предел не проверяется.
+
+`interopAcceptGostBaseSigScheme` (по умолчанию выключен) — обход
+openssl-gost-provider v3.6.0: он шлёт базовые схемы подписи (0x0709 для
+256 бит, 0x070D для 512 бит) независимо от кривой сертификата, а RFC
+9367 §5 требует точного соответствия. При срабатывании пишется WARNING.
+Включайте только осознанно, в большинстве соединений флаг не нужен.
+
 ### Ограничения GostSsl
+
+- Сервер без mTLS собирается без доверенных якорей. Включение
+  `needClientAuth`, `wantClientAuth`, `clientOcspPolicy` или `crlPolicy`
+  без якорей отвергается при сборке контекста.
 
 - Только один сертификат на контекст — для SNI (multi-tenant)
   используйте `GostX509KeyManager` напрямую (см. ниже).
 
-- `GostX509TrustManager` принимает список CA-ключей
-  (`List<PublicKeyParameters>`) — все переданные CA участвуют в проверке
-  цепочки.
+- `GostX509TrustManager` принимает только якоря-сертификаты
+  (`TrustAnchors`). Они аутентифицируют `pathLen` и `NameConstraints`
+  корня.
 
 - PKCS12 с GOST PBE поддерживается нативно (PBKDF2-HMAC-Streebog +
   Кузнечик CTR-ACPKM).
 
 ## API — уровни интеграции
 
-Модуль предоставляет три уровня:
+Модуль предоставляет три уровня. Для блокирующего I/O берите сокеты, для
+NIO и Netty — движок, для серверов приложений — SPI.
 
 **Socket API** — `GostSSLSocket / GostSSLServerSocket` — стандартный
 Java I/O. Handshake запускается автоматически при первом read/write или
@@ -421,10 +629,6 @@ I/O (NIO, Netty). Ручное управление handshake через `wrap()
 
 **Context API** — `GostSSLContextSpi` — фабрика engine и сокетов, точка
 входа для интеграции с серверами приложений (см. раздел «Интеграция»).
-
-`GostSSLEngine` разрешает параллельные `wrap()` и `unwrap()` из разных
-потоков. Запрещено вызывать `wrap()` из двух потоков одновременно.
-`GostX509TrustManager` thread-safe.
 
 ## Конфигурация сервера — ручная настройка
 
@@ -439,13 +643,16 @@ I/O (NIO, Netty). Ручное управление handshake через `wrap()
 PKCS12 (ключ и цепочка в одном файле):
 
     import org.rssys.gost.pkix.cert.GostPkcs12Loader;
-    import org.rssys.gost.pkix.cert.GostCertificate;
     import org.rssys.gost.jsse.bridge.CertificateBridge;
 
     GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(
-        Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray(), true);
+        Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray(), false); // 
     PrivateKeyParameters privateKey = p12.getPrivateKey();
     X509Certificate[] chain = CertificateBridge.toJca(p12.getCertificateChain());
+
+- `allowJdkFallback=false` — читаются только ГОСТ-контейнеры. Откат на
+  JDK `KeyStore` включайте явно (`true`), только если в вашей PKI есть
+  не-ГОСТ контейнеры.
 
 DER-файлы:
 
@@ -463,11 +670,14 @@ DER-файлы:
 PEM-файлы (авто-определение формата):
 
     import org.rssys.gost.jsse.GostSsl;
+    import org.rssys.gost.pkix.cert.GostCertificate;
 
-    PrivateKeyParameters key = GostSsl.loadPrivateKey(
+    byte[] certDer = GostCertificate.pemToDer(
+        Files.readAllBytes(Paths.get("server.pem")));
+    PrivateKeyParameters privateKey = GostSsl.loadPrivateKey(
         Files.readAllBytes(Paths.get("server-key.pem")));
-    // Зашифрованный ключ:
-    PrivateKeyParameters key = GostSsl.loadPrivateKey(
+    // Зашифрованный ключ (GOST PBES2):
+    PrivateKeyParameters encryptedKey = GostSsl.loadPrivateKey(
         Files.readAllBytes(Paths.get("encrypted-key.pem")), "password".toCharArray());
 
 ### GostX509KeyManager
@@ -479,54 +689,60 @@ PEM-файлы (авто-определение формата):
     // SNI (multi-tenant): несколько записей
     km.addKeyEntry("api", apiChain, apiKey);
 
-Сервер автоматически вызывает `asSniSelector()` — выбор сертификата по
-`SubjectAltName/dNSName`.
+Сервер сам вызывает `asSniSelector()`: берётся первая запись, чей лист
+подходит по имени (`SubjectAltName/dNSName`, wildcard по RFC 6125; для
+IP — `iPAddress`). Без SNI берётся первая запись. Тот же выбор вручную —
+`chooseAliasForHostname(hostname)`.
 
 ### GostX509TrustManager
 
-Конструкторы `GostX509TrustManager` покрывают все комбинации проверок.
+Фабрики `GostX509TrustManager.fromTrustAnchors(...)` покрывают все
+комбинации проверок.
 
 Проверка цепочки + срок действия (без OCSP/CRL):
 
     import org.rssys.gost.jsse.manager.GostX509TrustManager;
     import org.rssys.gost.pkix.cert.GostCertificate;
+    import org.rssys.gost.pkix.cert.TrustAnchors;
 
     byte[] caDer = Files.readAllBytes(Paths.get("ca.der"));
-    PublicKeyParameters caKey = new GostCertificate(caDer).getPublicKey();
-    GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
+    GostCertificate caCert = new GostCertificate(caDer);
+    GostX509TrustManager tm =
+            GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert));
 
 С одним CA + OCSP (stapling или client-side fetch):
 
     import org.rssys.gost.jsse.ocsp.OcspPolicy;
     import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
 
-    GostX509TrustManager tm = new GostX509TrustManager(
-        caKey,
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificate(caCert),
         OcspPolicy.STAPLING_OR_FETCH,   // 
         new JdkHttpOcspFetcher());
 
 - Политика: `STAPLING_OR_FETCH` — если нет staple-ответа, клиент сам
-  сходит на OCSP-responder. Также доступны: `DISABLED`, `IF_PRESENT`,
+  сходит на OCSP-responder. Также доступны: `IF_PRESENT`,
   `STAPLING_REQUIRED`. Для Android используйте
   `UrlConnectionOcspFetcher` вместо `JdkHttpOcspFetcher`.
 
 С несколькими CA + OCSP:
 
-    GostX509TrustManager tm = new GostX509TrustManager(
-        List.of(caKey1, caKey2),          // 
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificates(List.of(caCert1, caCert2)),
         OcspPolicy.STAPLING_OR_FETCH,
         new JdkHttpOcspFetcher());
 
-- Все переданные CA участвуют в проверке цепочки. Порядок не важен.
+Все переданные сертификаты CA участвуют в проверке цепочки. Порядок не
+важен.
 
-Полный конструктор: CA + OCSP + CRL (JVM — `JdkHttp*`; для Android
+Полная перегрузка: CA + OCSP + CRL (JVM — `JdkHttp*`; для Android
 подставьте `UrlConnection*`):
 
     import org.rssys.gost.jsse.crl.CrlPolicy;
     import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
 
-    GostX509TrustManager tm = new GostX509TrustManager(
-        List.of(caKey1, caKey2),
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificates(List.of(caCert1, caCert2)),
         OcspPolicy.STAPLING_OR_FETCH,
         new JdkHttpOcspFetcher(),
         CrlPolicy.IF_CDP_PRESENT,         // 
@@ -535,39 +751,78 @@ PEM-файлы (авто-определение формата):
 - `CrlPolicy`: `DISABLED` (не проверять), `IF_CDP_PRESENT` (проверять
   если CRL DP в сертификате), `REQUIRE` (требовать CRL всегда).
 
-Конструктор с настраиваемыми лимитами CRL/OCSP:
+Перегрузка с настраиваемыми лимитами CRL/OCSP:
 
-    GostX509TrustManager tm = new GostX509TrustManager(
-        List.of(caKey1, caKey2),
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificates(List.of(caCert1, caCert2)),
         OcspPolicy.STAPLING_OR_FETCH,
         new JdkHttpOcspFetcher(),
         CrlPolicy.IF_CDP_PRESENT,
         new JdkHttpCrlFetcher(),
         16 * 1024 * 1024,                 //  maxCrlSize (байты)
         500_000,                          //  maxRevokedEntries
-        12 * 3600_000L);                  //  maxOcspAgeMs (RFC 6960 §2.4)
+        512L * 1024 * 1024,               //  crlCacheMaxBytes
+        Duration.ofHours(6),              //  crlMaxAge (ZERO - перепроверка выключена)
+        12 * 3600_000L,                   //  maxOcspAgeMs (RFC 6960 §2.4)
+        Duration.ofHours(12));            //  maxThisUpdateAge (null - не задан)
 
 - Максимальный размер CRL. Лимит `maxResponseSize` у \*CrlFetcher должен
-  быть ≥ этого значения.
+  быть ≥ этого значения (проверяется при построении, см. выше);
+  превышение размера — отказ проверки.
 
 - Максимальное число отозванных записей в CRL (защита от
   DoS-раздувания).
+
+- Бюджет кэша проверенных CRL в байтах оценки удержания (около шести
+  байт кучи на байт DER); `0` — не хранить CRL между соединениями,
+  отрицательное значение — `IllegalArgumentException`. Сокращённые
+  перегрузки используют `CrlCache.DEFAULT_MAX_BYTES` (512 МиБ).
+
+- Предельный возраст записи кэша CRL с последней успешной загрузки:
+  запись старше, но ещё не истёкшая (`nextUpdate`), перепроверяется.
+  `Duration.ZERO` выключает перепроверку, иначе от 1 минуты до 30 суток,
+  `null` — `IllegalArgumentException`. Сокращённые перегрузки используют
+  `CrlCache.DEFAULT_MAX_AGE` (6 ч).
 
 - Максимальный возраст OCSP-ответа без `nextUpdate` — локальная политика
   свежести relying party. Перегрузка без `maxOcspAgeMs` использует
   дефолт `GostOids.MAX_OCSP_AGE_MS` (24 ч).
 
+- Необязательный предел возраста `thisUpdate` для всех OCSP-ответов, в
+  том числе с `nextUpdate` (Р 1323565.1.059-2024, п. 5.3). Тип
+  `Duration`, `null` - не задан; ноль и отрицательное значение
+  отвергаются. Сокращённые перегрузки предел не задают.
+
+С якорями-сертификатами (pathLen и NameConstraints корня):
+
+    import org.rssys.gost.pkix.cert.TrustAnchors;
+
+    TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(rootCaCert));
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        anchors,
+        OcspPolicy.IF_PRESENT,
+        null);
+
+`fromTrustAnchors(...)` принимает полный сертификат якоря. При опущенном
+корне эффективная цепочка строится снизу вверх: перевыпущенный корень с
+тем же ключом и закреплённый промежуточный CA поддерживаются, лишние
+сертификаты выше якоря игнорируются. Срок якоря при `n > 1` не
+проверяется (WARNING), закреплённый leaf (`n == 1`) проверяется как
+обычный leaf.
+
 Через фабрику JSSE (`TrustManagerFactory`) с параметрами:
 
     import org.rssys.gost.jsse.manager.GostTrustManagerParameters;
+    import org.rssys.gost.pkix.cert.TrustAnchors;
 
     GostTrustManagerParameters params = GostTrustManagerParameters.builder()
-        .caPublicKeys(List.of(caKey))
+        .trustAnchors(TrustAnchors.ofCertificate(rootCaCert))
         .ocspPolicy(OcspPolicy.IF_PRESENT)
         .crlPolicy(CrlPolicy.IF_CDP_PRESENT)
         .maxCrlSize(16 * 1024 * 1024)
         .maxRevokedEntries(500_000)
         .maxOcspAgeMs(12 * 3600_000L)
+        .maxThisUpdateAge(Duration.ofHours(12))   // необязательный предел возраста thisUpdate
         .build();
 
     TrustManagerFactory tmf =
@@ -575,15 +830,23 @@ PEM-файлы (авто-определение формата):
     tmf.init(params);   // 
 
 - Штатный JSSE-путь `TrustManagerFactory.init(ManagerFactoryParameters)`
-  — прокидывает лимиты в `GostX509TrustManager` без «сырого» вызова
-  конструктора.
+  — прокидывает лимиты в `GostX509TrustManager` без прямого вызова
+  фабрики. `.build()` требует непустой набор `trustAnchors`.
 
 Trust-all (только для разработки):
 
-    GostX509TrustManager tm = new GostX509TrustManager(null, false);
+    GostX509TrustManager tm = GostX509TrustManager.insecureTrustAll();
 
-`caKey = null` — проверка сертификата пира отключена. Только для
-разработки.
+`insecureTrustAll()` отключает проверку цепочки. Срок, KU, EKU, имя узла
+и присланный staple проверяются, но сетевых OCSP/CRL-запросов и проверки
+CRL нет, а подмена узла не обнаруживается. Только для разработки;
+строгий путь — `fromTrustAnchors(...)`: якоря-сертификаты
+аутентифицируют `pathLen` и `NameConstraints` корня.
+
+`TrustManagerFactory.init((KeyStore) null)` и KeyStore без ГОСТ-якорей
+дают `KeyStoreException`: неявного системного trust store для ГОСТ нет.
+Передайте KeyStore с доверенными сертификатами; они сохраняются как
+якоря, поэтому ограничения корня применяются.
 
 ### Создание SSLContext
 
@@ -604,13 +867,20 @@ Trust-all (только для разработки):
 
 ## Конфигурация клиента
 
+Клиент проверяет сервер по доверенным якорям; свой сертификат нужен
+только для mTLS. Для типового случая достаточно `GostSsl.builder()` (см.
+выше), ниже — ручная сборка.
+
     import org.rssys.gost.jsse.RssysGostJsseProvider;
+    import org.rssys.gost.jsse.manager.GostX509KeyManager;
     import org.rssys.gost.jsse.manager.GostX509TrustManager;
+    import org.rssys.gost.pkix.cert.TrustAnchors;
 
     Security.addProvider(new RssysGostJsseProvider());
 
-    // TrustManager с проверкой сервера
-    GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
+    // caCert — сертификат CA из раздела «Конфигурация сервера»
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificate(caCert));
     // Пустой KeyManager — без клиентского сертификата
     GostX509KeyManager km = new GostX509KeyManager();
 
@@ -626,16 +896,37 @@ Trust-all (только для разработки):
 mTLS — клиент предоставляет свой сертификат:
 
     GostX509KeyManager km = new GostX509KeyManager();
-    km.addKeyEntry("client", clientChain, clientPrivateKey);
+    km.addKeyEntry("client", clientChain, clientPrivateKey);  // цепочка лист-первым
 
     SSLContext ctx = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
     ctx.init(new KeyManager[]{km}, new TrustManager[]{tm}, null);
 
-Без проверки hostname клиент уязвим для MITM-атак. И socket-путь, и
-engine-путь включают проверку hostname по RFC 6125 по умолчанию:
-`ctx.getSocketFactory()`-сокеты и `ctx.createSSLEngine(host, port)` с
-непустым host получают `endpointIdentificationAlgorithm = "HTTPS"`
-автоматически. Явный отказ (тесты, изолированные сети):
+Без проверки имени клиент не отличит нужный узел от любого другого с
+доверенным сертификатом. По умолчанию проверка включена: сокеты из
+`ctx.getSocketFactory()` и `ctx.createSSLEngine(host, port)` с непустым
+host получают `endpointIdentificationAlgorithm = "HTTPS"` (RFC 6125).
+
+Кириллический `peerHost` (`пример.рф`) преобразуется в A-label; в SNI
+уходит punycode, и проверка hostname использует то же значение.
+IP-литералы проверяются по iPAddress SAN и в SNI не отправляются.
+
+**Имя SNI отдельно от проверяемого имени.**
+`SSLParameters.setServerNames(List.of(new SNIHostName(...)))` на движке
+и сокете меняет только имя в SNI:
+
+- сертификат сервера по-прежнему сверяется с `peerHost`, и PSK-тикет
+  привязан к `peerHost`;
+
+- пустой список отключает SNI; `SSLParameters` без заданных имён
+  (`getServerNames() == null`) переопределение не меняет, как в JDK;
+  имена не типа `host_name` игнорируются;
+
+- неотправляемое имя (например, длиннее 253 символов) отвергается сразу
+  в `setSSLParameters` (`IllegalArgumentException`);
+  `getSSLParameters()` возвращает заданные имена, поэтому круговой
+  `setSSLParameters(getSSLParameters())` их не сбрасывает.
+
+Явный отказ (тесты, изолированные сети; в production не используйте):
 
 - По контракту `SSLParameters`:
   `params.setEndpointIdentificationAlgorithm(null)` и
@@ -652,23 +943,41 @@ engine-путь включают проверку hostname по RFC 6125 по у
 - `GostSslBuilder.withoutHostnameVerification()` — флаг в builder,
   компонуется с `trustAll()` или `trustCa()`.
 
-### Выбор клиентского сертификата по OID-фильтрам (oid\_filters)
+### Выбор клиентского сертификата по CertificateRequest
 
-Если сервер включил `oid_filters` (RFC 8446 §4.2.5) в
-`CertificateRequest`, `GostX509KeyManager.asClientCertificateSelector()`
-выбирает подходящий сертификат:
+`GostSSLEngine` не выбирает клиентский сертификат заранее: выбор
+делается, когда сервер прислал `CertificateRequest`, селектором
+`GostX509KeyManager.asClientCertificateSelector()`. Запись подходит,
+если одновременно:
+
+- лист удовлетворяет `oid_filters` (RFC 8446 §4.2.5);
+
+- при непустом `certificate_authorities` издатель какого-либо
+  сертификата цепочки входит в список (§4.2.4); пустой список означает
+  «CA не указаны» и не фильтрует;
+
+- схема подписи ключа листа входит в `signature_algorithms` сервера
+  (§4.4.3).
+
+Среди подошедших предпочитается запись, подписи цепочки которой входят в
+`signature_algorithms_cert` (§4.2.3), иначе берётся первая. Если не
+подошла ни одна, клиент отправляет пустой Certificate (§4.4.2.3).
 
     import org.rssys.gost.jsse.manager.GostX509KeyManager;
 
     GostX509KeyManager km = new GostX509KeyManager();
-    km.addKeyEntry("kc1", kc1Chain, kc1Key);   // EKU: clientAuth
-    km.addKeyEntry("simple", simpleChain, simpleKey);
+    km.addKeyEntry("kc256", kc256Chain, kc256Key);   // ключ 256 бит
+    km.addKeyEntry("kc512", kc512Chain, kc512Key);   // ключ 512 бит
 
     GostSSLEngine engine = GostSSLEngine.createForClient(km, tm, "host", 8443, sessionCtx);
-    // При CertificateRequest с oid_filters engine сам вызывает km.asClientCertificateSelector()
+    // Сервер предложил только 512-битные схемы - уйдёт kc512, а не первая запись
 
-Записи перебираются в порядке добавления. Возвращается первая,
-удовлетворяющая всем фильтрам.
+`SSLSession.getLocalCertificates()` и `getLocalPrincipal()` отражают то,
+что реально отправлено в этом рукопожатии: до `CertificateRequest`, при
+пустом Certificate и при возобновлении по PSK они равны `null` (как в
+JDK для рукопожатия без клиентской аутентификации).
+
+Записи перебираются в порядке добавления.
 
 ## OCSP API
 
@@ -681,6 +990,7 @@ Fluent-построитель DER-закодированного OCSP-запро
 
     import org.rssys.gost.jsse.ocsp.OcspRequestBuilder;
     import org.rssys.gost.jsse.ocsp.OcspRequest;
+    import org.rssys.gost.api.GostSigner;
 
     // Базовый запрос (без подписи)
     OcspRequest req = OcspRequestBuilder.create()
@@ -697,7 +1007,7 @@ Fluent-построитель DER-закодированного OCSP-запро
         .targetCert(certDer)
         .issuerCert(issuerDer)
         .signKey(privateKey)            // ключ для подписи (опционально)
-        .params(ECParameters.tc26a256())// параметры кривой (обязательно с signKey)
+        .params(ECParameters.tc26a256())// параметры кривой; обязательны с signKey
         .build();
 
     // Запрос с подписью через GostSigner (HSM-адаптер)
@@ -722,26 +1032,90 @@ Fluent-построитель DER-закодированного OCSP-запро
 <td style="text-align: left;"><p>Поведение</p></td>
 </tr>
 <tr>
-<td style="text-align: left;"><p><code>DISABLED</code></p></td>
-<td style="text-align: left;"><p>OCSP не проверяется</p></td>
-</tr>
-<tr>
 <td style="text-align: left;"><p><code>IF_PRESENT</code></p></td>
 <td style="text-align: left;"><p>Проверить OCSP-ответ, если сервер его
 предоставил (не фатально при отсутствии)</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p><code>STAPLING_REQUIRED</code></p></td>
-<td style="text-align: left;"><p>Требовать OCSP stapling в handshake —
-fail-closed при отсутствии</p></td>
+<td style="text-align: left;"><p>Требовать OCSP stapling серверного
+сертификата — fail-closed при отсутствии</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p><code>STAPLING_OR_FETCH</code></p></td>
-<td style="text-align: left;"><p>Использовать stapling, если есть; иначе
-клиент сам сходит на респондер</p></td>
+<td style="text-align: left;"><p>Для серверного сертификата: stapling
+или client-side fetch; иначе fail-closed</p></td>
 </tr>
 </tbody>
 </table>
+
+Обязательность OCSP относится к серверному сертификату. Для клиентских
+сертификатов ответ проверяется, но не обязателен: при
+`STAPLING_OR_FETCH` — best-effort fetch, при `STAPLING_REQUIRED`
+загрузки нет. Строгий отзыв клиента — `CrlPolicy.REQUIRE`, и только при
+отсутствии OCSP-ответа.
+
+### OCSP-staple клиентского сертификата
+
+Сервер может запросить у клиента OCSP-ответ для его сертификата (RFC
+8446 §4.4.2.1) политикой `ClientOcspPolicy` из `crypto-gost-tls13`:
+
+- `OFF` (по умолчанию) — staple не запрашивается, присланный без запроса
+  отвергается (`unsupported_extension`);
+
+- `REQUEST` — запрашивается; присланный ответ проверяется, отсутствие
+  допустимо;
+
+- `REQUIRE` — запрашивается и обязателен для предъявленного сертификата;
+  без него `bad_certificate`. Ответ, полученный сервером по сети
+  (`STAPLING_OR_FETCH`), требование не выполняет: нужен именно staple
+  клиента.
+
+<!-- -->
+
+    import org.rssys.gost.tls13.config.ClientOcspPolicy;
+
+    SSLContext srv = GostSsl.builder()
+        .certificate(serverPem, serverKeyPem)
+        .trustCa(caPem)
+        .needClientAuth(true)
+        .clientOcspPolicy(ClientOcspPolicy.REQUIRE)
+        .buildServerContext();
+
+    // Клиент: staple собственного сертификата, до beginHandshake()
+    GostSSLEngine engine = (GostSSLEngine) clientContext.createSSLEngine("host", 8443);
+    engine.setOcspResponse(ocspDer);   // сырой OCSPResponse DER для клиентского сертификата
+
+Правила режима:
+
+- `needClientAuth(true)` — сертификат обязателен; `wantClientAuth(true)`
+  — запрашивается, но клиент вправе его не предъявлять. Приложение тогда
+  само проверяет `SSLSession.getPeerCertificates()` (без сертификата —
+  `SSLPeerUnverifiedException`). При обоих флагах действует
+  `needClientAuth`.
+
+- Политика требует аутентификации клиента, иначе `beginHandshake()`
+  бросает `SSLException`; с `trustAll()` builder бросает
+  `IllegalStateException`.
+
+- При `wantClientAuth` и `REQUIRE` анонимный клиент допустим, а клиент с
+  сертификатом обязан приложить staple. Staple отправляется только по
+  запросу сервера и должен относиться к сертификату, который выберет
+  `KeyManager`.
+
+- Staple задаётся только через `GostSSLEngine` (`setOcspResponse`),
+  сокеты его не поддерживают.
+
+### OCSP-staple сервера в клиентской сессии
+
+После handshake `((ExtendedSSLSession) session).getStatusResponses()`
+клиентской сессии возвращает OCSP-ответы, которые прислал сервер, в
+порядке его цепочки: запись нулевой длины означает «ответа нет»,
+хвостовые пустые записи отбрасываются, без staple список пуст. В список
+попадает только присланное сервером: ответ, который клиент получил сам
+по сети (`STAPLING_OR_FETCH`), и собственный staple клиента
+(`setOcspResponse`) в него не входят. Серверная сессия возвращает
+собственный staple сервера.
 
 ### HTTP-фетчеры OCSP и CRL
 
@@ -754,6 +1128,40 @@ CRL-списков. На выбор две реализации:
 - `UrlConnectionOcspFetcher` / `UrlConnectionCrlFetcher` — на
   HttpURLConnection (Android, API level 1+, не требует java.net.http).
 
+Адрес загрузки задаёт тот, кто выпустил сертификат, поэтому загрузчики
+ограничены одинаково:
+
+- **Один общий срок на весь запрос**: соединение, заголовки, тело и
+  перенаправления. Сервер, который быстро отдал заголовки и затем
+  присылает тело по байту, срок не продлевает. Срок задаётся от 1 мс до
+  10 минут (`Deadline.MAX_FETCH_TIMEOUT`), иначе конструктор бросает
+  `IllegalArgumentException`; предел размера ответа должен быть больше
+  нуля. У `HttpURLConnection` (Android) блокирующее чтение прервать
+  нельзя, поэтому гарантия честная: тело не позже «срок + одно чтение»
+  (`readTimeout` равен четверти срока), и сервер, молчащий дольше
+  `readTimeout`, считается недоступным раньше общего срока. Разрешение
+  имени в срок не входит.
+
+- **Перенаправления**: GET (CRL) следует 301, 302, 303, 307, 308, POST
+  (OCSP) только 307 и 308, не более 5 запросов; SSRF-защита и проверка
+  схемы выполняются на каждом переходе, понижение `https` до `http`
+  запрещено. OCSP принимает только `http://`, CRL — `http://` и
+  `https://`.
+
+- **Размер**: заявленный `Content-Length` сверяется до чтения тела,
+  фактический — при приёме. Для CRL превышение даёт
+  `CrlSizeLimitException`, для OCSP — `null`. Тело ответа не-200 не
+  читается.
+
+- **Исключения**: `OcspFetcher.fetch` никогда не бросает исключений
+  (любая ошибка — `null`); `CrlFetcher.fetch` бросает только
+  `IOException` (срок — `DeadlineExceededException`) и
+  `CrlSizeLimitException`.
+
+Менеджер доверия, кроме того, пробует не более 3 адресов каждого вида на
+сертификат и расходует на сетевые загрузки отзыва общий бюджет 30 с на
+проверку цепочки (см. Javadoc `GostX509TrustManager`).
+
 #### UrlConnectionOcspFetcher (Android) и JdkHttpOcspFetcher (JVM)
 
 Реализация `OcspFetcher` на JDK HttpClient или HttpURLConnection.
@@ -762,29 +1170,27 @@ CRL-списков. На выбор две реализации:
     import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
     import java.time.Duration;
 
-    OcspFetcher fetcher = new JdkHttpOcspFetcher();
-    OcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(10), 131072);
+    OcspFetcher fetcher = new JdkHttpOcspFetcher();                     // умолчания
+    OcspFetcher tuned = new JdkHttpOcspFetcher(Duration.ofSeconds(10), 131072);
 
     // Android: используем UrlConnectionOcspFetcher
     import org.rssys.gost.jsse.ocsp.UrlConnectionOcspFetcher;
     import java.time.Duration;
 
-    OcspFetcher fetcher = new UrlConnectionOcspFetcher();
-    OcspFetcher fetcher = new UrlConnectionOcspFetcher(Duration.ofSeconds(10), 131072);
+    OcspFetcher fetcher = new UrlConnectionOcspFetcher();               // умолчания
+    OcspFetcher tuned = new UrlConnectionOcspFetcher(Duration.ofSeconds(10), 131072);
 
 #### TrustManager с OCSP-фетчером
 
     // JVM
-    import org.rssys.gost.jsse.ocsp.JdkHttpOcspFetcher;
-    GostX509TrustManager tm = new GostX509TrustManager(
-        caKey,
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificate(caCert),
         OcspPolicy.STAPLING_OR_FETCH,
         new JdkHttpOcspFetcher());
 
     // Android
-    import org.rssys.gost.jsse.ocsp.UrlConnectionOcspFetcher;
-    GostX509TrustManager tm = new GostX509TrustManager(
-        caKey,
+    GostX509TrustManager tmAndroid = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificate(caCert),
         OcspPolicy.STAPLING_OR_FETCH,
         new UrlConnectionOcspFetcher());
 
@@ -793,7 +1199,8 @@ OCSP-ответы кэшируются в `GostX509TrustManager` на 1 час (
 
 ## CRL API
 
-API для проверки сертификатов через CRL (Certificate Revocation List).
+Проверка отзыва по CRL (RFC 5280 §5). По умолчанию выключена: включите
+`crlPolicy` и загрузчик.
 
 ### CrlPolicy
 
@@ -827,35 +1234,184 @@ CRL Distribution Points</p></td>
 </tbody>
 </table>
 
-#### UrlConnectionCrlFetcher (Android) и JdkHttpCrlFetcher (JVM)
+Загрузчик CRL (`crlFetcher`) без политики, отличной от `DISABLED`, —
+ошибка конфигурации: `GostSslBuilder` бросает `IllegalStateException`,
+`GostTrustManagerParameters.Builder` и фабрика `fromTrustAnchors(...)` —
+`IllegalArgumentException`. Раньше такой загрузчик молча не
+использовался, и отзыв по CRL фактически не проверялся. Задайте
+`crlPolicy(CrlPolicy.IF_CDP_PRESENT)` или `REQUIRE`.
+
+### UrlConnectionCrlFetcher (Android) и JdkHttpCrlFetcher (JVM)
 
 Реализация `CrlFetcher` на JDK HttpClient или HttpURLConnection. Имеет
 защиту от SSRF.
 
-    // JVM
-    import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
     import org.rssys.gost.jsse.crl.CrlPolicy;
-    GostX509TrustManager tm = new GostX509TrustManager(
-        List.of(caKey),
+    import org.rssys.gost.jsse.crl.JdkHttpCrlFetcher;
+    import org.rssys.gost.jsse.crl.UrlConnectionCrlFetcher;
+
+    // JVM
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificate(caCert),
         OcspPolicy.IF_PRESENT,
         null,
         CrlPolicy.IF_CDP_PRESENT,
         new JdkHttpCrlFetcher());
 
     // Android
-    import org.rssys.gost.jsse.crl.UrlConnectionCrlFetcher;
-    import org.rssys.gost.jsse.crl.CrlPolicy;
-    GostX509TrustManager tm = new GostX509TrustManager(
-        List.of(caKey),
+    GostX509TrustManager tmAndroid = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificate(caCert),
         OcspPolicy.IF_PRESENT,
         null,
         CrlPolicy.IF_CDP_PRESENT,
         new UrlConnectionCrlFetcher());
 
-CRL-ответы кэшируются до `nextUpdate`, с grace-периодом 1 час (перекос
-часов).
+Проверенные CRL кэшируются до `nextUpdate` с допуском часов 5 минут; CRL
+без `nextUpdate` проверка не принимает. Подробности — «Кэш проверенных
+CRL».
 
-## GostSSLEngine (низкоуровневый API)
+### Лимиты CRL
+
+CRL больше предела загрузчика или `maxCrlSize` — это ошибка проверки
+(`CrlSizeLimitException` из загрузчика, отказ рукопожатия), а не «адрес
+недоступен»: CRL не пропускается молча даже при
+`CrlPolicy.IF_CDP_PRESENT`. Отказ наступает сразу, без перехода к
+следующему адресу CDP: одного зеркала со слишком большим ответом
+достаточно, чтобы соединение не состоялось, даже если другое зеркало
+исправно. Поэтому, когда CRL крупного УЦ подходит к пределу, лимиты
+нужно поднять заранее, все три согласованно:
+
+    GostSsl.builder()
+        .crlPolicy(CrlPolicy.IF_CDP_PRESENT)
+        .crlFetcher(new JdkHttpCrlFetcher(Duration.ofSeconds(60), crlSizeLimit)) // maxResponseSize
+        .maxCrlSize(crlSizeLimit)           // размер CRL в байтах
+        .maxRevokedEntries(entriesLimit)    // число записей
+        .buildServerContext();
+
+Здесь `crlSizeLimit` и `entriesLimit` — значения, подобранные под
+конкретный УЦ с запасом относительно его текущего CRL; готовых
+рекомендуемых чисел библиотека не даёт.
+
+Рост лимитов увеличивает память, которую удерживает проверенный CRL (см.
+«Кэш проверенных CRL» ниже); значения ≤ 0 отвергаются при создании.
+
+Превышение предела записей — отказ проверки с причиной
+`CRL_LIMIT_EXCEEDED` при `IF_CDP_PRESENT` и `REQUIRE`: такой CRL не
+равносилен недоступному адресу и не пропускается. CRL ФНС содержит 829
+548 записей (83% предела записей) и занимает 38,9 МиБ (61% предела
+размера), поэтому первым упрётся число записей; пределы поднимают
+вместе.
+
+### Кэш проверенных CRL
+
+Хэш, подпись ГОСТ и строгий разбор записей не зависят от проверяемого
+сертификата, поэтому менеджер доверия выполняет их один раз и хранит
+результат до `nextUpdate` (плюс допуск часов). На каждом соединении
+остаётся проверка самого сертификата по готовому объекту: `thisUpdate` и
+срок, издатель, `cRLNumber`, запись об отзыве, область CRL. Измерение на
+синтетическом CRL с 800 000 записей (по размеру близок к CRL ФНС):
+проверка одного CRL занимала около 0,84 с и около 400 МиБ мусора на
+каждое соединение, теперь это один раз на `nextUpdate`.
+
+- **Одна загрузка на адрес.** Если CRL нет в кэше, его загружает и
+  проверяет один поток, остальные соединения ждут и проверяют по тому же
+  объекту свои сертификаты. Ожидание ограничено остатком бюджета
+  проверки (30 с на проверку цепочки): ожидающий, не дождавшийся CRL,
+  считает адрес недоступным. Поэтому при `IF_CDP_PRESENT` он пропускает
+  проверку отзыва, как при недоступном CDP (в том числе когда подлинный
+  CRL просто ещё не загрузился), а при `REQUIRE` получает отказ. Об этом
+  пишется одна запись в журнале на серию сдач по адресу (после успешной
+  загрузки следующая сдача снова пишется). Загрузка инициатора от сдачи
+  ожидающего не страдает. Собственный `CrlFetcher` по-прежнему обязан
+  ограничивать время загрузки; проверка подписи загруженного CRL срока
+  не имеет. Ошибка загрузки не кэшируется.
+
+- **Перепроверка раньше `nextUpdate`** (`crlMaxAge`, по умолчанию 6
+  часов). Если УЦ выпустил новый CRL раньше, чем истекает загруженный,
+  кэш его не видит. Запись, загруженная давнее `crlMaxAge`, но ещё не
+  истёкшая, перепроверяется: одно соединение (первое, поставившее
+  отметку на адрес) грузит CRL заново, остальные не ждут и берут
+  действующую запись. Больший `cRLNumber` заменяет запись; тот же номер
+  только сбрасывает возраст; меньший номер или отсутствие номера при
+  известном — признак отката, запись остаётся, в журнал пишется ERROR.
+  Если перепроверка не удалась, запись остаётся до `nextUpdate`, возраст
+  не сбрасывается, следующая попытка по адресу не раньше чем через 5
+  минут (или `crlMaxAge`, если он меньше), а в журнал пишется одно
+  предупреждение на серию неудач. Это сознательное ослабление свежести
+  ради доступности: при `REQUIRE` отзыв, опубликованный после загрузки,
+  не виден до `nextUpdate`, пока сервер недоступен.
+
+  **Задержка видимости нового CRL равна `crlMaxAge` плюс интервал, с
+  которым УЦ выпускает CRL**, а не самому `crlMaxAge`: при ежесуточной
+  публикации и 6 часах худший случай около 30 часов. Если между
+  перепроверками УЦ не выпустил новый CRL, перепроверка принесёт тот же
+  CRL. Для повышенных требований безопасности разумны 1—6 часов, но пока
+  идёт перепроверка, в куче лежат старая и новая записи: бюджет
+  `crlCacheMaxBytes` должен вмещать две самые большие разобранные
+  записи. Одно соединение раз в `crlMaxAge` на каждый адрес может занять
+  до потолка проверки (около 60 с) плюс срок загрузчика CRL.
+  Перепроверка защищает от устаревшего кэша в обычных условиях, а не от
+  подмены ответа на канале.
+
+  **Условный запрос.** Перепроверка идёт с `If-Modified-Since`:
+  загрузчик посылает серверу значение `Last-Modified` прошлого ответа
+  строкой как есть (`If-None-Match` не посылается), и ответ 304 означает
+  «CRL не изменился», тело не загружается, разбор и проверка подписи не
+  повторяются. Валидатор хранится вместе с записью; его принимают и
+  обязательные, и перепроверочные полные загрузки, поэтому условной
+  бывает уже первая перепроверка. Валидатор принимается, только если он
+  короткий, из печатных ASCII и разбирается как HTTP-дата; ответ без
+  `Last-Modified` его очищает. Условный запрос посылается только на
+  исходный адрес: адреса, которые отвечают перенаправлением,
+  перепроверяются полной загрузкой. Сервер вправе ответить 200 вместо
+  304: это обычная полная загрузка. Проверка на большом CRL ФНС (около
+  40 МБ, IIS 10, 8 ноября 2026): ответ 304 приходит без тела, но за
+  адресом несколько узлов с разной датой файла. С валидатором от более
+  старого узла 5 из 12 запросов дали 304, остальные 200 с полным телом;
+  с валидатором от более нового узла 16 из 16 запросов дали 304. Клиент
+  после ответа 200 запоминает его `Last-Modified`, поэтому валидатор
+  сходится к дате более нового узла: на публикацию CRL приходится не
+  больше двух полных загрузок, а между публикациями перепроверка стоит
+  несколько сотен байт. При нескольких узлах за одним адресом ответ 304
+  означает «на этом узле не новее», а не «нового CRL нет»: от устаревшей
+  копии защищают проверка отката `cRLNumber`, пауза и граница
+  `nextUpdate`. Дата `Last-Modified` из ответа 304 не читается совсем:
+  по смыслу 304 дата файла не позже отправленной, более ранняя откатила
+  бы валидатор (следующий запрос к более новому узлу стал бы полной
+  загрузкой), а более поздняя противоречит RFC 9110 и увела бы валидатор
+  вперёд без тела, и новый CRL перестал бы приходить до `nextUpdate`.
+  Валидатор двигает только ответ 200, где тело и дата согласованы. Дата
+  из будущего в ответе 200 (сбой часов сервера) даёт 304 до
+  `nextUpdate`: граница свежести остаётся `nextUpdate`, как у любого
+  неподписанного 304. Если CDP не отдаёт `Last-Modified` или CRL большой
+  и адрес отвечает перенаправлением, каждая перепроверка — полная
+  загрузка, и `crlMaxAge` стоит увеличить. Собственный `CrlFetcher` без
+  метода `fetchConditional` работает как раньше, но перепроверяется
+  полной загрузкой. **Ответ 304 не подписан:** любой, кто управляет
+  каналом до http-CDP, может отвечать «не изменился», пряча обновление
+  до `nextUpdate`; хуже, чем без перепроверки, это не делает. \* **Ключ
+  кэша** — адрес CRL и сертификат издателя: один адрес у двух издателей
+  не смешивается. \* **Бюджет** `crlCacheMaxBytes` (по умолчанию 512
+  МиБ). Разобранный CRL удерживает около шести байт кучи на байт DER
+  (CRL ФНС: около 233 МиБ при 40 МБ DER). Бюджет — верхняя граница, а не
+  занятая память; он общий для разобранных и сырых записей. Если
+  разобранный CRL не помещается, но помещается его DER, хранится сырой
+  DER: сеть используется один раз, а проверка подписи и разбор
+  повторяются на каждом соединении. Если не помещается и DER, CRL
+  загружается заново на каждом соединении (в журнал пишется
+  предупреждение). Значение 0 запрещает хранить CRL между соединениями.
+  Бюджет должен быть не меньше оценки самого большого ожидаемого CRL;
+  для устройств с малой памятью его уменьшают. \* **Защита от отката.**
+  Последний известный `cRLNumber` хранится отдельно от записей и не
+  теряется ни при истечении, ни при вытеснении, ни при нулевом бюджете.
+  \* **Кэш принадлежит менеджеру доверия**: у каждого `SSLContext` своя
+  копия CRL и своя загрузка. Просроченный объект освобождается при
+  следующем обращении к кэшу. \* Подлинный CRL, не покрывающий данный
+  сертификат (другой сегмент, `onlyContainsCACerts`), тоже кэшируется:
+  он годится другим сертификатам. Для своего сертификата соединение
+  получает отказ области на каждом соединении без повторной загрузки. \*
+  Прерывание потока при загрузке CRL даёт отказ проверки, а не переход к
+  следующему адресу. === GostSSLEngine (низкоуровневый API)
 
 `GostSSLEngine` предназначен для неблокирующих интеграций (NIO, Netty,
 кастомные selector-циклы). Управление handshake — через wrap/unwrap с
@@ -873,23 +1429,133 @@ CRL-ответы кэшируются до `nextUpdate`, с grace-периодо
             km, tm, "host", 8443, null /* без PSK-контекста */);
 
     clientEngine.beginHandshake();
-    ByteBuffer netBuf = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+    ByteBuffer netOut = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
+    ByteBuffer netIn = ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH + 64);
     ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
 
-    SSLEngineResult result = clientEngine.wrap(ByteBuffer.allocate(0), netBuf);
-    netBuf.flip();
-    // отправить netBuf пиру
-    // принять данные от пира → unwrap
-    result = clientEngine.unwrap(netBuf, appBuf);
+    clientEngine.wrap(ByteBuffer.allocate(0), netOut);   // ClientHello
+    netOut.flip();
+    // отправить netOut пиру
+    // прочитать ответ пира в netIn, затем:
+    netIn.flip();
+    SSLEngineResult result = clientEngine.unwrap(netIn, appBuf);
 
-Цикл handshake — смотрите `doClientHandshake()` / `doServerHandshake()`
-в `GostSSLEngineLoopbackTest.java` (исходники тестов).
+Дальше цикл повторяется по `getHandshakeStatus()`: `NEED_WRAP` —
+`wrap()`, `NEED_UNWRAP` — `unwrap()`, `NEED_TASK` — выполнить
+`getDelegatedTask()`. Полный цикл — в `GostSSLEngineLoopbackTest.java`
+(`doClientHandshake()` / `doServerHandshake()`).
+
+### max\_fragment\_length
+
+Клиент может попросить уменьшить максимальный размер фрагмента (RFC 6066
+§4): коды `1`..`4` — 512, 1024, 2048 и 4096 байт. Запрос задаётся до
+`beginHandshake()`.
+
+    clientEngine.setClientMaxFragLenRequest(3);   // 2048 байт
+    clientEngine.beginHandshake();
+    // после рукопожатия:
+    int code = clientEngine.getMaxFragmentLength();   // 3; 0 — размер по умолчанию
+
+Для сокета — `((GostSSLSocket) s).setMaxFragmentLengthRequest(3)` до
+`startHandshake()`. Сервер принимает запрос автоматически: код
+возвращается в `EncryptedExtensions`. Ограничение действует на сообщения
+рукопожатия и на `application_data`. Неверный код —
+`IllegalArgumentException`, вызов после начала рукопожатия —
+`IllegalStateException`.
+
+### Наборы шифров, параметры и закрытие
+
+**Включённые наборы шифров и протоколы действуют.** Движок предлагает
+(клиент) и принимает (сервер) только наборы из `setEnabledCipherSuites`,
+а TLS 1.3 должен быть в `setEnabledProtocols`. Как и в JDK, пустой
+массив принимается сеттером, но рукопожатие тогда завершается
+`SSLHandshakeException`; неизвестное имя отвергается сразу
+(`IllegalArgumentException`). Серверу контейнера (например, Tomcat через
+`SSLUtil.getEnabledCiphers()`) нужно отдавать
+`GostJsseConstants.supportedCipherSuites()`: пустой список теперь
+означает «наборов нет».
+
+**Параметры снимаются при `beginHandshake()`.** Сеттеры и геттеры
+параметров берут замок движка, как в JDK: рукопожатие видит либо все
+значения одного вызова `setSSLParameters`, либо ни одного. Наборы,
+протоколы, режим аутентификации клиента, алгоритм проверки имени и
+протоколы ALPN, заданные позже (`setEnabledCipherSuites`,
+`setSSLParameters`), видны через геттеры, но на уже идущее рукопожатие
+не влияют. В частности, поздний `setSSLParameters` с отключённой
+проверкой имени не отключает сверку имени у текущего рукопожатия.
+`setSSLParameters` задаёт режим аутентификации клиента полностью, как в
+JDK: `needClientAuth` включает обязательный режим, иначе
+`wantClientAuth` включает запрашиваемый, иначе сертификат клиента не
+запрашивается; пустой массив ALPN снимает ранее заданные протоколы.
+
+**Закрытие.** Контракт близок к JDK, с одним отличием (последний пункт):
+
+- после `closeOutbound()` `wrap()` отдаёт `close_notify` со статусом
+  `CLOSED`, повторный `wrap()` возвращает `CLOSED` без байтов;
+  `isOutboundDone()` истинно, когда закрывающая запись отдана (до этого
+  приложение обязано вызвать `wrap()`);
+
+- после `close_notify` пира `unwrap()` сначала выдаёт данные,
+  расшифрованные до закрытия, затем `CLOSED`; пока остаток не выдан,
+  статус `OK` (или `BUFFER_OVERFLOW`, если выдавать некуда);
+  `isInboundDone()` истинно после выдачи этих данных;
+
+- `closeInbound()` означает отказ приложения читать дальше: невыданные
+  данные затираются, и это верно также после `close_notify` пира;
+
+- после отказа (fatal alert) исключение с кодом alert остаётся при
+  каждом `unwrap()`, а невыданные данные затираются; `wrap()` отдаёт
+  alert пиру один раз, затем `CLOSED`;
+
+- **отличие от JDK:** `closeInbound()` без `close_notify` пира закрывает
+  и выходную сторону: `isOutboundDone()` истинно, `wrap()` возвращает
+  `CLOSED` без записи, потому что ключи записи уничтожены и отвечать
+  нечем. В JDK `closeInbound()` выходную сторону не трогает; здесь
+  иначе, чтобы цикл контейнера по `isOutboundDone()` завершался.
+
+`SSLSession.getPacketBufferSize()` вмещает запись наибольшей длины
+вместе с заголовком.
+
+### Экспорт ключевого материала (привязка к каналу)
+
+После рукопожатия сессия соединения выводит одинаковые секретные байты
+на обеих сторонах (RFC 8446 §7.5): для `tls-exporter` (RFC 9266,
+SCRAM-PLUS), EAP-TLS 1.3, NTS.
+
+    import org.rssys.gost.jsse.engine.GostSSLSession;
+
+    GostSSLSession session = (GostSSLSession) engine.getSession();
+    byte[] channelBinding = session.exportKeyingMaterialData("EXPORTER-Channel-Binding", null, 32);
+    try {
+        // передать в протокол аутентификации
+    } finally {
+        java.util.Arrays.fill(channelBinding, (byte) 0); // значение секретное
+    }
+
+Сигнатуры `exportKeyingMaterialData` и `exportKeyingMaterialKey`
+совпадают с `ExtendedSSLSession` из JDK 25. Проект собирается под JDK 21
+и Android 14, поэтому методы объявлены без `@Override`: на JDK 25 и
+новее они переопределяют стандартные, и приложение может вызывать их
+через `ExtendedSSLSession` (так делают драйверы БД), на более ранних
+версиях это обычные методы класса `GostSSLSession`.
+
+Контракт исключений повторяет JDK: `NullPointerException` для `label` и
+`keyAlg`, `IllegalArgumentException` для длины, метки (1-249 байт в
+UTF-8), контекста (до 255 байт) и пустого `keyAlg`,
+`IllegalStateException` до завершения рукопожатия. Отличие от JDK: после
+закрытия соединения экспорт недоступен (секрет живёт в движке и
+затирается при закрытии), а `invalidate()` его на живом соединении не
+отключает.
+
+RFC 9367 экспорт для ГОСТ-наборов не определяет. Значения сверены с
+OpenSSL (gost-provider), совместимость с другими ГОСТ-реализациями не
+проверялась.
 
 ## Интеграция с серверами приложений
 
 ### Общие принципы
 
-Версии серверов в примерах указаны на момент проверки (июнь 2026). При
+Версии серверов в примерах указаны на момент проверки (ноябрь 2026). При
 смене мажорной версии API может измениться — сверяйтесь с документацией
 сервера.
 
@@ -904,9 +1570,9 @@ GostPkcs12Loader):
     import org.rssys.gost.jsse.manager.GostX509TrustManager;
     import org.rssys.gost.jsse.bridge.CertificateBridge;
     import org.rssys.gost.signature.PrivateKeyParameters;
-    import org.rssys.gost.signature.PublicKeyParameters;
     import org.rssys.gost.pkix.cert.GostPkcs12Loader;
     import org.rssys.gost.pkix.cert.GostCertificate;
+    import org.rssys.gost.pkix.cert.TrustAnchors;
 
     import javax.net.ssl.KeyManager;
     import javax.net.ssl.SSLContext;
@@ -933,8 +1599,9 @@ GostPkcs12Loader):
 
     // Шаг 4: TrustManager — загрузка CA
     byte[] caDer = Files.readAllBytes(Paths.get("ca.der"));
-    PublicKeyParameters caKey = new GostCertificate(caDer).getPublicKey();
-    GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
+    GostCertificate caCert = new GostCertificate(caDer);
+    GostX509TrustManager tm =
+            GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert));
 
     // Шаг 5: SSLContext
     SSLContext sslContext = SSLContext.getInstance("TLSv1.3", "RssysGostJsse");
@@ -985,9 +1652,11 @@ GostPkcs12Loader):
 ### Netty 4.2
 
 Модуль `crypto-gost-netty` предоставляет `GostSslContextBuilder` —
-готовый адаптер для Netty pipeline. Внутри builder сам регистрирует
-`RssysGostJsseProvider` и создаёт `SSLContext` — вызывать
-`Security.addProvider()` вручную не нужно.
+готовый адаптер для Netty pipeline. Builder создаёт собственный
+экземпляр `RssysGostJsseProvider` и передаёт его в
+`SSLContext.getInstance`, поэтому `Security.addProvider()` для работы
+адаптера не нужен (регистрация нужна только для поиска провайдера по
+имени через JCA).
 
 Дополнительная зависимость:
 
@@ -1014,7 +1683,8 @@ GostPkcs12Loader):
     import io.netty.channel.ChannelFuture;
     import io.netty.channel.ChannelInitializer;
     import io.netty.channel.EventLoopGroup;
-    import io.netty.channel.nio.NioEventLoopGroup;
+    import io.netty.channel.MultiThreadIoEventLoopGroup;
+    import io.netty.channel.nio.NioIoHandler;
     import io.netty.channel.socket.SocketChannel;
     import io.netty.channel.socket.nio.NioServerSocketChannel;
 
@@ -1023,7 +1693,8 @@ GostPkcs12Loader):
     km.addKeyEntry("default", jcaChain, privateKey);
 
     // TrustManager (см. «Общие принципы»)
-    GostX509TrustManager tm = new GostX509TrustManager(caKey, false);
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+        TrustAnchors.ofCertificate(caCert));
 
     // GostSslContext через builder
     GostSslContext sslCtx = GostSslContextBuilder.forServer(km)
@@ -1032,8 +1703,8 @@ GostPkcs12Loader):
             .build();
 
     // ServerBootstrap
-    EventLoopGroup boss   = new NioEventLoopGroup(1);
-    EventLoopGroup worker = new NioEventLoopGroup();
+    EventLoopGroup boss   = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+    EventLoopGroup worker = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
     try {
         ServerBootstrap b = new ServerBootstrap();
         b.group(boss, worker)
@@ -1061,7 +1732,8 @@ GostPkcs12Loader):
     import io.netty.bootstrap.Bootstrap;
     import io.netty.channel.ChannelInitializer;
     import io.netty.channel.EventLoopGroup;
-    import io.netty.channel.nio.NioEventLoopGroup;
+    import io.netty.channel.MultiThreadIoEventLoopGroup;
+    import io.netty.channel.nio.NioIoHandler;
     import io.netty.channel.socket.SocketChannel;
     import io.netty.channel.socket.nio.NioSocketChannel;
 
@@ -1075,7 +1747,7 @@ GostPkcs12Loader):
             .applicationProtocols("h2", "http/1.1")
             .build();
 
-    EventLoopGroup group = new NioEventLoopGroup();
+    EventLoopGroup group = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
     try {
         Bootstrap b = new Bootstrap();
         b.group(group)
@@ -1094,11 +1766,157 @@ GostPkcs12Loader):
         group.shutdownGracefully();
     }
 
-mTLS: `.clientAuth(ClientAuth.REQUIRE)` — обязательный,
-`.clientAuth(ClientAuth.OPTIONAL)` — опциональный.
+Клиентский контекст проверяет имя узла в сертификате сервера (RFC 6125),
+поэтому обработчик нужно создавать с узлом:
+`newHandler(alloc, host, port)`. Без узла рукопожатие отказывает до
+отправки ClientHello, пока проверка не отключена осознанно через
+`withoutHostnameVerification()` (небезопасно, только для закрытых сетей
+и тестов).
 
-GostSslContextBuilder.build() сам вызывает `Security.addProvider()`. Не
-регистрируйте провайдер вручную при использовании Netty-модуля.
+Режимы mTLS и политика OCSP клиента (серверный builder):
+
+- `.clientAuth(ClientAuth.REQUIRE)` — клиентский сертификат обязателен,
+  `.clientAuth(ClientAuth.OPTIONAL)` — опционален;
+
+- `.clientOcspPolicy(ClientOcspPolicy.REQUIRE)` — требовать OCSP-staple
+  клиентского сертификата (только при `OPTIONAL` или `REQUIRE`).
+
+ALPN:
+
+- Приоритет у списка сервера: выбирается первый протокол сервера,
+  который есть у клиента.
+
+- Списки есть у обеих сторон, общего протокола нет: сервер завершает
+  рукопожатие алертом `no_application_protocol` (120).
+
+- ALPN настроен только у одной стороны: рукопожатие проходит,
+  `applicationProtocol()` равен `null`; запасной протокол выбирает
+  приложение (например, `ApplicationProtocolNegotiationHandler`).
+
+Доступ к движку:
+
+- `newHandler(...)` возвращает обработчик над «сырым» `GostSSLEngine`:
+  приведение `(GostSSLEngine) handler.engine()` работает всегда, в том
+  числе при ALPN. Это нужно для `setOcspResponse` (клиентский staple при
+  mTLS), `initiateKeyUpdate` и других методов движка. Вызывайте их до
+  добавления обработчика в канал: Netty начинает рукопожатие при
+  добавлении.
+
+- `newEngine(...)` объявлен `final` в Netty. При ALPN движок
+  возвращается в закрытой обёртке, и приведение к `GostSSLEngine`
+  невозможно. Путь годится, только если `SslHandler` создаёт сам
+  фреймворк.
+
+Сессии:
+
+- `sessionCacheSize(n)` — размер кэша JSSE-сессий: 0 снимает предел, по
+  умолчанию 20 480. Тикеты возобновления (PSK) хранятся отдельно, предел
+  хранилища фиксирован (1000).
+
+- `sessionTimeout(s)` — тайм-аут сессии в секундах.
+
+- Внешний контекст (`sessionContext(...)`) разделяет только PSK-тикеты и
+  привязки host:port; тайм-аут, размер кэша, режим проверки имени и
+  политика OCSP остаются у создаваемого контекста.
+
+### HTTP/2 и gRPC на Netty
+
+HTTP/2 поверх ГОСТ TLS проверяется настоящими кадрами, а не только
+согласованием ALPN: `GostSslContextHttp2Test` поднимает сервер и клиент
+на `Http2FrameCodec` и `Http2MultiplexHandler`, а тесты `examples/jsse`
+проверяют сервер Netty клиентом OkHttp — независимой реализацией
+протокола. Рабочие примеры: `make -C examples/jsse http2`
+(`Http2EchoServer`) и `make -C examples/jsse grpc` (`GrpcEchoServer`). В
+fat-jar `gost-curl` зависимости HTTP/2 и gRPC не входят.
+
+Зависимость:
+
+    <dependency>
+        <groupId>io.netty</groupId>
+        <artifactId>netty-codec-http2</artifactId>
+        <version>4.2.20.Final</version>
+    </dependency>
+
+    GostSslContext serverCtx = GostSslContextBuilder.forServer(km)
+            .applicationProtocols("h2", "http/1.1")     // без ALPN клиент HTTP/2 не согласует протокол
+            .build();
+
+    // В ChannelInitializer сервера
+    ch.pipeline().addLast(serverCtx.newHandler(ch.alloc()));
+    ch.pipeline().addLast(new ApplicationProtocolNegotiationHandler("http/1.1") {
+        @Override
+        protected void configurePipeline(ChannelHandlerContext ctx, String protocol) {
+            if ("h2".equals(protocol)) {
+                ctx.pipeline().addLast(Http2FrameCodecBuilder.forServer().build(),
+                        new Http2MultiplexHandler(new MyStreamInitializer()));
+            } else {
+                ctx.close();
+            }
+        }
+    });
+
+- Обработчик создавайте через `newHandler(...)`: при этом
+  `handler.engine()` остаётся `GostSSLEngine`, и до добавления
+  обработчика в канал можно вызвать, например, `setOcspResponse`
+  (клиентский OCSP-staple при mTLS). Сочетание HTTP/2, mTLS и
+  обязательного staple проверено тестом.
+
+- Клиент обязан создавать обработчик с узлом:
+  `newHandler(alloc, host, port)`, иначе рукопожатие отказывает до
+  отправки ClientHello (проверка имени узла включена по умолчанию).
+
+- Клиент OkHttp в примерах (`Http2Clients`) отключает собственный
+  `hostnameVerifier`, потому что имя узла сверяет `GostX509TrustManager`
+  внутри рукопожатия, а OkHttp не знает ГОСТ-сертификаты. Это не то же,
+  что `withoutHostnameVerification()`: проверка имени остаётся
+  включённой. В своём коде не копируйте такую настройку без проверки
+  имени на стороне движка.
+
+gRPC
+
+Нешейденный `grpc-netty` (проверен 1.85.1 на Netty 4.2.20) работает с
+`GostSslContext`: унарные вызовы, серверные потоки и mTLS проверены
+тестом `GrpcTest`, пример `GrpcEchoServer`.
+
+    <dependency>
+        <groupId>io.grpc</groupId>
+        <artifactId>grpc-netty</artifactId>   <!-- не grpc-netty-shaded -->
+        <version>1.85.1</version>
+    </dependency>
+    <dependency>
+        <groupId>io.grpc</groupId>
+        <artifactId>grpc-stub</artifactId>
+        <version>1.85.1</version>
+    </dependency>
+    <dependency>
+        <groupId>io.grpc</groupId>
+        <artifactId>grpc-api</artifactId>
+        <version>1.85.1</version>
+    </dependency>
+
+    Server server = NettyServerBuilder.forPort(8443).sslContext(serverCtx).addService(svc).build();
+    ManagedChannel channel = NettyChannelBuilder.forAddress("host", 8443).sslContext(clientCtx).build();
+
+- `sslContext(...)` принимает Netty `SslContext`, то есть
+  `GostSslContext`, а не `javax.net.ssl.SSLContext`.
+
+- ALPN `h2` обязателен на обоих контекстах:
+  `applicationProtocols("h2")`. Без него gRPC отвергает контекст ещё при
+  настройке (`ensureAlpnAndH2Enabled`).
+
+- gRPC сам создаёт движок через `newEngine(...)` и свой `SslHandler`.
+  Движок при этом скрыт в обёртке Netty: `GostSSLEngine`, клиентский и
+  серверный OCSP-staple через gRPC недоступны.
+
+- Адрес канала должен совпадать с SAN сертификата сервера (клиентский
+  контекст проверяет имя узла).
+
+- `grpc-netty-shaded` не подходит: у него свой перемещённый
+  `SslContext`, и `GostSslContext` к нему не применим.
+
+- Netty и gRPC в проекте задаются одной версией через `netty-bom` и
+  `grpc-bom`; смешивать `netty-codec-http2` другой версии с
+  `netty-handler` нельзя.
 
 ### Jetty 12
 
@@ -1168,6 +1986,27 @@ mTLS: `setNeedClientAuth(true)` — обязательный,
 ALPN в Jetty 12 требует модуль `jetty-alpn-java-server` на classpath.
 Без него согласование HTTP/2 не будет работать.
 
+HTTP/2 в Jetty
+
+Стандартный ALPN-процессор Jetty (`JDK9ServerALPNProcessor`) применяется
+только к движкам из `java.base`, поэтому для `GostSSLEngine` Jetty
+отвергает соединение: `No ALPN Processor`. HTTP/2 работает со своим
+процессором. Пример, не поддерживаемый API:
+`examples/jsse/src/test/java/org/rssys/gost/jsse/examples/jetty/GostServerALPNProcessor.java`
+(своя реализация `ALPNProcessor.Server`) и его регистрация через
+ServiceLoader, файл
+`META-INF/services/org.eclipse.jetty.io.ssl.ALPNProcessor$Server` с
+именем класса. Дополнительные зависимости: `jetty-http2-server` и
+`jetty-alpn-server` той же версии, что `jetty-server`. Рабочая связка
+проверена тестом `JettyHttp2Test`: клиент OkHttp получает ответ Jetty по
+HTTP/2.
+
+    ALPNServerConnectionFactory alpn = new ALPNServerConnectionFactory("h2", "http/1.1");
+    alpn.setDefaultProtocol("http/1.1");
+    ServerConnector connector = new ServerConnector(server,
+            new SslConnectionFactory(scf, alpn.getProtocol()), alpn,
+            new HTTP2ServerConnectionFactory(config), new HttpConnectionFactory(config));
+
 ### Undertow 2
 
 Дополнительная зависимость:
@@ -1179,16 +2018,24 @@ ALPN в Jetty 12 требует модуль `jetty-alpn-java-server` на class
     </dependency>
 
     import io.undertow.Undertow;
-    import io.undertow.UndertowOptions;
 
     Undertow server = Undertow.builder()
             .addHttpsListener(8443, "0.0.0.0", sslContext)
-            .setServerOption(UndertowOptions.ENABLE_HTTP2, true)
             .setHandler(exchange -> {
                 exchange.getResponseSender().send("Hello GOST TLS!");
             })
             .build();
     server.start();
+
+HTTP/2 в Undertow поверх ГОСТ TLS недоступен. Параметр
+`UndertowOptions.ENABLE_HTTP2` не помогает: перед ALPN Undertow
+(`AlpnOpenListener.engineSupportsHTTP2`) требует, чтобы у движка были
+включены `TLSv1.2` и набор `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`
+(требование RFC 7540 §9.2.2 к HTTP/2 поверх TLS 1.2), и при их
+отсутствии молча отвечает по HTTP/1.1. Эта проверка срабатывает на любом
+движке только с TLS 1.3, а у библиотеки только `TLSv1.3` и ГОСТ-наборы;
+заявлять несуществующие возможности движок не будет. Для HTTP/2
+используйте Netty или Jetty (см. выше).
 
 Для mTLS через OptionMap:
 
@@ -1316,12 +2163,12 @@ Tomcat 11 не предоставляет публичного API для пря
 
         @Override
         public String[] getEnabledProtocols() {
-            return GostJsseConstants.SUPPORTED_PROTOCOLS.clone();
+            return GostJsseConstants.supportedProtocols();
         }
 
         @Override
         public String[] getEnabledCiphers() {
-            return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+            return GostJsseConstants.supportedCipherSuites();
         }
     }
 
@@ -1335,6 +2182,10 @@ Tomcat 11 использует Jakarta EE 10 (`jakarta.*`). Все зависи�
 `sslImplementationName` передаётся через `connector.setProperty()`.
 Tomcat автоматически создаёт экземпляр `SSLImplementation` по имени
 класса при старте коннектора.
+
+HTTP/2 в Tomcat поверх ГОСТ TLS не проверялся: он требует собственного
+`SSLImplementation` и отдельной проверки ALPN. Для HTTP/2 используйте
+Netty или Jetty.
 
 ### Spring Boot 3.4
 
@@ -1446,8 +2297,9 @@ mTLS: внутри `ConnectorCustomizer` добавьте
 
     // CA для проверки клиентских сертификатов
     byte[] clientCaDer = Files.readAllBytes(Paths.get("client-ca.der"));
-    PublicKeyParameters clientCaKey = new GostCertificate(clientCaDer).getPublicKey();
-    GostX509TrustManager tm = new GostX509TrustManager(clientCaKey, false);
+    GostCertificate clientCaCert = new GostCertificate(clientCaDer);
+    GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+            TrustAnchors.ofCertificate(clientCaCert));
 
     // Серверный KeyManager — свой сертификат
     GostX509KeyManager km = new GostX509KeyManager();
@@ -1500,15 +2352,150 @@ style="text-align: left;"><p><code>SSLHostConfig.setCertificateVerification("req
 </tbody>
 </table>
 
+## Возобновление сессии по PSK
+
+После полного рукопожатия сервер выдаёт `NewSessionTicket`, клиент
+сохраняет тикет в `GostSSLSessionContext`, и следующее соединение с тем
+же сервером возобновляется без обмена сертификатов. Результат показывает
+`wasResumed()` у `GostSSLEngine` и `GostSSLSocket`: до завершения
+рукопожатия метод бросает `IllegalStateException`, после завершения
+возвращает его итог, в том числе после закрытия.
+
+Возобновление не показывает сертификат и наследует проверку исходного
+рукопожатия, поэтому клиентский тикет привязан к серверу и модели
+доверия:
+
+- к имени узла (без учёта регистра) и порту;
+
+- к режиму проверки имени: тикет, полученный на engine без проверки
+  имени, не используется engine с HTTPS, и наоборот;
+
+- к экземпляру `GostX509TrustManager` (`bindingId()`): якоря, политики,
+  загрузчики отзыва и будущие настройки охватываются одним
+  идентификатором. Создавайте один менеджер доверия на `SSLContext` и
+  переиспользуйте его: engine с разными экземплярами менеджера
+  возобновление не делят, а тикет не переживает пересоздание менеджера.
+
+Сервер привязывает тикет к SNI клиента и при другом SNI не принимает его
+(RFC 6066 §3).
+
+Тикет не переживает сертификат сервера. Клиент запоминает границу
+доверия: наименьший `notAfter` среди сертификатов, по которым сервер
+принят (`GostX509TrustManager.validateChainWithOcsp` возвращает
+проверенную цепочку без якоря, срок которого проверка не учитывает; в
+режиме `insecureTrustAll` берётся срок leaf). Срок тикета ограничивается
+остатком до границы, запись просрочена строго после неё, а новые тикеты
+возобновлённой сессии наследуют границу прежней. Сервер ограничивает
+`ticket_lifetime` сроком собственной цепочки и не выдаёт тикет, если
+остаток меньше секунды.
+
+Не используйте один `GostSSLSessionContext` для клиента и сервера (в том
+числе через `redirectToSharedState` и
+`GostSslContextBuilder.sessionContext`): клиентская и серверная записи с
+одним тикетом имеют разные привязки, а ключ хранилища — байты тикета,
+поэтому они затирают друг друга и возобновление молча отключается. Общий
+контекст между клиентскими контекстами с разными менеджерами доверия
+возобновления не даёт, это намеренно.
+
+Возобновление подтверждено кросс-валидацией для MGM L и S: клиент
+`GostSSLEngine` возобновляется с сервером OpenSSL (GC256B и GC256A; для
+GC256A задайте группу через `setClientNamedGroup`), клиенты OpenSSL и
+КриптоПро (`csptest`) — с сервером `GostSSLEngine`. Работает и через
+HelloRetryRequest: binder второго ClientHello по RFC 8446 §4.2.11.2.
+Группа по умолчанию — GC256B в обеих ролях; задавайте её заранее, чтобы
+не тратить обмен на HRR.
+
+## Исключения при ошибках рукопожатия
+
+Алерт TLS отображается в исключение по таблице JDK
+(`sun.security.ssl.Alert`), а не по фазе соединения. Алерты рукопожатия,
+в том числе сертификатные (`bad_certificate`, `unknown_ca`,
+`certificate_expired`) и `decrypt_error` (неверные `Finished`, подпись
+`CertificateVerify`, PSK binder), дают `SSLHandshakeException`;
+`unexpected_message` и неизвестный код - `SSLProtocolException`;
+`bad_record_mac`, `record_overflow`, `internal_error` - `SSLException`.
+`SSLPeerUnverifiedException` бросают только методы сессии
+(`getPeerCertificates()`), когда сертификата пира нет.
+
+## Логирование
+
+Модуль пишет в `java.util.logging` через обёртку модуля core. Имя
+логгера — полное имя класса (`org.rssys.gost.jsse.engine.GostSSLEngine`,
+`org.rssys.gost.jsse.manager.GostX509TrustManager`,
+`org.rssys.gost.jsse.crl.CrlCache`), поэтому уровень настраивается и для
+класса, и для пакета. Записи экземпляра движка помечаются префиксом
+`[conn#N]` (`GostSSLEngine.getConnectionLabel()`): номер выдаётся при
+создании движка и не является идентификатором сессии. Фабричные
+предупреждения (`applyEndpointIdentification`,
+`createForClientNoHostnameCheck`) идут без префикса; записи общего
+`GostX509TrustManager` номера соединения не имеют — он обслуживает
+параллельные рукопожатия, корреляция по серийному номеру и времени.
+Уровни, включение и правила о том, что не попадает в журнал, — в разделе
+«Логирование» файла `crypto-gost-core/README.adoc`.
+
+- `DEBUG`: успешные операции (загрузка OCSP, принятие клиентского
+  сертификата, сохранение CRL в кэше), ход сетевой загрузки (код ответа,
+  перенаправление, тип содержимого, блокировка адреса), отказ
+  сертификата собеседника (одна запись: стадия, имя alert, очищенный
+  текст; причина остаётся в исключении) и отказ рукопожатия (стадия,
+  alert, тип исключения без текста). Итог рукопожатия пишет набор шифров
+  IANA-именем и кодом
+  (`TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L (0xc103)`). Для разбора
+  mTLS включите `DEBUG` для `org.rssys.gost.jsse`: отказ клиентского
+  сертификата по умолчанию не пишется, чтобы внешний узел не мог
+  заполнить журнал.
+
+- `WARNING`: отказ, который библиотека обработала сама, и ослабленные
+  режимы. Отказ загрузки CRL или OCSP пишется один раз менеджером
+  доверия: серийный номер, адрес без учётных данных и параметров
+  запроса, причина (`TIMEOUT`, `NETWORK`, `HTTP_STATUS`,
+  `ADDRESS_BLOCKED` и другие значения `FetchFailure`). Загрузчики в
+  журнал сами не пишут: причина приходит в результате
+  (`OcspFetchResult.failure()`, `CrlFetchResult.failure()`). Отзыв —
+  одна WARNING с серийным номером (для CRL — с адресом списка).
+
+- DN собеседника в записи `Handshake completed` усечён, SNI и ALPN
+  очищены. Управляющие символы в SAN и других IA5String отвергаются при
+  разборе сертификата и не попадают ни в журнал, ни в сообщение
+  исключения.
+
+- Текст исключения HTTP-клиента или стороннего загрузчика в журнал не
+  попадает: он недоверен и может нести адрес с учётными данными.
+
+- `ERROR` не используется там, где отказ обработан: превышение размера
+  CRL, отзыв по CRL и откат `cRLNumber` пишутся на `WARNING`, а решение
+  остаётся за исключением.
+
+Приложение с SLF4J перенаправляет `java.util.logging` мостом
+`jul-to-slf4j`.
+
 ## Потокобезопасность (Thread safety)
 
 `GostSSLEngine` разрешает параллельные `wrap()` и `unwrap()` из разных
-потоков (два `ReentrantLock` для inbound/outbound). Запрещено вызывать
-`wrap()` из двух потоков одновременно.
+потоков: вызовы сериализуются одним `ReentrantLock`, как в JDK. Проверка
+цепочки сертификатов (`NEED_TASK`) идёт вне замка.
 
-`GostSSLSocket` — thread-safe после завершения handshake: чтение и
-запись могут выполняться из разных потоков (отдельные блокировки
-read/write).
+`GostSSLSocket` потокобезопасен после завершения рукопожатия: чтение и
+запись могут идти из разных потоков, для них три независимых замка —
+handshake, read и write. Замки сокета всегда берутся раньше замка
+движка, никогда наоборот.
+
+`GostSSLSocket.getSession()` по контракту `SSLSocket` запускает
+рукопожатие и ждёт его. Из обратного вызова рукопожатия (например,
+селектора ALPN) он возвращает текущую сессию без повторного запуска. При
+отказе рукопожатия возвращается пустая сессия
+(`SSL_NULL_WITH_NULL_NULL`) без исключения, а сокет закрывается: после
+отказа рукопожатия (ошибка протокола, обрыв соединения, непредвиденный
+сбой) `SSLSocket` закрыт и дальнейший обмен невозможен. Тайм-аут чтения
+(`setSoTimeout`) не роковой, как в JDK: сокет остаётся открытым,
+повторный `startHandshake()` или `read()` продолжает рукопожатие, а
+посреди TLS-записи уже прочитанные байты не теряются.
+
+`GostSSLEngine.initiateKeyUpdate()` ставит обновление ключа, которое
+уходит при следующем `wrap()`. Повторный вызов до отправки объединяется
+с ним: секрет записи сдвигается один раз, а запрос `update_requested`
+повышает стоящее обновление и не теряется. Так же ведёт себя
+`TlsSession.initiateKeyUpdate()` (tls13).
 
 `GostX509TrustManager` thread-safe — OCSP-кэш использует
 `ConcurrentHashMap`.
@@ -1518,23 +2505,41 @@ read/write).
 
 `GostSSLSessionContext` thread-safe — PSK-хранилище использует
 `InMemoryPskStore` (thread-safe), карта сессий — `LinkedHashMap` с
-LRU-эвiction под `ReentrantLock`.
+LRU-вытеснением под `ReentrantLock`.
 
-## Загрузка сертификата
+## Мост сертификатов
 
-Для production рекомендуется PKCS12 (см. раздел «Конфигурация сервера»).
-
-`CertificateBridge.toJca()` и `CertificateBridge.toGost()` конвертируют
-между `GostCertificate` и `java.security.cert.X509Certificate`.
-`toJca()` принимает `GostCertificate` / `List<GostCertificate>`,
-`toGost()` — `X509Certificate` / `X509Certificate[]`.
+JSSE работает с `java.security.cert.X509Certificate`, а модуль pkix — с
+`GostCertificate`. `CertificateBridge` переводит типы в обе стороны:
 
     import org.rssys.gost.jsse.bridge.CertificateBridge;
+    import org.rssys.gost.pkix.cert.GostCertificate;
+
+    import java.security.cert.X509Certificate;
+    import java.util.List;
+
+    GostCertificate gost = new GostCertificate(der);
+    X509Certificate jca = CertificateBridge.toJca(gost);
+    List<GostCertificate> chain = CertificateBridge.toGost(jcaChain);
+
+`toJca()` принимает `GostCertificate` или `List<GostCertificate>`,
+`toGost()` — `X509Certificate` или `X509Certificate[]`. Мост нужен при
+ручной сборке `GostX509KeyManager`: `addKeyEntry` ждёт JCA-цепочку. Для
+production сертификаты и ключи берите из PKCS12 (см. «Конфигурация
+сервера»).
 
 ## Безопасность реализации
 
-- `GostX509TrustManager` — fail-closed: при отсутствии OCSP-ответа (если
-  политика `STAPLING_REQUIRED`) сертификат считается невалидным.
+- `GostX509TrustManager` — fail-closed для серверного сертификата: при
+  отсутствии OCSP-ответа (политика `STAPLING_REQUIRED` или
+  `STAPLING_OR_FETCH` без успешного fetch) сертификат считается
+  невалидным. Для клиентских сертификатов OCSP не обязателен: при
+  `STAPLING_OR_FETCH` выполняется best-effort fetch, при
+  `STAPLING_REQUIRED` загрузка не выполняется. Клиентский staple
+  запрашивается только политикой `ClientOcspPolicy` (по умолчанию
+  `OFF`). `CrlPolicy.REQUIRE` обеспечивает строгий отзыв только при
+  отсутствии OCSP-ответа: если OCSP получен и валиден, CRL не
+  проверяется.
 
 - Constant-time сравнения для verify\_data и PSK binders.
 
@@ -1553,7 +2558,15 @@ LRU-эвiction под `ReentrantLock`.
 
 - Только ГОСТ-наборы (`TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L/S`).
 
-- PSK-тикеты одноразовые (RFC 8446 §8.1).
+- Сервер не принимает PSK-тикет повторно (RFC 8446 §8.1); клиент хранит
+  полученные тикеты до вытеснения.
+
+- PSK-тикет клиента привязан к серверу, режиму проверки имени и
+  экземпляру `GostX509TrustManager` (см. «Возобновление сессии по PSK»).
+
+- При `needClientAuth` и `wantClientAuth` сервер не выдаёт
+  `NewSessionTicket`: PSK-resumption обошёл бы повторную аутентификацию
+  клиента.
 
 - KeyManagerFactory — только алгоритм `GostX509` (не `PKIX`, не
   `NewSunX509`).
@@ -1565,11 +2578,13 @@ LRU-эвiction под `ReentrantLock`.
 Все примеры интеграции с популярными серверами находятся в модуле
 `examples/jsse` и запускаются через Makefile из его корня:
 
-    # Все 4 сервера последовательно (Netty, Jetty, Undertow, Tomcat)
+    # Все серверные примеры последовательно
     make -C examples/jsse all
 
     # По одному
     make -C examples/jsse netty
+    make -C examples/jsse http2
+    make -C examples/jsse grpc
     make -C examples/jsse jetty
     make -C examples/jsse undertow
     make -C examples/jsse tomcat
@@ -1584,10 +2599,10 @@ LRU-эвiction под `ReentrantLock`.
 handshake с ГОСТ-наборами, выводит `SUCCESS` и останавливается.
 Исключение — `make springboot` (бесконечный цикл, останов через Ctrl+C).
 
-HTTP-серверы (Jetty, Undertow, Tomcat) проверяют только TLS handshake.
-`GostSSLEngine` не совместим с JDK HttpClient (SSLFlowDelegate) — полный
-HTTP-обмен доступен через ручной запуск и
-`curl -k --tlsv1.3 --https...`.
+Примеры Jetty, Undertow и Tomcat проверяют TLS-рукопожатие; полный
+HTTP-обмен проверяют тесты HTTP/2 (`JettyHttp2Test`,
+`NettyHttp2OkHttpTest`) и `gost-curl`. HTTP/2 в Undertow и Tomcat поверх
+ГОСТ TLS не поддерживается (см. разделы выше).
 
 ## Запуск интеграционных тестов
 
@@ -1595,9 +2610,10 @@ HTTP-обмен доступен через ручной запуск и
 (`GostSSLSessionContext`, `GostX509KeyManager`), mTLS через Jetty, PSK
 resumption, reconnect под нагрузкой и таймауты в сетевых условиях.
 
-Все тесты помечены `@Tag("integration")` — запуск одной командой:
+Интеграционные тесты помечены `@Tag("integration")` — запуск одной
+командой:
 
-    # Все интеграционные тесты JSSE (19 тестов, 7 файлов)
+    # Все интеграционные тесты JSSE (20 тестов, 7 файлов)
     make -C examples/jsse test-int-all
 
     # Или напрямую через Maven:

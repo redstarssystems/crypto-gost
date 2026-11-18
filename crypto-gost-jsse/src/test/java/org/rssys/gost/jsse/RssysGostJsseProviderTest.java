@@ -2,12 +2,17 @@ package org.rssys.gost.jsse;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.security.KeyManagementException;
 import java.security.Security;
+import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
 
 /**
  * Тесты регистрации RssysGostJsseProvider.
@@ -44,9 +49,179 @@ class RssysGostJsseProviderTest {
             SSLContext ctx =
                     SSLContext.getInstance(
                             GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
-            assertNotNull(ctx, "SSLContext не должен быть null");
+            assertEquals(
+                    GostJsseConstants.PROVIDER_NAME,
+                    ctx.getProvider().getName(),
+                    "контекст должен принадлежать ГОСТ-провайдеру, а не JDK");
+            assertEquals(GostJsseConstants.PROTOCOL_TLS_1_3, ctx.getProtocol());
             ctx.init(null, null, null);
-            assertNotNull(ctx.createSSLEngine(), "SSLEngine не должен быть null");
+            assertEquals(
+                    "GostSSLEngine",
+                    ctx.createSSLEngine().getClass().getSimpleName(),
+                    "движок должен быть ГОСТ-реализацией");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("Сторонний TrustManager отвергается с KeyManagementException")
+    void testForeignTrustManagerRejected() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            TrustManager foreign = new TrustManager() {};
+            assertThrows(
+                    KeyManagementException.class,
+                    () -> ctx.init(null, new TrustManager[] {foreign}, null),
+                    "сторонний TrustManager не должен заменяться trust-all");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("Два разных GostX509TrustManager отвергаются: якоря второго не теряются молча")
+    void testTwoDistinctGostTrustManagersRejected() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            TrustManager first = GostX509TrustManager.insecureTrustAll();
+            TrustManager second = GostX509TrustManager.insecureTrustAll();
+            assertThrows(
+                    KeyManagementException.class,
+                    () -> ctx.init(null, new TrustManager[] {first, second}, null),
+                    "два разных экземпляра не должны приводить к выбору первого");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("Один и тот же GostX509TrustManager дважды допустим")
+    void testSameGostTrustManagerTwiceAccepted() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            TrustManager tm = GostX509TrustManager.insecureTrustAll();
+            ctx.init(null, new TrustManager[] {tm, tm}, null);
+            assertNotNull(ctx.createSSLEngine(), "контекст с одним экземпляром должен работать");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("GostX509TrustManager вместе со сторонним отвергается")
+    void testGostWithForeignTrustManagerRejected() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            TrustManager gost = GostX509TrustManager.insecureTrustAll();
+            TrustManager foreign = new TrustManager() {};
+            assertThrows(
+                    KeyManagementException.class,
+                    () -> ctx.init(null, new TrustManager[] {gost, foreign}, null),
+                    "сторонний менеджер в массиве должен отвергаться");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("null-элемент массива TrustManager отвергается")
+    void testNullTrustManagerElementRejected() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            assertThrows(
+                    KeyManagementException.class,
+                    () -> ctx.init(null, new TrustManager[] {null}, null),
+                    "null-элемент не должен приводить к trust-all");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("Сторонний KeyManager отвергается с KeyManagementException")
+    void testForeignKeyManagerRejected() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            KeyManager foreign = new KeyManager() {};
+            assertThrows(
+                    KeyManagementException.class,
+                    () -> ctx.init(new KeyManager[] {foreign}, null, null),
+                    "сторонний KeyManager не должен молча заменяться пустым");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("null-элемент массива KeyManager отвергается")
+    void testNullKeyManagerElementRejected() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            assertThrows(
+                    KeyManagementException.class,
+                    () -> ctx.init(new KeyManager[] {null}, null, null),
+                    "null-элемент не должен приводить к пустому менеджеру");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("Два разных GostX509KeyManager отвергаются: ключи второго не теряются молча")
+    void testTwoDistinctGostKeyManagersRejected() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            SSLContext ctx =
+                    SSLContext.getInstance(
+                            GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
+            KeyManager first = new GostX509KeyManager();
+            KeyManager second = new GostX509KeyManager();
+            assertThrows(
+                    KeyManagementException.class,
+                    () -> ctx.init(new KeyManager[] {first, second}, null, null),
+                    "два разных экземпляра не должны приводить к выбору первого");
+        } finally {
+            Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
+        }
+    }
+
+    @Test
+    @DisplayName("KeyManager: один и тот же экземпляр дважды, null и пустой массив допустимы")
+    void testKeyManagerAcceptedForms() throws Exception {
+        Security.addProvider(new RssysGostJsseProvider());
+        try {
+            KeyManager gost = new GostX509KeyManager();
+            for (KeyManager[] accepted : new KeyManager[][] {{gost, gost}, {gost}, {}, null}) {
+                SSLContext ctx =
+                        SSLContext.getInstance(
+                                GostJsseConstants.PROTOCOL_TLS_1_3,
+                                GostJsseConstants.PROVIDER_NAME);
+                assertDoesNotThrow(
+                        () -> ctx.init(accepted, null, null),
+                        "клиент без mTLS и повтор одного менеджера допустимы");
+            }
         } finally {
             Security.removeProvider(GostJsseConstants.PROVIDER_NAME);
         }

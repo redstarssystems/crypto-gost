@@ -6,6 +6,8 @@ import java.math.BigInteger;
 import org.junit.jupiter.api.BeforeAll;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -18,7 +20,6 @@ class CmsVerifierFuzzTest {
 
     private static PrivateKeyParameters privKey;
     private static GostCertificate cert;
-    private static CmsKeyWrap keyWrap;
 
     @BeforeAll
     static void setUp() {
@@ -30,14 +31,27 @@ class CmsVerifierFuzzTest {
         cert =
                 CmsTestUtils.createSelfSignedCert(
                         privKey, pubKey, BigInteger.valueOf(System.currentTimeMillis()));
-        keyWrap = new Kexp15CmsKeyWrap();
     }
 
     @FuzzTest
     void fuzzDecryptEnvelopedData(FuzzedDataProvider data) {
         byte[] der = data.consumeRemainingAsBytes();
         try {
-            CmsEnvelopedDataDecryptor.decrypt(der, privKey, cert, keyWrap);
+            CmsEnvelopedDataDecryptor.decrypt(der, privKey, cert);
+        } catch (RuntimeException e) {
+            FuzzTestUtils.rethrowIfBug(e);
+        } catch (Exception ignored) {
+            // ожидаемо: битый DER -> ошибка парсинга, несоответствие ключей
+        }
+    }
+
+    // Метод без требования имитовставки принимает и режим CTR без MAC: самый мягкий путь
+    // разбора недоверенного входа тоже не должен выпускать непроверяемые исключения.
+    @FuzzTest
+    void fuzzDecryptEnvelopedDataAllowingNoIntegrity(FuzzedDataProvider data) {
+        byte[] der = data.consumeRemainingAsBytes();
+        try {
+            CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(der, privKey, cert);
         } catch (RuntimeException e) {
             FuzzTestUtils.rethrowIfBug(e);
         } catch (Exception ignored) {
@@ -49,7 +63,12 @@ class CmsVerifierFuzzTest {
     void fuzzVerifySignedData(FuzzedDataProvider data) {
         byte[] der = data.consumeRemainingAsBytes();
         try {
-            CmsSignedDataVerifier.verifyAny(der, cert);
+            CmsSignedDataVerifier.verify(
+                    der,
+                    VerifyOptions.trusting(
+                            TrustAnchors.ofCertificates(cert),
+                            SignerSelection.ANY,
+                            Revocation.none()));
         } catch (RuntimeException e) {
             FuzzTestUtils.rethrowIfBug(e);
         } catch (Exception ignored) {

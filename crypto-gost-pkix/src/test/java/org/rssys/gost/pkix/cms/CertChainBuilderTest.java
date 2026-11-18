@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cms;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -19,6 +20,7 @@ import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.GostDnParser;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -239,6 +241,69 @@ class CertChainBuilderTest {
     }
 
     // ========================================================================
+    // Cert-якоря: приоритет над пулом, перевыпуск, закрепление, подделка
+    // ========================================================================
+
+    @Test
+    @DisplayName("Перевыпущенный корень: якорь с тем же ключом выигрывает у старого из пула")
+    void testReissuedRootAnchorWinsOverPool() throws Exception {
+        KeyPair rootKeys = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] caDn = GostDnParser.encodeDn("CN=Reissued Root CA");
+
+        GostCertificate oldRoot = selfSignedRoot(caDn, rootKeys, BigInteger.ONE);
+        GostCertificate reissuedRoot = selfSignedRoot(caDn, rootKeys, BigInteger.TWO);
+        GostCertificate leaf = leafSignedBy(caDn, rootKeys.getPrivate(), rootKeys.getPublic());
+
+        assertFalse(
+                java.util.Arrays.equals(oldRoot.getEncoded(), reissuedRoot.getEncoded()),
+                "Перевыпущенный корень должен иметь другой DER");
+
+        List<GostCertificate> chain =
+                CertChainBuilder.buildChain(leaf, List.of(oldRoot), List.of(reissuedRoot));
+
+        assertEquals(2, chain.size(), "Цепочка: leaf + перевыпущенный якорь");
+        assertEquals(reissuedRoot, chain.get(1), "Должен быть выбран локальный якорь");
+        assertFalse(chain.contains(oldRoot), "Старый корень из пула не должен попасть в цепочку");
+    }
+
+    @Test
+    @DisplayName("Закреплённый промежуточный CA останавливает цепочку выше себя")
+    void testPinnedIntermediateStopsChain() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCa(root, null);
+        CertBundle leaf = createLeaf(intermediate);
+
+        List<GostCertificate> chain =
+                CertChainBuilder.buildChain(
+                        leaf.cert,
+                        List.of(intermediate.cert, root.cert),
+                        List.of(intermediate.cert));
+
+        assertEquals(2, chain.size(), "Цепочка: leaf + закреплённый промежуточный CA");
+        assertEquals(intermediate.cert, chain.get(1), "Корень выше якоря игнорируется");
+        assertFalse(chain.contains(root.cert), "Корень не должен попасть в цепочку");
+    }
+
+    @Test
+    @DisplayName("Поддельный корень с тем же DN, но чужим ключом -> отказ")
+    void testFakeRootSameDnRejected() throws Exception {
+        CertBundle trustedRoot = createRootCa();
+        byte[] rootDn = trustedRoot.dn;
+
+        KeyPair attackerKeys = KeyGenerator.generateKeyPair(PARAMS);
+        GostCertificate fakeRoot = selfSignedRoot(rootDn, attackerKeys, BigInteger.valueOf(42));
+        GostCertificate fakeLeaf =
+                leafSignedBy(rootDn, attackerKeys.getPrivate(), attackerKeys.getPublic());
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CertChainBuilder.buildChain(
+                                fakeLeaf, List.of(fakeRoot), List.of(trustedRoot.cert)),
+                "Самоподписанный поддельный корень с тем же DN не должен заменять якорь");
+    }
+
+    // ========================================================================
     // Дополнительная проверка: валидная цепочка проходит ChainValidator
     // ========================================================================
 
@@ -253,9 +318,8 @@ class CertChainBuilderTest {
                 CertChainBuilder.buildChain(
                         leaf.cert, List.of(intermediate.cert), List.of(root.cert));
 
-        List<PublicKeyParameters> caKeys = List.of(root.cert.getPublicKey());
         assertDoesNotThrow(
-                () -> ChainValidator.validateChain(chain, caKeys),
+                () -> ChainValidator.validateChain(chain, TrustAnchors.ofCertificate(root.cert)),
                 "Построенная цепочка должна проходить PKIX-валидацию");
     }
 

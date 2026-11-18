@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.SignedDerTestSupport;
 import org.rssys.gost.signature.ECParameters;
 
 /**
@@ -100,10 +101,10 @@ class GostCsrBuilderTest {
         byte[] fromBuilder =
                 GostCsrBuilder.create("CN=StaticVsBuilder", kp.getPublic()).sign(kp.getPrivate());
 
-        assertArrayEquals(
+        SignedDerTestSupport.assertSameExceptSignature(
+                "Старый static-метод должен давать тот же CSR, что и create()+buildCsr() (без значения подписи)",
                 fromStatic,
-                fromBuilder,
-                "Старый static-метод должен давать побайтово тот же CSR, что и create()+buildCsr()");
+                fromBuilder);
     }
 
     // ========================================================================

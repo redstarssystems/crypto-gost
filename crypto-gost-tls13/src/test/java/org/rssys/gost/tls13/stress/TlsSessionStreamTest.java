@@ -21,10 +21,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsSession;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.TlsTransport;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
@@ -50,10 +51,12 @@ class TlsSessionStreamTest {
     @BeforeAll
     static void setup() throws Exception {
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        PkixCertTestHelper.CertBundle bundle =
+                PkixCertTestHelper.createCertWithKey(ECParameters.tc26a256());
         serverConfig = new TlsServerConfig(cs, Collections.singletonList(bundle.cert), bundle.priv);
         clientConfig =
-                new TlsClientConfig(cs, bundle.cert.getPublicKey()).withoutHostnameVerification();
+                new TlsClientConfig(cs, TrustAnchors.ofCertificate(bundle.cert))
+                        .withoutHostnameVerification();
         serverSocket = new ServerSocket(0);
         port = serverSocket.getLocalPort();
     }

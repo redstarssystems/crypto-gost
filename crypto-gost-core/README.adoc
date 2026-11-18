@@ -13,49 +13,173 @@ toc::[]
 * *ГОСТ Р 34.13-2015* — режимы шифрования CBC, CFB, CTR, OFB; имитовставка (CMAC).
 * *ГОСТ Р 34.10-2012* — электронная подпись 256 и 512 бит (RFC 7091).
 * *HMAC-Стрибог* — RFC 7836 (HMAC-Streebog-256 и HMAC-Streebog-512).
-* *MGM (Multilinear Galois Mode)* — AEAD-режим для Кузнечика, RFC 9058. Совместим с OpenSSL.
-* *CTR-ACPKM и CTR-ACPKM-OMAC* — режимы шифрования для PBES2 (ГОСТ Р 34.13-2015 CTR), RFC 9337 §7.3.
-* *KDF_GOSTR3411_2012_256 и KDF_TREE_GOSTR3411_2012_256* — функции выработки ключевого материала, RFC 7836 §4.4 и §4.5.
-* *ECDH (ГОСТ Р 34.10-2012)* — сырой общий секрет (X-координата точки), для протокольных реализаций (TLS 1.3), RFC 9367 §6.1.1.
-* *VKO_GOSTR3410_2012_256/512* — согласование ключей с UKM и хэшированием Стрибог (256 или 512 бит в зависимости от кривой), RFC 7836 §4.3.1.
+* *MGM (Multilinear Galois Mode)* — режим шифрования с аутентификацией для Кузнечика, RFC 9058. Результаты совпадают с OpenSSL.
+* *CTR-ACPKM и CTR-ACPKM-OMAC* — режимы шифрования для PBES2 (RFC 9337 §7.3), построены на CTR по ГОСТ Р 34.13-2015, доступны через JCA.
+* *KDF_GOSTR3411_2012_256 и KDF_TREE_GOSTR3411_2012_256* — выработка ключевого материала, RFC 7836 §4.4 и §4.5.
+* *VKO_GOSTR3410_2012_256/512* — согласование ключей с UKM и хэшированием Стрибог, RFC 7836 §4.3.
+* *ECDH (ГОСТ Р 34.10-2012)* — сырой общий секрет (X-координата точки) для протокольных реализаций (TLS 1.3), RFC 9367 §6.1.1.
 * *KExp15/KImp15* — экспорт и импорт ключей на шифре Кузнечик (MAC-then-Encrypt), RFC 9189 §8.2.1.
-* *PBKDF2-HMAC-Стрибог* — вывод ключа из пароля, RFC 2898 §5.2.
+* *PBKDF2-HMAC-Стрибог* — вывод ключа из пароля, RFC 2898 §5.2, RFC 9337 §4.
 
 .Дополнительные алгоритмы (не ГОСТ):
-* *SCrypt* — функция выработки ключа на основе пароля (RFC 7914).
+* *scrypt* — вывод ключа из пароля (RFC 7914). Использует HMAC-SHA256 из JCA как осознанное исключение (ADR 05).
 
-NOTE: *Для модуля `crypto-gost-core` выполнена кросс-валидация на совместимость с `openssl (ГОСТ)` и `Bouncycastle`.*
+Модуль предоставляет два независимых API:
 
+* `org.rssys.gost.api` — основной API. Не требует регистрации провайдера, ориентирован на задачу («зашифровать буфер», «подписать»), а не на режим. Все примеры до главы про JCA написаны на нём.
+* `org.rssys.gost.jca` — JCA/JCE-провайдер `RssysGostProvider` для интеграции со стандартной инфраструктурой Java. Описан в отдельной главе «JCA-провайдер».
 
-Криптографическое ядро предоставляет два независимых API для работы:
+Требования: Java 21; код совместим с Android 14+.
 
-* `org.rssys.gost.api` — высокоуровневый API, не требует регистрации провайдера. Код лаконичнее, ориентирован на пользователя.
-* `org.rssys.gost.jca` — JCA/JCE-совместимый API, интегрируется со стандартной инфраструктурой Java.
+Потокобезопасность: все статические методы потокобезопасны. Объекты с состоянием (`Digest`, `CmacApi`, `ECDSASigner`, потоки `Cipher`, `AuthenticatedStream`) не потокобезопасны: один экземпляр на поток.
 
-Все статические методы потокобезопасны. +
+История изменений — в `CHANGELOG.adoc`.
 
+NOTE: Для модуля выполнена кросс-валидация на совместимость с OpenSSL (ГОСТ-провайдер gostprov) и BouncyCastle, см. раздел «Кросс-валидация».
 
-=== Генерация ключей
+=== Быстрый старт
 
-==== Управление симметричными ключами
+Пять частых задач. Подробности, лимиты и обработка ошибок — в тематических разделах. Для краткости в этих примерах ключи не затираются; в реальном коде затирайте их в `finally`, как описано в разделе «Ключи». Один ключ используйте для одной цели: для имитовставки и для шифрования выработайте разные ключи. Переменные `data`, `plaintext`, `receivedTag`, `source`, `target` и `decrypted` — ваши данные и пути (в примерах они не объявлены).
 
-
-===== Настройка провайдера (только для JCA API)
-
-Перед использованием JCA-методов необходимо зарегистрировать провайдер один раз:
-
+.Хэш Стрибог-256
 [source,java]
 ----
-import java.security.Security;
-import org.rssys.gost.jca.RssysGostProvider;
-Security.addProvider(new RssysGostProvider());
+import java.nio.charset.StandardCharsets;
+import org.rssys.gost.api.Digest;
+
+byte[] hash = Digest.digest256("данные".getBytes(StandardCharsets.UTF_8));
 ----
 
-===== Генерация симметричного ключа
+.Имитовставка CMAC-Кузнечик и её проверка
+[source,java]
+----
+import org.rssys.gost.api.CmacApi;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.cipher.SymmetricKey;
 
-Генерация случайного 256-битного ключа для шифра "Кузнечик" (ГОСТ Р 34.12-2015). По умолчанию, как источник энтропии используется единый экземпляр `CryptoRandom` (org.rssys.gost.util.CryptoRandom.INSTANCE).
+SymmetricKey macKey = KeyGenerator.generateSymmetricKey();
+byte[] tag = CmacApi.cmac(data, macKey); // 16 байт
 
-.Через `org.rssys.gost.api`
+// у получателя: тег вычисляется заново, пришедший тег идёт вторым аргументом
+boolean ok = CmacApi.verifyMac(CmacApi.cmac(data, macKey), receivedTag);
+----
+
+.Шифрование данных в памяти с проверкой целостности
+[source,java]
+----
+import org.rssys.gost.api.AuthenticatedCipher;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.cipher.SymmetricKey;
+
+SymmetricKey key = KeyGenerator.generateSymmetricKey(); // отдельный ключ шифрования
+byte[] packet = AuthenticatedCipher.seal(plaintext, key);
+byte[] restored = AuthenticatedCipher.open(packet, key); // AuthenticationException, если пакет изменён
+----
+
+Если сообщение принадлежит контексту — имя документа, получатель, номер, — передайте его в `aad`: пакет откроется только с тем же значением. См. «Что такое AAD и что в него класть».
+
+.Шифрование и чтение файла с проверкой целостности
+[source,java]
+----
+import org.rssys.gost.api.AuthenticatedStream;
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.cipher.SymmetricKey;
+
+SymmetricKey key = KeyGenerator.generateSymmetricKey();
+
+try (InputStream in = Files.newInputStream(source);
+     OutputStream out = AuthenticatedStream.sealing(Files.newOutputStream(target), key)) {
+    in.transferTo(out); // close() дописывает последний чанк
+}
+
+try (InputStream in = AuthenticatedStream.opening(Files.newInputStream(target), key);
+     OutputStream out = Files.newOutputStream(decrypted)) {
+    in.transferTo(out); // AuthenticationIOException, если поток изменён или усечён
+}
+----
+
+.Электронная подпись и её проверка
+[source,java]
+----
+import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.api.KeyPair;
+import org.rssys.gost.api.Signature;
+import org.rssys.gost.signature.ECParameters;
+
+KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA()); // кривую выбирайте по требованиям совместимости, см. «Поддерживаемые кривые»
+byte[] signature = Signature.sign(data, pair.getPrivate()); // HEDGED по умолчанию, включать ничего не нужно
+boolean valid = Signature.verify(data, signature, pair.getPublic());
+----
+
+=== Что выбрать
+
+[cols="3,2,3", options="header"]
+|===
+|Задача |Класс |Чего избегать
+
+|Данные в памяти, с проверкой целостности
+|`AuthenticatedCipher`
+|`Cipher` в режиме CTR без аутентификации
+
+|Файл или сокет, с проверкой целостности
+|`AuthenticatedStream` (рекомендуется для файлов и больших данных)
+|`Cipher.encryptingStream` без аутентификации
+
+|Обмен с внешней системой, режим задан протоколом (CTR, CBC, CFB, OFB)
+|`Cipher`; через JCA — `Kuznyechik/<режим>/NoPadding` (для CBC — `PKCS5Padding`, `PKCS7Padding`, `ISO7816-4`)
+|Применять без имитовставки там, где целостность нужна
+
+|Данные в памяти, нужна совместимость с MGM или другими реализациями ГОСТ (стандарт RFC 9058)
+|`MgmCipher`
+|`MgmCipher.sealWithIcn`
+
+|Данные в памяти или файл, нужна привязка к контексту (AAD): имя файла, получатель, номер сообщения
+|`AuthenticatedCipher` (свои ключи на сообщение) и `AuthenticatedStream` (файлы) с параметром `aad`; `MgmCipher` — если нужны стандарт и обмен с другими реализациями ГОСТ
+|Класть контекст в открытый текст вручную
+
+|Хэш
+|`Digest.digest256`, `Digest.digest512`
+|
+
+|Имитовставка (CMAC, ГОСТ Р 34.13-2015)
+|`CmacApi`; проверка — `CmacApi.verifyMac`
+|`Arrays.equals` для тегов
+
+|Код аутентификации на хэш-функции (HMAC-Стрибог)
+|`Digest.hmac256`, `Digest.hmac512`; проверка — `CmacApi.verifyMac`
+|`Arrays.equals` для тегов
+
+|Подпись
+|`Signature.sign`, `Signature.verify`
+|`ECDSASigner` и `signHash`, если хэш не вычислен вами осознанно
+
+|Ключ из пароля
+|`KeyGenerator.deriveKey` (scrypt), `Pbkdf2Streebog` (ГОСТ)
+|Собственные циклы хэширования
+
+|Общий ключ двух сторон
+|`KeyAgreement.vkoGostR3410_2012_256/512` и затем KDF
+|`KeyAgreement.computeSharedSecret` (сырой секрет)
+
+|Передача ключа получателю
+|`KeyExport.kExp15`, `KeyExport.kImp15`
+|Шифрование ключа обычным режимом без имитовставки
+
+|Интеграция со стандартными интерфейсами Java
+|JCA-провайдер `RssysGostProvider`
+|
+|===
+
+Статус режимов: MGM — RFC 9058, в национальной системе — рекомендация ТК 26 `Р 1323565.1.026-2019`; `AuthenticatedCipher` — собственная композиция библиотеки (CTR + CMAC с выводом ключей через KDF_TREE), не стандартизована.
+
+Низкоуровневое: следующие средства оставлены для протоколов и проверки по векторам и применяются только при ясном понимании последствий: `MgmCipher.sealWithIcn` (ICN задаёт вызывающий), `KeyAgreement.computeSharedSecret`, `Signature.signHash` и `GostSigner.signHash` (подписывают любой переданный хэш), `ECDSASigner`, конструктор `ECParameters` с заданными параметрами кривой, неаутентифицированные режимы `Cipher`.
+
+=== Ключи
+
+==== Симметричный ключ
+
+Генерация случайного 256-битного ключа для шифра «Кузнечик» (ГОСТ Р 34.12-2015). Источник случайных чисел по умолчанию — `CryptoRandom.INSTANCE` (`org.rssys.gost.util.CryptoRandom`).
+
 [source,java]
 ----
 import org.rssys.gost.api.KeyGenerator;
@@ -65,220 +189,294 @@ SymmetricKey key = KeyGenerator.generateSymmetricKey();
 try {
     // использование ключа
 } finally {
-    key.destroy(); // обнуляет ключевой материал в памяти
+    key.destroy(); // затирает ключевой материал в памяти
 }
 ----
-
-.Через JCA (`org.rssys.gost.jca`)
-[source,java]
-----
-import javax.crypto.KeyGenerator;
-import javax.crypto.SecretKey;
-import javax.security.auth.Destroyable;
-
-KeyGenerator kg = KeyGenerator.getInstance("Kuznyechik", "RssysGostProvider");
-SecretKey key = kg.generateKey();
-try {
-    // использование ключа
-} finally {
-    if (key instanceof Destroyable d) {
-        d.destroy(); // обнуляет ключевой материал в памяти
-    }
-}
-----
-
-
-===== Импорт и экспорт симметричного ключа
 
 Симметричный ключ хранится как сырые байты `byte[]`.
 
-WARNING: Никогда не храните симметричный ключ в открытом виде.
-Для хранения используйте шифрование ключа другим ключом (KEK)
-или вывод из пароля через scrypt (см. ниже).
+WARNING: Не храните симметричный ключ в открытом виде. Для хранения шифруйте его другим ключом (KEK) или выводите из пароля (см. ниже).
 
-===== org.rssys.gost.api
-
-.Экспорт ключа в byte[]
+.Экспорт ключа в `byte[]`
 [source,java]
 ----
 import org.rssys.gost.cipher.SymmetricKey;
 
 SymmetricKey key = ...; // выработан или загружен ранее
-// getKey() возвращает defensive copy — мутация результата не влияет на ключ внутри объекта
-byte[] rawKey = key.getKey(); // 32 байта
+// getKey() возвращает копию: изменение результата не влияет на ключ внутри объекта
+byte[] rawKey = key.getKey(); // 32 байта; после destroy() — IllegalStateException
 try {
-    // сохранить rawKey в зашифрованном хранилище ...
+    // сохранить rawKey в зашифрованном хранилище
 } finally {
-    java.util.Arrays.fill(rawKey, (byte) 0); // обнулить после использования
+    Arrays.fill(rawKey, (byte) 0); // копия тоже затирается
 }
 ----
 
-.Импорт ключа из byte[]
+.Импорт ключа из `byte[]`
 [source,java]
 ----
 import org.rssys.gost.cipher.SymmetricKey;
 
 byte[] rawKey = ...; // 32 байта, загружены из хранилища
-// Конструктор делает defensive copy — мутация rawKey после не влияет на ключ
+// конструктор копирует массив (изменение rawKey ключ не затрагивает), проверяет только непустоту; 32 байта требуют шифры
 SymmetricKey key = new SymmetricKey(rawKey);
 try {
-    // использование ключа ...
+    // использование ключа
 } finally {
-    key.destroy();                             // обнуляет ключ внутри объекта
-    java.util.Arrays.fill(rawKey, (byte) 0);  // обнулить исходный массив
+    key.destroy();
+    Arrays.fill(rawKey, (byte) 0); // затирается и исходный массив
 }
 ----
-.Вывод ключа из пароля (scrypt, RFC 7914. не ГОСТ)
 
-См. также `Pbkdf2Streebog` для выработки ключа из пароля строго по ГОСТ.
+NOTE: `SymmetricKey` и `PrivateKeyParameters` не синхронизированы: `destroy()` не должен пересекаться ни с одной операцией над этим ключом (шифрованием, MAC, подписью). Уничтожайте ключ после завершения всех операций.
+
+==== Ключ из пароля
+
+Для выработки ключа строго по ГОСТ используйте `Pbkdf2Streebog` (см. раздел «Выработка ключей»). `KeyGenerator.deriveKey` использует scrypt (RFC 7914, не ГОСТ).
+
+Пароль хранится как `char[]` (в `String` его нельзя затереть) и кодируется в UTF-8 функцией `PasswordUtf8.encode`: кодирование строгое, непарный суррогат отвергается. В `finally` затираются и пароль, и его байты.
 
 [source,java]
 ----
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.CryptoRandom;
-import java.security.GeneralSecurityException;
+import org.rssys.gost.util.PasswordUtf8;
 
-// Соль должна быть случайной и уникальной для каждого пользователя/объекта
-// Минимальная рекомендуемая длина соли: 16 байт
-byte[] password = "секретный пароль".getBytes(StandardCharsets.UTF_8);
-byte[] salt     = new byte[16];
-CryptoRandom.INSTANCE.nextBytes(salt); // <1>
+char[] password = ...; // ввод пользователя
+byte[] passwordBytes = PasswordUtf8.encode(password);
+// соль не секрет, но уникальна для каждого объекта; не короче 16 байт; хранится рядом с данными
+byte[] salt = new byte[16];
+CryptoRandom.INSTANCE.nextBytes(salt);
 SymmetricKey key = null;
 try {
-    key = KeyGenerator.deriveKey(password, salt); // <2>
-    // использование ключа ...
+    key = KeyGenerator.deriveKey(passwordBytes, salt);
+    // использование ключа
 } catch (GeneralSecurityException e) {
-    throw new RuntimeException("Key derivation failed", e);
+    throw new IllegalStateException("Key derivation failed", e);
 } finally {
-    if (key != null) key.destroy();
-    java.util.Arrays.fill(password, (byte) 0); // <3>
-}
-----
-<1> Соль не является секретом — её можно хранить рядом с зашифрованными данными.
-Главное требование: соль уникальна для каждого объекта шифрования.
-<2> Параметры по умолчанию: N=524288, r=8, p=1.
-Операция ресурсоёмкая — не вызывайте в цикле и не блокируйте UI-поток.
-<3> `deriveKey` не обнуляет массив пароля — это ответственность вызывающего кода.
-
-===== JCA (org.rssys.gost.jca)
-.Экспорт ключа в byte[]
-[source,java]
-----
-import org.rssys.gost.jca.key.GostSecretKey;
-
-GostSecretKey key = ...; // выработан или загружен ранее
-
-// returns defensive copy, бросает IllegalStateException если ключ уничтожен
-byte[] rawKey = key.getEncoded(); // 32 байта
-try {
-    // сохранить rawKey в зашифрованном хранилище ...
-} finally {
-    java.util.Arrays.fill(rawKey, (byte) 0);
-}
-----
-
-.Импорт ключа из byte[] через `SecretKeyFactory` (рекомендуется)
-[source,java]
-----
-import javax.crypto.SecretKey;
-import javax.crypto.SecretKeyFactory;
-import javax.crypto.spec.SecretKeySpec;
-import javax.security.auth.Destroyable;
-
-byte[] rawKey = ...; // 32 байта, загружены из хранилища
-SecretKeySpec spec = new SecretKeySpec(rawKey, "Kuznyechik");
-SecretKeyFactory skf = SecretKeyFactory.getInstance("Kuznyechik", "RssysGostProvider");
-SecretKey key = skf.generateSecret(spec);
-try {
-    // использование ключа ...
-} finally {
-    if (key instanceof Destroyable d) {
-        d.destroy();
+    if (key != null) {
+        key.destroy();
     }
-    java.util.Arrays.fill(rawKey, (byte) 0);
+    Arrays.fill(passwordBytes, (byte) 0);
+    Arrays.fill(password, '\0');
 }
 ----
-.Импорт ключа через прямой конструктор `GostSecretKey`
+
+Параметры по умолчанию: N = 131072 (2¹⁷, минимум OWASP), r = 8, p = 1; памяти нужно 128 МиБ одним массивом. Для большей стойкости задайте параметры явно: `deriveKey(password, salt, N, r, p)`. Операция ресурсоёмкая: не вызывайте её в цикле и не блокируйте поток интерфейса. `deriveKey` не затирает переданный пароль.
+
+=== Хэш-функция Стрибог (ГОСТ Р 34.11-2012)
+
+Стрибог — криптографическая хэш-функция в двух вариантах: 256 и 512 бит.
+
+NOTE: Результат — массив байт в порядке big-endian (старший байт первым), как у OpenSSL. RFC 6986 приводит контрольные векторы в ГОСТ-нотации (справа налево): при прямом сравнении байты окажутся в обратном порядке.
+
+.Хэш данных, целиком находящихся в памяти
 [source,java]
 ----
-import org.rssys.gost.jca.key.GostSecretKey;
-byte[] rawKey = ...; // 32 байта, загружены из хранилища
-// algorithm: "Kuznyechik", "HmacGOST3411-2012-256", "HmacGOST3411-2012-512", "CMAC-Kuznyechik"
-GostSecretKey key = new GostSecretKey("Kuznyechik", rawKey);
-try {
-    // использование ключа ...
-} finally {
-    key.destroy();
-    java.util.Arrays.fill(rawKey, (byte) 0);
+import org.rssys.gost.api.Digest;
+
+byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
+
+byte[] hash256 = Digest.digest256(data); // Стрибог-256, 32 байта
+byte[] hash512 = Digest.digest512(data); // Стрибог-512, 64 байта
+----
+
+.Хэш потока: данные обрабатываются порциями, без накопления в памяти
+[source,java]
+----
+import org.rssys.gost.api.Digest;
+
+byte[] hash;
+try (Digest digest = new Digest(Digest.Algorithm.STREEBOG_256);
+     InputStream in = Files.newInputStream(Path.of("data.bin"))) {
+    byte[] buf = new byte[8192];
+    int n;
+    while ((n = in.read(buf)) != -1) {
+        digest.update(buf, 0, n);
+    }
+    hash = digest.digest();
 }
 ----
-.Конвертация между `SymmetricKey` и `GostSecretKey`
+
+Для Стрибога-512 используйте `Digest.Algorithm.STREEBOG_512`. `Digest` реализует `AutoCloseable`: `close()` вызывает `destroy()`. Экземпляр не потокобезопасен: создавайте отдельный экземпляр на каждый поток.
+
+=== HMAC-Стрибог (RFC 7836)
+
+HMAC — код аутентификации сообщений на основе хэш-функции «Стрибог». Требует симметричного ключа. Два варианта: HMAC-Streebog-256 (32 байта) и HMAC-Streebog-512 (64 байта).
+
+.HMAC данных в памяти
 [source,java]
 ----
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.cipher.SymmetricKey;
-import org.rssys.gost.jca.key.GostSecretKey;
 
-// api/ → JCA: SymmetricKey → GostSecretKey
-SymmetricKey symKey = ...; // из api/
-GostSecretKey jcaKey = new GostSecretKey("Kuznyechik", symKey); // <1>
+SymmetricKey key = ...; // выработан ранее
+byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
 
-// JCA → api/: GostSecretKey → SymmetricKey
-GostSecretKey jcaKey2 = ...; // из JCA
-SymmetricKey symKey2 = jcaKey2.toSymmetricKey(); // <1>
+byte[] mac256 = Digest.hmac256(data, key);
+byte[] mac512 = Digest.hmac512(data, key);
 ----
-<1> Конвертация создаёт копию ключевых байт.
-Уничтожение одного объекта не влияет на другой — вызывайте `destroy()` на обоих.
 
-=== Шифрование данных
+.HMAC потока
+[source,java]
+----
+import org.rssys.gost.api.Digest;
+import org.rssys.gost.cipher.SymmetricKey;
 
-Все алгоритмы используют шифр Кузнечик (ГОСТ Р 34.12-2015) с ключом 256 бит.
-Ключи считаются выработанными на предыдущем шаге (см. раздел «Управление симметричными ключами»).
+SymmetricKey key = ...; // выработан ранее
+byte[] mac;
+try (Digest hmac = new Digest(Digest.Algorithm.HMAC_256, key); // затирает ipad и opad
+     InputStream in = Files.newInputStream(Path.of("data.bin"))) {
+    byte[] buf = new byte[8192];
+    int n;
+    while ((n = in.read(buf)) != -1) {
+        hmac.update(buf, 0, n);
+    }
+    mac = hmac.digest();
+}
+----
 
-==== Выбор алгоритма
+Для HMAC-512 используйте `Digest.Algorithm.HMAC_512`.
 
-В таблице приведены только некоторые режимы, рекомендуемые для начала, обеспечивающие безопасную работу.
-Под API в таблице понимается или `org.rssys.gost.api` или `org.rssys.gost.jca`
+==== Проверка HMAC
 
-[cols="3,1,2", options="header"]
+HMAC вычисляет получатель; пришедшее значение передаётся только вторым аргументом `verifyMac`. Сравнение идёт за постоянное время; `null`, пустое значение и значения разной длины не равны (`false`). Не сравнивайте через `Arrays.equals`: время сравнения зависит от места первого расхождения.
+
+[source,java]
+----
+import org.rssys.gost.api.CmacApi;
+import org.rssys.gost.api.Digest;
+
+byte[] computed = Digest.hmac256(data, key); // вычисляет получатель
+byte[] receivedHmac = ...;                  // пришло от отправителя
+boolean ok = CmacApi.verifyMac(computed, receivedHmac);
+----
+
+Проверка CMAC устроена так же; отличие только в усечении — см. раздел «CMAC-Кузнечик».
+
+=== CMAC-Кузнечик (ГОСТ Р 34.13-2015)
+
+CMAC — имитовставка на основе блочного шифра Кузнечик. Полный тег — 16 байт (размер блока); допускается усечение до длины от 1 до 16 байт.
+
+В ГОСТ Р 34.13-2015 результат называется имитовставкой; в руководстве он же называется тегом (MAC) — это одно и то же значение, термин «тег» здесь не означает ничего другого.
+
+Длину проверяемого тега задаёт получатель, а не входящее значение: иначе проверку можно ослабить до одного байта.
+
+NOTE: CMAC строится на блочном шифре (Кузнечик), HMAC — на хэш-функции (Стрибог). Это разные алгоритмы с разной областью применения.
+
+.CMAC данных в памяти
+[source,java]
+----
+import org.rssys.gost.api.CmacApi;
+import org.rssys.gost.cipher.SymmetricKey;
+
+SymmetricKey key = ...; // выработан ранее
+byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
+
+byte[] tag = CmacApi.cmac(data, key);     // полный тег, 16 байт
+byte[] tag8 = CmacApi.cmac(data, key, 8); // усечённый тег: первые 8 байт полного
+
+// проверка: длину ожидаемого тега задаёт получатель
+boolean ok = CmacApi.verifyMac(CmacApi.cmac(data, key, 8), receivedTag);
+----
+
+.CMAC потока
+[source,java]
+----
+import org.rssys.gost.api.CmacApi;
+import org.rssys.gost.cipher.SymmetricKey;
+
+SymmetricKey key = ...; // выработан ранее
+byte[] tag;
+try (CmacApi cmac = new CmacApi(key); // затирает расписание ключа и подключи
+     InputStream in = Files.newInputStream(Path.of("data.bin"))) {
+    byte[] buf = new byte[8192];
+    int n;
+    while ((n = in.read(buf)) != -1) {
+        cmac.update(buf, 0, n);
+    }
+    tag = cmac.digest(); // 16 байт
+}
+----
+
+Экземпляр `CmacApi` не потокобезопасен; `close()` вызывает `destroy()`. Создавайте отдельный экземпляр на каждый поток.
+
+=== Шифрование с аутентификацией
+
+Все алгоритмы используют шифр Кузнечик (ГОСТ Р 34.12-2015) с ключом 256 бит. Ключи выработаны на предыдущем шаге (см. раздел «Ключи»).
+
+[cols="2,3,1,1,2", options="header"]
 |===
-|Сценарий | Доступность в API |Алгоритм в API / JCA
-|Шифрование блока данных аутентификацией и контролем целостности, +
-ГОСТ Р 34.13-2015 CTR+CMAC
-|`api`
-|`AuthenticatedCipher` +
+|Класс |Формат |Накладные расходы |AAD |Для чего
 
-|Шифрование блока данных +
-(без аутентификации и без контроля целостности) +
-ГОСТ Р 34.13-2015 CTR
+|`AuthenticatedCipher`
+|`[версия 1][соль 16][CMAC 16][шифртекст]`
+|33 байта
+|да
+|данные в памяти, свои ключи на каждое сообщение, пара к `AuthenticatedStream`
 
-|`api` / JCA
-|`Cipher(CTR)` / `Kuznyechik/CTR/NoPadding`
-|Потоковое шифрование (файл или сокет) с аутентификацией и контролем целостности +
-ГОСТ Р 34.13-2015 CTR+CMAC
-|`api`
+|`MgmCipher`
+|`[ICN 16][шифртекст][тег 16]`
+|32 байта
+|да
+|данные в памяти, стандарт RFC 9058 и обмен с другими реализациями ГОСТ
+
 |`AuthenticatedStream`
-|Файл или сокет без аутентификации
-|`api` / JCA
-|`Cipher.encryptingStream` / `CipherOutputStream`
-
-|Шифрование буфера с аутентификацией целостности +
-(не ГОСТ, но носит рекомендательный характер)
-|`api` / JCA
-|`MgmCipher` / `Kuznyechik/MGM/NoPadding`
-
+|заголовок потока и чанки с собственным CMAC
+|21 байт на поток и 21 байт на чанк
+|да
+|файлы, сокеты, большие данные
 |===
 
-==== Шифрование буфера
+==== AuthenticatedCipher: данные в памяти
 
-===== org.rssys.gost.api
+Схема Encrypt-then-MAC: для каждого сообщения из мастер-ключа и случайной 16-байтной соли через KDF_TREE выводятся два независимых ключа (CMAC и CTR); тег проверяется до расшифрования. Соль генерируется внутри `seal`. Композиция собственная, не стандартизована: примитивы стандартные, а формат пакета и метка KDF определены в библиотеке. Для обмена со сторонними системами используйте CMS или PBES2.
 
+Мастер-ключ используется только для этого API. Безопасно не более ≈2⁴⁸ сообщений на один ключ (вероятность совпадения соли ≈2⁻³³); около 50 % вероятность совпадения достигается к ≈2⁶⁴ сообщениям.
 
-.AuthenticatedCipher — CTR + CMAC (ГОСТ Р 34.13-2015) с аутентификацией и контролем целостности данных.
+Состояния нет, поэтому API не защищает от повтора пакета, переупорядочивания и замены пакета другим валидным пакетом под тем же ключом и тем же AAD. Внешний AAD (см. ниже) привязывает пакет к контексту, но повтор сам не обнаруживает: чтобы обнаружить его, положите в AAD номер сообщения и ведите счётчик.
 
-AuthenticatedCipher — это строительный блок, т.е. вам нужно понимать что вы делаете и как его применять. В случае неверного применения есть риск потери конфиденциальности данных.
+Чем отличается от `MgmCipher`: `MgmCipher` — стандарт (RFC 9058), его выбирают для обмена со сторонними реализациями ГОСТ. `AuthenticatedCipher` — собственная конструкция библиотеки: у каждого сообщения свои ключи CMAC и CTR, и она использует тот же приём, что `AuthenticatedStream`, поэтому файлы и сообщения шифруются одним способом. Формат внутренний, для обмена не предназначен.
 
-Если не хочется вникать в детали — *используйте `AuthenticatedStream`, который рекомендуется для большинства задач* шифрования потоков байтов и файлов, (но не для TLS) и избавляет от знания нюансов криптографии.
+Если не хочется разбираться в деталях схемы, используйте `AuthenticatedStream`: он годится и для файлов, и для данных в памяти, а обо всех нюансах заботится сам.
+
+[source,java]
+----
+import org.rssys.gost.api.AuthenticatedCipher;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.util.AuthenticationException;
+
+SymmetricKey key = ...; // ваш мастер-ключ; destroy() — когда он больше не нужен (см. «Ключи»)
+byte[] plaintext = "открытые данные".getBytes(StandardCharsets.UTF_8);
+
+// соль генерируется автоматически; тег считается от версии, соли и шифртекста
+byte[] packet = AuthenticatedCipher.seal(plaintext, key);
+
+try {
+    byte[] decrypted = AuthenticatedCipher.open(packet, key);
+} catch (AuthenticationException e) {
+    // CMAC не совпал: данные повреждены или изменены
+}
+----
+
+===== Что такое AAD и что в него класть
+
+AAD (Associated Authenticated Data, «ассоциированные данные») — это короткая подпись контекста, к которому относится сообщение. Библиотека не шифрует AAD и не кладёт его в пакет: она лишь проверяет, что при расшифровании вы назвали то же самое, что при шифровании. Пакет, зашифрованный с одним AAD, не откроется с другим, даже если ключ верный. Получатель должен знать AAD сам, откуда-то ещё: из имени файла, из заголовка вашего протокола, из таблицы в базе.
+
+Зачем это нужно. Без AAD библиотека замечает порчу содержимого пакета, но не замечает замену одного настоящего пакета другим, зашифрованным тем же ключом: например, приложению могут передать ведомость вместо накладной, и оба пакета пройдут проверку. AAD закрывает такую замену: пакет «накладная» открывается только там, где ожидается именно эта накладная.
+
+Что можно класть в AAD:
+
+* имя файла или путь («report-2026.pdf»): зашифрованный файл нельзя незаметно переименовать или выдать за другой файл;
+* идентификатор получателя или отправителя («user-42»): сообщение для одного адресата не откроется у другого;
+* версия или тип данных («invoice/v2»): данные одного типа не примут за данные другого;
+* номер сообщения или время («msg-000125»): если приложение ведёт счётчик, повтор старого сообщения обнаруживается;
+* поля заголовка вашего протокола, которые передаются открыто, но должны быть защищены от изменения.
+
+Что в AAD не класть: секреты (пароли, ключи) и большие объёмы данных. AAD не шифруется и должен быть коротким контекстом, а не самими данными. Если AAD состоит из нескольких полей, соединяйте их однозначно: например, «user-42|invoice/v2» разделяйте символом, который не встречается в самих полях, или записывайте длину перед каждым полем. Иначе пары («ab», «c») и («a», «bc») дадут одну и ту же строку.
+
+AAD «нет» можно выразить любым из трёх способов: вызовом без параметра, пустым массивом или `null`. Все три вызова равнозначны: соль случайна, поэтому два вызова дают разные пакеты, но открываются они одинаково.
 
 [source,java]
 ----
@@ -287,28 +485,38 @@ import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.AuthenticationException;
 
 SymmetricKey key = ...; // выработан ранее
-byte[] plaintext  = "открытые данные".getBytes(StandardCharsets.UTF_8);
+byte[] plaintext = "сумма к оплате: 1000 руб.".getBytes(StandardCharsets.UTF_8);
 
-// Шифрование: IV генерируется автоматически
-// Формат пакета: [IV (8 байт)] [CMAC(ciphertext) (16 байт)] [шифртекст]
-byte[] packet = AuthenticatedCipher.seal(plaintext, key);
+// Пример 1. AAD - идентификатор документа. Он нигде не записан в пакете
+byte[] aad = "invoice-2026-0417".getBytes(StandardCharsets.UTF_8);
+byte[] packet = AuthenticatedCipher.seal(plaintext, key, aad);
 
-// Расшифрование
+// Расшифровать можно только с тем же AAD
+byte[] decrypted = AuthenticatedCipher.open(packet, key, aad);
+
+// Другой документ, тот же ключ: проверка не пройдена
+byte[] otherAad = "invoice-2026-0418".getBytes(StandardCharsets.UTF_8);
 try {
-    byte[] decrypted = AuthenticatedCipher.open(packet, key);
+    AuthenticatedCipher.open(packet, key, otherAad);
 } catch (AuthenticationException e) {
-    // CMAC не совпал: данные повреждены или подменены
-} finally {
-    key.destroy();
+    // ключ верный, но пакет предназначался другому документу
 }
+
+// Пример 2. AAD - получатель и тип данных, склеенные однозначно
+byte[] recipientAad = "user-42|invoice/v2".getBytes(StandardCharsets.UTF_8);
+byte[] forUser42 = AuthenticatedCipher.seal(plaintext, key, recipientAad);
+
+// Пример 3. AAD - номер сообщения: приложение хранит счётчик и принимает только ожидаемый номер
+long messageNumber = 125;
+byte[] counterAad = ByteBuffer.allocate(8).putLong(messageNumber).array();
+byte[] numbered = AuthenticatedCipher.seal(plaintext, key, counterAad);
 ----
 
-.MgmCipher — AEAD без AAD.
+==== MgmCipher: данные в памяти, с AAD
 
-Это альтернатива AuthenticatedCipher, там тоже Кузнечик, но используется другой режим.
+MGM (RFC 9058) — другой режим с аутентификацией для того же Кузнечика; в отличие от `AuthenticatedCipher` стандартизован и подходит для обмена со сторонними реализациями ГОСТ. ICN (уникальный номер сообщения) генерируется внутри `seal` и записывается в начало пакета. Что такое AAD и что в него класть, см. выше, в разделе про `AuthenticatedCipher`: смысл параметра `aad` одинаков.
 
-MgmCipher также  является строительным блоком, вам нужно понимать, что вы делаете. Если не хочется вникать в детали — *используйте `AuthenticatedStream`, который рекомендуется для большинства задач* шифрования потоков байтов и файлов, но не для TLS.
-
+.Без AAD
 [source,java]
 ----
 import org.rssys.gost.api.MgmCipher;
@@ -316,24 +524,18 @@ import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.AuthenticationException;
 
 SymmetricKey key = ...; // выработан ранее
-byte[] plaintext  = "открытые данные".getBytes(StandardCharsets.UTF_8);
+byte[] plaintext = "открытые данные".getBytes(StandardCharsets.UTF_8);
 
-// Шифрование — ICN генерируется автоматически, шифр "Кузнечик"
-// Формат пакета: [ICN (16 байт)] [шифртекст] [тег (16 байт)]
-byte[] packet = MgmCipher.seal(plaintext, key);
+byte[] packet = MgmCipher.seal(plaintext, key); // [ICN 16][шифртекст][тег 16]
 
-// Расшифрование
 try {
     byte[] decrypted = MgmCipher.open(packet, key);
 } catch (AuthenticationException e) {
-    // Тег не совпал: данные повреждены или подменены
+    // тег не совпал или пакет некорректен (короче минимального, недопустимый ICN)
 }
 ----
 
-.MgmCipher — AEAD с AAD (ассоциированные данные).
-
-Этот режим также является строительным блоком и необходимо понимание, как его встраивать и использовать.
-
+.С AAD
 [source,java]
 ----
 import org.rssys.gost.api.MgmCipher;
@@ -341,818 +543,123 @@ import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.AuthenticationException;
 
 SymmetricKey key = ...; // выработан ранее
-byte[] plaintext  = "открытые данные".getBytes(StandardCharsets.UTF_8);
-byte[] aad        = "заголовок сообщения".getBytes(StandardCharsets.UTF_8);
+byte[] plaintext = "открытые данные".getBytes(StandardCharsets.UTF_8);
+byte[] aad = "заголовок сообщения".getBytes(StandardCharsets.UTF_8);
 
-// см. ниже про AAD
-// Шифрование: AAD аутентифицируется, но не шифруется и не включается в пакет
+// AAD аутентифицируется, но не шифруется и не входит в пакет
 byte[] packet = MgmCipher.seal(plaintext, key, aad);
 
-// Расшифрование: AAD должен совпадать с переданным при шифровании
+// при расшифровании AAD должен совпадать с переданным при шифровании
 try {
     byte[] decrypted = MgmCipher.open(packet, key, aad);
 } catch (AuthenticationException e) {
-    // Тег не совпал: данные или AAD повреждены / подменены
-} finally {
-    key.destroy();
+    // тег не совпал или пакет некорректен
 }
 ----
-AAD — любые данные (заголовок, метаданные, идентификатор сессии и т.д.), которые нужно включить в процесс аутентификации вместе с шифртекстом, но не шифровать и передать в открытом виде.
 
+AAD — любые данные (заголовок, метаданные, идентификатор сессии), которые нужно включить в проверку вместе с шифртекстом, но не шифровать и передавать в открытом виде. Пустой открытый текст при пустом AAD отвергается: тег такого сообщения не зависит от ICN (RFC 9058 §6).
 
-.Cipher — CTR без аутентификации
-[source,java]
-----
-import org.rssys.gost.api.Cipher;
-import org.rssys.gost.cipher.SymmetricKey;
+IMPORTANT: `MgmCipher.sealWithIcn` принимает ICN от вызывающего и нужен только для проверки по контрольным векторам. Повтор ICN под одним ключом полностью раскрывает защиту; в прикладном коде используйте `seal`.
 
-SymmetricKey key = ...; // выработан ранее
-byte[] plaintext  = "данные".getBytes(StandardCharsets.UTF_8);
+==== AuthenticatedStream: файлы и сокеты
 
-// Шифрование: IV (8 байт) генерируется автоматически и включается в начало результата
-// Формат результата: [IV (8 байт)] [шифртекст]
-byte[] encrypted = Cipher.encrypt(plaintext, key, Cipher.Mode.CTR);
+`AuthenticatedStream` — рекомендуемый способ шифровать потоки байтов и файлы с проверкой целостности (но не для TLS). Он защищает от типичных ошибок: перестановка и дублирование чанков, усечение потока. Его можно использовать и для данных в памяти.
 
-// Расшифрование: IV извлекается автоматически из начала массива
-byte[] decrypted = Cipher.decrypt(encrypted, key, Cipher.Mode.CTR);
-key.destroy();
-----
-NOTE: Режим CTR без аутентификации не защищает от подмены данных.
-Если целостность важна — используйте `AuthenticatedCipher` (ГОСТ Р 34.13-2015)
-или `MgmCipher` (Р 1323565.1.026-2019, рекомендация).
-
-===== JCA (org.rssys.gost.jca)
-
-.Kuznyechik/CTR/NoPadding — без аутентификации и контроля целостности данных.
-
-Строительный блок, который требует понимания в использовании.
-
-[source,java]
-----
-import javax.crypto.Cipher;
-import javax.crypto.spec.IvParameterSpec;
-import org.rssys.gost.jca.key.GostSecretKey;
-GostSecretKey key = ...; // выработан ранее
-
-byte[] plaintext = "данные".getBytes(StandardCharsets.UTF_8);
-
-// Шифрование: IV (8 байт) генерируется автоматически
-Cipher cipher = Cipher.getInstance("Kuznyechik/CTR/NoPadding", "RssysGostProvider");
-cipher.init(Cipher.ENCRYPT_MODE, key);
-byte[] ciphertext = cipher.doFinal(plaintext);
-byte[] iv         = cipher.getIV(); // <1>
-
-// Расшифрование
-cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(iv));
-byte[] decrypted = cipher.doFinal(ciphertext);
-key.destroy();
-----
-<1> IV необходимо передать получателю вместе с `ciphertext`.
-
-NOTE: Режим CTR без аутентификации не защищает от подмены данных.
-Если целостность важна — используйте `AuthenticatedCipher` / `AuthenticatedStream` из `org.rssys.gost.api` (ГОСТ Р 34.13-2015)
-или `Kuznyechik/MGM/NoPadding` (Р 1323565.1.026-2019).
-
-
-.Kuznyechik/MGM/NoPadding — AEAD без AAD
-
-Строительный блок, который требует понимания в использовании.
-
-[source,java]
-----
-import javax.crypto.Cipher;
-import javax.crypto.spec.IvParameterSpec;
-import org.rssys.gost.jca.key.GostSecretKey;
-
-GostSecretKey key = ...; // выработан ранее
-byte[] plaintext = "открытые данные".getBytes(StandardCharsets.UTF_8);
-
-// Шифрование: ICN генерируется автоматически
-Cipher cipher = Cipher.getInstance("Kuznyechik/MGM/NoPadding", "RssysGostProvider");
-cipher.init(Cipher.ENCRYPT_MODE, key);
-byte[] ciphertext = cipher.doFinal(plaintext); // [шифртекст][тег (16 байт)]
-byte[] icn        = cipher.getIV();            // <1>
-
-// Расшифрование
-cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
-try {
-    byte[] decrypted = cipher.doFinal(ciphertext);
-} catch (javax.crypto.AEADBadTagException e) {
-    // Тег не совпал: данные повреждены или подменены
-} finally {
-    key.destroy();
-}
-----
-<1> ICN необходимо передать получателю вместе с `ciphertext`.
-В отличие от `MgmCipher.seal`, JCA не включает ICN в выходной буфер автоматически.
-
-.Kuznyechik/MGM/NoPadding — AEAD с AAD
-[source,java]
-----
-import javax.crypto.Cipher;
-import javax.crypto.spec.IvParameterSpec;
-import org.rssys.gost.jca.key.GostSecretKey;
-
-GostSecretKey key = ...; // выработан ранее
-byte[] plaintext = "открытые данные".getBytes(StandardCharsets.UTF_8);
-byte[] aad       = "заголовок".getBytes(StandardCharsets.UTF_8);
-
-// Шифрование
-Cipher cipher = Cipher.getInstance("Kuznyechik/MGM/NoPadding", "RssysGostProvider");
-cipher.init(Cipher.ENCRYPT_MODE, key);
-cipher.updateAAD(aad);                          // <1>
-byte[] ciphertext = cipher.doFinal(plaintext);
-byte[] icn        = cipher.getIV();
-
-// Расшифрование
-cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
-cipher.updateAAD(aad);                          // <1>
-try {
-    byte[] decrypted = cipher.doFinal(ciphertext);
-} catch (javax.crypto.AEADBadTagException e) {
-    // Тег не совпал
-} finally {
-    key.destroy();
-}
-----
-<1> `updateAAD` должен вызываться до `doFinal`. AAD при шифровании и расшифровании должен совпадать.
-
-
-==== Потоковое шифрование (файл / сокет)
-
-===== org.rssys.gost.api
-
-.AuthenticatedStream — предназначен для потокового шифрования сокета/файла с аутентификацией и контролем целостности данных (рекомендуется для большинства задач).
-
-Можно использовать этот режим для шифрования буфера данных в памяти.
-
-AuthenticatedStream  представляет высокоуровневый интерфейс, который спроектирован так, что закрывает все возможные атаки на использование режимов шифрования и избавляет от знания нюансов криптографии.
+Мастер-ключ — ключ Кузнечика ровно 32 байта; ключ другой длины отвергается с `IllegalArgumentException`.
 
 [source,java]
 ----
 import org.rssys.gost.api.AuthenticatedStream;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.AuthenticationException;
-import java.io.*;
-import java.nio.file.*;
+import org.rssys.gost.util.AuthenticationIOException;
 
 SymmetricKey key = ...; // выработан ранее
 
-// Шифрование файла
-Path src       = Path.of("plaintext.bin");
+// шифрование файла
+Path src = Path.of("plaintext.bin");
 Path encrypted = Path.of("encrypted.bin");
-try (InputStream  in  = Files.newInputStream(src);
+try (InputStream in = Files.newInputStream(src);
      OutputStream raw = Files.newOutputStream(encrypted);
-     OutputStream out = AuthenticatedStream.sealing(raw, key)) { // <1>
+     OutputStream out = AuthenticatedStream.sealing(raw, key)) {
     in.transferTo(out);
 }
 
-// Расшифрование файла
+// расшифрование файла
 Path decrypted = Path.of("decrypted.bin");
-try (InputStream  raw = Files.newInputStream(encrypted);
-     InputStream  in  = AuthenticatedStream.opening(raw, key);  // <2>
+try (InputStream raw = Files.newInputStream(encrypted);
+     InputStream in = AuthenticatedStream.opening(raw, key);
      OutputStream out = Files.newOutputStream(decrypted)) {
     in.transferTo(out);
-} catch (AuthenticationException e) {
-    // CMAC чанка не совпал: файл повреждён или подменён
+} catch (AuthenticationException | AuthenticationIOException e) {
+    // заголовок или CMAC чанка не совпал, поток усечён: файл повреждён или изменён
 } catch (IOException e) {
-    if (e.getCause() instanceof AuthenticationException) {
-        // CMAC чанка не совпал: файл повреждён или подменён
-    }
+    // обычная ошибка ввода-вывода, не признак повреждения данных: можно повторить
     throw e;
-} finally {
-    key.destroy();
 }
 ----
-<1> `sealing` записывает заголовок потока и шифрует данные чанками по 64 КБ.
-Каждый чанк содержит собственный IV и CMAC с порядковым номером — усечение,
-перестановка и дублирование чанков обнаруживаются автоматически.
-Максимальный размер чанка — 1 МБ.
-<2> `opening` проверяет CMAC каждого чанка до возврата данных вызывающему.
-+
-Каждый поток выводит два независимых ключа
-(`cmacKey` для CMAC и `ctrKey` для CTR) через KDF_TREE_GOSTR3411_2012_256
-из мастер-ключа и случайного streamNonce.
 
-NOTE: При использовании `AuthenticatedStream` один мастер-ключ можно безопасно
-использовать для произвольного числа потоков и объемов данных. Производные ключи разных потоков вычислительно независимы. Компрометация одного потока не затрагивает остальные.
-
-.Cipher.encryptingStream / decryptingStream — CTR без аутентификации.
-
-Строительный блок, который требует понимания в использовании.
+Чтобы привязать файл к контексту, передайте AAD последним параметром `sealing` и `opening`. Что такое AAD и что в него класть, см. выше, в разделе про `AuthenticatedCipher`.
 
 [source,java]
 ----
-import org.rssys.gost.api.Cipher;
+import org.rssys.gost.api.AuthenticatedStream;
 import org.rssys.gost.cipher.SymmetricKey;
-import java.io.*;
-import java.nio.file.*;
 
 SymmetricKey key = ...; // выработан ранее
 
-// Шифрование: IV (8 байт) записывается в поток автоматически первым
-Path src       = Path.of("plaintext.bin");
-Path encrypted = Path.of("encrypted.bin");
-try (InputStream  in  = Files.newInputStream(src);
-     OutputStream raw = Files.newOutputStream(encrypted);
-     OutputStream out = Cipher.encryptingStream(raw, key, Cipher.Mode.CTR)) {
+// AAD - короткий контекст, к которому относится файл. В файл он не записывается,
+// поэтому при расшифровании его нужно знать заново
+byte[] aad = "report-2026.pdf|user-42".getBytes(StandardCharsets.UTF_8);
+
+try (InputStream in = Files.newInputStream(Path.of("report-2026.pdf"));
+     OutputStream raw = Files.newOutputStream(Path.of("report.enc"));
+     OutputStream out = AuthenticatedStream.sealing(raw, key, aad)) {
     in.transferTo(out);
 }
 
-// Расшифрование: IV читается из потока автоматически
-Path decrypted = Path.of("decrypted.bin");
-try (InputStream  raw = Files.newInputStream(encrypted);
-     InputStream  in  = Cipher.decryptingStream(raw, key, Cipher.Mode.CTR);
-     OutputStream out = Files.newOutputStream(decrypted)) {
+// Тот же AAD при чтении. Неверный AAD обнаруживается при чтении первого чанка:
+// read() бросает AuthenticationIOException, как и при неверном ключе
+try (InputStream raw = Files.newInputStream(Path.of("report.enc"));
+     InputStream in = AuthenticatedStream.opening(raw, key, aad);
+     OutputStream out = Files.newOutputStream(Path.of("report-decrypted.pdf"))) {
     in.transferTo(out);
-} finally {
-    key.destroy();
-}
-----
-NOTE: CTR без аутентификации не обнаруживает повреждение или подмену данных.
-Для потоков с требованием целостности используйте `AuthenticatedStream`.
-
-===== JCA (org.rssys.gost.jca)
-
-.CipherOutputStream / CipherInputStream — CTR без аутентификации и контроля целостности данных.
-
-CipherOutputStream / CipherInputStream это строительные блоки, которые требуют понимания в использовании.
-
-[source,java]
-----
-import javax.crypto.Cipher;
-import javax.crypto.CipherInputStream;
-import javax.crypto.CipherOutputStream;
-import javax.crypto.spec.IvParameterSpec;
-import org.rssys.gost.jca.key.GostSecretKey;
-import java.io.*;
-import java.nio.file.*;
-
-GostSecretKey key = ...; // выработан ранее
-Cipher cipher = Cipher.getInstance("Kuznyechik/CTR/NoPadding", "RssysGostProvider");
-
-// Шифрование: IV генерируется автоматически, записываем его явно перед шифртекстом
-Path src       = Path.of("plaintext.bin");
-Path encrypted = Path.of("encrypted.bin");
-cipher.init(Cipher.ENCRYPT_MODE, key);
-byte[] iv = cipher.getIV(); // <1>
-try (InputStream        in  = Files.newInputStream(src);
-     OutputStream       raw = Files.newOutputStream(encrypted)) {
-    raw.write(iv);                               // <1>
-    try (OutputStream out = new CipherOutputStream(raw, cipher)) {
-        in.transferTo(out);
-    }
 }
 
-// Расшифрование: читаем IV явно из начала потока
-Path decrypted = Path.of("decrypted.bin");
-try (InputStream  raw = Files.newInputStream(encrypted)) {
-    byte[] ivRead = raw.readNBytes(iv.length);   // <1>
-    cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(ivRead));
-    try (InputStream  in  = new CipherInputStream(raw, cipher);
-         OutputStream out = Files.newOutputStream(decrypted)) {
-        in.transferTo(out);
-    }
-} finally {
-    key.destroy();
-}
-----
-<1> JCA не управляет IV автоматически в потоковом API — приложение отвечает за
-запись и чтение IV из потока.
-
-NOTE: Для потоков с аутентификацией целостности используйте `AuthenticatedStream`
-из `org.rssys.gost.api`.
-
-
-=== Режимы CTR-ACPKM и CTR-ACPKM-OMAC (PBES2, RFC 9337 §7.3)
-
-**Данные режимы являются строительными блоками и требуется понимание их использования.
-**
-
-
-NOTE: Оба режима доступны только через JCA-интерфейс (`Cipher.getInstance`).
-В `api.Cipher.Mode` эти режимы не представлены.
-
-==== Когда использовать какой режим
-
-[cols="1,2,2,1,1", options="header"]
-|===
-|Режим |Когда использовать |Аутентификация |Потоковый update |Буферизует всё
-
-|`CTR-ACPKM`
-|Потоковое шифрование, большие файлы.
-Аутентификация — отдельно.
-|Нет
-|✓ — да
-|❌ — нет
-
-|`CTR-ACPKM-OMAC`
-|Файлы с аутентификацией (Encrypt-then-MAC).
-Данные помещаются в память.
-|Да (OMAC-тег)
-|❌ — нет
-|✓ — да
-|===
-
-Практическое следствие из таблицы:
-
-- **Только `CTR-ACPKM`** (без OMAC) подходит для потокового шифрования через
-`CipherOutputStream` / `update` — данные шифруются порциями без буферизации.
-- **`CTR-ACPKM-OMAC` и `MGM`** буферизуют весь plaintext в памяти до вызова
-`doFinal`. Используйте их только когда данные помещаются в память целиком.
-
-IMPORTANT: `engineUpdate` буферизует все данные — реальное шифрование происходит
-только в `doFinal`. Не используйте этот режим через `CipherOutputStream` для больших файлов.
-
-==== Ключевые понятия
-
-**UKM (User Keying Material)** — нонс, аналог IV.
-Его нельзя повторять с тем же ключом — повтор UKM полностью компрометирует шифрование.
-
-- `CTR-ACPKM`: UKM ≥ 8 байт (первые 8 байт используются как IV счётчика)
-- `CTR-ACPKM-OMAC`: UKM = ровно 16 байт (используется в KDF_TREE для вывода
-пары ключей: ключа шифрования и ключа OMAC)
-
-**UKM при расшифровании** необходимо передавать явно через `IvParameterSpec` —
-он должен совпадать с тем что был при шифровании.
-После шифрования UKM можно получить через `cipher.getIV()`.
-
-==== CTR-ACPKM — потоковое шифрование
-
-Строительный блок, который требует понимания в использовании.
-
-`engineUpdate` шифрует данные немедленно — подходит для `CipherOutputStream`
-и обработки данных порциями без буферизации.
-
-.Шифрование (UKM генерируется автоматически)
-[source,java]
-----
-import javax.crypto.Cipher;
-import javax.crypto.SecretKey;
-import javax.crypto.spec.IvParameterSpec;
-
-SecretKey key = ...; // 32-байтный ключ Кузнечика
-Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM/NoPadding", "RssysGostProvider");
-
-// UKM генерируется автоматически при отсутствии IvParameterSpec
-cipher.init(Cipher.ENCRYPT_MODE, key);
-byte[] ukm = cipher.getIV(); // <1>
-
-byte[] plaintext  = ...;
-byte[] ciphertext = cipher.doFinal(plaintext);
-
-// ukm и ciphertext передать получателю вместе
-----
-<1> UKM (≥ 8 байт) генерируется автоматически из `CryptoRandom`.
-Сохраните его — без него расшифрование невозможно. Передавайте открыто рядом с шифртекстом.
-
-.Шифрование с явным UKM
-Строительный блок, который требует понимания в использовании.
-
-
-[source,java]
-----
-import org.rssys.gost.util.CryptoRandom;
-
-byte[] ukm = new byte[8];
-CryptoRandom.INSTANCE.nextBytes(ukm); // каждый раз новый UKM
-
-Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM/NoPadding", "RssysGostProvider");
-cipher.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(ukm));
-byte[] ciphertext = cipher.doFinal(plaintext);
+// Другие примеры AAD для потока:
+//   идентификатор получателя:   "user-42".getBytes(UTF_8)   - файл откроет только его получатель
+//   тип и версия формата:       "backup/v3".getBytes(UTF_8) - резервную копию не примут за другой тип
+//   сеанс и направление:        "session-9f2c|client->server".getBytes(UTF_8)
 ----
 
-.Расшифрование
-[source,java]
-----
-byte[] ukm        = ...; // тот же UKM что при шифровании
-byte[] ciphertext = ...;
+Как это устроено:
 
-Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM/NoPadding", "RssysGostProvider");
-cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(ukm)); // <1>
-byte[] plaintext = cipher.doFinal(ciphertext);
-----
-<1> При расшифровании `IvParameterSpec` обязателен.
+* `sealing` записывает заголовок потока и шифрует данные чанками по 64 КиБ (`AuthenticatedStream.DEFAULT_CHUNK_SIZE`). Размер чанка допустим от 16 байт до 1 МиБ и задаётся перегрузкой `sealing(out, key, chunkSize)`; недопустимое значение отвергается сразу.
+* Каждый чанк содержит собственный CMAC, в который входит порядковый номер чанка. Гамма CTR непрерывна по всему потоку, поэтому усечение, перестановка и дублирование чанков обнаруживаются автоматически.
+* Каждый поток выводит два независимых ключа (`cmacKey` для CMAC и `ctrKey` для CTR) через KDF_TREE_GOSTR3411_2012_256 из мастер-ключа и затравки: случайного 128-битного `streamNonce` из заголовка, а при непустом внешнем AAD вместе с ним (`streamNonce ‖ aad`). Поэтому формат потока от AAD не зависит, а при пустом AAD поток совпадает с потоком без AAD. Версия формата `0x03` — первый байт заголовка. Весь поток — одно сообщение в режиме CTR с нулевым IV: ключ CTR свой у каждого потока, счётчик не сбрасывается между чанками, поэтому гамма не повторяется внутри потока. Заголовок потока занимает 21 байт, заголовок чанка 21 байт.
 
-.Потоковое шифрование больших файлов через CipherOutputStream. Строительный блок, который требует понимания в использовании.
+Что поток гарантирует и чего не обещает:
 
-[source,java]
-----
-import java.io.InputStream;
-import java.io.OutputStream;
-import javax.crypto.CipherOutputStream;
-import org.rssys.gost.util.CryptoRandom;
+* `opening` проверяет CMAC каждого чанка до возврата данных вызывающему. Ошибка целостности при чтении приходит как `AuthenticationIOException` (наследник `IOException`); усечение потока в любом месте — тоже. Сообщение об отказе заканчивается позицией `[chunk N, plaintext offset M]`: номер чанка с нуля и смещение его открытого текста от начала данных (без заголовка потока); по нему в большом файле видно, где поток повреждён или оборван. До первого чанка (неполный заголовок потока) позиции нет. Прочие `IOException` нижнего потока передаются как есть.
+* Открытый текст выдаётся по мере проверки чанков, а об усечении читатель узнаёт только в конце: необратимые действия над данными делайте после того, как `read` вернул `-1`.
+* Неверный ключ и неверный внешний AAD обнаруживаются при чтении первого чанка, а не при `opening`. AAD в потоке не передаётся, его нужно знать до `opening`. У пустого потока отказ приходит при первом `read()`, который иначе вернул бы `-1`; если поток не читать, проверки нет.
+* `null` вместо AAD равнозначен пустому массиву и короткой форме без параметра. Обработка AAD добавляет два прохода HMAC-Стрибог по его байтам, поэтому AAD должен быть коротким.
+* Данные за последним чанком не читаются: защищённый поток можно встраивать в более длинный.
+* Перестановку и дублирование чанков внутри потока схема обнаруживает, а замену потока другим валидным потоком под тем же ключом и тем же AAD и повтор потока целиком — нет. Внешний AAD (имя файла, получатель, номер сообщения) привязывает поток к контексту, но повтор сам не обнаруживает: чтобы обнаружить его, положите в AAD номер сообщения и ведите счётчик.
+* Произвольного доступа (seek) нет: расшифрование чанка зависит от того, что все предыдущие прочитаны по порядку.
 
-byte[] ukm = new byte[8];
-CryptoRandom.INSTANCE.nextBytes(ukm);
+`sealing` возвращает `AuthenticatedStream.SealingStream`. Последний чанк пишет `close()` (он же закрывает нижний поток) либо `finish()`: `finish()` записывает последний чанк, делает `flush()` нижнего потока и затирает ключи потока, но нижний поток не закрывает, поэтому его закрывает тот, кто открыл. Это нужно, когда защищённый поток встроен в более длинный (сокет). `flush()` выталкивает только уже записанные полные чанки, неполный хвост уходит с `finish()` или `close()`. Читающий поток затирает ключи сразу после проверки последнего чанка, не дожидаясь `close()`. `close()` обоих потоков закрывает нижний поток, как у `FilterOutputStream` и `FilterInputStream`; чтение из закрытого `opening`-потока бросает `IOException`.
 
-Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM/NoPadding", "RssysGostProvider");
-cipher.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(ukm));
-
-OutputStream out = ...;
-out.write(ukm); // <1>
-
-try (CipherOutputStream cos = new CipherOutputStream(out, cipher);
-     InputStream in = ...) {
-    byte[] buf = new byte[65536];
-    int n;
-    while ((n = in.read(buf)) != -1) {
-        cos.write(buf, 0, n); // шифруется и пишется немедленно, без буферизации
-    }
-} // <2>
-----
-<1> UKM записывается в начало потока открытым текстом — при расшифровании читается первым.
-<2> `CipherOutputStream.close()` вызывает `doFinal` — для `CTR-ACPKM` без OMAC
-это no-op (нет тега), все данные уже записаны через `update`.
-
-==== CTR-ACPKM-OMAC — шифрование с аутентификацией (данные в памяти)
-
-Строительный блок, который требует понимания в использовании.
-
-Использует `KdfTreeGostR3411_2012_256` для вывода пары ключей из UKM:
-ключа шифрования и ключа OMAC. 16-байтный тег добавляется в конец шифртекста.
-
-IMPORTANT: `engineUpdate` буферизует все данные — реальное шифрование происходит
-только в `doFinal`. Не используйте этот режим через `CipherOutputStream` для больших файлов.
-
-.Шифрование
-[source,java]
-----
-import org.rssys.gost.util.CryptoRandom;
-
-byte[] ukm = new byte[16]; // <1>
-CryptoRandom.INSTANCE.nextBytes(ukm);
-
-Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM-OMAC/NoPadding", "RssysGostProvider");
-cipher.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(ukm));
-
-byte[] plaintext  = ...;
-byte[] ciphertext = cipher.doFinal(plaintext); // <2>
-----
-<1> UKM для CTR-ACPKM-OMAC — ровно 16 байт.
-<2> Длина `ciphertext` = `plaintext.length + 16` (тег в конце).
-
-.Расшифрование
-[source,java]
-----
-import javax.crypto.AEADBadTagException;
-
-byte[] ukm        = ...; // 16 байт, тот же что при шифровании
-byte[] ciphertext = ...;
-
-Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM-OMAC/NoPadding", "RssysGostProvider");
-cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(ukm));
-
-try {
-    byte[] plaintext = cipher.doFinal(ciphertext); // проверяет тег
-} catch (AEADBadTagException e) {
-    // данные повреждены или ключ/UKM неверны
-    throw new SecurityException("Аутентификация не прошла", e);
-}
-----
-
-NOTE: Алиасы для работы с OID из ASN.1: +
-`1.2.643.7.1.1.5.2.1` → `Kuznyechik/CTR-ACPKM/NoPadding` +
-`1.2.643.7.1.1.5.2.2` → `Kuznyechik/CTR-ACPKM-OMAC/NoPadding`
-
-=== Хэш-функция Стрибог (ГОСТ Р 34.11-2012)
-
-Стрибог — криптографическая хэш-функция в двух вариантах: 256 бит и 512 бит.
-
-Библиотека предоставляет два независимы API по вызову хеш-функций:
-
-* `org.rssys.gost.api` — прямой API, не требует регистрации провайдера.
-* `org.rssys.gost.jca` — JCA/JCE-совместимый API.
-
-NOTE: Результат хеширования - big-endian (MSB first) массив байт, совместимый с OpenSSL.
-RFC 6986 приводит тест-векторы в ГОСТ-нотации (right-to-left) —
-байты будут в обратном порядке при прямом сравнении.
-
-==== org.rssys.gost.api
-
-.Блочный режим хеширования данных. Хешируемые данные целиком в памяти.
-[source,java]
-----
-import org.rssys.gost.api.Digest;
-
-byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
-
-// Стрибог-256 (ГОСТ Р 34.11-2012), вывод 32 байта
-byte[] hash256 = Digest.digest256(data);
-
-// Стрибог-512 (ГОСТ Р 34.11-2012), вывод 64 байта
-byte[] hash512 = Digest.digest512(data);
-----
-
-.Инкрементальный режим хеширования. Данные из файла или сокета обрабатываются в потоковом режиме, без накопления в памяти.
-[source,java]
-----
-import org.rssys.gost.api.Digest;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-
-// Стрибог-256
-Digest h256 = new Digest(Digest.Algorithm.STREEBOG_256);
-byte[] buf = new byte[8192];
-int n;
-try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
-    while ((n = in.read(buf)) != -1) {
-        h256.update(buf, 0, n);
-    }
-}
-byte[] hash256 = h256.digest();
-
-// Стрибог-512
-Digest h512 = new Digest(Digest.Algorithm.STREEBOG_512);
-try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
-    while ((n = in.read(buf)) != -1) {
-        h512.update(buf, 0, n);
-    }
-}
-byte[] hash512 = h512.digest();
-----
-NOTE: Экземпляр `Digest` не является потокобезопасным.
-Создавайте отдельный экземпляр на каждый поток.
-
-==== JCA (org.rssys.gost.jca)
-
-.Блочный режим хеширования данных. Хешируемые данные целиком в памяти.
-[source,java]
-----
-import java.security.MessageDigest;
-
-// Стрибог-256
-MessageDigest md256 = MessageDigest.getInstance("GOST3411-2012-256", "RssysGostProvider"); // <1>
-byte[] hash256 = md256.digest(data);
-
-// Стрибог-512
-MessageDigest md512 = MessageDigest.getInstance("GOST3411-2012-512", "RssysGostProvider");
-byte[] hash512 = md512.digest(data);
-----
-<1> Алиасы: `"Streebog-256"`, `"1.2.643.7.1.1.2.2"` для 256-бит;
-`"Streebog-512"`, `"1.2.643.7.1.1.2.3"` для 512-бит.
-
-.Инкрементальный режим хеширования. Данные из файла или сокета обрабатываются в потоковом режиме, без накопления в памяти.
-[source,java]
-----
-import java.security.MessageDigest;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-
-MessageDigest md256 = MessageDigest.getInstance("GOST3411-2012-256", "RssysGostProvider");
-byte[] buf = new byte[8192];
-int n;
-try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
-    while ((n = in.read(buf)) != -1) {
-        md256.update(buf, 0, n);
-    }
-}
-byte[] hash256 = md256.digest();
-----
-
-=== HMAC-Streebog (RFC 7836)
-
-HMAC — код аутентификации сообщений на основе хэш-функции "Стрибог". +
-Данная функция требует симметричный ключ. +
-В библиотеке представлено два варианта функции: HMAC-Streebog-256 (32 байта) и HMAC-Streebog-512 (64 байта).
-
-==== org.rssys.gost.api
-
-.Блочный режим вычисления HMAC. Защищаемые данные целиком в памяти.
-[source,java]
-----
-import org.rssys.gost.api.Digest;
-import org.rssys.gost.api.CmacApi;
-import org.rssys.gost.cipher.SymmetricKey;
-
-SymmetricKey key = ...; // выработан ранее
-byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
-
-// HMAC-Streebog-256
-byte[] mac256 = Digest.hmac256(data, key);
-
-// HMAC-Streebog-512
-byte[] mac512 = Digest.hmac512(data, key);
-
-// Проверка целостности — constant-time сравнение (защита от timing-атак)
-boolean ok = CmacApi.verifyMac(expected, mac256);
-----
-
-.Инкрементальный режим вычисления HMAC. Данные из файла или сокета обрабатываются в потоковом режиме, без накопления в памяти.
-[source,java]
-----
-import org.rssys.gost.api.Digest;
-import org.rssys.gost.api.CmacApi;
-import org.rssys.gost.cipher.SymmetricKey;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-
-SymmetricKey key = ...; // выработан ранее
-
-// HMAC-Streebog-256
-Digest m256 = new Digest(Digest.Algorithm.HMAC_256, key);
-byte[] buf = new byte[8192];
-int n;
-try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
-    while ((n = in.read(buf)) != -1) {
-        m256.update(buf, 0, n);
-    }
-}
-byte[] mac256 = m256.digest();
-
-// HMAC-Streebog-512
-Digest m512 = new Digest(Digest.Algorithm.HMAC_512, key);
-try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
-    while ((n = in.read(buf)) != -1) {
-        m512.update(buf, 0, n);
-    }
-}
-byte[] mac512 = m512.digest();
-
-// Проверка целостности
-boolean ok = CmacApi.verifyMac(expected, mac256);
-
-key.destroy();
-----
-NOTE: Экземпляр `Digest` не является потокобезопасным.
-Создавайте отдельный экземпляр на каждый поток.
-
-==== JCA (org.rssys.gost.jca)
-
-.Блочный режим вычисления HMAC. Защищаемые данные целиком в памяти.
-[source,java]
-----
-import javax.crypto.Mac;
-import org.rssys.gost.jca.key.GostSecretKey;
-
-GostSecretKey key = ...; // выработан ранее
-byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
-
-// HMAC-Streebog-256
-Mac mac256 = Mac.getInstance("HmacGOST3411-2012-256", "RssysGostProvider"); // <1>
-mac256.init(key);
-byte[] result256 = mac256.doFinal(data);
-
-// HMAC-Streebog-512
-Mac mac512 = Mac.getInstance("HmacGOST3411-2012-512", "RssysGostProvider");
-mac512.init(key);
-byte[] result512 = mac512.doFinal(data);
-
-key.destroy();
-----
-<1> Алиасы: `"HMAC-Streebog-256"`, `"1.2.643.7.1.1.4.1"` для 256-бит;
-`"HMAC-Streebog-512"`, `"1.2.643.7.1.1.4.2"` для 512-бит.
-
-.Инкрементальный режим вычисления HMAC. Данные из файла или сокета обрабатываются в потоковом режиме, без накопления в памяти.
-[source,java]
-----
-import javax.crypto.Mac;
-import org.rssys.gost.jca.key.GostSecretKey;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-
-GostSecretKey key = ...; // выработан ранее
-
-Mac mac256 = Mac.getInstance("HmacGOST3411-2012-256", "RssysGostProvider");
-mac256.init(key);
-byte[] buf = new byte[8192];
-int n;
-try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
-    while ((n = in.read(buf)) != -1) {
-        mac256.update(buf, 0, n);
-    }
-}
-byte[] result256 = mac256.doFinal();
-
-key.destroy();
-----
-
-=== CMAC-Кузнечик (ГОСТ Р 34.13-2015)
-
-CMAC — имитовставка на основе блочного шифра Кузнечик. Для вычисления необходим симметричный ключ. +
-
-Полный тег: 16 байт (128 бит = размер блока). Допускается усечение тега.
-
-NOTE: CMAC строится на блочном шифре (Кузнечик). HMAC строится на хэш-функции (Стрибог). *Это разные алгоритмы с разной областью применения.*
-
-==== org.rssys.gost.api
-
-.Блочный режим вычисления CMAC. Защищаемые данные целиком в памяти.
-[source,java]
-----
-import org.rssys.gost.api.CmacApi;
-import org.rssys.gost.cipher.SymmetricKey;
-
-SymmetricKey key = ...; // выработан ранее
-byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
-
-// Полный тег CMAC, 16 байт
-byte[] tag = CmacApi.cmac(data, key);
-
-// Усечённый тег, 8 байт (первые 8 байт полного тега)
-byte[] tag8 = CmacApi.cmac(data, key, 8);
-
-// Проверка целостности — constant-time сравнение (защита от timing-атак)
-boolean ok = CmacApi.verifyMac(expected, tag);
-
-key.destroy();
-----
-
-.Инкрементальный режим режим вычисления CMAC. Данные из файла или сокета обрабатываются в потоковом режиме, без накопления в памяти.
-[source,java]
-----
-import org.rssys.gost.api.CmacApi;
-import org.rssys.gost.cipher.SymmetricKey;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-
-SymmetricKey key = ...; // выработан ранее
-
-CmacApi cmac = new CmacApi(key);
-byte[] buf = new byte[8192];
-int n;
-try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
-    while ((n = in.read(buf)) != -1) {
-        cmac.update(buf, 0, n);
-    }
-}
-byte[] tag = cmac.digest(); // 16 байт
-
-// Проверка целостности
-boolean ok = CmacApi.verifyMac(expected, tag);
-
-key.destroy();
-----
-NOTE: Экземпляр `CmacApi` не является потокобезопасным.
-Создавайте отдельный экземпляр на каждый поток.
-
-==== JCA (org.rssys.gost.jca)
-
-.Блочный режим вычисления CMAC. Данные целиком находятся в памяти.
-[source,java]
-----
-import javax.crypto.Mac;
-import org.rssys.gost.jca.key.GostSecretKey;
-
-GostSecretKey key = ...; // выработан ранее
-byte[] data = "данные".getBytes(StandardCharsets.UTF_8);
-
-Mac mac = Mac.getInstance("CMAC-Kuznyechik", "RssysGostProvider");
-mac.init(key);
-byte[] tag = mac.doFinal(data);
-
-key.destroy();
-----
-
-.Инкрементальный режим вычисления CMAC.  Данные из файла или сокета обрабатываются в потоковом режиме, без накопления в памяти.
-[source,java]
-----
-import javax.crypto.Mac;
-import org.rssys.gost.jca.key.GostSecretKey;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-
-GostSecretKey key = ...; // выработан ранее
-
-Mac mac = Mac.getInstance("CMAC-Kuznyechik", "RssysGostProvider");
-mac.init(key);
-byte[] buf = new byte[8192];
-int n;
-try (InputStream in = Files.newInputStream(Path.of("data.bin"))) {
-    while ((n = in.read(buf)) != -1) {
-        mac.update(buf, 0, n);
-    }
-}
-byte[] tag = mac.doFinal();
-
-key.destroy();
-----
-
+Пределы нагрузки: под одним мастер-ключом не более ≈2⁴⁸ потоков (nonce 128 бит, вероятность совпадения у q потоков ≈ q²/2¹²⁹, при 2⁴⁸ потоков ≈2⁻³³); совпавший nonce означает одинаковые ключи и повтор всей гаммы потока. Объём одного потока ограничен оценкой σ²/2¹²⁸, где σ — число блоков потока: 2⁴⁰ блоков по 16 байт (2⁴⁴ байт, 16 ТиБ) дают ≈2⁻⁴⁸. Жёсткая граница конструкции — 2⁶⁴ блоков (2⁶⁸ байт): дальше счётчик CTR переходит через ноль и гамма повторяется; она намного выше рабочего потолка.
 
 === Электронная подпись ГОСТ Р 34.10-2012
 
-.Электронная подпись — алгоритм ГОСТ Р 34.10-2012 (RFC 7091).
-* в методах *sign/veify* хэш для переданных данных выбирается и вычисляется автоматически по параметрам кривой: Streebog-256 для 256-битных кривых, Streebog-512 для 512-битных.
-* Нонс k генерируется детерминированно по RFC 6979 §3.2 (HMAC-Стрибог) — одно сообщение + один ключ всегда дают одну подпись.
-* Формат подписи: `s ∥ r` big-endian, без DER/ASN.1. Длина: 64 байта (256-бит кривые) или 128 байт (512-бит кривые).
+* В `sign` и `verify` хэш данных выбирается и вычисляется автоматически по параметрам кривой: Стрибог-256 для 256-битных кривых, Стрибог-512 для 512-битных.
+* Подпись имеет формат `s ∥ r` (big-endian, без DER/ASN.1). Длина: 64 байта для 256-битных кривых, 128 байт для 512-битных.
+* Режим нонса по умолчанию — `HEDGED`: включать ничего не нужно, подпись одного и того же сообщения каждый раз разная. Воспроизводимость даёт только явный `NonceMode.DETERMINISTIC` (см. «Выбор режима нонса»).
+* Подпись неверной длины (в том числе пустая и `null`) не принимается: `Signature.verify` и `Signature.verifyHash` возвращают `false`, а не бросают исключение.
 
-.Библиотека предоставляет два независимых API для вычисления электронной подписи:
-* `org.rssys.gost.api` — прямой API, не требует регистрации провайдера.
-* `org.rssys.gost.jca` — JCA/JCE-совместимый API.
-
-
-==== org.rssys.gost.api
-
-.Подпись и проверка подписи для "сырых" данных.
-
-*В данном режиме, хеш вычисляется автоматически, внутри методов sign/verify.*
-
+.Подпись и проверка
 [source,java]
 ----
 import org.rssys.gost.api.KeyGenerator;
@@ -1162,27 +669,89 @@ import org.rssys.gost.signature.ECParameters;
 
 byte[] data = "сообщение для подписи".getBytes(StandardCharsets.UTF_8);
 
-// Генерация ключевой пары — кривая CryptoPro-A (256 бит)
+// ключевая пара на кривой CryptoPro-A (256 бит)
 KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
-
 try {
-    // Подпись: хеш Стрибог-256 вычисляется автоматически для данных data, базируясь на параметрах кривой. То есть отдельно хэш вычислять не нужно.
-    // Формат: s ∥ r big-endian, длина 64 байта
-    byte[] signature = Signature.sign(data, pair.getPrivate());
-    // Проверка подписи. Хэш для data вычисляется внути автоматически.
-    boolean valid = Signature.verify(data, signature, pair.getPublic());
-    // valid => true
-    // Подмена данных обнаруживается
-    byte[] tampered = data.clone();
-    tampered[0] ^= 0x01;
-    boolean invalid = Signature.verify(tampered, signature, pair.getPublic());
-    // invalid => false
+    // хэш Стрибог-256 вычисляется внутри sign; отдельно хэшировать не нужно
+    byte[] signature = Signature.sign(data, pair.getPrivate()); // 64 байта
+    boolean valid = Signature.verify(data, signature, pair.getPublic()); // true
+
+    // любое изменение данных делает подпись недействительной
+    byte[] changed = data.clone();
+    changed[0] ^= 0x01;
+    boolean invalid = Signature.verify(changed, signature, pair.getPublic()); // false
 } finally {
-    pair.getPrivate().destroy(); // обнуляет d в памяти
+    pair.getPrivate().destroy(); // затирает закрытый ключ d в памяти
 }
 ----
 
-.Импорт закрытого ключа из byte[] и подпись
+==== Поддерживаемые кривые
+
+[cols="2,2,1,1", options="header"]
+|===
+|Имя кривой |Фабрика `ECParameters` |Бит |Хэш подписи
+
+|`cryptopro-A`
+|`cryptoProA()`
+|256
+|Стрибог-256
+
+|`cryptopro-B`
+|`cryptoProB()`
+|256
+|Стрибог-256
+
+|`cryptopro-C`
+|`cryptoProC()`
+|256
+|Стрибог-256
+
+|`tc26-gost-A-256`
+|`tc26a256()`
+|256
+|Стрибог-256
+
+|`tc26-gost-A-512`
+|`tc26a512()`
+|512
+|Стрибог-512
+
+|`tc26-gost-B-512`
+|`tc26b512()`
+|512
+|Стрибог-512
+
+|`tc26-gost-C-512`
+|`tc26c512()`
+|512
+|Стрибог-512
+|===
+
+Кривую можно получить по имени или OID: `GostCurves.byName("cryptopro-A")` (`org.rssys.gost.jca.spec.GostCurves`; регистр имени не важен).
+
+==== Выбор режима нонса
+
+Режим по умолчанию — `HEDGED`: `Signature.sign` и `Signature.signHash` работают в нём сразу, включать ничего не нужно. Подпись одного и того же сообщения каждый раз разная, и все варианты верны. Нонс `k` вырабатывается через HMAC-Стрибог по схеме RFC 6979 §3.2 с затравкой из числа `e` уравнения подписи и идентификатора кривой; в `HEDGED` в затравку подмешиваются свежие случайные байты.
+
+Воспроизводимая подпись — отступление от умолчания, `NonceMode.DETERMINISTIC`: одни и те же данные с одним ключом дают одну и ту же подпись.
+
+[source,java]
+----
+import org.rssys.gost.api.Signature;
+import org.rssys.gost.signature.NonceMode;
+
+byte[] sig1 = Signature.sign(data, priv, NonceMode.DETERMINISTIC);
+byte[] sig2 = Signature.sign(data, priv, NonceMode.DETERMINISTIC);
+// sig1 и sig2 побайтно равны
+----
+
+NOTE: `HEDGED` — рекомендуемый режим и умолчание: включать ничего не нужно. `NonceMode.DETERMINISTIC` — стандартная схема RFC 6979, и в обычных условиях она безопасна: нонс `k` зависит только от закрытого ключа, хэша и кривой, поэтому качество генератора случайных чисел на него не влияет, а разные сообщения дают разные `k`. «Детерминированный» означает, что одни и те же данные, подписанные одним ключом, всегда дают одну и ту же подпись; это воспроизводимость, а не слабость. Но у режима есть цена: если при вычислении подписи произошёл сбой (физический доступ к устройству, внесённая неисправность), сбойная и верная подписи одного сообщения имеют общий `k`, и по их разности вычисляется закрытый ключ; кроме того, равные подписи показывают, что подписаны равные сообщения (ADR 07). Поэтому `DETERMINISTIC` задавайте только когда нужна воспроизводимость: эталонные векторы, отладка, сравнение результатов.
+
+Режим принимают также `Signature.signHash`, `GostSigner.of(priv, mode)` и (в JCA) `GostSignatureParameterSpec`. Перегрузки с `SecureRandom` позволяют задать собственный источник случайности вместо `CryptoRandom.INSTANCE`.
+
+==== Импорт и экспорт ключей
+
+.Закрытый ключ из `byte[]` (d, big-endian)
 [source,java]
 ----
 import org.rssys.gost.api.Signature;
@@ -1193,17 +762,15 @@ import java.math.BigInteger;
 byte[] dBytes = ...; // 32 байта закрытого ключа, big-endian
 ECParameters params = ECParameters.cryptoProA();
 PrivateKeyParameters priv = new PrivateKeyParameters(new BigInteger(1, dBytes), params);
-
 try {
-    byte[] signature = Signature.sign(data, priv); // хеш нужной битности вычисляется автоматически
-    // ...
+    byte[] signature = Signature.sign(data, priv);
 } finally {
     priv.destroy();
-    java.util.Arrays.fill(dBytes, (byte) 0); // очистить исходный массив
+    Arrays.fill(dBytes, (byte) 0); // затирается исходный массив
 }
 ----
 
-.Импорт открытого ключа из координат и верификация
+.Открытый ключ из координат
 [source,java]
 ----
 import org.rssys.gost.api.Signature;
@@ -1221,330 +788,218 @@ PublicKeyParameters pub = new PublicKeyParameters(q, params);
 boolean valid = Signature.verify(data, signature, pub);
 ----
 
-.Получение открытого ключа из закрытого: Q = d·G
+Точка вне кривой или вне подгруппы отвергается исключением уже в конструкторе `PublicKeyParameters`.
+
+.Открытый ключ из закрытого: Q = d·G
 [source,java]
 ----
 import org.rssys.gost.api.Signature;
+import org.rssys.gost.signature.PublicKeyParameters;
+
+PublicKeyParameters pub = Signature.derivePublicKey(priv);
+----
+
+.Ключи в DER: X.509 SubjectPublicKeyInfo и PKCS#8
+[source,java]
+----
+import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
-PrivateKeyParameters priv = ...; // загружен ранее
+byte[] pubDer = GostDerCodec.encodePublicKey(pub);
+PublicKeyParameters pub2 = GostDerCodec.decodePublicKey(pubDer);
 
-try {
-    // Вычисляет Q = d·G — скалярное умножение базовой точки
-    PublicKeyParameters pub = Signature.derivePublicKey(priv);
-    // Полученный ключ можно использовать для верификации
-    boolean valid = Signature.verify(data, signature, pub);
-} finally {
-    priv.destroy();
-}
+byte[] privDer = GostDerCodec.encodePrivateKey(priv); // хранить только в зашифрованном виде
+PrivateKeyParameters priv2 = GostDerCodec.decodePrivateKey(privDer);
+Arrays.fill(privDer, (byte) 0);
 ----
 
-==== Подпись готового хэша (signHash / verifyHash)
+==== Подпись готового хэша
 
-Данные методы используются, когда хэш вычислен отдельно.
+`signHash` и `verifyHash` применяются, когда хэш вычислен отдельно. Хэш должен соответствовать кривой: Стрибог-256 (32 байта) для 256-битных кривых, Стрибог-512 (64 байта) для 512-битных. Хэш другого алгоритма (SHA-256, MD5) нарушает требования ГОСТ Р 34.10-2012.
 
-NOTE: Хэш должен соответствовать кривой: Стрибог-256 (32 байта) для 256-битных
-кривых, Стрибог-512 (64 байта) для 512-битных. Передача хэша другого алгоритма
-(SHA-256, MD5 и т.п.) нарушает требования ГОСТ Р 34.10-2012.
-
-Нонс k генерируется детерминированно по RFC 6979 — идентично `Signature.sign`.
-
-===== org.rssys.gost.api
-
-.Подпись готового хэша
 [source,java]
 ----
 import org.rssys.gost.api.Digest;
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
-import org.rssys.gost.signature.ECParameters;
-byte[] data = "сообщение".getBytes(StandardCharsets.UTF_8);
-KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
-try {
-    // Хэш вычислен заранее
-    byte[] hash = Digest.digest256(data); // 32 байта для 256-битной кривой
-    // Подпись готового хэша
-    byte[] signature = Signature.signHash(hash, pair.getPrivate()); // 64 байта
-    // Проверка подписи для хэша
-    boolean valid = Signature.verifyHash(hash, signature, pair.getPublic());
-    // valid => true
-} finally {
-    pair.getPrivate().destroy();
-}
+
+byte[] hash = Digest.digest256(data); // 32 байта для 256-битной кривой
+byte[] signature = Signature.signHash(hash, pair.getPrivate()); // 64 байта
+boolean valid = Signature.verifyHash(hash, signature, pair.getPublic()); // true
+
+// verify и verifyHash взаимозаменяемы: каждая принимает подписи, созданные как sign, так и signHash
+boolean ok1 = Signature.verify(data, signature, pair.getPublic());
+boolean ok2 = Signature.verifyHash(hash, Signature.sign(data, pair.getPrivate()), pair.getPublic());
 ----
 
-.Кросс-совместимость sign ↔ signHash
-[source,java]
-----
-import org.rssys.gost.api.Digest;
-import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.api.KeyPair;
-import org.rssys.gost.api.Signature;
-import org.rssys.gost.signature.ECParameters;
-import java.util.Arrays;
-KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
-try {
-    byte[] hash = Digest.digest256(data);
-    // sign и signHash дают одинаковый результат для тех же данных
-    byte[] sig1 = Signature.sign(data, pair.getPrivate());     // хэш внутри
-    byte[] sig2 = Signature.signHash(hash, pair.getPrivate()); // хэш снаружи
-    // sig1 и sig2 идентичны побайтово — детерминированность RFC 6979
-    Arrays.equals(sig1, sig2) // => true
-    // verify и verifyHash взаимозаменяемы
-    boolean ok1 = Signature.verify(data, sig2, pair.getPublic());      // <1>
-    boolean ok2 = Signature.verifyHash(hash, sig1, pair.getPublic()); // <1>
-    // ok1 == ok2 == true
-} finally {
-    pair.getPrivate().destroy();
-}
-----
-<1> `verify(data, sig)` и `verifyHash(hash, sig)` принимают подписи,
-созданные как через `sign`, так и через `signHash`.
+Нонс вырабатывается так же, как в `Signature.sign`, — по умолчанию в режиме `HEDGED`, поэтому `signHash(digest(data))` и `sign(data)` как правило различаются, обе верны. Гарантированно побайтно равны они только в явном `NonceMode.DETERMINISTIC`.
 
+CAUTION: `Signature.signHash` и `GostSigner.signHash` подписывают любой переданный хэш, то есть позволяют подписать произвольные данные: не отдавайте их недоверенной стороне без авторизации.
 
-==== Абстракция подписанта — `GostSigner` (HSM/PKCS#11)
+==== GostSigner: подпись без доступа к закрытому ключу
 
-`GostSigner` (пакет `org.rssys.gost.api`) отделяет операцию подписи от материала
-закрытого ключа. Это позволяет подписывать внутри аппаратного модуля (HSM, PKCS#11,
-внешний CSP), не извлекая закрытый ключ в память JVM: потребитель отдаёт хэш,
-получает готовую подпись. Интерфейс используется X.509-строителями модуля
-`crypto-gost-pkix` (`GostCertificateBuilder`, `GostCrlBuilder`, `GostCsrBuilder`).
+`GostSigner` (пакет `org.rssys.gost.api`) отделяет операцию подписи от материала закрытого ключа. Это позволяет подписывать внутри аппаратного модуля (HSM, PKCS#11, внешний CSP), не извлекая закрытый ключ в память JVM: потребитель отдаёт хэш и получает готовую подпись. Интерфейс используют X.509-строители модуля `crypto-gost-pkix` (`GostCertificateBuilder`, `GostCrlBuilder`, `GostCsrBuilder`).
 
 Интерфейс содержит три метода:
 
-* `byte[] signHash(byte[] hash)` — подпись готового хэша, результат в формате `s ∥ r`
-big-endian (как `Signature.signHash`);
-* `ECParameters getParams()` — параметры кривой (нужны для выбора длины хэша и
-построения AlgorithmIdentifier);
-* `PublicKeyParameters getPublicKey()` — открытый ключ подписанта (для self-verify).
+* `byte[] signHash(byte[] hash)` — подпись готового хэша в формате `s ∥ r` big-endian (как `Signature.signHash`);
+* `ECParameters getParams()` — параметры кривой (нужны для выбора длины хэша и построения AlgorithmIdentifier);
+* `PublicKeyParameters getPublicKey()` — открытый ключ подписанта (для самопроверки).
 
-Для сценариев без HSM используйте `GostSigner.of(priv)` — тонкий мост поверх ключа
-в памяти. Открытый ключ выводится немедленно (Q = d·G) в момент вызова `of()`.
+Для сценариев без HSM используйте `GostSigner.of(priv)` — тонкий мост поверх ключа в памяти. Открытый ключ выводится в момент вызова `of()` (Q = d·G).
 
-.Дефолтный подписант поверх ключа в памяти
 [source,java]
 ----
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
+import org.rssys.gost.api.Signature;
 import org.rssys.gost.signature.ECParameters;
+
 KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
 GostSigner signer = GostSigner.of(pair.getPrivate());
+
 byte[] hash = Digest.digest256(data);
 byte[] signature = signer.signHash(hash); // 64 байта
 boolean ok = Signature.verifyHash(hash, signature, signer.getPublicKey());
 ----
 
-.Собственная реализация поверх внешнего модуля (HSM)
-[source,java]
-----
-final class Pkcs11Signer implements GostSigner {
-    // ... ссылка на сессию/слот PKCS#11 ...
-    public byte[] signHash(byte[] hash) {
-        // вызов C_Sign внутри HSM; закрытый ключ не покидает модуль.
-        // Результат — подпись ГОСТ Р 34.10 в формате s ∥ r big-endian.
-        return hsmSignGost(hash);
-    }
-    public ECParameters getParams()      { return ECParameters.tc26a256(); }
-    public PublicKeyParameters getPublicKey() { return hsmPublicKey(); }
-}
-----
+Собственная реализация поверх HSM реализует те же три метода (схема): `signHash` вызывает подпись внутри модуля и возвращает результат в формате `s ∥ r`; `getParams` и `getPublicKey` возвращают параметры кривой и открытый ключ, соответствующие ключу в модуле.
 
-NOTE: X.509-строители после подписи выполняют *fail-closed*-проверку: длина подписи
-и self-verify открытым ключом подписанта. Это ловит неисправный HSM-адаптер, вернувший
-усечённый буфер или подпись не тем ключом, чем заявлено (например, неверно
-сконфигурированный слот). Self-verify подтверждает лишь *внутреннюю самосогласованность*
-подписанта — он не гарантирует, что это правильный ключ издателя (подключение к чужому
-слоту библиотека обнаружить не может, это ответственность оператора).
+NOTE: X.509-строители после подписи выполняют проверку по принципу fail-closed: длину подписи и проверку открытым ключом подписанта. Это выявляет неисправный адаптер HSM, вернувший усечённый буфер или подпись не тем ключом, чем заявлено. Самопроверка подтверждает лишь внутреннюю самосогласованность подписанта: она не гарантирует, что это правильный ключ издателя (подключение к чужому слоту библиотека обнаружить не может, это ответственность оператора).
 
-CAUTION: Реализация `GostSigner` сама отвечает за потокобезопасность — библиотека не
-сериализует вызовы. PKCS#11-сессии часто требуют отдельной сессии на поток или явной
-синхронизации.
-
-
-
-==== JCA (org.rssys.gost.jca)
-
-.Генерация ключевой пары, подпись и верификация
-[source,java]
-----
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.Signature;
-import java.security.spec.ECGenParameterSpec;
-import javax.security.auth.Destroyable;
-
-byte[] data = "сообщение для подписи".getBytes(StandardCharsets.UTF_8);
-
-// Генерация ключевой пары — кривая tc26-gost-A-256 (256 бит)
-KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", "RssysGostProvider");
-kpg.initialize(new ECGenParameterSpec("tc26-gost-A-256")); // <1>
-
-KeyPair pair = kpg.generateKeyPair();
-
-try {
-    // Подпись — хеш Стрибог-256 вычисляется автоматически базируясь на параметрах кривой
-    Signature signer = Signature.getInstance("ECGOST3410-2012-256", "RssysGostProvider"); // <2>
-    signer.initSign(pair.getPrivate());
-    signer.update(data);
-    byte[] signature = signer.sign(); // 64 байта
-
-    // Верификация
-    Signature verifier = Signature.getInstance("ECGOST3410-2012-256", "RssysGostProvider");
-    verifier.initVerify(pair.getPublic());
-    verifier.update(data);
-    boolean valid = verifier.verify(signature);
-    // valid => true
-} finally {
-    if (pair.getPrivate() instanceof Destroyable d) {
-        d.destroy();
-    }
-}
-----
-<1> Поддерживаемые имена кривых: `"cryptopro-A"`, `"cryptopro-B"`, `"cryptopro-C"`,
-`"tc26-gost-A-256"` (256 бит); `"tc26-gost-A-512"`, `"tc26-gost-B-512"`, `"tc26-gost-C-512"` (512 бит). +
-Инициализация по размеру: `kpg.initialize(256)` → `cryptopro-A`, `kpg.initialize(512)` → `tc26-gost-A-512`.
-<2> Для 512-битных кривых используйте `"ECGOST3410-2012-512"`.
-
-Алиасы: OID `"1.2.643.7.1.1.3.2"` (256 бит), `"1.2.643.7.1.1.3.3"` (512 бит).
-
-.Импорт закрытого ключа из PKCS#8 DER и подпись
-[source,java]
-----
-import java.security.KeyFactory;
-import java.security.PrivateKey;
-import java.security.Signature;
-import java.security.spec.PKCS8EncodedKeySpec;
-import javax.security.auth.Destroyable;
-
-byte[] pkcs8Der = ...; // DER-кодирование в формате PKCS#8 PrivateKeyInfo
-KeyFactory kf = KeyFactory.getInstance("ECGOST3410-2012", "RssysGostProvider");
-
-PrivateKey priv = kf.generatePrivate(new PKCS8EncodedKeySpec(pkcs8Der));
-
-try {
-    Signature signer = Signature.getInstance("ECGOST3410-2012-256", "RssysGostProvider");
-    signer.initSign(priv);
-    signer.update(data);
-    byte[] signature = signer.sign();
-    // ...
-} finally {
-    if (priv instanceof Destroyable d) {
-        d.destroy();
-    }
-}
-----
-
-.Импорт открытого ключа из X.509 DER и верификация
-[source,java]
-----
-import java.security.KeyFactory;
-import java.security.PublicKey;
-import java.security.Signature;
-import java.security.spec.X509EncodedKeySpec;
-
-byte[] x509Der = ...; // DER-кодирование в формате X.509 SubjectPublicKeyInfo
-KeyFactory kf = KeyFactory.getInstance("ECGOST3410-2012", "RssysGostProvider");
-PublicKey pub = kf.generatePublic(new X509EncodedKeySpec(x509Der));
-Signature verifier = Signature.getInstance("ECGOST3410-2012-256", "RssysGostProvider");
-verifier.initVerify(pub);
-verifier.update(data);
-
-boolean valid = verifier.verify(signature);
-----
-
-.Экспорт ключей в DER для хранения или передачи
-[source,java]
-----
-import javax.security.auth.Destroyable;
-
-// Экспорт открытого ключа — X.509 SubjectPublicKeyInfo DER
-byte[] pubDer = pair.getPublic().getEncoded(); // <1>
-
-// Экспорт закрытого ключа — PKCS#8 PrivateKeyInfo DER
-// ВНИМАНИЕ: хранить только в зашифрованном виде
-byte[] privDer = pair.getPrivate().getEncoded(); // <1>
-try {
-    // сохранить privDer ...
-} finally {
-    java.util.Arrays.fill(privDer, (byte) 0); // очистить после использования
-    if (pair.getPrivate() instanceof Destroyable d) {
-        d.destroy();
-    }
-}
-----
-<1> `getEncoded()` возвращает `null` если ключ уничтожен (`destroy()` был вызван).
-
-==== Поддерживаемые кривые
-[cols="2,2,1,1", options="header"]
-|===
-|Имя кривой |Стандарт |Бит |Хэш подписи
-|`cryptopro-A`
-|RFC 4357 §11.2
-|256
-|Стрибог-256
-|`cryptopro-B`
-|RFC 4357 §11.3
-|256
-|Стрибог-256
-|`cryptopro-C`
-|RFC 4357 §11.4
-|256
-|Стрибог-256
-|`tc26-gost-A-256`
-|RFC 7836, Appendix A.2
-|256
-|Стрибог-256
-|`tc26-gost-A-512`
-|RFC 7836, Appendix A.1
-|512
-|Стрибог-512
-|`tc26-gost-B-512`
-|RFC 7836
-|512
-|Стрибог-512
-|`tc26-gost-C-512`
-|RFC 7836
-|512
-|Стрибог-512
-|===
-
-
+CAUTION: Реализация `GostSigner` сама отвечает за потокобезопасность: библиотека не сериализует вызовы. PKCS#11-сессии часто требуют отдельной сессии на поток или явной синхронизации.
 
 ==== Что даёт RFC 6979
 
-Детерминированный k через HMAC-DRBG (HMAC-Стрибог) решает проблему плохого ГСЧ радикально: k = HMAC-DRBG(закрытый ключ, хеш сообщения).
+`HEDGED` (умолчание, включать ничего не нужно) решает проблему плохого генератора случайных чисел: нонс `k = HMAC-DRBG(закрытый ключ, e, кривая)`, где `e` — число из уравнения подписи `s = r·d + k·e`. В гибридном режиме во вход дополнительно подмешиваются свежие случайные байты, а закрытый ключ и `e` остаются во входе, поэтому слабый или повторяющийся источник случайности даёт подпись не хуже детерминированной.
+
+.Адаптация RFC 6979 под ГОСТ Р 34.10-2012:
+* В RFC 6979 на вход генератора подаётся `bits2octets(H)`, и то же значение `bits2int(H)` входит в уравнение подписи: равная затравка означает равное `e`.
+* В ГОСТ число `e` читается из хэша младшим байтом вперёд (RFC 7091 §5.3), нуль заменяется единицей. Затравка из байт хэша в прямом порядке этого свойства не сохраняет: два разных хэша могли дать один `k` при разных `e`, а по двум таким подписям вычисляется закрытый ключ.
+* Поэтому библиотека подаёт на вход `int2octets(e)`: равный `k` возможен только при равном `e`, то есть при побайтно равной подписи.
 
 .Свойства:
-* Два разных сообщения → два разных k (хеши разные → DRBG даёт разный вывод).
-* Одно сообщение подписывается всегда одним k → никакой вариативности нет.
-* `k` не предсказуем без знания закрытого ключа (HMAC — псевдослучайная функция).
-* Не зависит от качества системного ГСЧ.
+* Два сообщения с разными `e` дают два разных `k`.
+* В `HEDGED` `k` каждый раз другой; в `DETERMINISTIC` одно значение `e` подписывается всегда одним `k`.
+* `k` непредсказуем без знания закрытого ключа.
+* Безопасность не зависит от качества системного генератора: он только добавляет случайность поверх детерминированного вывода.
 
+=== Выработка ключей (KDF и PBKDF2)
 
-=== Согласование ключей и выработка сессионных ключей
+[cols="2,3,2", options="header"]
+|===
+|Класс |Назначение |RFC
 
-*VKO* (Выработка Ключевого Объекта) — алгоритм, с помощью которого две стороны независимо вычисляют одинаковый секретный ключ, зная свой закрытый ключ и открытый ключ партнёра. Секрет никогда не передаётся по каналу — каждая сторона получает его самостоятельно.
+|`KdfGostR3411_2012_256`
+|Выработка ключевого материала из ключа и метки. Применяется в TLSTREE (RFC 9367).
+|RFC 7836 §4.4
 
-*UKM* (случайное число сессии) гарантирует, что для каждого сеанса вырабатывается новый уникальный секрет, даже если долгосрочные ключи сторон не менялись.
+|`KdfTreeGostR3411_2012_256`
+|Выработка нескольких ключей из одного ключа. Применяется в CTR-ACPKM-OMAC (RFC 9337 §5.1.1) и KExp15.
+|RFC 7836 §4.5
 
-*KDF* (функция выработки ключей, Key Derivation Function) — алгоритм, который превращает один секрет в несколько независимых ключей нужной длины. На вход подаётся секрет (например, результат VKO) и контекст (метка, затравка). На выходе — готовые к использованию ключи: отдельно для шифрования, отдельно для проверки целостности. +
-Даже если один из выходных ключей скомпрометирован, остальные и исходный секрет остаются в безопасности.
+|`Pbkdf2Streebog`
+|Вывод ключа из пароля. Применяется при работе с PKCS#12 и PBES2.
+|RFC 2898 §5.2, RFC 9337
+|===
 
+NOTE: `KdfGostR3411_2012_256` (§4.4) и `KdfTreeGostR3411_2012_256` (§4.5) — разные алгоритмы с разным форматом буфера и разным назначением, несмотря на похожие названия. При `count = 1` и `keyLen = 32` их выход совпадает побайтно, поэтому разницу легко не заметить.
 
-==== VKO + KDF — рекомендуемая схема для прикладного использования
+==== KdfGostR3411_2012_256
 
-Для большинства задач (защищённый обмен данными, CMS, IKEv2) используйте связку
-VKO → KDF: VKO вырабатывает общий секрет с учётом случайного UKM,
-KDF разворачивает его в готовые сессионные ключи.
+Формула блока: `K(i) = HMAC-Streebog256(key, [i] || label || 0x00 || seed || [L]_b)`; результат — `K(1) || K(2) || …` нужной длины. Здесь `[i]` — счётчик блока (1 октет, с единицы), `[L]_b` — суммарная длина выхода в битах, минимальная запись big-endian. Максимум 255 блоков (8160 байт).
 
-Обе стороны независимо вычисляют *одинаковые* ключи, не передавая секрет по каналу.
-UKM (случайное число) гарантирует уникальность ключей каждой сессии — даже если
-статические ключи сторон не меняются.
+[source,java]
+----
+import org.rssys.gost.kdf.KdfGostR3411_2012_256;
 
-NOTE: VKO + KDF вырабатывают сессионные ключи — то есть ключи, которые обе стороны вычисляют независимо и сразу используют для шифрования трафика. Это работает когда обе стороны онлайн одновременно и договариваются о ключах в реальном времени.
+byte[] key = ...; // 32-байтный ключ
+byte[] label = "key expansion".getBytes(StandardCharsets.UTF_8);
+byte[] seed = ...; // затравка
+
+// 64 байта = два блока по 32; функция итерирует автоматически
+byte[] keyMaterial = KdfGostR3411_2012_256.expand(key, label, seed, 64);
+byte[] key1 = Arrays.copyOfRange(keyMaterial, 0, 32);
+byte[] key2 = Arrays.copyOfRange(keyMaterial, 32, 64);
+try {
+    // использование key1 и key2
+} finally {
+    Arrays.fill(keyMaterial, (byte) 0);
+    Arrays.fill(key1, (byte) 0);
+    Arrays.fill(key2, (byte) 0);
+}
+----
+
+==== KdfTreeGostR3411_2012_256
+
+Формула блока: `K(i) = HMAC-Streebog256(K_in, [i]_1 || label || 0x00 || seed || [L]_b)`; результат — `K(1) || K(2) || … || K(count)`. Счётчик `[i]_1` стоит первым и занимает один октет, поэтому `count` не превышает 255. `[L]_b` — суммарная длина всего выхода в битах (`count · keyLen · 8`), минимальная запись big-endian; она одна для всех блоков. Длина блока `keyLen` не превышает 32 байт (выход HMAC-Streebog-256, RFC 7836 §4.5): для большего объёма увеличивайте `count`.
+
+.Ключ шифрования и ключ аутентификации из одного ключа
+[source,java]
+----
+import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
+
+byte[] masterKey = ...; // 32-байтный ключ
+byte[] label = "kdf tree".getBytes(StandardCharsets.UTF_8);
+byte[] seed = ...; // уникальная затравка для каждой сессии
+
+// count = 2: два ключа по 32 байта, результат K(1) || K(2), 64 байта
+byte[] keys = KdfTreeGostR3411_2012_256.generate(masterKey, label, seed, 2, 32);
+byte[] encKey = Arrays.copyOfRange(keys, 0, 32);  // K(1) — ключ шифрования
+byte[] macKey = Arrays.copyOfRange(keys, 32, 64); // K(2) — ключ аутентификации
+try {
+    // использование encKey и macKey
+} finally {
+    Arrays.fill(keys, (byte) 0);
+    Arrays.fill(encKey, (byte) 0);
+    Arrays.fill(macKey, (byte) 0);
+}
+----
+
+==== Pbkdf2Streebog
+
+PBKDF2 с PRF = HMAC-Streebog-512 (RFC 9337 §4). Применяется при работе с PKCS#12 и для хранения ключей, защищённых паролем. Число итераций допустимо от 1 (`MIN_ITERATIONS`, нужна для проверки по контрольным векторам RFC) до 2 000 000 (`MAX_ITERATIONS`).
+
+NOTE: Для PBES2 RFC 9337 требует не менее 1000 итераций (§5.1.1, §7.1). Библиотека шире: `Pbkdf2Streebog` и JCA-фабрика принимают и меньшие значения и числа 1000 не проверяют. Выбирайте существенно больше 1000, исходя из требуемого времени выполнения; ориентир «600 000» относится к PBKDF2-HMAC-SHA256 (OWASP) и для Стрибога применим только как порядок величины.
+
+[source,java]
+----
+import org.rssys.gost.kdf.Pbkdf2Streebog;
+import org.rssys.gost.util.CryptoRandom;
+import org.rssys.gost.util.PasswordUtf8;
+
+char[] password = ...; // ввод пользователя
+byte[] passwordBytes = PasswordUtf8.encode(password);
+byte[] salt = new byte[16]; // не секрет, уникальна для каждого объекта
+CryptoRandom.INSTANCE.nextBytes(salt);
+int iterations = 100_000;
+int keyLen = 32; // байт
+
+byte[] derivedKey = Pbkdf2Streebog.generate(passwordBytes, salt, iterations, keyLen);
+try {
+    // использование derivedKey
+} finally {
+    Arrays.fill(derivedKey, (byte) 0);
+    Arrays.fill(passwordBytes, (byte) 0);
+    Arrays.fill(password, '\0');
+}
+----
+
+`Pbkdf2Streebog.generate` не затирает переданные пароль и соль.
+
+=== Согласование ключей
+
+*VKO* (выработка ключевого объекта) — алгоритм, с помощью которого две стороны независимо вычисляют одинаковый секретный ключ, зная свой закрытый ключ и открытый ключ партнёра. Секрет не передаётся по каналу.
+
+*UKM* (User Keying Material, случайное число сессии) делает секрет уникальным для каждого сеанса, даже если долгосрочные ключи не менялись; партнёру он передаётся открыто и секретом не является.
+
+*KDF* превращает один секрет в несколько независимых ключей нужной длины: отдельно для шифрования, отдельно для проверки целостности. Если один из выходных ключей раскрыт, остальные и исходный секрет остаются защищёнными.
+
+==== VKO и KDF — рекомендуемая схема
+
+Для защищённого обмена данными, CMS и IKEv2 используйте связку «VKO, затем KDF»: VKO вырабатывает общий секрет с учётом UKM, KDF разворачивает его в готовые сессионные ключи. Это работает, когда обе стороны онлайн и договариваются о ключах в реальном времени.
 
 [source,java]
 ----
@@ -1553,149 +1008,78 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
 import org.rssys.gost.signature.ECParameters;
-import java.math.BigInteger;
 import org.rssys.gost.util.CryptoRandom;
-import java.util.Arrays;
+import java.math.BigInteger;
 
 ECParameters params = ECParameters.cryptoProA();
-
 KeyPair alice = KeyGenerator.generateKeyPair(params);
-KeyPair bob   = KeyGenerator.generateKeyPair(params);
+KeyPair bob = KeyGenerator.generateKeyPair(params);
 
-// UKM — случайное число, минимум 8 байт; генерируется инициатором сессии
-// и передаётся партнёру открыто (например, в заголовке сообщения)
+// UKM генерирует инициатор сессии и передаёт партнёру открыто (например, в заголовке сообщения);
+// рекомендуется не менее 64 бит (8 байт)
 byte[] ukmBytes = new byte[8];
 CryptoRandom.INSTANCE.nextBytes(ukmBytes);
 BigInteger ukm = new BigInteger(1, ukmBytes);
 
+byte[] kekAlice = null;
+byte[] kekBob = null;
 byte[] keys = null;
+byte[] encKey = null;
+byte[] macKey = null;
 try {
-    // Алиса вычисляет KEK с ключами Боба
-    byte[] kekAlice = KeyAgreement.vkoGostR3410_2012_256(
-            alice.getPrivate(), bob.getPublic(), ukm);
-
-    // Боб вычисляет тот же KEK с ключами Алисы
-    byte[] kekBob = KeyAgreement.vkoGostR3410_2012_256(
-            bob.getPrivate(), alice.getPublic(), ukm);
-
-    // kekAlice == kekBob — 32 байта, одинаковы с обеих сторон
+    // обе стороны получают один и тот же KEK, 32 байта
+    kekAlice = KeyAgreement.vkoGostR3410_2012_256(alice.getPrivate(), bob.getPublic(), ukm);
+    kekBob = KeyAgreement.vkoGostR3410_2012_256(bob.getPrivate(), alice.getPublic(), ukm);
 
     // KDF_TREE: из KEK получить ключ шифрования и ключ MAC
-    byte[] label = "session keys".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    byte[] label = "session keys".getBytes(StandardCharsets.UTF_8);
     keys = KdfTreeGostR3411_2012_256.generate(kekAlice, label, ukmBytes, 2, 32);
-
-    byte[] encKey = Arrays.copyOfRange(keys, 0, 32);  // ключ шифрования
-    byte[] macKey = Arrays.copyOfRange(keys, 32, 64); // ключ аутентификации
-
-    // использовать encKey и macKey...
-
+    encKey = Arrays.copyOfRange(keys, 0, 32);  // ключ шифрования
+    macKey = Arrays.copyOfRange(keys, 32, 64); // ключ аутентификации
+    // использование encKey и macKey
 } finally {
     alice.getPrivate().destroy();
     bob.getPrivate().destroy();
-    if (keys != null) Arrays.fill(keys, (byte) 0);
+    for (byte[] b : new byte[][] {kekAlice, kekBob, keys, encKey, macKey}) {
+        if (b != null) Arrays.fill(b, (byte) 0);
+    }
 }
 ----
 
-NOTE: UKM передаётся партнёру открыто — это не секрет. Его назначение — сделать
-KEK уникальным для каждой сессии, даже при статических ключах сторон.
-Рекомендуется минимум 64 бит (8 байт).
+UKM — любое положительное целое: `null`, ноль и отрицательное значение отвергаются. Ключ партнёра на другой кривой отвергается (`IllegalArgumentException`).
 
-==== VKO через JCA
+Для 512-битных ключей есть `KeyAgreement.vkoGostR3410_2012_512` (RFC 7836 §4.3.2): результат 64 байта, только на 512-битных кривых. `vkoGostR3410_2012_256` (§4.3.1) работает на ключах обоих размеров.
 
-[source,java]
-----
-import javax.crypto.KeyAgreement;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.spec.ECGenParameterSpec;
-import org.rssys.gost.jca.spec.GostUkmParameterSpec;
-import java.math.BigInteger;
+==== Сырой ECDH
 
-// Генерация ключевых пар через JCA — для VKO нужны именно JCA-ключи
-KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", "RssysGostProvider");
-kpg.initialize(new ECGenParameterSpec("cryptopro-A"));
-KeyPair aliceJca = kpg.generateKeyPair();
-KeyPair bobJca   = kpg.generateKeyPair();
+CAUTION: `KeyAgreement.computeSharedSecret` возвращает *сырую* X-координату точки без хэширования и без UKM. Это примитив для реализации протоколов (TLS 1.3 ГОСТ использует его внутри key schedule). Для прикладного кода используйте VKO выше.
 
-BigInteger ukm = new BigInteger(1, ukmBytes); // ukmBytes — случайные 8+ байт
+Результат — X-координата точки `d·Qpeer` в little-endian (с учётом кофактора кривой): 32 байта для 256-битных кривых, 64 байта для 512-битных.
 
-KeyAgreement ka = KeyAgreement.getInstance("VKOGOST3410-2012-256", "RssysGostProvider");
-ka.init(aliceJca.getPrivate(), new GostUkmParameterSpec(ukm)); // <1>
-ka.doPhase(bobJca.getPublic(), true);
-byte[] kek = ka.generateSecret(); // 32 байта KEK_VKO
-----
-<1> UKM обязателен. Вызов `ka.init(key)` без `GostUkmParameterSpec` выбросит
-`InvalidKeyException`.
-
-==== Raw ECDH — только для протокольной реализации
-
-Строительный блок, который требует понимания в использовании.
-
-CAUTION: `computeSharedSecret` и `ECDHGOST2012` возвращают *сырую* X-координату
-точки без хэширования и без UKM. Это примитив для реализации протоколов (TLS 1.3 ГОСТ
-использует его внутри key schedule). Для прикладного кода используйте VKO выше.
-
-Результат — X-координата точки `d·Qpeer` в little-endian.
-Длина: 32 байта для 256-битных кривых, 64 байта для 512-битных.
-
-.api Raw ECDH
 [source,java]
 ----
 import org.rssys.gost.api.KeyAgreement;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
-import java.util.Arrays;
 
 // myPriv — PrivateKeyParameters, peerPub — PublicKeyParameters
-// Только для протокольной реализации — результат передаётся в KDF протокола
 byte[] shared = KeyAgreement.computeSharedSecret(myPriv, peerPub);
 try {
-    // передать shared в KDF протокола (например, HKDF в TLS 1.3)...
+    // передать shared в KDF протокола
 } finally {
     Arrays.fill(shared, (byte) 0);
 }
 ----
 
-Через JCA (`ECDHGOST2012`) — аналогично, без UKM:
+=== Передача ключа получателю (KExp15 и KImp15)
 
-[source,java]
-----
-import javax.crypto.KeyAgreement;
-import java.security.PrivateKey;
-import java.security.PublicKey;
+KExp15 и KImp15 защищённо передают симметричный ключ от одной стороны к другой: ключ шифруется и защищается имитовставкой. Схема MAC-then-Encrypt: сначала OMAC(IV ‖ S) под ключом `kMac`, затем `S ‖ MAC` шифруется CTR под ключом `kEnc`, поэтому тег уходит внутри шифртекста. Размеры фиксированы: ключи `kMac` и `kEnc` по 32 байта, IV 8 байт; результат `kExp15` на 16 байт длиннее экспортируемого секрета.
 
-// myPriv — java.security.PrivateKey (из JCA KeyPairGenerator),
-// peerPub — java.security.PublicKey (из JCA KeyPairGenerator)
-KeyAgreement ka = KeyAgreement.getInstance("ECDHGOST2012", "RssysGostProvider");
-ka.init(myPriv);
-ka.doPhase(peerPub, true);
-byte[] shared = ka.generateSecret(); // <1>
-----
-<1> Поддерживаемые алгоритмы для `generateSecret(String)`: `"ECDHGOST2012"` и `"RAW"`.
+*KEK* (Key Encryption Key) — симметричный ключ, который используется не для шифрования данных, а для защиты другого ключа.
 
-=== Защищённая передача ключа (KExp15/KImp15)
+*Типичный сценарий.* Алиса зашифровала документ на случайном ключе CEK и передаёт его Бобу, который в выработке CEK не участвовал. В CMS документ шифруется один раз на CEK, а CEK отдельно упаковывается для каждого получателя: десять получателей — десять упакованных копий CEK при одном шифртексте документа. Готовая реализация — в модуле `crypto-gost-pkix`: `CmsEnvelopedDataBuilder` и `CmsEnvelopedDataDecryptor` (см. link:../crypto-gost-pkix/README.adoc[CMS EnvelopedData]).
 
-KExp15/KImp15 — алгоритм защищённой передачи симметричного ключа от одной стороны
-к другой.
+Отличие от схемы «VKO и KDF»: там обе стороны онлайн договариваются об общем ключе; KExp15 передаёт уже существующий ключ.
 
-*Типичный сценарий:* отправитель шифрует ключ контента
-на KEK, полученном через VKO, и передаёт получателю. Получатель независимо
-вычисляет тот же KEK и расшифровывает ключ контента.
-
-*KEK* (Key Encryption Key, ключ шифрования ключей) — симметричный ключ, который используется не для шифрования данных, а для защиты другого ключа при передаче.
-
-====
-KExp15 используется когда нужно физически передать другой стороне ключ шифрования, который уже существует (в отличие от схемы VKO + KDF, которая позволяет договориться двум сторонам вместе об общем ключе онлайн).
-
-*Например:*
-Алиса зашифровала документ на случайном ключе CEK. Теперь ей нужно передать  CEK Бобу, чтобы он мог расшифровать документ. Боб не участвовал в выработке CEK — он его не знает.
-В CMS/PKCS#7: документ шифруется один раз на CEK, а CEK отдельно упаковывается через KExp15 для каждого получателя. Десять получателей — десять упакованных копий CEK, один шифртекст документа.
-
-Готовая реализация — в модуле `crypto-gost-pkix`: `CmsEnvelopedDataBuilder` / `CmsEnvelopedDataDecryptor`. См. link:../crypto-gost-pkix/README.adoc[CMS EnvelopedData].
-====
-
-
-.Полная схема: VKO → KDF_TREE → KExp15 / KImp15
+.Полная схема: VKO, KDF_TREE, KExp15 и KImp15
 [source,java]
 ----
 import org.rssys.gost.api.KeyAgreement;
@@ -1707,303 +1091,826 @@ import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.util.CryptoRandom;
 import java.math.BigInteger;
-import java.util.Arrays;
 
 ECParameters params = ECParameters.cryptoProA();
-
-// Долгосрочные ключевые пары сторон (обычно загружаются из сертификатов)
+// долгосрочные ключевые пары сторон (обычно загружаются из сертификатов)
 KeyPair aliceKeyPair = KeyGenerator.generateKeyPair(params);
-KeyPair bobKeyPair   = KeyGenerator.generateKeyPair(params);
+KeyPair bobKeyPair = KeyGenerator.generateKeyPair(params);
 
-// UKM — случайное число сессии, делает KEK уникальным для каждой передачи.
-// Генерируется отправителем и передаётся Бобу открыто (например, в заголовке сообщения).
+// UKM делает KEK уникальным для каждой передачи; отправитель передаёт его получателю открыто
 byte[] sessionUkm = new byte[8];
 CryptoRandom.INSTANCE.nextBytes(sessionUkm);
 BigInteger ukmValue = new BigInteger(1, sessionUkm);
 
-// CEK — ключ, которым зашифрован документ или файл.
-// Именно его нужно безопасно передать Бобу.
+// IV для KExp15 — отдельное случайное значение (8 байт); не переиспользуйте UKM как IV;
+// передаётся получателю открыто вместе с упакованным ключом
+byte[] iv = new byte[8];
+CryptoRandom.INSTANCE.nextBytes(iv);
+
+// CEK — ключ, которым зашифрован документ; его нужно безопасно передать Бобу
 SymmetricKey contentKey = KeyGenerator.generateSymmetricKey();
+byte[] secret = contentKey.getKey();
 
-// wrappedContentKey — CEK, упакованный (зашифрованный) на KEK.
-// Только это значение передаётся Бобу по открытому каналу вместе с sessionUkm.
 byte[] wrappedContentKey = null;
-byte[] aliceDerivedKeys  = null;
+byte[] aliceKek = null;
+byte[] aliceDerived = null;
+byte[] bobKek = null;
+byte[] bobDerived = null;
+byte[] restored = null;
+byte[] aliceMacRaw = null;
+byte[] aliceEncRaw = null;
+byte[] bobMacRaw = null;
+byte[] bobEncRaw = null;
+SymmetricKey receivedContentKey = null;
+SymmetricKey aliceKMac = null;
+SymmetricKey aliceKEnc = null;
+SymmetricKey bobKMac = null;
+SymmetricKey bobKEnc = null;
 try {
-    // ── Отправитель (Алиса) ──────────────────────────────────────────────
-
-    // Шаг 1: вычислить общий секрет KEK через VKO.
-    // Алиса использует свой закрытый ключ и открытый ключ Боба.
-    byte[] aliceKek = KeyAgreement.vkoGostR3410_2012_256(
+    // --- отправитель (Алиса) ---
+    // шаг 1: общий секрет KEK через VKO (свой закрытый ключ и открытый ключ Боба)
+    aliceKek = KeyAgreement.vkoGostR3410_2012_256(
             aliceKeyPair.getPrivate(), bobKeyPair.getPublic(), ukmValue);
+    // шаг 2: из KEK вывести ключи имитовставки и шифрования; порядок K_MAC и K_ENC определяет протокол
+    byte[] label = "kexp15".getBytes(StandardCharsets.UTF_8);
+    aliceDerived = KdfTreeGostR3411_2012_256.generate(aliceKek, label, sessionUkm, 2, 32);
+    aliceMacRaw = Arrays.copyOfRange(aliceDerived, 0, 32);
+    aliceEncRaw = Arrays.copyOfRange(aliceDerived, 32, 64);
+    aliceKMac = new SymmetricKey(aliceMacRaw); // конструктор копирует массив
+    aliceKEnc = new SymmetricKey(aliceEncRaw);
+    // шаг 3: упаковать CEK; результат на 16 байт длиннее секрета
+    wrappedContentKey = KeyExport.kExp15(secret, aliceKMac, aliceKEnc, iv);
 
-    // Шаг 2: из KEK вывести два рабочих ключа — для MAC и для шифрования.
-    // Порядок K_MAC/K_ENC в массиве определяется протоколом — здесь условный пример.
-    aliceDerivedKeys = KdfTreeGostR3411_2012_256.generate(
-            aliceKek, "kexp15".getBytes(), sessionUkm, 2, 32);
-    SymmetricKey aliceKMac = new SymmetricKey(Arrays.copyOfRange(aliceDerivedKeys, 0, 32));
-    SymmetricKey aliceKEnc = new SymmetricKey(Arrays.copyOfRange(aliceDerivedKeys, 32, 64));
+    // --- передача ---
+    // Бобу уходят открыто: sessionUkm, iv и wrappedContentKey; CEK и KEK по каналу не передаются
 
-    // Шаг 3: упаковать CEK — зашифровать его на паре ключей (kMac, kEnc).
-    // Результат: CEK, защищённый для передачи по открытому каналу.
-    wrappedContentKey = KeyExport.kExp15(
-            contentKey.getKey(), aliceKMac, aliceKEnc, sessionUkm); // <1>
-
-    // ── Передача ─────────────────────────────────────────────────────────
-    // Алиса отправляет Бобу открыто: sessionUkm + wrappedContentKey.
-    // Сам CEK и KEK по каналу не передаются никогда.
-
-    // ── Получатель (Боб) ─────────────────────────────────────────────────
-
-    // Шаг 1: вычислить тот же KEK через VKO.
-    // Боб использует свой закрытый ключ и открытый ключ Алисы.
-    // KEK у Боба будет идентичен KEK у Алисы.
-    byte[] bobKek = KeyAgreement.vkoGostR3410_2012_256(
+    // --- получатель (Боб) ---
+    // шаг 1: тот же KEK через VKO (свой закрытый ключ и открытый ключ Алисы)
+    bobKek = KeyAgreement.vkoGostR3410_2012_256(
             bobKeyPair.getPrivate(), aliceKeyPair.getPublic(), ukmValue);
-
-    // Шаг 2: вывести те же рабочие ключи из KEK и sessionUkm.
-    byte[] bobDerivedKeys = KdfTreeGostR3411_2012_256.generate(
-            bobKek, "kexp15".getBytes(), sessionUkm, 2, 32);
-    SymmetricKey bobKMac = new SymmetricKey(Arrays.copyOfRange(bobDerivedKeys, 0, 32));
-    SymmetricKey bobKEnc = new SymmetricKey(Arrays.copyOfRange(bobDerivedKeys, 32, 64));
-
-    // Шаг 3: распаковать CEK — расшифровать и проверить целостность.
-    // Если wrappedContentKey был повреждён или ключи неверны — AuthenticationException.
-    byte[] contentKeyBytes = KeyExport.kImp15(
-            wrappedContentKey, bobKMac, bobKEnc, sessionUkm); // <2>
-
-    // Боб получил CEK и может расшифровать документ
-    SymmetricKey decryptedContentKey = new SymmetricKey(contentKeyBytes);
-
+    // шаг 2: те же ключи из KEK и sessionUkm
+    bobDerived = KdfTreeGostR3411_2012_256.generate(bobKek, label, sessionUkm, 2, 32);
+    bobMacRaw = Arrays.copyOfRange(bobDerived, 0, 32);
+    bobEncRaw = Arrays.copyOfRange(bobDerived, 32, 64);
+    bobKMac = new SymmetricKey(bobMacRaw);
+    bobKEnc = new SymmetricKey(bobEncRaw);
+    // шаг 3: распаковать CEK; при повреждении данных или неверных ключах — AuthenticationException
+    restored = KeyExport.kImp15(wrappedContentKey, bobKMac, bobKEnc, iv);
+    receivedContentKey = new SymmetricKey(restored);
+    // использование receivedContentKey
 } finally {
     aliceKeyPair.getPrivate().destroy();
     bobKeyPair.getPrivate().destroy();
     contentKey.destroy();
-    if (aliceDerivedKeys != null) Arrays.fill(aliceDerivedKeys, (byte) 0);
+    for (SymmetricKey k : new SymmetricKey[] {
+            aliceKMac, aliceKEnc, bobKMac, bobKEnc, receivedContentKey}) {
+        if (k != null) k.destroy();
+    }
+    for (byte[] b : new byte[][] {secret, aliceKek, aliceDerived, aliceMacRaw, aliceEncRaw,
+            bobKek, bobDerived, bobMacRaw, bobEncRaw, restored}) {
+        if (b != null) Arrays.fill(b, (byte) 0);
+    }
 }
 ----
-<1> `kExp15` возвращает `contentKey.length + 16` байт: зашифрованный CEK + OMAC-тег целостности.
-<2> `kImp15` бросает `AuthenticationException` если данные повреждены или ключи неверны.
 
+=== Неаутентифицированные режимы
 
-NOTE: UKM передаётся получателю открыто (например, в заголовке сообщения).
-Его назначение — сделать KEK уникальным для каждой сессии.
+WARNING: Режимы `Cipher` (CTR, CBC, CFB, OFB) не защищают от изменения данных: повреждение или изменение остаются незамеченными. Если целостность важна, используйте `AuthenticatedCipher`, `MgmCipher` или `AuthenticatedStream`. Эти режимы — строительные блоки: применяйте их, только понимая последствия.
 
-=== Функции выработки ключей (KDF)
+.Шифрование данных в памяти (CTR)
+[source,java]
+----
+import org.rssys.gost.api.Cipher;
+import org.rssys.gost.cipher.SymmetricKey;
 
-Библиотека предоставляет три KDF-алгоритма для разных задач.
+SymmetricKey key = ...; // ваш ключ; destroy() — когда он больше не нужен (см. «Ключи»)
+byte[] plaintext = "данные".getBytes(StandardCharsets.UTF_8);
 
-[cols="2,3,2", options="header"]
+// IV (8 байт) генерируется автоматически и записывается в начало результата: [IV 8][шифртекст]
+byte[] encrypted = Cipher.encrypt(plaintext, key, Cipher.Mode.CTR);
+
+// IV извлекается из начала массива автоматически
+byte[] decrypted = Cipher.decrypt(encrypted, key, Cipher.Mode.CTR);
+----
+
+.CBC с дополнением (padding)
+[source,java]
+----
+import org.rssys.gost.api.Cipher;
+
+byte[] encrypted = Cipher.encrypt(plaintext, key, Cipher.Mode.CBC, Cipher.Padding.PKCS7);
+byte[] decrypted = Cipher.decrypt(encrypted, key, Cipher.Mode.CBC, Cipher.Padding.PKCS7);
+----
+
+Доступные схемы дополнения: `PKCS7`, `ISO7816_4`, `NONE` (для CBC данные без дополнения должны быть кратны 16 байтам, иначе исключение).
+
+.Потоки (CTR, CFB, OFB)
+[source,java]
+----
+import org.rssys.gost.api.Cipher;
+
+// IV записывается в поток автоматически первым
+try (InputStream in = Files.newInputStream(source);
+     OutputStream out = Cipher.encryptingStream(Files.newOutputStream(encrypted), key, Cipher.Mode.CTR)) {
+    in.transferTo(out);
+}
+
+// IV читается из потока автоматически
+try (InputStream in = Cipher.decryptingStream(Files.newInputStream(encrypted), key, Cipher.Mode.CTR);
+     OutputStream out = Files.newOutputStream(decrypted)) {
+    in.transferTo(out);
+}
+----
+
+Потоки не поддерживают CBC (`UnsupportedOperationException`).
+
+Размер IV: для CTR ровно 8 байт; для CBC, CFB и OFB по умолчанию 16, явный IV должен быть кратен 16 байтам (регистр сдвига m = n·z по ГОСТ Р 34.13-2015, контрольные примеры стандарта используют 32 байта), иначе он отвергается. `Cipher.decrypt(data, key, mode)` читает из начала массива только IV по умолчанию: для более длинного IV используйте перегрузку с явным IV.
+
+Лимит случайного IV: для CTR IV занимает 8 байт, и при случайной выработке вероятность совпадения IV у `q` сообщений под одним ключом ≈ q²/2⁶⁵ (q = 2¹⁶ даёт ≈2⁻³³, q = 2²⁴ даёт ≈2⁻¹⁷). Повтор IV под одним ключом в CTR и OFB открывает XOR открытых текстов. Поэтому для большого числа сообщений под одним ключом используйте `AuthenticatedCipher`, `MgmCipher` или `AuthenticatedStream` (ADR 06).
+
+=== JCA-провайдер
+
+`RssysGostProvider` (`org.rssys.gost.jca`) интегрирует алгоритмы со стандартной инфраструктурой Java: `MessageDigest`, `Mac`, `Cipher`, `KeyGenerator`, `KeyPairGenerator`, `KeyFactory`, `SecretKeyFactory`, `KeyAgreement`, `Signature`.
+
+==== Регистрация провайдера
+
+Регистрируйте провайдер один раз при старте приложения:
+
+[source,java]
+----
+import java.security.Security;
+import org.rssys.gost.jca.RssysGostProvider;
+
+Security.addProvider(new RssysGostProvider());
+// далее: getInstance("<алгоритм>", RssysGostProvider.PROVIDER_NAME)
+----
+
+В примерах ниже подразумевается `import org.rssys.gost.jca.RssysGostProvider;`.
+
+==== Имена алгоритмов
+
+[cols="2,3,3", options="header"]
 |===
-|Класс |Назначение |RFC
+|Класс JCA |Имя |Алиасы
 
-|`KdfGostR3411_2012_256`
-|Выработка ключевого материала из мастер-ключа и метки.
-Применяется в TLSTREE (RFC 9367).
-|RFC 7836 §4.4
+|`MessageDigest`
+|`GOST3411-2012-256`, `GOST3411-2012-512`
+|`Streebog-256`, `1.2.643.7.1.1.2.2`; `Streebog-512`, `1.2.643.7.1.1.2.3`
 
-|`KdfTreeGostR3411_2012_256`
-|Выработка нескольких ключей из одного мастер-ключа.
-Применяется в CTR-ACPKM-OMAC (RFC 9337 §5.1.1).
-|RFC 7836 §4.5
+|`Mac`
+|`HmacGOST3411-2012-256`, `HmacGOST3411-2012-512`, `CMAC-Kuznyechik`
+|`HMAC-Streebog-256`, `1.2.643.7.1.1.4.1`; `HMAC-Streebog-512`, `1.2.643.7.1.1.4.2`; `Kuznyechik-CMAC`
 
-|`Pbkdf2Streebog`
-|Вывод ключа из пароля. Применяется при расшифровании PKCS#12.
-|RFC 2898 §5.2
+|`Cipher`
+|`Kuznyechik/CTR/NoPadding`, `Kuznyechik/MGM/NoPadding`, `Kuznyechik/CTR-ACPKM/NoPadding`, `Kuznyechik/CTR-ACPKM-OMAC/NoPadding`
+|`GOST3412-2015`; OID `1.2.643.7.1.1.5.2.1` и `1.2.643.7.1.1.5.2.2` для ACPKM и ACPKM-OMAC
+
+|`KeyGenerator`, `SecretKeyFactory`
+|`Kuznyechik`
+|`GOST3412-2015`
+
+|`SecretKeyFactory` (из пароля)
+|`PBKDF2WithHmacStreebog512`
+|`PBKDF2WithHmacGOST3411-2012-512`
+
+|`KeyPairGenerator`, `KeyFactory`
+|`ECGOST3410-2012`
+|OID `1.2.643.7.1.1.1.1`, `1.2.643.7.1.1.1.2`
+
+|`Signature`
+|`ECGOST3410-2012-256`, `ECGOST3410-2012-512`
+|OID `1.2.643.7.1.1.3.2`, `1.2.643.7.1.1.3.3`
+
+|`KeyAgreement`
+|`ECDHGOST2012`, `VKOGOST3410-2012-256`, `VKOGOST3410-2012-512`
+|OID `1.2.643.7.1.1.6.1`, `1.2.643.7.1.1.6.2` для VKO
 |===
 
-NOTE: `KdfGostR3411_2012_256` (§4.4) и `KdfTreeGostR3411_2012_256` (§4.5) —
-разные алгоритмы с разным форматом буфера и разным назначением, несмотря на
-похожие названия. Не путайте их.
+Шифр `Kuznyechik` поддержан также в режимах `CBC`, `CFB` и `OFB`: `Kuznyechik/<режим>/NoPadding`. Для CBC дополнительно доступны `Kuznyechik/CBC/PKCS5Padding`, `Kuznyechik/CBC/PKCS7Padding` и `Kuznyechik/CBC/ISO7816-4`.
 
-==== KdfGostR3411_2012_256 — выработка ключевого материала (RFC 7836 §4.4)
+==== Ключи
 
-Формула: `K(i) = HMAC-Streebog256(key, [i]_b || label || 0x00 || seed || [L]_b)`,
-результат: `K(1) || K(2) || ...` до нужной длины.
-
-.Выработка 32 байт ключевого материала
+.Выработка симметричного ключа
 [source,java]
 ----
-import org.rssys.gost.kdf.KdfGostR3411_2012_256;
+import javax.crypto.KeyGenerator;
+import org.rssys.gost.jca.key.GostSecretKey;
 
-byte[] masterKey = ...; // 32-байтный мастер-ключ
-byte[] label     = "key expansion".getBytes(StandardCharsets.UTF_8);
-byte[] seed      = ...; // случайная затравка
-
-// Выработать 32 байта (один блок Streebog-256)
-byte[] keyMaterial = KdfGostR3411_2012_256.expand(masterKey, label, seed, 32);
+KeyGenerator kg = KeyGenerator.getInstance("Kuznyechik", RssysGostProvider.PROVIDER_NAME);
+GostSecretKey key = (GostSecretKey) kg.generateKey(); // провайдер возвращает GostSecretKey
 try {
-    // использование keyMaterial...
+    // использование ключа
 } finally {
-    java.util.Arrays.fill(keyMaterial, (byte) 0);
+    key.destroy(); // у конкретного типа destroy() не бросает проверяемых исключений
 }
 ----
 
-.Выработка большего объёма ключевого материала
+NOTE: Через интерфейс `javax.security.auth.Destroyable` `destroy()` объявляет проверяемое `DestroyFailedException`. Если тип ключа заранее неизвестен: `if (key instanceof Destroyable d) { try { d.destroy(); } catch (DestroyFailedException e) { ... } }`. Для ключей провайдера (`GostSecretKey`, `GostECPrivateKey`) удобнее приведение к конкретному типу.
+
+.Экспорт ключа в `byte[]`
 [source,java]
 ----
-import org.rssys.gost.kdf.KdfGostR3411_2012_256;
+import org.rssys.gost.jca.key.GostSecretKey;
 
-byte[] masterKey = ...;
-byte[] label     = "traffic keys".getBytes(StandardCharsets.UTF_8);
-byte[] seed      = ...;
-
-// 64 байта = два блока по 32; функция итерирует автоматически
-byte[] keyMaterial = KdfGostR3411_2012_256.expand(masterKey, label, seed, 64);
+GostSecretKey key = ...; // выработан или загружен ранее
+// копия ключа; бросает IllegalStateException, если ключ уничтожен
+byte[] rawKey = key.getEncoded(); // 32 байта
 try {
-    byte[] key1 = Arrays.copyOfRange(keyMaterial, 0, 32);  // первый ключ
-    byte[] key2 = Arrays.copyOfRange(keyMaterial, 32, 64); // второй ключ
-    // ...
+    // сохранить rawKey в зашифрованном хранилище
 } finally {
-    java.util.Arrays.fill(keyMaterial, (byte) 0);
+    Arrays.fill(rawKey, (byte) 0);
 }
 ----
 
-==== KdfTreeGostR3411_2012_256 — дерево ключей (RFC 7836 §4.5)
-
-Формула: `K(i) = HMAC-Streebog256(K_in, label || 0x00 || seed || INT(i,4) || INT(L,4))`,
-результат: `K(1) || K(2) || ... || K(count)`.
-
-Отличие от §4.4: счётчик `i` и длина `L` кодируются фиксированными 4 байтами big-endian;
-каждый блок не превышает 32 байт (размер вывода HMAC-Streebog-256).
-
-.Выработка ключа шифрования и ключа аутентификации из одного мастер-ключа
+.Импорт ключа через `SecretKeyFactory`
 [source,java]
 ----
-import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.SecretKeySpec;
+import org.rssys.gost.jca.key.GostSecretKey;
 
-byte[] masterKey = ...; // 32-байтный мастер-ключ
-byte[] label     = "kdf tree".getBytes(StandardCharsets.UTF_8);
-byte[] seed      = ...; // уникальная затравка для каждой сессии
-
-// count=2: два ключа по 32 байта
-// Результат: K(1) || K(2), итого 64 байта
-byte[] keys = KdfTreeGostR3411_2012_256.generate(masterKey, label, seed, 2, 32);
+byte[] rawKey = ...; // 32 байта, загружены из хранилища
+SecretKeyFactory skf = SecretKeyFactory.getInstance("Kuznyechik", RssysGostProvider.PROVIDER_NAME);
+GostSecretKey key = (GostSecretKey) skf.generateSecret(new SecretKeySpec(rawKey, "Kuznyechik"));
 try {
-    byte[] encKey = Arrays.copyOfRange(keys, 0, 32);  // K(1) — ключ шифрования
-    byte[] macKey = Arrays.copyOfRange(keys, 32, 64); // K(2) — ключ аутентификации
-    // ...
+    // использование ключа
 } finally {
-    java.util.Arrays.fill(keys, (byte) 0);
+    key.destroy();
+    Arrays.fill(rawKey, (byte) 0);
 }
 ----
 
-.Выработка одного ключа
+NOTE: Имя алгоритма в `SecretKeySpec` должно быть `Kuznyechik` или `GOST3412-2015`. Ключ с другим именем (`AES`, `RAW`) отвергается: `generateSecret` и `translateKey` бросают исключение, `Cipher.init` бросает `InvalidKeyException`. Ключ не становится ключом Кузнечика молча. Ключи для `Mac` имя не проверяют.
+
+.Импорт через конструктор `GostSecretKey`
 [source,java]
 ----
-import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
+import org.rssys.gost.jca.key.GostSecretKey;
 
-byte[] masterKey = ...;
-byte[] label     = "session key".getBytes(StandardCharsets.UTF_8);
-byte[] seed      = ...;
-
-// count=1, keyLen=32: один ключ 32 байта
-byte[] sessionKey = KdfTreeGostR3411_2012_256.generate(masterKey, label, seed, 1, 32);
+byte[] rawKey = ...; // 32 байта
+// алгоритм: "Kuznyechik", "HmacGOST3411-2012-256", "HmacGOST3411-2012-512", "CMAC-Kuznyechik"
+GostSecretKey key = new GostSecretKey("Kuznyechik", rawKey); // конструктор копирует массив
 try {
-    // использование sessionKey...
+    // использование ключа
 } finally {
-    java.util.Arrays.fill(sessionKey, (byte) 0);
+    key.destroy();
+    Arrays.fill(rawKey, (byte) 0);
 }
 ----
 
-NOTE: `keyLen` не может превышать 32 байта (размер вывода HMAC-Streebog-256 по RFC 7836 §4.5).
-Для большего объёма увеличивайте `count`, а не `keyLen`.
-
-==== Pbkdf2Streebog — вывод ключа из пароля (RFC 2898 §5.2)
-
-PBKDF2 с PRF = HMAC-Streebog-512 (RFC 9337 §4). Используется при работе с PKCS#12
-и для хранения ключей, защищённых паролем.
-
-.Вывод ключа из пароля (HMAC-Streebog-512)
+.Конвертация между `SymmetricKey` и `GostSecretKey`
 [source,java]
 ----
-import org.rssys.gost.kdf.Pbkdf2Streebog;
+import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.jca.key.GostSecretKey;
+
+SymmetricKey symKey = ...; // из api
+GostSecretKey jcaKey = new GostSecretKey("Kuznyechik", symKey);
+SymmetricKey back = jcaKey.toSymmetricKey();
+----
+
+Конвертация создаёт копию ключевых байт. Уничтожение одного объекта не влияет на другой: вызывайте `destroy()` на обоих. `GostSecretKey` защищает свой `destroy()` блокировкой.
+
+==== Хэш
+
+[source,java]
+----
+import java.security.MessageDigest;
+
+MessageDigest md256 = MessageDigest.getInstance("GOST3411-2012-256", RssysGostProvider.PROVIDER_NAME);
+byte[] hash256 = md256.digest(data);
+
+MessageDigest md512 = MessageDigest.getInstance("GOST3411-2012-512", RssysGostProvider.PROVIDER_NAME);
+byte[] hash512 = md512.digest(data);
+----
+
+Хэш потока: вызывайте `md256.update(buf, 0, n)` в цикле чтения и затем `md256.digest()`.
+
+==== HMAC и CMAC
+
+[source,java]
+----
+import javax.crypto.Mac;
+import org.rssys.gost.jca.key.GostSecretKey;
+
+GostSecretKey key = ...; // выработан ранее
+
+Mac hmac = Mac.getInstance("HmacGOST3411-2012-256", RssysGostProvider.PROVIDER_NAME);
+hmac.init(key);
+byte[] hmacTag = hmac.doFinal(data);
+
+Mac cmac = Mac.getInstance("CMAC-Kuznyechik", RssysGostProvider.PROVIDER_NAME);
+cmac.init(key);
+byte[] cmacTag = cmac.doFinal(data);
+----
+
+Для потока вызывайте `update(buf, 0, n)` в цикле и `doFinal()`. Для HMAC-512 используйте `HmacGOST3411-2012-512`. Для проверки тега, полученного из JCA `Mac`, используйте `CmacApi.verifyMac(expected, received)` (см. раздел «HMAC-Стрибог»).
+
+==== Шифрование
+
+.Kuznyechik/CTR/NoPadding (без аутентификации)
+[source,java]
+----
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.jca.key.GostSecretKey;
+
+GostSecretKey key = ...; // выработан ранее
+byte[] plaintext = "данные".getBytes(StandardCharsets.UTF_8);
+
+Cipher cipher = Cipher.getInstance("Kuznyechik/CTR/NoPadding", RssysGostProvider.PROVIDER_NAME);
+cipher.init(Cipher.ENCRYPT_MODE, key); // IV (8 байт) генерируется автоматически
+byte[] ciphertext = cipher.doFinal(plaintext);
+byte[] iv = cipher.getIV(); // передаётся получателю вместе с ciphertext
+
+cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(iv));
+byte[] decrypted = cipher.doFinal(ciphertext);
+----
+
+CTR без аутентификации не защищает от изменения данных. Если целостность важна, используйте `AuthenticatedCipher` и `AuthenticatedStream` из `org.rssys.gost.api` либо `Kuznyechik/MGM/NoPadding`.
+
+.Kuznyechik/MGM/NoPadding (с AAD и без)
+[source,java]
+----
+import javax.crypto.AEADBadTagException;
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.jca.key.GostSecretKey;
+
+GostSecretKey key = ...; // выработан ранее
+byte[] plaintext = "открытые данные".getBytes(StandardCharsets.UTF_8);
+byte[] aad = "заголовок".getBytes(StandardCharsets.UTF_8);
+
+Cipher cipher = Cipher.getInstance("Kuznyechik/MGM/NoPadding", RssysGostProvider.PROVIDER_NAME);
+cipher.init(Cipher.ENCRYPT_MODE, key); // ICN генерируется автоматически
+cipher.updateAAD(aad);                 // до doFinal; AAD можно не передавать
+byte[] ciphertext = cipher.doFinal(plaintext); // [шифртекст][тег 16]
+byte[] icn = cipher.getIV(); // в отличие от MgmCipher.seal, ICN в буфер не включается: передайте его получателю
+
+cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(icn));
+cipher.updateAAD(aad);
+try {
+    byte[] decrypted = cipher.doFinal(ciphertext);
+} catch (AEADBadTagException e) {
+    // тег не совпал: данные изменены или повреждены
+}
+----
+
+`init` принимает `IvParameterSpec` (ICN 16 байт, старший бит равен 0) или `GCMParameterSpec` с тегом 128 бит; тег другой длины отвергается, усечение тега не поддерживается. Режимы `WRAP_MODE` и `UNWRAP_MODE` шифрами провайдера не поддерживаются (`UnsupportedOperationException`). Пустой открытый текст при пустом AAD отвергается (RFC 9058 §6); `CipherOutputStream.close()` на потоке, в который ничего не записано и не передано AAD, бросает `IllegalArgumentException`, а нижний поток в этом случае закрывает вызывающий.
+
+MGM буферизует весь открытый текст до `doFinal`; используйте его, только если данные помещаются в память.
+
+.Потоки: CipherOutputStream и CipherInputStream (CTR без аутентификации)
+[source,java]
+----
+import javax.crypto.Cipher;
+import javax.crypto.CipherInputStream;
+import javax.crypto.CipherOutputStream;
+import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.jca.key.GostSecretKey;
+
+GostSecretKey key = ...; // выработан ранее
+Cipher cipher = Cipher.getInstance("Kuznyechik/CTR/NoPadding", RssysGostProvider.PROVIDER_NAME);
+
+// шифрование: IV генерируется автоматически, записываем его явно перед шифртекстом
+cipher.init(Cipher.ENCRYPT_MODE, key);
+byte[] iv = cipher.getIV();
+try (InputStream in = Files.newInputStream(source);
+     OutputStream raw = Files.newOutputStream(encrypted)) {
+    raw.write(iv);
+    try (OutputStream out = new CipherOutputStream(raw, cipher)) {
+        in.transferTo(out);
+    }
+}
+
+// расшифрование: IV читаем из начала потока
+try (InputStream raw = Files.newInputStream(encrypted)) {
+    byte[] ivRead = raw.readNBytes(iv.length);
+    cipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(ivRead));
+    try (InputStream in = new CipherInputStream(raw, cipher);
+         OutputStream out = Files.newOutputStream(decrypted)) {
+        in.transferTo(out);
+    }
+}
+----
+
+JCA не управляет IV в потоковом API: приложение само записывает и читает IV. Для потоков с проверкой целостности используйте `AuthenticatedStream` из `org.rssys.gost.api`.
+
+==== Состояние Cipher после doFinal
+
+Состояние шифра после `doFinal` зависит от режима:
+
+[cols="2,3,3", options="header"]
+|===
+|Шифр |Шифрование после `doFinal` |Расшифрование после `doFinal`
+
+|`CTR`, `CBC`, `CFB`, `OFB`
+|`update` и `doFinal` без нового `init` бросают `IllegalStateException`: сброс на тот же IV повторил бы гамму под тем же ключом (в `CTR` и `OFB` совпала бы гамма и раскрылся XOR открытых текстов, в `CFB` — XOR первых блоков, в `CBC` — общий префикс из целых блоков). `getIV()` остаётся доступным.
+|Возвращается в состояние после `init` (тот же ключ и IV), в том числе после ошибки padding.
+
+|`MGM`
+|Нужен новый `init`: у каждого сообщения свой ICN, `Mgm` не умеет `reset()`.
+|Нужен новый `init`, в том числе после ошибки тега.
+
+|`CTR-ACPKM`, `CTR-ACPKM-OMAC`
+|Нужен новый `init` с новым UKM; повтор пары ключ и UKM отвергается.
+|Возвращается в состояние после `init`.
+|===
+
+`init` на шифрование с теми же ключом и IV (ICN, UKM), на которых уже выдан шифртекст, отвергается (`InvalidAlgorithmParameterException`) во всех режимах: `CTR`, `CBC`, `CFB`, `OFB`, `MGM`, `CTR-ACPKM`. Сгенерированный IV входит в пару, поэтому цепочка «`init` без параметров, `getIV()`, `init` с тем же IV» тоже отвергается. Проверка работает только внутри одного экземпляра `Cipher`: помнится последняя использованная пара (после A, затем B пара A снова принимается), хранится отпечаток ключа, а не ключ. Уникальность IV между экземплярами обеспечивает вызывающий; осознанное детерминированное шифрование (например, CBC с фиксированным IV) возможно через новый экземпляр. Расшифрование не проверяется. Для `CTR-ACPKM` без OMAC сравниваются первые 8 байт UKM: от них зависит гамма.
+
+IV обязателен при расшифровании во всех режимах (`IvParameterSpec`); при шифровании без параметров IV генерируется и доступен через `getIV()`. Padding допустим только в `CBC`: для `CTR`, `CFB` и `OFB` трансформация с padding отвергается уже в `Cipher.getInstance`.
+
+==== CTR-ACPKM и CTR-ACPKM-OMAC (PBES2, RFC 9337)
+
+Эти режимы доступны только через JCA (в `api.Cipher.Mode` их нет) и являются строительными блоками.
+
+[cols="1,2,2,1,1", options="header"]
+|===
+|Режим |Когда использовать |Аутентификация |Потоковый `update` |Буферизует всё
+
+|`CTR-ACPKM`
+|Потоковое шифрование, большие файлы. Аутентификация — отдельно.
+|Нет
+|да
+|нет
+
+|`CTR-ACPKM-OMAC`
+|Шифрование с аутентификацией (MAC по открытому тексту, шифруется `M ‖ MAC`, RFC 9337). Данные помещаются в память.
+|Да (OMAC-тег)
+|нет
+|да
+|===
+
+Размер секции смены ключа ACPKM по умолчанию 4096 байт (`AcpkmSectionSize.DEFAULT`); 256 КиБ (`AcpkmSectionSize.CMS`) применяется в CMS EnvelopedData (модуль `crypto-gost-pkix`).
+
+**UKM (User Keying Material)** — нонс, аналог IV. Повтор UKM под одним ключом полностью раскрывает шифрование.
+
+* `CTR-ACPKM`: UKM не короче 8 байт (первые 8 байт — IV счётчика, RFC 8645 §6.2.2). Профили PBES2 (RFC 9337 §7.3) и CMS требуют ровно 16 байт.
+* `CTR-ACPKM-OMAC`: UKM ровно 16 байт (IV ‖ seed для KDF_TREE, из которого выводятся ключ шифрования и ключ OMAC). Другая длина отвергается: усечённый или дополненный нулями seed ослабил бы защиту от повтора гаммы.
+* Без явного UKM при шифровании провайдер генерирует его из `CryptoRandom`: 8 байт для `CTR-ACPKM` и 16 байт для `CTR-ACPKM-OMAC`; получить его можно через `cipher.getIV()`.
+* При расшифровании UKM обязателен и передаётся через `IvParameterSpec`; он должен совпадать с использованным при шифровании.
+
+.CTR-ACPKM: шифрование с автоматическим UKM
+[source,java]
+----
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+
+Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM/NoPadding", RssysGostProvider.PROVIDER_NAME);
+cipher.init(Cipher.ENCRYPT_MODE, key); // key — SecretKey Кузнечика (32 байта)
+byte[] ukm = cipher.getIV(); // сохраните: без него расшифрование невозможно; передаётся открыто
+byte[] ciphertext = cipher.doFinal(plaintext);
+
+// расшифрование: IvParameterSpec обязателен
+Cipher decipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM/NoPadding", RssysGostProvider.PROVIDER_NAME);
+decipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(ukm));
+byte[] restored = decipher.doFinal(ciphertext);
+----
+
+.CTR-ACPKM: явный UKM и потоковое шифрование больших файлов
+[source,java]
+----
+import javax.crypto.Cipher;
+import javax.crypto.CipherOutputStream;
+import javax.crypto.spec.IvParameterSpec;
 import org.rssys.gost.util.CryptoRandom;
 
-byte[] password   = "секретный пароль".getBytes(StandardCharsets.UTF_8);
-byte[] salt       = new byte[16];
-CryptoRandom.INSTANCE.nextBytes(salt); // <1>
-int    iterations = 100_000;                      // <2>
-int    keyLen     = 32;                           // байт
+byte[] ukm = new byte[8];
+CryptoRandom.INSTANCE.nextBytes(ukm); // каждый раз новый UKM
 
-byte[] derivedKey = Pbkdf2Streebog.generate(password, salt, iterations, keyLen);
-try {
-    // использование derivedKey...
-} finally {
-    java.util.Arrays.fill(derivedKey, (byte) 0);
-    java.util.Arrays.fill(password, (byte) 0);   // <3>
+Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM/NoPadding", RssysGostProvider.PROVIDER_NAME);
+cipher.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(ukm));
+
+try (OutputStream raw = Files.newOutputStream(encrypted);
+     InputStream in = Files.newInputStream(source)) {
+    raw.write(ukm); // UKM открытым текстом в начало потока: при расшифровании читается первым
+    try (CipherOutputStream cos = new CipherOutputStream(raw, cipher)) {
+        in.transferTo(cos); // шифруется и пишется порциями, без буферизации
+    }
 }
 ----
-<1> Соль не является секретом — её можно хранить рядом с зашифрованными данными.
-Главное требование: соль уникальна для каждого объекта.
-<2> Число итераций определяет вычислительную стоимость. NIST рекомендует не менее
-600 000 для PBKDF2-HMAC-SHA256; для Streebog-512 подбирайте исходя из требуемого
-времени выполнения.
-<3> `Pbkdf2Streebog.generate` не обнуляет массив пароля — это ответственность
-вызывающего кода.
 
+`CipherOutputStream.close()` вызывает `doFinal`; для `CTR-ACPKM` без OMAC это не операция (тега нет), все данные уже записаны через `update`.
 
-.JCA-вариант через SecretKeyFactory
+.CTR-ACPKM-OMAC: шифрование с аутентификацией (данные в памяти)
+[source,java]
+----
+import javax.crypto.AEADBadTagException;
+import javax.crypto.Cipher;
+import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.util.CryptoRandom;
+
+byte[] ukm = new byte[16]; // ровно 16 байт
+CryptoRandom.INSTANCE.nextBytes(ukm);
+
+Cipher cipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM-OMAC/NoPadding", RssysGostProvider.PROVIDER_NAME);
+cipher.init(Cipher.ENCRYPT_MODE, key, new IvParameterSpec(ukm));
+byte[] ciphertext = cipher.doFinal(plaintext); // длина = plaintext.length + 16 (тег в конце)
+
+Cipher decipher = Cipher.getInstance("Kuznyechik/CTR-ACPKM-OMAC/NoPadding", RssysGostProvider.PROVIDER_NAME);
+decipher.init(Cipher.DECRYPT_MODE, key, new IvParameterSpec(ukm));
+try {
+    byte[] restored = decipher.doFinal(ciphertext); // проверяет тег
+} catch (AEADBadTagException e) {
+    // данные повреждены, ключ или UKM неверны
+}
+----
+
+Схема RFC 9337 §5.1.1: CMAC считается по открытому тексту, затем `M ‖ MAC` шифруется одним потоком CTR-ACPKM; зашифрованный 16-байтный тег добавляется в конец шифртекста. `CTR-ACPKM-OMAC` и `MGM` буферизуют весь открытый текст до `doFinal`: не используйте их через `CipherOutputStream` для больших файлов.
+
+==== Электронная подпись
+
+.Ключевая пара, подпись и проверка
+[source,java]
+----
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.Signature;
+import java.security.spec.ECGenParameterSpec;
+import org.rssys.gost.jca.key.GostECPrivateKey;
+
+byte[] data = "сообщение для подписи".getBytes(StandardCharsets.UTF_8);
+
+KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", RssysGostProvider.PROVIDER_NAME);
+kpg.initialize(new ECGenParameterSpec("tc26-gost-A-256"));
+KeyPair pair = kpg.generateKeyPair();
+try {
+    // хэш Стрибог-256 вычисляется внутри по параметрам кривой
+    Signature signer = Signature.getInstance("ECGOST3410-2012-256", RssysGostProvider.PROVIDER_NAME);
+    signer.initSign(pair.getPrivate());
+    signer.update(data);
+    byte[] signature = signer.sign(); // 64 байта
+
+    Signature verifier = Signature.getInstance("ECGOST3410-2012-256", RssysGostProvider.PROVIDER_NAME);
+    verifier.initVerify(pair.getPublic());
+    verifier.update(data);
+    boolean valid = verifier.verify(signature);
+} finally {
+    ((GostECPrivateKey) pair.getPrivate()).destroy();
+}
+----
+
+Для 512-битных кривых используйте `ECGOST3410-2012-512`. Имена кривых: `cryptopro-A`, `cryptopro-B`, `cryptopro-C`, `tc26-gost-A-256` (256 бит); `tc26-gost-A-512`, `tc26-gost-B-512`, `tc26-gost-C-512` (512 бит); регистр не важен. Инициализация по размеру: `kpg.initialize(256)` даёт `cryptopro-A`, `kpg.initialize(512)` даёт `tc26-gost-A-512`.
+
+В JCA подпись по умолчанию гибридная (`NonceMode.HEDGED`) — включать ничего не нужно; воспроизводимую подпись задаёт параметр:
+
+[source,java]
+----
+import org.rssys.gost.jca.spec.GostSignatureParameterSpec;
+import org.rssys.gost.signature.NonceMode;
+
+signer.setParameter(new GostSignatureParameterSpec(NonceMode.DETERMINISTIC)); // режим нонса
+----
+
+`java.security.Signature.verify` бросает `SignatureException` при подписи неверной длины, как требует контракт JDK.
+
+.Импорт закрытого ключа из PKCS#8 DER и открытого из X.509 DER
+[source,java]
+----
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
+import org.rssys.gost.jca.key.GostECPrivateKey;
+
+KeyFactory kf = KeyFactory.getInstance("ECGOST3410-2012", RssysGostProvider.PROVIDER_NAME);
+
+byte[] pkcs8Der = ...; // PrivateKeyInfo DER
+PrivateKey priv = kf.generatePrivate(new PKCS8EncodedKeySpec(pkcs8Der));
+try {
+    // подпись через Signature.initSign(priv)
+} finally {
+    ((GostECPrivateKey) priv).destroy();
+    Arrays.fill(pkcs8Der, (byte) 0);
+}
+
+byte[] x509Der = ...; // SubjectPublicKeyInfo DER
+PublicKey pub = kf.generatePublic(new X509EncodedKeySpec(x509Der));
+----
+
+.Экспорт ключей в DER
+[source,java]
+----
+import java.security.KeyPair;
+
+KeyPair pair = ...; // выработана через KeyPairGenerator выше
+byte[] pubDer = pair.getPublic().getEncoded();   // X.509 SubjectPublicKeyInfo
+byte[] privDer = pair.getPrivate().getEncoded(); // PKCS#8; хранить только в зашифрованном виде
+try {
+    // сохранить privDer
+} finally {
+    Arrays.fill(privDer, (byte) 0);
+}
+----
+
+После `destroy()` `getEncoded()` закрытого ключа бросает `IllegalStateException`; `null` возвращается только если кривая ключа не зарегистрирована в провайдере и ключ нельзя закодировать. На границах JCA (`KeyFactory`, `Signature.initSign`, `KeyAgreement.init`) уничтоженный ключ даёт проверяемое исключение (`InvalidKeySpecException`, `InvalidKeyException`). Открытые ключи сравниваются по значению (`equals` и `hashCode` по кривой и точке), закрытые — только по ссылке.
+
+==== Согласование ключей
+
+.VKO
+[source,java]
+----
+import javax.crypto.KeyAgreement;
+import java.math.BigInteger;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.spec.ECGenParameterSpec;
+import org.rssys.gost.jca.spec.GostUkmParameterSpec;
+
+// для VKO нужны ключи, выработанные через JCA
+KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", RssysGostProvider.PROVIDER_NAME);
+kpg.initialize(new ECGenParameterSpec("cryptopro-A"));
+KeyPair aliceJca = kpg.generateKeyPair();
+KeyPair bobJca = kpg.generateKeyPair();
+
+BigInteger ukm = new BigInteger(1, ukmBytes); // ukmBytes — случайные 8 и более байт
+
+KeyAgreement ka = KeyAgreement.getInstance("VKOGOST3410-2012-256", RssysGostProvider.PROVIDER_NAME);
+ka.init(aliceJca.getPrivate(), new GostUkmParameterSpec(ukm)); // без GostUkmParameterSpec — InvalidKeyException
+ka.doPhase(bobJca.getPublic(), true);
+byte[] kek = ka.generateSecret(); // 32 байта KEK_VKO
+----
+
+`VKOGOST3410-2012-512` (RFC 7836 §4.3.2) даёт 64 байта и работает только на 512-битных ключах; `VKOGOST3410-2012-256` работает на ключах обоих размеров. Ключ партнёра на другой кривой отвергается в `doPhase` (`InvalidKeyException`). После `generateSecret()` объект возвращается в состояние после `init` (тот же закрытый ключ и UKM); для нового секрета нужен новый `doPhase`.
+
+.Сырой ECDH (без UKM; только для протокольных реализаций)
+[source,java]
+----
+import javax.crypto.KeyAgreement;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+
+PrivateKey myPriv = ...; // ключи, выработанные через JCA KeyPairGenerator
+PublicKey peerPub = ...;
+
+KeyAgreement ka = KeyAgreement.getInstance("ECDHGOST2012", RssysGostProvider.PROVIDER_NAME);
+ka.init(myPriv);
+ka.doPhase(peerPub, true);
+byte[] shared = ka.generateSecret(); // 32 байта
+// вариант generateSecret("RAW") возвращает SecretKey: байты — через getEncoded()
+----
+
+==== Пароль в ключ (PBKDF2)
+
 [source,java]
 ----
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
+import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.util.CryptoRandom;
 
-char[] password   = "секретный пароль".toCharArray();
-byte[] salt       = new byte[16];
+char[] password = ...; // ввод пользователя
+byte[] salt = new byte[16];
 CryptoRandom.INSTANCE.nextBytes(salt);
-int    iterations = 100_000;
-int    keyLenBits = 256;                           // <1>
+int iterations = 100_000;
+int keyLenBits = 256; // длина в битах (у Pbkdf2Streebog.generate — в байтах)
 
-SecretKeyFactory skf = SecretKeyFactory.getInstance(
-        "PBKDF2WithHmacStreebog512", "RssysGostProvider");
+SecretKeyFactory skf = SecretKeyFactory.getInstance("PBKDF2WithHmacStreebog512", RssysGostProvider.PROVIDER_NAME);
 PBEKeySpec spec = new PBEKeySpec(password, salt, iterations, keyLenBits);
+GostSecretKey key = null;
 try {
-    SecretKey key = skf.generateSecret(spec);      // <2>
+    key = (GostSecretKey) skf.generateSecret(spec); // getAlgorithm() = "PBKDF2WithHmacStreebog512"
     byte[] raw = key.getEncoded();
-    // передать raw в KDF или использовать как ключ шифрования...
-    java.util.Arrays.fill(raw, (byte) 0);
+    // передать raw в KDF или использовать как ключ шифрования, затем затереть
+    Arrays.fill(raw, (byte) 0);
 } finally {
     spec.clearPassword();
-    java.util.Arrays.fill(password, '\0');
+    Arrays.fill(password, '\0');
+    if (key != null) key.destroy();
 }
 ----
-<1> Длина ключа в **битах** (в отличие от `Pbkdf2Streebog.generate`, где байты).
-<2> Возвращает `GostSecretKey` с `getAlgorithm() = "PBKDF2WithHmacStreebog512"`.
-Алиас `"PBKDF2WithHmacGOST3411-2012-512"` даёт тот же результат.
 
-NOTE: Символы пароля за пределами Basic Multilingual Plane (U+10000 и выше)
-кодируются как CESU-8, а не UTF-8. Для паролей из ASCII и кириллицы поведение
-идентично стандартному UTF-8.
+Пароль кодируется в стандартный UTF-8 (`org.rssys.gost.util.PasswordUtf8`), в том числе символы вне Basic Multilingual Plane (суррогатная пара даёт одну 4-байтовую последовательность). Непарный суррогат отвергается (`InvalidKeySpecException`): молчаливая замена на `?` дала бы ключ от другого пароля. Тот же путь кодирования используется при загрузке и сборке PKCS#12.
 
-=== Замечания по безопасности API
+=== Безопасность
 
-* *Очистка ключей* — `SymmetricKey`, `PrivateKeyParameters`, `ECDSASigner`
-реализуют `javax.security.auth.Destroyable`. Вызывайте `destroy()` в блоке `finally`.
+==== Ключи и затирание
 
-* *Сравнение MAC* — используйте `verifyMac()` вместо `Arrays.equals()`.
-`verifyMac` использует `MessageDigest.isEqual()` — constant-time.
-* *IV* — каждый вызов `encrypt()` без явного IV генерирует новый случайный IV.
-Повторное использование IV с одним ключом в CTR/OFB нарушает конфиденциальность.
-* *Thread-safety* — статические методы всех классов API потокобезопасны.
+* *Затирание.* `SymmetricKey`, `PrivateKeyParameters`, `ECDSASigner`, `GostSecretKey`, `GostECPrivateKey`, `Digest`, `CmacApi` реализуют `destroy()` (ключи и `ECDSASigner` — `Destroyable`). Вызывайте его в `finally`. Копии, полученные через `getKey()`, `getEncoded()`, `getD()`, и производные ключи затирайте сами: `Arrays.fill(buf, (byte) 0)`.
+* *Ограничения затирания на Java.* HotSpot вправе удалить запись в массив как «мёртвую», а байты могут остаться в куче до сборки мусора и попасть в дамп памяти: гарантированного затирания на чистой Java нет. Поэтому по возможности держите секреты в объектах с `destroy()`, не копируйте их без нужды и сокращайте время жизни.
+* *Пароли.* `String` затереть нельзя: храните пароль в `char[]` с самого начала. Кодируйте его через `PasswordUtf8.encode` и затирайте и `char[]`, и результат.
+* *Потоки и параллельность.* `destroy()` не должен пересекаться с операциями над тем же ключом.
 
+==== Проверка и сравнение
 
-=== Замечания по безопасности JCA
+* *Теги.* Проверяйте теги (CMAC и HMAC) через `CmacApi.verifyMac(expected, received)`: сравнение за постоянное время, `null`, пустой и тег другой длины дают `false`. Длину ожидаемого тега задаёт получатель. `Arrays.equals` для тегов не используйте.
+* *Участки массивов и другие секреты.* Для сравнения участков массивов с секретами за постоянное время есть `ConstantTime.equals(a, aOff, b, bOff, len)` (`org.rssys.gost.util`): метод сам отвергает `null`, отрицательные длину и смещения и выход за границы (`IllegalArgumentException`), поэтому передавайте корректные диапазоны. Для целых массивов можно использовать `MessageDigest.isEqual` (предварительно отсекая `null`).
 
-* *Закрытые ключи* — `PrivateKeyParameters` реализует `Destroyable`.
-  После использования вызывайте `((Destroyable) privateKey).destroy()`.
-* *ICN в MGM* — повтор ICN с тем же ключом полностью компрометирует защиту.
-  Используйте `ENCRYPT_MODE` без явного ICN: он генерируется через `CryptoRandom` автоматически.
-* *AAD* — `updateAAD` должен вызываться до `update`/`doFinal`. Порядок важен.
-* *AEADBadTagException* — не кэшируйте данные из потока расшифрования до получения этого исключения или успешного завершения.
+==== Контракты ошибок
+
+[cols="2,3", options="header"]
+|===
+|Где |Что происходит при нарушении
+|`AuthenticatedCipher.open`, `MgmCipher.open`
+|`AuthenticationException` при несовпадении тега или повреждении пакета
+
+|`KeyExport.kImp15`
+|`AuthenticationException` при несовпадении тега; `null` и пакет короче 17 байт — `IllegalArgumentException` (ошибка вызывающего кода)
+|`AuthenticatedStream` (чтение)
+|`AuthenticationIOException` (наследник `IOException`) при несовпадении тега, повреждении и усечении потока
+|`Signature.verify`, `Signature.verifyHash`, `CmacApi.verifyMac`
+|`false` (подпись неверной длины, пустая и `null` — тоже `false`)
+|JCA `Cipher` MGM, CTR-ACPKM-OMAC
+|`AEADBadTagException`
+|JCA `Signature.verify`
+|`SignatureException` при подписи неверной длины (контракт JDK)
+|===
+
+Аргументы `null` и некорректные значения — ошибка вызывающего кода, а не отказ проверки: не перехватывайте такие исключения, а исправляйте вызов. Тип исключения зависит от класса и аргумента (`NullPointerException` или `IllegalArgumentException`); `AuthenticatedCipher` и `AuthenticatedStream` на `null` вместо буфера или потока дают `NullPointerException`, у `AuthenticatedCipher` это зафиксировано в Javadoc как намеренное, для остальных классов смотрите `@throws` в Javadoc метода. Отказы проверки целостности и подписи сообщаются способами из таблицы выше.
+
+==== Одноразовость нонсов по слоям
+
+* `AuthenticatedCipher`, `AuthenticatedStream`: нонс (соль, `streamNonce`) генерируется внутри; вы отвечаете только за лимит сообщений под одним ключом (≈2⁴⁸).
+* `MgmCipher.seal`: ICN генерируется внутри; `sealWithIcn` — ICN задаёте вы, повтор раскрывает защиту.
+* `Cipher` (CTR, CBC, CFB, OFB): IV генерируется внутри при шифровании без явного IV; при случайном 8-байтном IV действует лимит из раздела «Неаутентифицированные режимы».
+* JCA: внутри экземпляра `Cipher` повтор пары «ключ и IV (ICN, UKM)» отвергается; между экземплярами уникальность обеспечивает вызывающий.
+* Для всех режимов с UKM, ICN и IV: не используйте один и тот же случайный нонс повторно под одним ключом.
+
+==== Подписи
+
+* Режим нонса по умолчанию — `HEDGED`: включать ничего не нужно, подпись одного сообщения каждый раз другая. Воспроизводимость — только явный `NonceMode.DETERMINISTIC`.
+* `signHash` подписывает любой переданный хэш: не отдавайте его недоверенной стороне без авторизации.
+* Ядро не проверяет выработанную подпись открытым ключом (ADR 07): защиты от сбоев вычислений в ядре нет. Для критичных подписей проверяйте результат сами: `Signature.verify` после `Signature.sign`, `Signature.verifyHash` после `Signature.signHash`. X.509-строители модуля `crypto-gost-pkix` такую проверку выполняют всегда.
+
+=== Логирование
+
+Модуль `crypto-gost-core` в журнал ничего не пишет: ни в `java.util.logging`, ни в консоль. Об отказе он сообщает исключением (см. «Контракты ошибок»), а приложение само решает, что и куда записать: запись внутри примитива дублировала бы исключение и замедляла бы горячий путь. Это проверяет тест `CoreSilenceTest` по байткоду всех классов модуля.
+
+Журнал ведут верхние модули (`pkix`, `tls13`, `jsse`) через общую обёртку `org.rssys.gost.util.GostLogger`: она тонкая, работает и на JDK, и на Android и пишет в `java.util.logging`. Имя логгера -- полное имя класса, поэтому всё лежит под `org.rssys.gost.*`, а уровень настраивается и для класса, и для пакета.
+
+Связать записи одного соединения позволяет `withContext`: `GostLogger.getLogger(...).withContext("conn#17")` ставит префикс `[conn#17]` перед текстом, не меняя имя JUL-логгера, поэтому настройка уровня по классу и пакету продолжает работать. Метка не должна содержать управляющие символы и квадратные скобки (`IllegalArgumentException`); `null` и пустая строка означают «без префикса».
+
+[source,java]
+----
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
+
+GostLogger log = GostLogger.getLogger("org.rssys.gost.pkix.cms.CmsEnvelopedDataBuilder");
+
+// записи одного соединения помечаются префиксом [conn#17]
+GostLogger connLog = log.withContext("conn#17");
+connLog.log(Level.DEBUG, "verify {0}", "certificate");
+// в журнале после форматирования: FINE: [conn#17] verify certificate
+----
+
+[cols="1,1,4",options="header"]
+|===
+| Уровень обёртки | Уровень JUL | Что пишется
+
+| `TRACE`, `DEBUG` | `FINEST`, `FINE` | ход операций и причины штатных отказов: подпись, проверка, шифрование, загрузка, успешные обращения к сети
+| `INFO` | `INFO` | редкие события, о которых полезно знать оператору
+| `WARNING` | `WARNING` | работа в ослабленном режиме и отказы, которые библиотека обработала (отказ записывается один раз)
+| `ERROR` | `SEVERE` | сбои, которые библиотека не может обработать
+|===
+
+Успешная операция не событие: на каждую подпись, проверку или расшифрование библиотека ничего не пишет выше `DEBUG`.
+
+Как выбирается уровень:
+
+* Отказ, который библиотека пробрасывает исключением с полным описанием причины, в журнал не дублируется. Запись обязательна, когда отказ поглощается внутри (проверка отзыва в мягком режиме, переход к следующему зеркалу, пропуск билета). Если запись делается при пробросе, она несёт то, чего нет в исключении: адрес, серийный номер, причину по конкретному источнику.
+* Отказ по данным собеседника (подпись или binder, схемы подписи, содержимое расширений, возраст билета, особенности кодировки CRL) пишется на `DEBUG`: код причины остаётся в исключении и в alert. Состояние локального хранилища и внутренние сбои (чужая привязка сессии, просроченная запись хранилища PSK) пишутся на `WARNING`: оператор может на них повлиять.
+* `ERROR` пишется только для сбоя, который библиотека обработать не может. Отказ, который она обработала (например, откат номера CRL), остаётся `WARNING`.
+* Аргументы записи передаются через `{0}`, а не склейкой строк; апостроф в тексте записи с аргументами не используется (в шаблоне `MessageFormat` он ломает подстановку).
+
+Подробности включаются настройкой JUL:
+
+[source,java]
+----
+// В коде
+Logger.getLogger("org.rssys.gost.pkix").setLevel(Level.FINE);
+// Обработчик тоже должен пропускать FINE
+for (Handler h : Logger.getLogger("").getHandlers()) h.setLevel(Level.FINE);
+----
+
+То же через `logging.properties`: `org.rssys.gost.pkix.level = FINE` и `java.util.logging.ConsoleHandler.level = FINE`.
+На Android записи JUL попадают в `adb logcat`. Системный обработчик может дополнительно сверяться с `Log.isLoggable(тег, DEBUG)`, поэтому одной настройки уровня JUL для записей ниже `INFO` может быть недостаточно: включите отладочный уровень для тега логгера командой `adb shell setprop log.tag.<тег> DEBUG`.
+
+Что не попадает в журнал:
+
+* Ключевой материал: закрытые ключи, ключи шифрования и трафика, пароли, общие секреты, PSK, нонсы, идентификаторы сессий.
+* DN сертификата целиком. Он пишется только усечённым и только на `DEBUG`: DN квалифицированного сертификата несёт ФИО, СНИЛС и ИНН, а `WARNING` включён по умолчанию. В записях `WARNING` вместо DN стоит идентификатор без персональных данных (серийный номер сертификата).
+* Недоверенный текст как есть: адреса из сертификатов, заголовки и тела ответов удалённых серверов, сообщения исключений чужого кода. Такой текст проходит через `SafeText`.
+
+==== SafeText
+
+`org.rssys.gost.util.SafeText` готовит недоверенный текст к записи в журнал и в сообщения исключений. `uri(...)` оставляет `схема://хост:порт/путь` без учётных данных, параметров запроса и фрагмента (не разбирающийся адрес заменяется на `<malformed URI>`). `printableAscii(...)` оставляет только печатные ASCII (остальное, включая перевод строки, заменяется знаком вопроса) и усекает текст: по умолчанию до 128 знаков, второй перегрузкой можно задать свой предел. `printableAscii(null)` даёт `"null"`, `uri(null)` — `<malformed URI>`; на любом тексте исключений нет, единственное исключение — отрицательный предел длины. Очищенное значение предназначено только для вывода: запрос всегда идёт на полный адрес.
+
+[source,java]
+----
+import org.rssys.gost.util.SafeText;
+
+logger.log(Level.WARNING, "Fetch failed: {0}", SafeText.uri(untrustedUrl));
+----
 
 === Кросс-валидация
 
-Тесты кросс-валидации проводились на Alt linux p11 x86-64, где OpenSSL (3.3.3 11 Feb 2025) имеет поддержку ГОСТ-алгоритмов (gost engine).
+Совместимость проверена на Alt Linux p11 x86-64 с OpenSSL 3.6.0 и ГОСТ-провайдером gostprov (сборка описана в `x-validation-tests/doc/openssl-3.6-gost-how-to.adoc`), а также с BouncyCastle 1.84 и со старой версией библиотеки (0.4.0) — проверка совместимости форматов в модуле `kuznyechik`.
 
-Запуск всех тестов (kuznyechick, digest-mac, sign, keys) кросс-валидации одной командой:
+Все тесты кросс-валидации одной командой:
+
 [source,sh]
 ----
 mvn -Pcrossval test -Dexec.skip=true
@@ -2013,113 +1920,67 @@ mvn -Pcrossval test -Dexec.skip=true
 
 link:../x-validation-tests/kuznyechik/doc/kuznyechik-cross-validation.md[Методика кросс-валидации режимов блочного шифра Кузнечик].
 
-Для модуля `crypto-gost-core` выполнена кросс-валидация на совместимость
-с предыдущим релизом, OpenSSL (Кузнечик) и BouncyCastle 1.84. Поддерживаются режимы:
-CTR, CBC, CFB, OFB, MGM(только между crypto-gost).
-
-Все тесты в модуле `x-validation-tests/kuznyechik`:
+Режимы CTR, CBC, CFB, OFB проверены на совместимость с предыдущим релизом, OpenSSL и BouncyCastle; MGM — с предыдущим релизом и с OpenSSL (BouncyCastle MGM не поддерживает).
 
 [source,sh]
 ----
-# Все тесты (JUnit): BC + OpenSSL + interop
+# все тесты (JUnit): BC, OpenSSL, взаимодействие версий
 mvn -Pcrossval -pl x-validation-tests/kuznyechik -am test -Dexec.skip=true
 
-# Только BouncyCastle
+# только BouncyCastle
 mvn -Pcrossval -pl x-validation-tests/kuznyechik -am test -Dexec.skip=true \
     -Dtest=BcCrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
 
-# Только OpenSSL
+# только OpenSSL (режимы CTR, CBC, CFB, OFB и MGM)
 mvn -Pcrossval -pl x-validation-tests/kuznyechik -am test -Dexec.skip=true \
-    -Dtest=OpenSslCrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
-
-# Все тесты с cross-version (previous.ver=0.3.4 подтягивается автоматически)
-mvn -Pcrossval -pl x-validation-tests/kuznyechik -am test -Dexec.skip=true
+    -Dtest='OpenSsl*CrossValidationTest' -Dsurefire.failIfNoSpecifiedTests=false
 ----
 
-
-
-==== Коды аутентификации (MAC)
+==== Коды аутентификации и хэши
 
 link:../x-validation-tests/digest-mac/doc/digest-mac-cross-validation.md[Методика кросс-валидации хэшей и MAC].
 
-Для модуля `crypto-gost-core` выполнена кросс-валидация на совместимость
-по следующим алгоритмам:
-
-* Streebog-256/512 (хэш),
-* HMAC-Streebog-256/512,
-* CMAC-Kuznyechik.
-
-Валидация выполняется против BouncyCastle и OpenSSL
-(GOST-провайдер).
-
-Все тесты в модуле `x-validation-tests/digest-mac`:
+Проверены Стрибог-256/512, HMAC-Стрибог-256/512 и CMAC-Кузнечик против BouncyCastle и OpenSSL (ГОСТ-провайдер).
 
 [source,sh]
 ----
-# Все тесты (JUnit): BC + OpenSSL
 mvn -Pcrossval -pl x-validation-tests/digest-mac -am test -Dexec.skip=true
-
-# Только BouncyCastle
-mvn -Pcrossval -pl x-validation-tests/digest-mac -am test -Dexec.skip=true \
-    -Dtest=BcMacCrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
-
-# Только OpenSSL
-mvn -Pcrossval -pl x-validation-tests/digest-mac -am test -Dexec.skip=true \
-    -Dtest=OpenSslMacCrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
 ----
 
-
-==== Проверка совместимостей ключей ГОСТ Р 34.10-2012
+==== Ключи ГОСТ Р 34.10-2012
 
 link:../x-validation-tests/keys/doc/keys-cross-validation.md[Методика кросс-валидации ключей ГОСТ Р 34.10-2012].
 
-Для модуля `crypto-gost-core` выполнена кросс-валидация на совместимость
-по генерации ключей ГОСТ Р 34.10-2012 (256 и 512 бит). Валидация выполняется
-против BouncyCastle и OpenSSL (GOST-провайдер). Поддерживаются кривые:
-CryptoPro-A/B/C, TC26-A/B/C-256, TC26-A/B/C-512.
-
-Все тесты в модуле `x-validation-tests/keys`:
+Проверена выработка ключей (256 и 512 бит) против BouncyCastle (7 кривых) и OpenSSL (6 кривых: CryptoPro-A/B/C и TC26-A/B/C-512).
 
 [source,sh]
 ----
-# Все тесты (JUnit): BC (7 кривых) + OpenSSL (6 кривых)
 mvn -Pcrossval -pl x-validation-tests/keys -am test -Dexec.skip=true
-
-# Только BC (7 кривых)
-mvn -Pcrossval -pl x-validation-tests/keys -am test -Dexec.skip=true \
-    -Dtest=BcKey*CrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
-
-# Только OpenSSL (6 кривых)
-mvn -Pcrossval -pl x-validation-tests/keys -am test -Dexec.skip=true \
-    -Dtest=OpenSsl*CrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
 ----
 
-==== Электронная подпись (ГОСТ Р 34.10-2012)
+==== Электронная подпись ГОСТ Р 34.10-2012
 
 link:../x-validation-tests/sign/doc/sign-cross-validation.md[Методика кросс-валидации ГОСТ Р 34.10-2012 (электронная подпись)].
 
-Для модуля `crypto-gost-core` выполнена кросс-валидация на совместимость
-по алгоритму подписи ГОСТ Р 34.10-2012 (256 и 512 бит).
-Валидация выполняется
-против BouncyCastle и OpenSSL (GOST-провайдер).
-
-Поддерживаются кривые: CryptoPro-A/B/C, TC26-A/B/C-256, TC26-A/B/C-512.
-
-Все тесты в модуле `x-validation-tests/sign`:
+Проверка против BouncyCastle (7 кривых, 2800 проверок) и OpenSSL (6 кривых, 180 проверок).
 
 [source,sh]
 ----
-# Все тесты (JUnit): BC (7 кривых, 2800 проверок) + OpenSSL (6 кривых, 120 проверок)
 mvn -Pcrossval -pl x-validation-tests/sign -am test -Dexec.skip=true
-
-# Только BC (7 кривых)
-mvn -Pcrossval -pl x-validation-tests/sign -am test -Dexec.skip=true \
-    -Dtest=BcSignCrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
-
-# Только OpenSSL (6 кривых, 256 и 512 бит)
-mvn -Pcrossval -pl x-validation-tests/sign -am test -Dexec.skip=true \
-    -Dtest=OpenSsl*CrossValidationTest -Dsurefire.failIfNoSpecifiedTests=false
 ----
+
+=== Архитектурные решения (ADR)
+
+Принятые решения и компромиссы зафиксированы в `doc/adr`:
+
+* ADR 01 — арифметика `BigInteger` при вычислении `s` в подписи и табличный HMAC-Стрибог при выработке нонса;
+* ADR 02 — табличная реализация Кузнечика;
+* ADR 03 — табличное умножение в GF(2¹²⁸) в MGM;
+* ADR 04 — снятие дополнения (PKCS#7, ISO 7816-4) с best-effort постоянным временем; строго constant-time реализация не внедряется;
+* ADR 05 — scrypt использует HMAC-SHA256 из JCA;
+* ADR 06 — случайный 64-битный IV в `Kuznyechik/CTR/NoPadding`;
+* ADR 07 — подпись в ядре не проверяется открытым ключом; гибридный нонс (`HEDGED`) по умолчанию;
+* ADR 08 — защита состояния `ECDSASigner` оптимистичной меткой.
 
 == Лицензия
 
@@ -2127,4 +1988,3 @@ mvn -Pcrossval -pl x-validation-tests/sign -am test -Dexec.skip=true \
 
 Данный проект распространяется под _Открытой лицензией на программное обеспечение "Рэд старс системс"_, версия 1.0. +
 Текст лицензии находится в файле LICENSE или по https://gitflic.ru/project/red-stars-systems/licenses/blob?file=open-license%2FLICENSE[ссылке].
-

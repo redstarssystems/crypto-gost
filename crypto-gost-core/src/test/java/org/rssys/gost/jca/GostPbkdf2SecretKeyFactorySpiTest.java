@@ -3,41 +3,27 @@ package org.rssys.gost.jca;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.security.InvalidKeyException;
-import java.security.Security;
 import java.security.spec.InvalidKeySpecException;
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.rssys.gost.JcaTestSupport;
+import org.rssys.gost.TestHex;
 import org.rssys.gost.jca.key.GostSecretKey;
 
 @DisplayName("GostPbkdf2SecretKeyFactorySpi — PBKDF2WithHmacStreebog512")
+@ExtendWith(JcaTestSupport.class)
 class GostPbkdf2SecretKeyFactorySpiTest {
 
     private static final String ALGORITHM = "PBKDF2WithHmacStreebog512";
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
 
-    @BeforeAll
-    static void registerProvider() {
-        if (Security.getProvider(PROVIDER) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
-    }
-
     private static byte[] hex(String s) {
-        s = s.replaceAll("\\s+", "");
-        int len = s.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] =
-                    (byte)
-                            ((Character.digit(s.charAt(i), 16) << 4)
-                                    | Character.digit(s.charAt(i + 1), 16));
-        }
-        return data;
+        return TestHex.bytes(s);
     }
 
     @Test
@@ -126,7 +112,7 @@ class GostPbkdf2SecretKeyFactorySpiTest {
     }
 
     @Test
-    @DisplayName("engineGetKeySpec(SecretKey, SecretKeySpec.class) — round-trip")
+    @DisplayName("engineGetKeySpec(SecretKey, SecretKeySpec.class) — обратное преобразование")
     void testGetKeySpec() throws Exception {
         SecretKeyFactory skf = SecretKeyFactory.getInstance(ALGORITHM, PROVIDER);
         PBEKeySpec spec = new PBEKeySpec("password".toCharArray(), "salt".getBytes(), 1, 32 * 8);
@@ -217,5 +203,59 @@ class GostPbkdf2SecretKeyFactorySpiTest {
         assertThrows(
                 InvalidKeySpecException.class,
                 () -> skf.generateSecret(new javax.crypto.spec.DESKeySpec(new byte[8])));
+    }
+
+    // -----------------------------------------------------------------------
+    // Кодирование пароля: UTF-8, в том числе символы вне BMP
+    // -----------------------------------------------------------------------
+
+    /**
+     * PBKDF2-HMAC-Стрибог-512, 1000 итераций, соль 000102..0f, длина ключа 32 байта. Эталоны получены
+     * независимо (OpenSSL 3.6.0 с gost-engine), пароль и соль заданы в шестнадцатеричном виде:
+     * {@code openssl kdf -provider gostprov -provider default -keylen 32 -kdfopt digest:md_gost12_512
+     * -kdfopt hexpass:<UTF-8 пароля> -kdfopt hexsalt:000102030405060708090a0b0c0d0e0f -kdfopt
+     * iter:1000 -binary PBKDF2}. Соль нужно передавать именно {@code hexsalt}: параметр {@code salt}
+     * читает значение как ASCII-строку и даёт совсем другие ключи.
+     */
+    private static void assertPasswordVector(String password, String expectedHex) throws Exception {
+        SecretKeyFactory skf = SecretKeyFactory.getInstance(ALGORITHM, PROVIDER);
+        byte[] salt = hex("000102030405060708090a0b0c0d0e0f");
+        PBEKeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 1000, 32 * 8);
+        assertArrayEquals(
+                hex(expectedHex),
+                skf.generateSecret(spec).getEncoded(),
+                "ключ для пароля из " + password.length() + " char");
+    }
+
+    @Test
+    @DisplayName(
+            "пароль ASCII и кириллица (BMP): ключ совпадает с эталоном OpenSSL, прежний ключ не меняется")
+    void passwordsInBmpMatchOpenSsl() throws Exception {
+        assertPasswordVector(
+                "password", "e6bcea78937cfe32e834849424541016e0698c8218cacfe055194eedcece0f77");
+        assertPasswordVector(
+                "\u043F\u0430\u0440\u043E\u043B\u044C",
+                "7bf740e07b01dd456d9ddd5e779c33c2fc5323fb2eb9bcc99b4b31e6e3ce9a46");
+    }
+
+    @Test
+    @DisplayName(
+            "пароль с символом вне BMP (суррогатная пара): ключ соответствует UTF-8, а не CESU-8")
+    void passwordOutsideBmpMatchesOpenSsl() throws Exception {
+        // U+1F600; раньше каждый суррогат кодировался тремя байтами, и ключ не совпадал с эталоном
+        assertPasswordVector(
+                "\uD83D\uDE00", "2645b1608372286aa791030b488519e49eb0af1ca36290a5e879c1942eb4630d");
+    }
+
+    @Test
+    @DisplayName("непарный суррогат в пароле -> InvalidKeySpecException, ключ не выводится")
+    void unpairedSurrogateIsRejected() throws Exception {
+        SecretKeyFactory skf = SecretKeyFactory.getInstance(ALGORITHM, PROVIDER);
+        PBEKeySpec spec = new PBEKeySpec("ab\uD800".toCharArray(), "salt".getBytes(), 1, 32 * 8);
+
+        assertThrows(
+                InvalidKeySpecException.class,
+                () -> skf.generateSecret(spec),
+                "непарный суррогат не должен молча заменяться на «?»");
     }
 }

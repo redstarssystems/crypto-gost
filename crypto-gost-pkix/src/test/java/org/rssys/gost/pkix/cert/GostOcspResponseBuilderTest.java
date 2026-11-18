@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
 import java.time.Instant;
+import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.GostSigner;
@@ -34,6 +35,26 @@ class GostOcspResponseBuilderTest {
         assertTrue(ocspDer.length > 100);
 
         OcspVerifier.verify(ocspDer, serialNumber, kp.getPublic());
+    }
+
+    @Test
+    @DisplayName("TBSResponseData не содержит явный version [0]: DEFAULT v1 опускается по DER")
+    void tbsResponseDataOmitsDefaultVersion() throws Exception {
+        KeyPair kp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
+        byte[] ocspDer =
+                GostOcspResponseBuilder.create(new byte[] {0x01})
+                        .issuerDn(GostDnParser.encodeDn("CN=Test CA"))
+                        .sign(kp.getPrivate());
+
+        GostOcspResponse parsed = new GostOcspResponse(ocspDer);
+        byte[][] basic = DerCodec.parseSequenceContents(parsed.getRevocationValueDer(), 0);
+        byte[][] tbs = DerCodec.parseSequenceContents(basic[0], 0);
+
+        // Первый элемент - responderID ([1] byName или [2] byKey), а не version [0]
+        assertNotEquals(
+                0xA0,
+                tbs[0][0] & 0xFF,
+                "явный version [0] нарушает DER: КриптоПро нормализует и ломает подпись");
     }
 
     @Test
@@ -230,14 +251,20 @@ class GostOcspResponseBuilderTest {
                 java.util.Arrays.copyOfRange(ocspDer, oidTlv[0], oidTlv[1]),
                 "OID расширения должен быть id-pkix-ocsp-nonce");
         extPos = oidTlv[1];
-        // OCTET STRING — значение nonce
-        int[] valueTlv = readTlv(ocspDer, extPos);
-        assertEquals(
-                0x04, ocspDer[valueTlv[0] - 2] & 0xFF, "Значение nonce должно быть OCTET STRING");
+        // extnValue — OCTET STRING, внутри которого OCTET STRING с nonce (RFC 8954 §2.1):
+        // для 16 байт nonce на проводе 04 12 04 10 <16 байт>
+        byte[] expectedExtnValue = new byte[4 + nonce.length];
+        expectedExtnValue[0] = 0x04;
+        expectedExtnValue[1] = (byte) (2 + nonce.length);
+        expectedExtnValue[2] = 0x04;
+        expectedExtnValue[3] = (byte) nonce.length;
+        System.arraycopy(nonce, 0, expectedExtnValue, 4, nonce.length);
+        int[] extnValueTlv = readTlv(ocspDer, extPos);
+        assertEquals(extSeq[1], extnValueTlv[1], "После extnValue не должно быть лишних данных");
         assertArrayEquals(
-                nonce,
-                java.util.Arrays.copyOfRange(ocspDer, valueTlv[0], valueTlv[1]),
-                "Значение nonce должно совпадать");
+                expectedExtnValue,
+                java.util.Arrays.copyOfRange(ocspDer, extPos, extnValueTlv[1]),
+                "extnValue должен содержать вложенный OCTET STRING с nonce (двойная обёртка)");
     }
 
     @Test
@@ -405,7 +432,7 @@ class GostOcspResponseBuilderTest {
     }
 
     // ========================================================================
-    // responseStatus ENUMERATED: проверка длины (RFC 6960 — значения 0..6, 1 байт)
+    // responseStatus ENUMERATED: ровно 1 байт, допустимы значения 0, 1, 2, 3, 5, 6 (RFC 6960)
     // ========================================================================
 
     // ========================================================================
@@ -615,5 +642,40 @@ class GostOcspResponseBuilderTest {
         assertTrue(
                 ex.getMessage().contains("too long"),
                 "Сообщение должно упоминать 'too long', было: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("Подпись ответа неверной длины -> PkixException(SIGNATURE_INVALID), не IAE")
+    void truncatedSignatureGivesPkixException() throws Exception {
+        KeyPair kp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
+        byte[] ocspDer =
+                GostOcspResponseBuilder.create(new byte[] {0x01})
+                        .issuerDn(GostDnParser.encodeDn("CN=Test CA"))
+                        .sign(kp.getPrivate());
+
+        // OCSPResponse -> [0] responseBytes -> OCTET STRING { BasicOCSPResponse }
+        // BasicOCSPResponse ::= SEQUENCE { tbsResponseData, signatureAlgorithm, signature BIT
+        // STRING }
+        byte[][] response = DerCodec.parseSequenceContents(ocspDer, 0);
+        int[] explicitLen = DerCodec.decodeLength(response[1], 1);
+        byte[][] responseBytes = DerCodec.parseSequenceContents(response[1], 1 + explicitLen[1]);
+        byte[][] basic =
+                DerCodec.parseSequenceContents(DerCodec.parseOctetString(responseBytes[1], 0), 0);
+        byte[] signatureBits = DerCodec.parseBitString(basic[2], 0);
+        basic[2] = DerCodec.encodeBitString(Arrays.copyOf(signatureBits, signatureBits.length - 1));
+        responseBytes[1] = DerCodec.encodeOctetString(DerCodec.encodeSequence(basic));
+        byte[] tampered =
+                DerCodec.encodeSequence(
+                        response[0],
+                        DerCodec.encodeContextConstructed(
+                                0, DerCodec.encodeSequence(responseBytes)));
+
+        GostOcspResponse parsed = new GostOcspResponse(tampered);
+        PkixException e =
+                assertThrows(
+                        PkixException.class,
+                        () -> parsed.verify(kp.getPublic()),
+                        "подпись неверной длины должна давать PkixException");
+        assertEquals(PkixException.Reason.SIGNATURE_INVALID, e.reason(), "причина - подпись");
     }
 }

@@ -81,12 +81,31 @@ style="text-align: left;"><p><code>ECParameters.tc26b512()</code></p></td>
 <td style="text-align: left;"><p><code>gostr34102012_512b</code>
 (0x070E)</p></td>
 </tr>
+<tr>
+<td
+style="text-align: left;"><p><code>gost2012_256 paramset:TCA</code></p></td>
+<td
+style="text-align: left;"><p><code>ECParameters.tc26a256()</code></p></td>
+<td style="text-align: left;"><p>GC256A (0x0022)</p></td>
+<td style="text-align: left;"><p><code>gostr34102012_256a</code>
+(0x0709)</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>gost2012_512 paramset:C</code></p></td>
+<td
+style="text-align: left;"><p><code>ECParameters.tc26c512()</code></p></td>
+<td style="text-align: left;"><p>GC512C (0x0028)</p></td>
+<td style="text-align: left;"><p><code>gostr34102012_512c</code>
+(0x070F)</p></td>
+</tr>
 </tbody>
 </table>
 
-GC256A (`tc26a256`) не включён в матрицу — gostprov не гарантирует
-работу на этой кривой. GC256C, GC256D, GC512C: нет подтверждённого
-маппинга OpenSSL paramset.
+GC256A и GC512C имеют кофактор 4: ECDHE на них считается как `(h·d)·Q`
+(RFC 9367 §6.1.1). Кривые с кофактором 1 такую ошибку не выявляют,
+поэтому эти две кривые обязательны в матрице. GC256C, GC256D: нет
+подтверждённого маппинга OpenSSL paramset.
 
 # Что и как проверяется
 
@@ -198,7 +217,79 @@ style="text-align: left;"><p><code>testClientAllCurves</code></p></td>
 </tbody>
 </table>
 
-Итого: **17 активных тестов**.
+Итого по этой матрице: **17 активных тестов**. Возобновление по PSK
+описано в отдельном разделе ниже.
+
+# Возобновление по PSK
+
+Тесты `OpenSslTls13ResumptionCrossValidationTest` проверяют, что второе
+соединение возобновляется по тикету, на обеих сторонах и с обменом
+данными. Тикет выдаёт внешняя сторона, предъявляет его вторая; стенд -
+OpenSSL gostprov, `s_client -sess_out/-sess_in` и `s_server`.
+
+<table style="width:100%;">
+<colgroup>
+<col style="width: 42%" />
+<col style="width: 14%" />
+<col style="width: 14%" />
+<col style="width: 28%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Тест</th>
+<th style="text-align: left;">Suite</th>
+<th style="text-align: left;">Кривые</th>
+<th style="text-align: left;">Статус</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td
+style="text-align: left;"><p><code>clientResumesAgainstOpenSslServer</code>:
+клиент crypto-gost, <code>s_server</code>; стартовая группа клиента
+(<code>withSelectedNamedGroup</code>) совпадает с кривой сервера,
+HelloRetryRequest нет</p></td>
+<td style="text-align: left;"><p>L и S</p></td>
+<td style="text-align: left;"><p>GC256B, GC256A</p></td>
+<td style="text-align: left;"><p>✓ (4 теста)</p></td>
+</tr>
+<tr>
+<td
+style="text-align: left;"><p><code>serverResumesOpenSslClient</code>:
+<code>s_client</code>, сервер crypto-gost</p></td>
+<td style="text-align: left;"><p>L и S</p></td>
+<td style="text-align: left;"><p>GC256B, GC256A</p></td>
+<td style="text-align: left;"><p>✓ (4 теста)</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>clientResumesThroughHrr</code>:
+клиент crypto-gost со стартовой группой по умолчанию (GC256B),
+<code>s_server</code></p></td>
+<td style="text-align: left;"><p>L</p></td>
+<td style="text-align: left;"><p>GC256A (HelloRetryRequest в каждом
+соединении)</p></td>
+<td style="text-align: left;"><p>✓</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>serverResumesThroughHrr</code>:
+<code>s_client -curves GC256B:GC256A</code>, сервер crypto-gost</p></td>
+<td style="text-align: left;"><p>L</p></td>
+<td style="text-align: left;"><p>GC256A (HelloRetryRequest в каждом
+соединении)</p></td>
+<td style="text-align: left;"><p>✓</p></td>
+</tr>
+</tbody>
+</table>
+
+Клиент `TlsSession` по умолчанию начинает с группы GC256B;
+`TlsClientConfig.withSelectedNamedGroup` задаёт другую. Были ли в
+соединении два ClientHello (то есть HelloRetryRequest), тесты определяют
+по числу открытых handshake-записей
+(`HandshakeRecordCountingTransport`). Binder второго ClientHello
+считается по RFC 8446 §4.2.11.2 (один хэш от `message_hash`,
+HelloRetryRequest и усечённого ClientHello); OpenSSL проверяет его
+независимо. Возобновление с КриптоПро описано в
+`x-validation-tests/cryptopro/README.adoc`.
 
 # Тестовые размеры payload
 
@@ -268,17 +359,17 @@ Linux pipe buffer (64 КБ).</p></td>
 помечаются как skipped, сборка остаётся зелёной.
 
 **PKI для mTLS.** `generateMtlsPKI` создаёт CA и серверный
-ключ/сертификат через crypto-gost (`TlsTestHelper`), затем упаковывает
-серверный сертификат в PFX через `openssl pkcs12 -export` — это
-проверяет wire-совместимость формата с тем, что ожидает s\_client.
+ключ/сертификат через crypto-gost (`PkixCertTestHelper`), затем
+упаковывает серверный сертификат в PFX через `openssl pkcs12 -export` —
+это проверяет wire-совместимость формата с тем, что ожидает s\_client.
 Клиентский сертификат создаётся отдельно в `runServerTest()` через
-`TlsTestHelper.createCertWithKey()` (crypto-gost), PEM записывается во
-временный файл и передаётся s\_client через `-cert` / `-key`.
+`PkixCertTestHelper.createCertWithKey()` (crypto-gost), PEM записывается
+во временный файл и передаётся s\_client через `-cert` / `-key`.
 `MtlsPkiResult.clientCertPem = null`.
 
-**Сертификаты без mTLS через `TlsTestHelper`.** `createCertWithKey()`
-генерирует самоподписанный сертификат на стороне crypto-gost. s\_client
-принимает его без проверки цепочки.
+**Сертификаты без mTLS через `PkixCertTestHelper`.**
+`createCertWithKey()` генерирует самоподписанный сертификат на стороне
+crypto-gost. s\_client принимает его без проверки цепочки.
 
 **Автодетект провайдера (`resolveTls13Flags()`).** Порядок проверок:
 

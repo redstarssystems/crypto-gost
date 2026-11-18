@@ -42,18 +42,13 @@ class CmsEnvelopedDataTest {
         byte[] data = "Confidential CMS EnvelopedData content".getBytes();
 
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         assertNotNull(envelopedData);
         assertTrue(envelopedData.length > 0);
 
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        envelopedData, privateKey, selfSignedCert, keyWrap);
+                CmsEnvelopedDataDecryptor.decrypt(envelopedData, privateKey, selfSignedCert);
 
         assertNotNull(decrypted);
         assertArrayEquals(data, decrypted);
@@ -68,13 +63,11 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.createKari()
                         .data(data)
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
                         .build();
 
         assertNotNull(envelopedData);
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        envelopedData, privateKey, selfSignedCert, keyWrap);
+                CmsEnvelopedDataDecryptor.decrypt(envelopedData, privateKey, selfSignedCert);
         assertArrayEquals(data, decrypted);
     }
 
@@ -87,15 +80,10 @@ class CmsEnvelopedDataTest {
         }
 
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        envelopedData, privateKey, selfSignedCert, keyWrap);
+                CmsEnvelopedDataDecryptor.decrypt(envelopedData, privateKey, selfSignedCert);
 
         assertArrayEquals(data, decrypted);
     }
@@ -105,11 +93,7 @@ class CmsEnvelopedDataTest {
     void contentInfoRoundtrip() throws PkixException {
         byte[] data = "test".getBytes();
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         CmsContentInfo info = CmsContentInfo.decode(envelopedData);
         assertEquals(GostOids.CMS_ENVELOPED_DATA, info.contentType());
@@ -123,7 +107,7 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.create()
                         .data("v".getBytes())
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
+                        .withoutIntegrity()
                         .build();
 
         // ktri (issuerAndSerialNumber) -> все RecipientInfo v0, нет originatorInfo/
@@ -141,7 +125,6 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.createKari()
                         .data("v".getBytes())
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
                         .build();
 
         // KeyAgreeRecipientInfo имеет version 3 (§6.2.2) -> не все RecipientInfo v0,
@@ -165,7 +148,6 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.create()
                         .data("p".getBytes())
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
                         .build();
 
         // AlgorithmIdentifier эфемерного ключа обязан в точности совпадать с представлением
@@ -185,7 +167,6 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.createKari()
                         .data("p".getBytes())
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
                         .build();
 
         byte[] originatorAlgId = kariOriginatorAlgId(envelopedData);
@@ -236,11 +217,7 @@ class CmsEnvelopedDataTest {
         byte[] data = "secret".getBytes();
 
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         var wrongKp = KeyGenerator.generateKeyPair(PARAMS);
 
@@ -248,7 +225,7 @@ class CmsEnvelopedDataTest {
                 PkixException.class,
                 () ->
                         CmsEnvelopedDataDecryptor.decrypt(
-                                envelopedData, wrongKp.getPrivate(), selfSignedCert, keyWrap));
+                                envelopedData, wrongKp.getPrivate(), selfSignedCert));
     }
 
     @Test
@@ -259,7 +236,7 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.create()
                         .data(data)
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
+                        .withoutIntegrity()
                         .build();
 
         byte[] decrypted = decryptIndependentlyKtri(envelopedData);
@@ -274,7 +251,7 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.createKari()
                         .data(data)
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
+                        .withoutIntegrity()
                         .build();
 
         byte[] decrypted = decryptIndependentlyKari(envelopedData);
@@ -286,11 +263,7 @@ class CmsEnvelopedDataTest {
     void cipherParamsAreSequence() throws PkixException {
         byte[] data = "params test".getBytes();
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         CmsContentInfo ci = CmsContentInfo.decode(envelopedData);
         byte[] envData = ci.content();
@@ -316,7 +289,6 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.createKari()
                         .data(data)
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
                         .build();
 
         CmsContentInfo ci = CmsContentInfo.decode(envelopedData);
@@ -390,7 +362,7 @@ class CmsEnvelopedDataTest {
                 "keyEncryptionAlgorithm SEQUENCE должен содержать OID и параметры");
         String algOid = DerCodec.parseOid(algParts[0], 0);
         assertEquals(
-                keyWrap.algorithmOid(),
+                GostOids.WRAP_KUZNYECHIK_KEXP15,
                 algOid,
                 "keyEncryptionAlgorithm OID должен быть алгоритмом key wrap (kexp15)");
 
@@ -432,11 +404,7 @@ class CmsEnvelopedDataTest {
     void keyTransRecipientInfoStructure() throws PkixException {
         byte[] data = "ktri structural DER verification".getBytes();
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         CmsContentInfo ci = CmsContentInfo.decode(envelopedData);
         byte[][] envParts = DerCodec.parseSequenceContents(ci.content(), 0);
@@ -513,12 +481,7 @@ class CmsEnvelopedDataTest {
         byte[] data = "Confidential + integrity via OMAC".getBytes();
 
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .withOmac()
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         assertNotNull(envelopedData);
 
@@ -540,8 +503,7 @@ class CmsEnvelopedDataTest {
 
         // Расшифровка с проверкой MAC
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        envelopedData, privateKey, selfSignedCert, keyWrap);
+                CmsEnvelopedDataDecryptor.decrypt(envelopedData, privateKey, selfSignedCert);
         assertArrayEquals(data, decrypted, "Расшифрованные данные должны совпадать");
     }
 
@@ -551,12 +513,7 @@ class CmsEnvelopedDataTest {
         byte[] data = "data with OMAC integrity".getBytes();
 
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .withOmac()
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         // Парсим DER, модифицируем encryptedMac в unprotectedAttrs
         CmsContentInfo ci = CmsContentInfo.decode(envelopedData);
@@ -590,9 +547,7 @@ class CmsEnvelopedDataTest {
 
         assertThrows(
                 PkixException.class,
-                () ->
-                        CmsEnvelopedDataDecryptor.decrypt(
-                                tamperedCi, privateKey, selfSignedCert, keyWrap),
+                () -> CmsEnvelopedDataDecryptor.decrypt(tamperedCi, privateKey, selfSignedCert),
                 "Подделка MAC должна приводить к PkixException (fail-closed)");
     }
 
@@ -603,8 +558,6 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.create()
                         .data("omac version check".getBytes())
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .withOmac()
                         .build();
 
         // OMAC добавляет unprotectedAttrs -> EnvelopedData.version = 2
@@ -621,8 +574,6 @@ class CmsEnvelopedDataTest {
                 CmsEnvelopedDataBuilder.create()
                         .data("unprotected attrs test".getBytes())
                         .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .withOmac()
                         .build();
 
         CmsContentInfo ci = CmsContentInfo.decode(envelopedData);
@@ -664,7 +615,6 @@ class CmsEnvelopedDataTest {
                         .data(data)
                         .addRecipient(selfSignedCert)
                         .addRecipient(cert2)
-                        .keyWrap(keyWrap)
                         .build();
 
         CmsContentInfo ci = CmsContentInfo.decode(envelopedData);
@@ -693,7 +643,6 @@ class CmsEnvelopedDataTest {
                         .data(data)
                         .addRecipient(selfSignedCert)
                         .addRecipient(cert2)
-                        .keyWrap(keyWrap)
                         .build();
 
         CmsContentInfo ci = CmsContentInfo.decode(envelopedData);
@@ -710,13 +659,12 @@ class CmsEnvelopedDataTest {
 
         // Расшифровка для первого получателя
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        envelopedData, privateKey, selfSignedCert, keyWrap);
+                CmsEnvelopedDataDecryptor.decrypt(envelopedData, privateKey, selfSignedCert);
         assertArrayEquals(data, decrypted);
 
         // Расшифровка для второго получателя
         byte[] decrypted2 =
-                CmsEnvelopedDataDecryptor.decrypt(envelopedData, kp2.getPrivate(), cert2, keyWrap);
+                CmsEnvelopedDataDecryptor.decrypt(envelopedData, kp2.getPrivate(), cert2);
         assertArrayEquals(data, decrypted2);
     }
 
@@ -725,11 +673,7 @@ class CmsEnvelopedDataTest {
     void encryptedContentIsImplicitPrimitive() throws PkixException {
         byte[] data = "implicit tag test".getBytes();
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         CmsContentInfo ci = CmsContentInfo.decode(envelopedData);
         byte[][] envParts = DerCodec.parseSequenceContents(ci.content(), 0);
@@ -887,19 +831,14 @@ class CmsEnvelopedDataTest {
         byte[] data = "BER indefinite-length encryptedContent (КриптоПРО-стиль)".getBytes();
 
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         // crypto-gost выдаёт primitive [0] (0x80). Перекодируем encryptedContent в
         // BER-эквивалент A0 80 04 <len> <ct> 00 00, как это делает КриптоПРО.
         byte[] berEnveloped = reencodeEncryptedContentAsBer(envelopedData, false);
 
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        berEnveloped, privateKey, selfSignedCert, keyWrap);
+                CmsEnvelopedDataDecryptor.decrypt(berEnveloped, privateKey, selfSignedCert);
         assertArrayEquals(
                 data, decrypted, "BER indefinite-length должен расшифровываться идентично DER");
     }
@@ -913,18 +852,13 @@ class CmsEnvelopedDataTest {
         }
 
         byte[] envelopedData =
-                CmsEnvelopedDataBuilder.create()
-                        .data(data)
-                        .addRecipient(selfSignedCert)
-                        .keyWrap(keyWrap)
-                        .build();
+                CmsEnvelopedDataBuilder.create().data(data).addRecipient(selfSignedCert).build();
 
         // Два OCTET STRING-сегмента внутри A0 80 -> должны склеиться при расшифровке.
         byte[] berEnveloped = reencodeEncryptedContentAsBer(envelopedData, true);
 
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        berEnveloped, privateKey, selfSignedCert, keyWrap);
+                CmsEnvelopedDataDecryptor.decrypt(berEnveloped, privateKey, selfSignedCert);
         assertArrayEquals(data, decrypted, "сегментированный OCTET STRING должен склеиваться");
     }
 

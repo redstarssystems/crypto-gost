@@ -56,6 +56,7 @@ public final class GostCrlBuilder {
     private final byte[] issuerDnDer;
     private String thisUpdate;
     private String nextUpdate;
+    private boolean nextUpdateOmitted;
     private boolean withIdpExtension;
     private boolean idpOnlyContainsUserCerts;
     private boolean idpOnlyContainsCACerts;
@@ -79,7 +80,14 @@ public final class GostCrlBuilder {
         return new GostCrlBuilder(issuerDnDer);
     }
 
-    /** Удобная перегрузка: DN из строки "CN=..., O=..." */
+    /**
+     * Удобная перегрузка: DN из строки "CN=..., O=...".
+     *
+     * <p>Для CRL уже существующего УЦ передавайте DER через
+     * {@link #create(byte[])} (например, {@code caCert.getSubjectDnBytes()}):
+     * строковая перегрузка кодирует DN заново и может не совпасть с issuer
+     * DN старых сертификатов.</p>
+     */
     public static GostCrlBuilder create(String issuerDn) {
         return new GostCrlBuilder(GostDnParser.encodeDn(issuerDn));
     }
@@ -96,7 +104,10 @@ public final class GostCrlBuilder {
         return this;
     }
 
-    /** @param time nextUpdate в формате GeneralizedTime (null = без nextUpdate) */
+    /**
+     * @param time nextUpdate в формате GeneralizedTime; {@code null} сбрасывает значение,
+     *     выпуск без nextUpdate разрешает только {@link #withoutNextUpdate()}
+     */
     public GostCrlBuilder nextUpdate(String time) {
         this.nextUpdate = time;
         return this;
@@ -105,6 +116,20 @@ public final class GostCrlBuilder {
     /** @param time nextUpdate как Instant (UTC) */
     public GostCrlBuilder nextUpdate(Instant time) {
         this.nextUpdate = GostSignatureHelper.formatGeneralizedTime(time);
+        return this;
+    }
+
+    /**
+     * Явно разрешает выпуск CRL без nextUpdate.
+     *
+     * <p>RFC 5280 §5.1.2.5 обязывает УЦ включать nextUpdate, а проверяющая сторона библиотеки
+     * такой CRL отвергает: без nextUpdate CRL не устаревает и его можно предъявлять бесконечно.
+     * Метод нужен только для негативных тестов и проверки чужих реализаций, поэтому без него
+     * {@link #sign(GostSigner)} не выпустит такой CRL.</p>
+     */
+    public GostCrlBuilder withoutNextUpdate() {
+        this.nextUpdate = null;
+        this.nextUpdateOmitted = true;
         return this;
     }
 
@@ -119,6 +144,14 @@ public final class GostCrlBuilder {
      * relying party.
      *
      * <p>Для тестов — используйте {@link #thisUpdate(String)} с фиксированной датой.
+     *
+     * <p><b>Осторожно с CAdES-X Long.</b> Откат на 5 минут совпадает с нижней границей окна
+     * свежести {@code STRICT} (thisUpdate не раньше времени подписи минус {@code CLOCK_SKEW_MS}),
+     * то есть запаса нет. Время округляется до секунды, поэтому CRL, построенный до штампа времени,
+     * при смене секунды между ними оказывается вне окна и отвергается. Так же отвергается CRL,
+     * построенный после штампа, если штамп выдал внешний сервер с опережающими часами: время
+     * штампа идёт по его часам, а thisUpdate - по локальным. Для доказательств, встраиваемых под
+     * {@code STRICT}, используйте {@link #thisUpdate(Instant)} с текущим моментом.
      */
     public GostCrlBuilder thisUpdateNow() {
         this.thisUpdate =
@@ -204,6 +237,7 @@ public final class GostCrlBuilder {
      * @param n номер CRL (монотонно возрастающее целое)
      */
     public GostCrlBuilder withCrlNumber(BigInteger n) {
+        requireValidCrlNumber(n);
         this.crlNumber = n;
         return this;
     }
@@ -221,8 +255,27 @@ public final class GostCrlBuilder {
      * @throws IllegalStateException при вызове {@link #build()} если {@link #withCrlNumber} не вызван
      */
     public GostCrlBuilder withDeltaCrlIndicator(BigInteger baseCrlNumber) {
+        requireValidCrlNumber(baseCrlNumber);
         this.baseCrlNumber = baseCrlNumber;
         return this;
+    }
+
+    /**
+     * Симметрично проверке {@link GostCrl}: номер неотрицателен и не длиннее
+     * {@link GostOids#MAX_CRL_NUMBER_OCTETS} октетов величины (RFC 5280 §5.2.3), иначе
+     * построитель выпустил бы CRL, который собственная проверка отвергнет.
+     */
+    private static void requireValidCrlNumber(BigInteger number) {
+        if (number == null) {
+            return;
+        }
+        if (number.signum() < 0) {
+            throw new IllegalArgumentException("CRL number must not be negative");
+        }
+        if ((number.bitLength() + 7) / 8 > GostOids.MAX_CRL_NUMBER_OCTETS) {
+            throw new IllegalArgumentException(
+                    "CRL number exceeds " + GostOids.MAX_CRL_NUMBER_OCTETS + " octets");
+        }
     }
 
     /** Удобная int-перегрузка для {@link #withDeltaCrlIndicator(BigInteger)}. */
@@ -299,10 +352,16 @@ public final class GostCrlBuilder {
      *
      * @param signer подписант CRL (может быть HSM-адаптером); ECParameters берутся из него
      * @return DER-кодированный CertificateList
-     * @throws IllegalStateException если deltaCRLIndicator задан без cRLNumber
+     * @throws IllegalStateException если deltaCRLIndicator задан без cRLNumber или не задан
+     *     nextUpdate (выпуск без него разрешает только {@link #withoutNextUpdate()})
      */
     public byte[] sign(GostSigner signer) {
         Objects.requireNonNull(signer, "signer must not be null");
+        // Собственная проверка отвергает CRL без nextUpdate: не выпускаем то, что сами не примем
+        if (nextUpdate == null && !nextUpdateOmitted) {
+            throw new IllegalStateException(
+                    "nextUpdate must be set (RFC 5280 §5.1.2.5); use withoutNextUpdate() to omit it");
+        }
         // RFC 5280 §5.2.4: deltaCRLIndicator не может присутствовать без cRLNumber
         if (baseCrlNumber != null && crlNumber == null) {
             throw new IllegalStateException(
@@ -477,9 +536,15 @@ public final class GostCrlBuilder {
             }
             tbsOut.write(GostSignatureHelper.buildAlgId(signer.getParams()));
             tbsOut.write(issuerDnDer);
-            tbsOut.write(DerCodec.encodeTime(thisUpdateGeneralizedTime));
+            // RFC 5280 §5.1.2.4: Time кодируется UTCTime до 2049, далее GeneralizedTime.
+            tbsOut.write(
+                    DerCodec.encodeTime(
+                            GostSignatureHelper.normalizeRfc5280Time(thisUpdateGeneralizedTime)));
             if (nextUpdateGeneralizedTime != null) {
-                tbsOut.write(DerCodec.encodeTime(nextUpdateGeneralizedTime));
+                tbsOut.write(
+                        DerCodec.encodeTime(
+                                GostSignatureHelper.normalizeRfc5280Time(
+                                        nextUpdateGeneralizedTime)));
             }
             if (revokedEntries != null && revokedEntries.length > 0) {
                 ByteArrayOutputStream rvOut = new ByteArrayOutputStream();
@@ -490,13 +555,17 @@ public final class GostCrlBuilder {
                         revokedEntry =
                                 DerCodec.encodeSequence(
                                         DerCodec.encodeTlv(0x02, entry.serial()),
-                                        DerCodec.encodeTime(entry.revocationDate()),
+                                        DerCodec.encodeTime(
+                                                GostSignatureHelper.normalizeRfc5280Time(
+                                                        entry.revocationDate())),
                                         entryExts);
                     } else {
                         revokedEntry =
                                 DerCodec.encodeSequence(
                                         DerCodec.encodeTlv(0x02, entry.serial()),
-                                        DerCodec.encodeTime(entry.revocationDate()));
+                                        DerCodec.encodeTime(
+                                                GostSignatureHelper.normalizeRfc5280Time(
+                                                        entry.revocationDate())));
                     }
                     rvOut.write(revokedEntry);
                 }
@@ -624,7 +693,9 @@ public final class GostCrlBuilder {
             }
 
             if (entry.invalidityDate() != null) {
-                byte[] invDate = DerCodec.encodeTime(entry.invalidityDate());
+                byte[] invDate =
+                        DerCodec.encodeTime(
+                                GostSignatureHelper.normalizeRfc5280Time(entry.invalidityDate()));
                 byte[] extValue = DerCodec.encodeOctetString(invDate);
                 byte[] ext =
                         DerCodec.encodeSequence(

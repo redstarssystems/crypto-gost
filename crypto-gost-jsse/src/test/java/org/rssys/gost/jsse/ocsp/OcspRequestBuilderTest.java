@@ -8,41 +8,52 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostDerParser;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
+import org.rssys.gost.util.DerCodec;
 
 /**
  * Структурная и семантическая проверка OcspRequestBuilder.
  */
+@DisplayName("OcspRequestBuilder: сборка OCSP-запроса")
 class OcspRequestBuilderTest {
 
-    private static TlsTestHelper.CertBundle root;
-    private static TlsTestHelper.CertBundle server;
-    private static TlsTestHelper.CertBundle signKey256;
-    private static TlsTestHelper.CertBundle signKey512;
+    /** Содержимое OID (без тега и длины) по точечной записи. */
+    private static byte[] oidContent(String dotted) {
+        byte[] tlv = DerCodec.encodeOid(dotted);
+        // длина может занимать несколько байтов: начало содержимого берётся из decodeLength
+        int contentStart = 1 + DerCodec.decodeLength(tlv, 1)[1];
+        return java.util.Arrays.copyOfRange(tlv, contentStart, tlv.length);
+    }
+
+    private static PkixCertTestHelper.CertBundle root;
+    private static PkixCertTestHelper.CertBundle server;
+    private static PkixCertTestHelper.CertBundle signKey256;
+    private static PkixCertTestHelper.CertBundle signKey512;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         ECParameters params256 = ECParameters.tc26a256();
-        root = TlsTestHelper.createRootCA(params256);
+        root = PkixCertTestHelper.createRootCA(params256);
         server =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params256,
                         root.priv,
                         root.cert.getPublicKey(),
                         root.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         null,
                         null,
                         false,
                         null);
-        signKey256 = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
-        signKey512 = TlsTestHelper.createCertWithKey(ECParameters.tc26a512());
+        signKey256 = PkixCertTestHelper.createCertWithKey(ECParameters.tc26a256());
+        signKey512 = PkixCertTestHelper.createCertWithKey(ECParameters.tc26a512());
     }
 
     @Test
@@ -122,8 +133,8 @@ class OcspRequestBuilderTest {
                 actualNameHash,
                 "issuerNameHash должен совпадать с хешем subject DN издателя");
 
-        // issuerKeyHash = Streebog256(full SPKI DER) — полный SubjectPublicKeyInfo, а не только BIT
-        // STRING
+        // issuerKeyHash = Streebog256(биты subjectPublicKey без октета unused-bits), RFC 6960
+        // §4.1.1
         byte[] rawPubKey = extractRawPublicKey(root.cert.getEncoded());
         byte[] expectedKeyHash = Digest.digest256(rawPubKey);
         byte[] actualKeyHash = java.util.Arrays.copyOfRange(request, keyHash[0], keyHash[1]);
@@ -168,7 +179,7 @@ class OcspRequestBuilderTest {
     @Test
     @DisplayName("OCSPRequest: OID алгоритма хеширования в CertID = Streebog-256")
     void testCertIdHashAlgorithmOid() throws Exception {
-        // T-6: OID в CertID должен совпадать с STREEBOG256_OID_BYTES из GostDerParser,
+        // OID в CertID должен совпадать с идентификатором Streebog-256 (GostOids.DIGEST_256),
         // иначе OCSP-верификатор отклонит ответ
         byte[] request =
                 OcspRequestBuilder.create()
@@ -189,10 +200,7 @@ class OcspRequestBuilderTest {
 
         assertTrue(
                 GostDerParser.matchesOid(
-                        request,
-                        oidTlv[0],
-                        oidTlv[1] - oidTlv[0],
-                        org.rssys.gost.pkix.cert.GostDerParser.STREEBOG256_OID_BYTES),
+                        request, oidTlv[0], oidTlv[1] - oidTlv[0], oidContent(GostOids.DIGEST_256)),
                 "OID алгоритма хеширования CertID должен быть Streebog-256");
     }
 
@@ -365,10 +373,7 @@ class OcspRequestBuilderTest {
 
         assertTrue(
                 GostDerParser.matchesOid(
-                        request,
-                        oidTlv[0],
-                        oidTlv[1] - oidTlv[0],
-                        org.rssys.gost.pkix.cert.GostDerParser.STREEBOG512_OID_BYTES),
+                        request, oidTlv[0], oidTlv[1] - oidTlv[0], oidContent(GostOids.DIGEST_512)),
                 "OID алгоритма хеширования CertID должен быть Streebog-512");
 
         // issuerNameHash — 64 байта
@@ -407,10 +412,7 @@ class OcspRequestBuilderTest {
 
         assertTrue(
                 GostDerParser.matchesOid(
-                        request,
-                        oidTlv[0],
-                        oidTlv[1] - oidTlv[0],
-                        org.rssys.gost.pkix.cert.GostDerParser.STREEBOG512_OID_BYTES),
+                        request, oidTlv[0], oidTlv[1] - oidTlv[0], oidContent(GostOids.DIGEST_512)),
                 "buildSigned с 512-битным ключом: CertID OID должен быть Streebog-512");
     }
 
@@ -428,7 +430,8 @@ class OcspRequestBuilderTest {
         int[] algTlv = GostDerParser.readTlv(der, spkiPos);
         spkiPos = algTlv[1];
         int[] bsTlv = GostDerParser.readTlv(der, spkiPos);
-        return java.util.Arrays.copyOfRange(der, bsTlv[0], bsTlv[1]);
+        // RFC 6960 §4.1.1: хеш от битов ключа без октета unused-bits
+        return java.util.Arrays.copyOfRange(der, bsTlv[0] + 1, bsTlv[1]);
     }
 
     /** Извлекает subject DN (полный TLV) — для проверки issuerNameHash, как в OcspRequestBuilder. */

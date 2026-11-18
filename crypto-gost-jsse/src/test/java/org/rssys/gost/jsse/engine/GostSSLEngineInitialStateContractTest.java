@@ -4,18 +4,17 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.ByteBuffer;
 import java.security.Security;
-import java.util.List;
 import javax.net.ssl.SSLEngineResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
+import org.rssys.gost.jsse.testkit.EngineServerPki;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.tls13.TlsConstants;
 
 /**
  * Проверяет JSSE-контракт для GostSSLEngine в INITIAL состоянии
@@ -25,35 +24,20 @@ import org.rssys.gost.tls13.TlsTestHelper;
  * которое могло бы проявиться при интеграции через Netty или
  * любой другой JSSE-consumer.
  */
+@DisplayName("GostSSLEngine: контракт начального состояния")
 class GostSSLEngineInitialStateContractTest {
 
-    private static TlsTestHelper.CertBundle rootCa;
-    private static TlsTestHelper.CertBundle serverCert;
+    private static PkixCertTestHelper.CertBundle rootCa;
+    private static PkixCertTestHelper.CertBundle serverCert;
     private static GostX509KeyManager serverKm;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        ECParameters params = ECParameters.tc26a256();
-        rootCa = TlsTestHelper.createRootCA(params);
-        serverCert =
-                TlsTestHelper.createCertSignedBy(
-                        params,
-                        rootCa.priv,
-                        rootCa.cert.getPublicKey(),
-                        rootCa.subjectDn,
-                        "240501120000Z",
-                        "290501120000Z",
-                        new String[] {"localhost"},
-                        new byte[] {(byte) 0x80},
-                        null,
-                        false,
-                        null);
-        serverKm = new GostX509KeyManager();
-        serverKm.addKeyEntry(
-                "default",
-                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
-                serverCert.priv);
+        EngineServerPki pki = EngineServerPki.create();
+        rootCa = pki.rootCa();
+        serverCert = pki.serverCert();
+        serverKm = pki.serverKm();
     }
 
     @Test
@@ -142,9 +126,11 @@ class GostSSLEngineInitialStateContractTest {
     @DisplayName("setEnableSessionCreation() не бросает в INITIAL")
     void testEnableSessionCreation() {
         GostSSLEngine engine = createClientEngine();
-        // По контракту не бросает в любом состоянии
+        // По контракту не бросает в любом состоянии, значение читается обратно
         engine.setEnableSessionCreation(true);
+        assertTrue(engine.getEnableSessionCreation(), "создание сессий включено");
         engine.setEnableSessionCreation(false);
+        assertFalse(engine.getEnableSessionCreation(), "создание сессий выключено");
     }
 
     @Test
@@ -243,7 +229,17 @@ class GostSSLEngineInitialStateContractTest {
         GostSSLEngine engine = createClientEngine();
         // closeOutbound() всегда легален по JSSE-контракту
         engine.closeOutbound();
-        assertTrue(engine.isOutboundDone(), "closeOutbound должен пометить outbound как done");
+        assertFalse(
+                engine.isOutboundDone(),
+                "до рукопожатия есть что отдавать: открытый close_notify ещё не отдан");
+        SSLEngineResult closing =
+                engine.wrap(
+                        ByteBuffer.allocate(0),
+                        ByteBuffer.allocate(TlsConstants.MAX_CIPHERTEXT_LENGTH));
+        assertEquals(
+                SSLEngineResult.Status.CLOSED, closing.getStatus(), "закрывающая запись отдана");
+        assertTrue(closing.bytesProduced() > 0, "close_notify должен быть отдан открытой записью");
+        assertTrue(engine.isOutboundDone(), "после отдачи outbound закрыт");
         assertFalse(engine.isInboundDone(), "inbound не должен быть закрыт на этом этапе");
 
         // RFC 8446 §6.1 не требует closeSent перед closeInbound.
@@ -268,12 +264,12 @@ class GostSSLEngineInitialStateContractTest {
 
     private static GostSSLEngine createClientEngine() {
         GostX509KeyManager km = new GostX509KeyManager();
-        GostX509TrustManager tm = new GostX509TrustManager(null, false);
+        GostX509TrustManager tm = GostX509TrustManager.insecureTrustAll();
         return new GostSSLEngine(km, tm, "localhost", 0, true);
     }
 
     private static GostSSLEngine createServerEngine() {
-        GostX509TrustManager tm = new GostX509TrustManager(null, false);
+        GostX509TrustManager tm = GostX509TrustManager.insecureTrustAll();
         return new GostSSLEngine(serverKm, tm, "localhost", 0, false);
     }
 }

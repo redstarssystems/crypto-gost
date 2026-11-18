@@ -26,24 +26,6 @@ public final class KdfGostR3411_2012_256 {
     private KdfGostR3411_2012_256() {}
 
     /**
-     * Кодирует положительное целое в big-endian (без лидирующих нулей).
-     *
-     * @param value положительное целое
-     * @return big-endian байты
-     */
-    private static byte[] bigEndian(int value) {
-        if (value == 0) return new byte[] {0};
-        int bits = 32 - Integer.numberOfLeadingZeros(value);
-        int bytes = (bits + 7) / 8;
-        byte[] result = new byte[bytes];
-        for (int i = bytes - 1; i >= 0; i--) {
-            result[i] = (byte) (value & 0xFF);
-            value >>>= 8;
-        }
-        return result;
-    }
-
-    /**
      * KDF_GOST_R_3411_2012_256: вырабатывает ключевой материал.
      *
      * @param key          ключ (используется напрямую как HMAC-ключ)
@@ -71,7 +53,7 @@ public final class KdfGostR3411_2012_256 {
         byte[] result = new byte[outputLength];
         // L в битах для суффикса [L]_b (RFC 7836 §4.4)
         int lBits = outputLength * 8;
-        byte[] lBytes = bigEndian(lBits);
+        byte[] lBytes = BigEndianEncoding.minimal(lBits);
 
         // Буфер: [i]_b(1) || label || 0x00 || seed || [L]_b
         // Для i = 1..n на месте [i]_b меняется только первый байт

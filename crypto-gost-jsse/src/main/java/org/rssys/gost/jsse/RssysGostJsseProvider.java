@@ -21,6 +21,7 @@ public final class RssysGostJsseProvider extends Provider {
 
     private static final long serialVersionUID = 1L;
 
+    /** Создаёт провайдер с ГОСТ-реализациями SSLContext, KeyManagerFactory и TrustManagerFactory. */
     public RssysGostJsseProvider() {
         super(
                 GostJsseConstants.PROVIDER_NAME,

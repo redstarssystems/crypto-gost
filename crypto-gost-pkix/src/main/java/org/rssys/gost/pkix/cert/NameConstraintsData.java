@@ -1,5 +1,7 @@
 package org.rssys.gost.pkix.cert;
 
+import java.util.Set;
+
 /**
  * Распарсенные данные расширения Name Constraints (RFC 5280 §4.2.1.10).
  *
@@ -42,13 +44,15 @@ public final class NameConstraintsData {
     public final byte[][] excludedDirectoryNames;
 
     /**
-     * Встречен неподдерживаемый тип GeneralName (otherName).
-     * Неподдерживаемые типы НЕ могут быть проверены, поэтому
-     * ChainValidator НЕ reject'ит цепочку, если лист НЕ содержит
-     * имён этих типов в SAN — только WARNING.
-     * Если же лист содержит otherName в SAN, а NameConstraints
-     * имеют otherName ограничения — REJECT (fail-closed).
+     * Формы GeneralName, для которых в NameConstraints есть ограничения, но проверка
+     * не реализована: otherName, x400Address, ediPartyName, registeredID.
+     * ChainValidator отклоняет цепочку (fail-closed), если сертификат содержит имя
+     * хотя бы одной из этих форм в SAN; иначе ограничение к нему неприменимо
+     * (RFC 5280 §4.2.1.10) и выдаётся только WARNING. Неизменяемое множество.
      */
+    public final Set<UnsupportedGeneralNameForm> unsupportedNameForms;
+
+    /** Есть ли в NameConstraints ограничения неподдерживаемой формы. */
     public final boolean hasUnsupportedNameType;
 
     /**
@@ -65,6 +69,14 @@ public final class NameConstraintsData {
     /** Расширение было non-critical — нарушение RFC 5280 §4.2.1.10 "MUST be critical". */
     public final boolean nonCritical;
 
+    /**
+     * Структура NameConstraints нарушена: не-SEQUENCE GeneralSubtree, пустой
+     * GeneralSubtree, лишние/неизвестные элементы, пустой NameConstraints,
+     * нарушены границы TLV и т.п. Такое расширение нельзя безопасно
+     * интерпретировать, поэтому ChainValidator обязан отклонить цепочку.
+     */
+    public final boolean hasMalformed;
+
     public NameConstraintsData(
             String[] permittedDnsNames,
             byte[][] permittedIps,
@@ -76,10 +88,11 @@ public final class NameConstraintsData {
             String[] excludedRfc822Names,
             String[] excludedUris,
             byte[][] excludedDirectoryNames,
-            boolean hasUnsupportedNameType,
+            Set<UnsupportedGeneralNameForm> unsupportedNameForms,
             boolean hasUnsupportedRfc822Form,
             boolean hasInvalidMinMax,
-            boolean nonCritical) {
+            boolean nonCritical,
+            boolean hasMalformed) {
         this.permittedDnsNames = permittedDnsNames;
         this.permittedIps = permittedIps;
         this.permittedRfc822Names = permittedRfc822Names;
@@ -90,17 +103,20 @@ public final class NameConstraintsData {
         this.excludedRfc822Names = excludedRfc822Names;
         this.excludedUris = excludedUris;
         this.excludedDirectoryNames = excludedDirectoryNames;
-        this.hasUnsupportedNameType = hasUnsupportedNameType;
+        this.unsupportedNameForms =
+                UnsupportedGeneralNameForm.immutableCopyOf(unsupportedNameForms);
+        this.hasUnsupportedNameType = !unsupportedNameForms.isEmpty();
         this.hasUnsupportedRfc822Form = hasUnsupportedRfc822Form;
         this.hasInvalidMinMax = hasInvalidMinMax;
         this.nonCritical = nonCritical;
+        this.hasMalformed = hasMalformed;
     }
 
     /** Пустой объект — сертификат без NameConstraints. */
     public static final NameConstraintsData EMPTY =
             new NameConstraintsData(
-                    null, null, null, null, null, null, null, null, null, null, false, false, false,
-                    false);
+                    null, null, null, null, null, null, null, null, null, null, Set.of(), false,
+                    false, false, false);
 
     /**
      * Есть ли хоть какие-то ограничения (permitted или excluded любого типа).
@@ -129,6 +145,7 @@ public final class NameConstraintsData {
                 && !hasUnsupportedNameType
                 && !hasUnsupportedRfc822Form
                 && !hasInvalidMinMax
-                && !nonCritical;
+                && !nonCritical
+                && !hasMalformed;
     }
 }

@@ -3,6 +3,7 @@ package org.rssys.gost.pkix.cert;
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
@@ -29,7 +30,7 @@ class OcspVerifierFuzzTest {
         } catch (PkixException e) {
             // Ожидаемо
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -43,7 +44,7 @@ class OcspVerifierFuzzTest {
         } catch (PkixException e) {
             // Ожидаемо
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -74,19 +75,7 @@ class OcspVerifierFuzzTest {
             OcspVerifier.verify(ocspResponse, serialNumber, issuerCert);
         } catch (PkixException e) {
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException
-                || e instanceof ClassCastException
-                || e instanceof ArithmeticException
-                || e instanceof java.nio.BufferOverflowException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

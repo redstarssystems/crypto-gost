@@ -203,7 +203,14 @@ public final class GostCertificateBuilder {
         return this;
     }
 
-    /** Удобная перегрузка: DN из строки "CN=..., O=..." */
+    /**
+     * Удобная перегрузка: DN из строки "CN=..., O=...".
+     *
+     * <p>Для сертификата, выпускаемого ранее созданным УЦ, передавайте DER
+     * через {@link #issuerDn(byte[])} (например,
+     * {@code caCert.getSubjectDnBytes()}): строковая перегрузка кодирует DN
+     * заново и может не совпасть с issuer DN старого сертификата.</p>
+     */
     public GostCertificateBuilder issuerDn(String dn) {
         this.issuerDn = GostDnParser.encodeDn(dn);
         return this;
@@ -661,6 +668,9 @@ public final class GostCertificateBuilder {
             throw new IllegalStateException(
                     "ocspNoCheck() requires extendedKeyUsage(EXT_OCSP_SIGNING)");
         }
+        // RFC 5280 §4.1.2.5: до 2049 включительно UTCTime, с 2050 — GeneralizedTime.
+        String encodedNotBefore = GostSignatureHelper.normalizeRfc5280Time(notBefore);
+        String encodedNotAfter = GostSignatureHelper.normalizeRfc5280Time(notAfter);
         ByteArrayOutputStream allExts = new ByteArrayOutputStream();
         try {
             ext.writeExtensions(allExts);
@@ -706,8 +716,8 @@ public final class GostCertificateBuilder {
         return assembleTbs(
                 pub,
                 params,
-                notBefore,
-                notAfter,
+                encodedNotBefore,
+                encodedNotAfter,
                 allExts.size() > 0 ? allExts.toByteArray() : null,
                 issuerDn,
                 subjectDn,
@@ -822,14 +832,14 @@ public final class GostCertificateBuilder {
     // ========================================================================
 
     public enum KeyUsage {
-        DIGITAL_SIGNATURE(0x80),
-        NON_REPUDIATION(0x40),
-        KEY_ENCIPHERMENT(0x20),
-        DATA_ENCIPHERMENT(0x10),
-        KEY_AGREEMENT(0x08),
-        KEY_CERT_SIGN(0x04),
-        CRL_SIGN(0x02),
-        ENCIPHER_ONLY(0x01);
+        DIGITAL_SIGNATURE(GostDerParser.KU_DIGITAL_SIGNATURE),
+        NON_REPUDIATION(GostDerParser.KU_NON_REPUDIATION),
+        KEY_ENCIPHERMENT(GostDerParser.KU_KEY_ENCIPHERMENT),
+        DATA_ENCIPHERMENT(GostDerParser.KU_DATA_ENCIPHERMENT),
+        KEY_AGREEMENT(GostDerParser.KU_KEY_AGREEMENT),
+        KEY_CERT_SIGN(GostDerParser.KU_KEY_CERT_SIGN),
+        CRL_SIGN(GostDerParser.KU_CRL_SIGN),
+        ENCIPHER_ONLY(GostDerParser.KU_ENCIPHER_ONLY);
 
         final int mask;
 

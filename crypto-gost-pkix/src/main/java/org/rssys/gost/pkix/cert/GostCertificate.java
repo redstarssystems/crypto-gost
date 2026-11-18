@@ -3,8 +3,6 @@ package org.rssys.gost.pkix.cert;
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
 import java.math.BigInteger;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -12,6 +10,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
@@ -19,6 +19,8 @@ import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.CheckReturnValue;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Минимальный парсер X.509 сертификата для GOST R 34.10-2012.
@@ -31,10 +33,26 @@ public final class GostCertificate {
      *  (модуль pkix не зависит от tls13, поэтому константа продублирована). */
     private static final int MAX_CERT_SIZE = 262_144;
 
+    /**
+     * Длина DN в записях журнала и диагностических строках по умолчанию. DN несёт персональные
+     * данные, поэтому в журнал он попадает только усечённым и только на уровне DEBUG; в строках
+     * {@code toString()} усечение защищает от слишком длинного вывода.
+     */
+    public static final int DN_LOG_MAX_CHARS = 128;
+
     // Индексы SEQUENCE в TBSCertificate для навигации (RFC 5280 §4.1)
     // SPKI — 5-я, Validity — 3-я SEQUENCE
     private static final int TBS_VALIDITY_SEQUENCE_INDEX = 3;
     private static final int TBS_SPKI_SEQUENCE_INDEX = 5;
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.pkix.cert.GostCertificate");
+
+    /** Наибольшее значение поля version: 2 - v3 (RFC 5280 §4.1.2.1). */
+    private static final int MAX_VERSION_VALUE = 2;
+
+    // Версия X.509 v3 (в поле version хранится значение 2): с неё допустимы extensions
+    private static final int CERT_VERSION_V2 = 2;
+    private static final int CERT_VERSION_V3 = 3;
     private static final int ISSUER_DN_SKIP = 0;
     private static final int SUBJECT_DN_SKIP = 2;
 
@@ -54,6 +72,7 @@ public final class GostCertificate {
     private final String[] sanUris;
     private final byte[][] sanDirectoryNames;
     private final OtherNameEntry[] sanOtherNames;
+    private final Set<UnsupportedGeneralNameForm> sanUnsupportedNameForms;
     private final String[] ianDnsNames;
     private final byte[][] ianIpAddresses;
     private final String[] ianRfc822Names;
@@ -117,6 +136,7 @@ public final class GostCertificate {
     private final CertificatePolicy[] certPolicyInfos;
     // Множество всех OID расширений, присутствующих в сертификате (dot-нотация)
     private final Set<String> presentExtensionOids;
+    private final Map<String, byte[]> extensionValues;
     // Name Constraints (RFC 5280 §4.2.1.10)
     private final NameConstraintsData nameConstraints;
     // Результат парсинга расширений — для bulk-доступа через getExtensions()
@@ -154,6 +174,14 @@ public final class GostCertificate {
         this.certData = derEncoded.clone();
 
         int[] outer = parseSequence(derEncoded, 0);
+        // Сертификат - ровно один DER-элемент: хвост за ним не читается и не подписан, но
+        // остался бы в certData и уходил дальше вместе с сертификатом
+        if (outer[1] != derEncoded.length) {
+            throw new IllegalArgumentException(
+                    "Unexpected trailing data after certificate: "
+                            + (derEncoded.length - outer[1])
+                            + " byte(s)");
+        }
         int certContentStart = outer[0];
         if (certContentStart >= outer[1]) {
             throw new IllegalArgumentException(
@@ -161,7 +189,7 @@ public final class GostCertificate {
         }
 
         // Три потомка верхнего уровня: TBSCertificate, SignatureAlgorithm, SignatureValue
-        int[] tbsTlv = readTlv(derEncoded, certContentStart);
+        int[] tbsTlv = readTlv(derEncoded, certContentStart, outer[1]);
         this.tbsCertOff = certContentStart;
         this.tbsCertLen = tbsTlv[1] - certContentStart;
 
@@ -171,17 +199,24 @@ public final class GostCertificate {
         {
             int vPos = tbsTlv[0];
             if (vPos < tbsTlv[1] && (derEncoded[vPos] & 0xFF) == TAG_CTX_0) {
-                int[] verTagTlv = readTlv(derEncoded, vPos);
-                // verTagTlv[0] — начало INTEGER внутри [0] EXPLICIT
-                if (verTagTlv[0] < verTagTlv[1]
-                        && (derEncoded[verTagTlv[0]] & 0xFF) == TAG_INTEGER) {
-                    int[] verIntTlv = readTlv(derEncoded, verTagTlv[0]);
-                    if (verIntTlv[0] >= verIntTlv[1]) {
-                        throw new IllegalArgumentException(
-                                "Truncated DER encoding: empty INTEGER in version field");
-                    }
-                    v = (derEncoded[verIntTlv[0]] & 0xFF) + 1;
+                int[] verTagTlv = readTlv(derEncoded, vPos, tbsTlv[1]);
+                // verTagTlv[0] — начало INTEGER внутри [0] EXPLICIT; [0] расходуется целиком:
+                // лишние байты после INTEGER - повреждённая структура, а не пропускаемые данные
+                int[] versionAndEnd =
+                        readStrictNonNegativeInt(derEncoded, verTagTlv[0], verTagTlv[1]);
+                if (versionAndEnd[1] != verTagTlv[1]) {
+                    throw new IllegalArgumentException("Unexpected trailing data in version field");
                 }
+                if (versionAndEnd[0] > MAX_VERSION_VALUE) {
+                    throw new IllegalArgumentException(
+                            "Unsupported certificate version value " + versionAndEnd[0]);
+                }
+                if (versionAndEnd[0] == 0) {
+                    // v1 - значение DEFAULT, и DER (X.690 §11.5) требует его опустить. Явная
+                    // запись встречается у старых издателей и безвредна: допускаем и помечаем
+                    LOG.log(Level.DEBUG, "Certificate has explicit default version v1");
+                }
+                v = versionAndEnd[0] + 1;
             }
         }
         this.version = v;
@@ -218,9 +253,9 @@ public final class GostCertificate {
                         : issuerDnR.fields.toArray(new GostDnParser.DnField[0]);
 
         // SignatureAlgorithm (SEQUENCE of OID + params) — извлекаем OID
-        int[] sigAlgTlv = readTlv(derEncoded, tbsTlv[1]);
+        int[] sigAlgTlv = readTlv(derEncoded, tbsTlv[1], outer[1]);
         if (sigAlgTlv[0] < sigAlgTlv[1] && (derEncoded[sigAlgTlv[0]] & 0xFF) == TAG_OID) {
-            int[] oidTlv = readTlv(derEncoded, sigAlgTlv[0]);
+            int[] oidTlv = readTlv(derEncoded, sigAlgTlv[0], sigAlgTlv[1]);
             this.sigAlgOidBytes = Arrays.copyOfRange(derEncoded, oidTlv[0], oidTlv[1]);
         } else {
             this.sigAlgOidBytes = new byte[0];
@@ -228,18 +263,26 @@ public final class GostCertificate {
 
         // SignatureValue (BIT STRING)
         int sigTagOffset = sigAlgTlv[1];
-        if (sigTagOffset >= derEncoded.length) {
+        if (sigTagOffset >= outer[1]) {
             throw new IllegalArgumentException(
                     "Truncated DER encoding: missing signature at offset " + sigTagOffset);
         }
-        if ((derEncoded[sigTagOffset] & 0x1F) != TAG_BIT_STRING) {
+        // Тег сверяется целиком: маска 0x1F пропускала бы 0x23 (constructed), 0x43 и 0x83
+        // (другие классы), то есть другое DER-кодирование того же сертификата
+        if ((derEncoded[sigTagOffset] & 0xFF) != TAG_BIT_STRING) {
             throw new IllegalArgumentException("Expected BIT STRING for signature");
         }
-        int[] sigValTlv = readTlv(derEncoded, sigTagOffset);
+        int[] sigValTlv = readTlv(derEncoded, sigTagOffset, outer[1]);
         if (sigValTlv[1] <= sigValTlv[0]) {
             throw new IllegalArgumentException(
                     "Truncated DER encoding: empty BIT STRING for signature at offset "
                             + sigTagOffset);
+        }
+        // Подпись - последний элемент сертификата: байты за ней внутри внешней SEQUENCE не
+        // покрыты подписью (она считается только по TBS) и меняли бы отпечаток
+        if (sigValTlv[1] != outer[1]) {
+            throw new IllegalArgumentException(
+                    "Unexpected trailing data after signature value in certificate");
         }
         int unusedBits = derEncoded[sigValTlv[0]] & 0xFF;
         if (unusedBits != 0) {
@@ -257,13 +300,14 @@ public final class GostCertificate {
         this.spkiAlgIdLen = spki.spkiAlgIdLen;
 
         // Парсим SubjectAltName, KeyUsage, ExtendedKeyUsage, BasicConstraints из extensions
-        this.extResult = parseExtensions(derEncoded, tbsTlv);
+        this.extResult = parseExtensions(derEncoded, tbsTlv, v);
         this.sanDnsNames = extResult.sanDnsNames;
         this.sanIpAddresses = extResult.sanIpAddresses;
         this.sanRfc822Names = extResult.sanRfc822Names;
         this.sanUris = extResult.sanUris;
         this.sanDirectoryNames = extResult.sanDirectoryNames;
         this.sanOtherNames = extResult.sanOtherNames;
+        this.sanUnsupportedNameForms = extResult.sanUnsupportedNameForms;
         this.ianDnsNames = extResult.ianDnsNames;
         this.ianIpAddresses = extResult.ianIpAddresses;
         this.ianRfc822Names = extResult.ianRfc822Names;
@@ -293,6 +337,7 @@ public final class GostCertificate {
         this.cpOids = extResult.cpOids;
         this.certPolicyInfos = extResult.certPolicies;
         this.presentExtensionOids = extResult.presentExtensionOids;
+        this.extensionValues = extResult.extensionValues;
         this.nameConstraints = extResult.nameConstraints;
 
         // Проверка согласованности алгоритма (RFC 5280 §4.1.1.2):
@@ -303,15 +348,15 @@ public final class GostCertificate {
         // TBSCertificate.signature — вторая SEQUENCE внутри TBS (после version, serial)
         int tbsPos = tbsTlv[0];
         if (tbsPos < tbsTlv[1] && (derEncoded[tbsPos] & 0xFF) == 0xA0) {
-            tbsPos = readTlv(derEncoded, tbsPos)[1];
+            tbsPos = readTlv(derEncoded, tbsPos, tbsTlv[1])[1];
         }
-        int[] serialTlv = readTlv(derEncoded, tbsPos);
+        int[] serialTlv = readTlv(derEncoded, tbsPos, tbsTlv[1]);
         this.serialOff = serialTlv[0];
         this.serialLen = serialTlv[1] - serialTlv[0];
         tbsPos = serialTlv[1];
         // signature — SEQUENCE внутри TBS
         if (tbsPos < tbsTlv[1] && (derEncoded[tbsPos] & 0xFF) == TAG_SEQUENCE) {
-            int[] tbsSigTlv = readTlv(derEncoded, tbsPos);
+            int[] tbsSigTlv = readTlv(derEncoded, tbsPos, tbsTlv[1]);
             this.algConsistent =
                     outerSigLen == tbsSigTlv[1] - tbsPos
                             && arrayRangeEquals(
@@ -359,6 +404,7 @@ public final class GostCertificate {
 
         byte[] sigCopy = new byte[sigLen];
         System.arraycopy(certData, sigOff, sigCopy, 0, sigLen);
+        // Подпись неверной длины - не валидная подпись: verifyHash возвращает false
         return Signature.verifyHash(hash, sigCopy, caPublicKey);
     }
 
@@ -386,30 +432,36 @@ public final class GostCertificate {
      * на аутентификацию хоста.
      * <p>
      * Wildcard (*.example.com) матчит ровно одну метку слева.
-     * Частичные wildcard (f*.example.com) запрещены.
-     * IDN A-label wildcard (xn--*) запрещён.
+     * Частичные wildcard (f*.example.com) запрещены. IDN-домены допускаются
+     * в A-label; Unicode-имя преобразуется в A-label перед сравнением.
      *
-     * @param hostname DNS-имя сервера; {@code null} — проверка пропускается
-     *                 (IP-соединение, см. RFC 6125 §1.7.2);
-     *                 пустая строка — {@code false}
-     * @return {@code true} если hostname соответствует сертификату,
-     *         или hostname == {@code null} (проверка пропущена);
+     * @param hostname DNS-имя сервера; {@code null} и пустая строка дают
+     *                 {@code false}. Если проверка имени не нужна, вызывающий
+     *                 обязан явно её не вызывать, а не передавать {@code null}
+     * @return {@code true} только если hostname соответствует сертификату;
      *         {@code false} в остальных случаях
      */
     @CheckReturnValue
     public boolean verifyHostname(String hostname) {
-        if (hostname == null) return true;
+        if (hostname == null) return false;
         if (hostname.isEmpty()) return false;
 
-        // Нормализация: trim, lowercase, удаляем trailing dot
-        String normalized = hostname.trim().toLowerCase();
-        if (normalized.isEmpty()) return false;
-        if (normalized.charAt(normalized.length() - 1) == '.') {
-            normalized = normalized.substring(0, normalized.length() - 1);
+        // Вся нормализация (края, регистр, завершающая точка, IDN) - в GostDnsName: второй
+        // собственный разбор здесь расходился бы с ним в границах случаев (например, по числу
+        // срезаемых точек). Ошибка преобразования - это несовпадение, а не исключение.
+        String normalized;
+        try {
+            normalized = GostDnsName.toAsciiHostname(hostname);
+        } catch (IllegalArgumentException e) {
+            return false;
         }
 
-        // IP-адрес -> проверка против iPAddress SAN (tag 0x87)
-        if (isIpAddress(normalized)) return verifyAddress(normalized);
+        // IP-адрес -> проверка против iPAddress SAN (tag 0x87). Квадратные скобки - синтаксис
+        // URI-хоста, не часть адреса; их снимает разбор литерала.
+        byte[] rawAddress = GostDnsName.parseIpAddress(normalized);
+        if (rawAddress != null) {
+            return verifyAddress(rawAddress);
+        }
 
         // DNS-проверка требует хотя бы одного dNSName в SAN
         if (sanDnsNames == null) return false;
@@ -424,18 +476,16 @@ public final class GostCertificate {
      * Атомарное сопоставление нормализованного hostname с одним dNSName из SAN.
      * <p>
      * Поддерживает точное совпадение и wildcard {@code *.example.com}.
-     * Частичные wildcard ({@code f*.example.com}) и IDN A-label
-     * ({@code *.xn--...}) запрещены по RFC 6125 §6.4.3.
-     * <p>
-     * Метод public, поскольку используется также в
-     * {@code GostX509KeyManager} из модуля JSSE.
+     * Частичные wildcard ({@code f*.example.com}) запрещены. IDN-зоны
+     * в A-label допустимы ({@code *.example.xn--p1ai}), но wildcard не может
+     * покрывать всю публичную зону ({@code *.xn--p1ai}).
      *
      * @param normalizedHostname нормализованный hostname (trim, lowercase, без trailing dot)
      * @param sanDnsName         одно dNSName значение из SAN (не нормализовано)
      * @return {@code true} если hostname соответствует dNSName
      */
-    public static boolean matchDnsName(String normalizedHostname, String sanDnsName) {
-        String sanLower = sanDnsName.toLowerCase();
+    static boolean matchDnsName(String normalizedHostname, String sanDnsName) {
+        String sanLower = sanDnsName.toLowerCase(Locale.ROOT);
 
         // Точное совпадение
         if (normalizedHostname.equals(sanLower)) return true;
@@ -451,9 +501,6 @@ public final class GostCertificate {
         // Частичный wildcard (f*.example.com) запрещён
         if (sanLower.indexOf('*', 1) >= 0) return false;
 
-        // IDN A-label wildcard запрещён
-        if (suffix.startsWith("xn--") || suffix.contains(".xn--")) return false;
-
         // Первая метка hostname не должна быть пустой и не должна содержать точек
         int firstDot = normalizedHostname.indexOf('.');
         if (firstDot <= 0) return false;
@@ -467,47 +514,18 @@ public final class GostCertificate {
     }
 
     /**
-     * Проверяет, является ли строка IP-адресом (IPv4 или IPv6).
-     * IPv6 детектится по наличию двоеточия, IPv4 — 4 десятичных октета.
-     *
-     * <p>Видимость package-private для переиспользования из ChainValidator
-     * (проверка URI-хоста на IP-адрес в NameConstraints).</p>
-     *
-     * @param hostname строка для проверки
-     * @return true если строка является IP-адресом
-     */
-    static boolean isIpAddress(String hostname) {
-        if (hostname.indexOf(':') >= 0) return true;
-        // Проверка на IPv4: 4 числа, разделённых точками
-        String[] parts = hostname.split("\\.");
-        if (parts.length != 4) return false;
-        for (String p : parts) {
-            try {
-                int v = Integer.parseInt(p);
-                if (v < 0 || v > 255) return false;
-            } catch (NumberFormatException e) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
      * Проверяет IP-адрес против iPAddress SAN (RFC 5280 §4.2.1.6).
      *
-     * @param ipAddress IP-адрес (IPv4 или IPv6)
+     * <p>Принимаются только IP-литералы (IPv4, IPv6, IPv6 в квадратных скобках, IPv6 с зоной):
+     * имя хоста не резолвится, обращений к DNS нет. IPv4-mapped IPv6 сопоставляется как IPv4.</p>
+     *
+     * @param ipAddress IP-литерал; не IP-литерал даёт {@code false}
      * @return true если адрес найден в SAN iPAddress entries
      */
     @CheckReturnValue
     public boolean verifyAddress(String ipAddress) {
-        if (sanIpAddresses == null) return false;
-        try {
-            InetAddress addr = InetAddress.getByName(ipAddress);
-            byte[] raw = addr.getAddress();
-            return verifyAddress(raw);
-        } catch (UnknownHostException e) {
-            return false;
-        }
+        byte[] rawAddress = GostDnsName.parseIpAddress(ipAddress);
+        return rawAddress != null && verifyAddress(rawAddress);
     }
 
     /**
@@ -563,11 +581,79 @@ public final class GostCertificate {
     }
 
     /**
-     * @return true если KeyUsage не задан или содержит cRLSign (RFC 5280 §4.2.1.3).
-     *         Отсутствие KeyUsage = без ограничений — сертификат может подписывать CRL.
+     * Проверяет, разрешён ли сертификат для подписи CMS.
+     * <p>
+     * В отличие от TLS, где требуется {@code digitalSignature}, CMS допускает
+     * также {@code nonRepudiation} (RFC 5280 §4.2.1.3). Отсутствие KeyUsage
+     * означает отсутствие ограничений по ключу.
+     *
+     * @return true если KeyUsage не задан или содержит digitalSignature/nonRepudiation
+     */
+    public boolean isKeyUsageValidForSigning() {
+        if (!presentExtensionOids.contains(GostOids.EXT_KU)) {
+            return true;
+        }
+        return (keyUsageBits
+                        & (GostDerParser.KU_DIGITAL_SIGNATURE | GostDerParser.KU_NON_REPUDIATION))
+                != 0;
+    }
+
+    /**
+     * Проверяет, предназначен ли ключ сертификата для шифрования, то есть может ли сертификат
+     * быть получателем CMS EnvelopedData (ktri и kari). Парно {@link #isKeyUsageValidForSigning()}.
+     *
+     * <p>Если KeyUsage не задан, ограничений нет. Если задан, нужен хотя бы один из битов
+     * {@code keyEncipherment}, {@code keyAgreement}, {@code dataEncipherment}, в обоих режимах
+     * одинаково. Критичность расширения не влияет. {@code encipherOnly} и {@code decipherOnly}
+     * не учитываются: для получателя в VKO их смысл неоднозначен.
+     *
+     * <p>Это сознательное отступление от RFC 5652 §6.2.1 и §6.2.2, где бит привязан к типу
+     * RecipientInfo (ktri - {@code keyEncipherment}, kari - {@code keyAgreement}), и от буквы
+     * RFC 9215 §4.4. В ГОСТ оба режима строятся на VKO (RFC 4490 §4.1.1, §4.2.1), а RFC 9215 §6
+     * (информационный профиль ключей ГОСТ Р 34.10-2012 в PKIX) указывает, что
+     * {@code keyEncipherment} и {@code dataEncipherment} для таких ключей определены не
+     * полностью. Строгая привязка бита к режиму отвергла бы выпускаемые удостоверяющими центрами
+     * сертификаты без {@code keyAgreement}, на которые контейнер при этом расшифровывается.
+     * Набор битов совпадает с поведением КриптоПро CSP 5.0 (cryptcp -encr отвергает сертификаты
+     * только для подписи и для УЦ и принимает сертификат с любым из этих трёх битов).
+     * Сертификат только для подписи отвергается (RFC 4491 §3).
+     *
+     * @return true если KeyUsage не задан или содержит keyEncipherment, keyAgreement либо
+     *         dataEncipherment
+     */
+    public boolean isKeyUsageValidForEncryption() {
+        if (!presentExtensionOids.contains(GostOids.EXT_KU)) {
+            return true;
+        }
+        return (keyUsageBits
+                        & (GostDerParser.KU_KEY_ENCIPHERMENT
+                                | GostDerParser.KU_KEY_AGREEMENT
+                                | GostDerParser.KU_DATA_ENCIPHERMENT))
+                != 0;
+    }
+
+    /**
+     * Мягкая проверка права подписывать CRL <b>для прямого пути</b>, где CRL подписан ключом
+     * самого УЦ: отсутствие KeyUsage трактуется как «без ограничений» (RFC 5280 §4.2.1.3).
+     * Для делегированных подписантов не подходит, см. {@link #hasCrlSignKeyUsage()}.
+     *
+     * @return true если KeyUsage не задан или содержит cRLSign
      */
     public boolean isCrlSigner() {
         return crlSignValid;
+    }
+
+    /**
+     * Строгая проверка права подписывать CRL <b>для делегированного подписанта</b>: KeyUsage
+     * обязан присутствовать и содержать cRLSign. Отсутствие KeyUsage здесь не разрешение:
+     * у делегированного подписанта нет иной границы полномочий (связи по имени с издателем
+     * CRL нет), поэтому любой сертификат УЦ без KeyUsage иначе подписал бы CRL от его имени.
+     *
+     * @return true только если KeyUsage задан и содержит cRLSign
+     */
+    public boolean hasCrlSignKeyUsage() {
+        return presentExtensionOids.contains(GostOids.EXT_KU)
+                && (keyUsageBits & GostDerParser.KU_CRL_SIGN) != 0;
     }
 
     /** @return true если EKU не задан или содержит serverAuth */
@@ -580,9 +666,11 @@ public final class GostCertificate {
         return ekuClientAuth;
     }
 
-    /** @return true если сертификат разрешён для подписи OCSP-ответов */
+    /**
+     * @return true если EKU содержит id-kp-OCSPSigning; сертификат без EKU
+     *     подписантом OCSP-ответа не считается (RFC 6960 §4.2.2.2 требует явного EKU)
+     */
     public boolean isOcspSigning() {
-        // EKU не задан -> без ограничений (RFC 5280 §4.2.1.12)
         return ekuOcspSigning;
     }
 
@@ -623,9 +711,19 @@ public final class GostCertificate {
     /**
      * Возвращает данные расширения Name Constraints (RFC 5280 §4.2.1.10).
      *
+     * <p>Результат - независимая копия: правка его массивов не влияет на проверку цепочки.</p>
+     *
      * @return распарсенные ограничения имён или {@link NameConstraintsData#EMPTY} если расширение отсутствует
      */
     public NameConstraintsData getNameConstraints() {
+        return GostExtensionParser.ExtensionsResult.copyNameConstraints(nameConstraintsInternal());
+    }
+
+    /**
+     * Ограничения имён без копирования - для проверки цепочки внутри пакета. Наружу не отдаются:
+     * поля объекта - публичные изменяемые массивы, и их правка меняла бы результат проверки.
+     */
+    NameConstraintsData nameConstraintsInternal() {
         NameConstraintsData nc = nameConstraints;
         return nc != null ? nc : NameConstraintsData.EMPTY;
     }
@@ -708,6 +806,18 @@ public final class GostCertificate {
     /** @return массив otherName из SubjectAltName или null. Defensive copy. */
     public OtherNameEntry[] getSanOtherNames() {
         return sanOtherNames == null ? null : sanOtherNames.clone();
+    }
+
+    /**
+     * Неподдерживаемые формы GeneralName в SubjectAltName: otherName, x400Address,
+     * ediPartyName, registeredID. Нужны для NameConstraints: ограничение на такую форму
+     * проверить нельзя, поэтому при пересечении с формами в NameConstraints цепочка
+     * отклоняется.
+     *
+     * @return неизменяемое множество; пустое, если таких имён в SAN нет
+     */
+    public Set<UnsupportedGeneralNameForm> getSanUnsupportedNameForms() {
+        return sanUnsupportedNameForms;
     }
 
     /** @return массив otherName из IssuerAltName или null. Defensive copy. */
@@ -803,13 +913,31 @@ public final class GostCertificate {
     }
 
     /**
-     * @return BIT STRING value из SubjectPublicKeyInfo (включая unused-bits байт),
-     *         для вычисления issuerKeyHash в CertID (RFC 6960 §4.1.1)
+     * @return BIT STRING value из SubjectPublicKeyInfo, включая ведущий октет unused-bits.
+     *         Для issuerKeyHash и ResponderID.byKey (RFC 6960 §4.1.1) не подходит:
+     *         используйте {@link #getSpkiKeyBits()}
      */
     public byte[] getSpkiKeyValue() {
         byte[] result = new byte[spkiKeyValueLen];
         System.arraycopy(certData, spkiKeyValueOff, result, 0, spkiKeyValueLen);
         return result;
+    }
+
+    /**
+     * Возвращает биты открытого ключа из SubjectPublicKeyInfo без тега, длины и октета
+     * unused-bits: именно от них RFC 6960 §4.1.1 требует считать issuerKeyHash и
+     * ResponderID.byKey. Для ГОСТ-ключа это DER {@code OCTET STRING(x_LE || y_LE)}.
+     *
+     * @return байты ключа без unused-bits (защитная копия)
+     * @throws IllegalStateException если октет unused-bits не равен нулю (fail-closed:
+     *         ГОСТ-ключ всегда кратен восьми битам)
+     */
+    public byte[] getSpkiKeyBits() {
+        if (spkiKeyValueLen < 2 || certData[spkiKeyValueOff] != 0) {
+            throw new IllegalStateException("SubjectPublicKey BIT STRING has non-zero unused bits");
+        }
+        return java.util.Arrays.copyOfRange(
+                certData, spkiKeyValueOff + 1, spkiKeyValueOff + spkiKeyValueLen);
     }
 
     /**
@@ -1347,6 +1475,24 @@ public final class GostCertificate {
     }
 
     /**
+     * Возвращает значение расширения: содержимое OCTET STRING {@code extnValue}, то есть DER
+     * значения расширения (RFC 5280 §4.1), без обёртки Extension, OID и флага критичности.
+     * Значение берётся из того же строгого разбора, что и остальные свойства сертификата;
+     * повторяющихся расширений в сертификате быть не может (такой сертификат не создаётся).
+     *
+     * @param oid OID расширения в dot-notation, например {@code "2.5.29.15"}
+     * @return копия значения или {@code null}, если расширения в сертификате нет
+     * @throws IllegalArgumentException если {@code oid} равен {@code null}
+     */
+    public byte[] getExtensionValue(String oid) {
+        if (oid == null) {
+            throw new IllegalArgumentException("oid must not be null");
+        }
+        byte[] value = extensionValues.get(oid);
+        return value == null ? null : value.clone();
+    }
+
+    /**
      * Возвращает результат парсинга расширений X.509v3.
      *
      * <p><b>Граница доверия:</b> расширения в сертификате подтверждены УЦ,
@@ -1358,11 +1504,14 @@ public final class GostCertificate {
      * сертификатов в CA/Browser Forum введён для принудительной
      * периодической переаттестации.</p>
      *
+     * <p>Результат - независимая копия: изменение возвращённых массивов не влияет на разобранный
+     * объект и на проверку цепочки.</p>
+     *
      * @return структурированный результат парсинга расширений.
      *         {@link GostExtensionParser.ExtensionsResult#empty()} если расширения отсутствуют.
      */
     public GostExtensionParser.ExtensionsResult getExtensions() {
-        return extResult;
+        return extResult.copy();
     }
 
     /** @return true если сертификат содержит хотя бы одно распознанное расширение */
@@ -1409,18 +1558,18 @@ public final class GostCertificate {
 
         // version [0] EXPLICIT (OPTIONAL, default v1)
         if (pos < end && (der[pos] & 0xFF) == 0xA0) {
-            pos = readTlv(der, pos)[1];
+            pos = readTlv(der, pos, end)[1];
         }
         // serialNumber (INTEGER)
         if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-        pos = readTlv(der, pos)[1];
+        pos = readTlv(der, pos, end)[1];
 
         // Из оставшихся полей SPKI — 5-я SEQUENCE
         // (1=signature, 2=issuer, 3=validity, 4=subject, 5=SPKI)
         int seqCount = 0;
         while (pos < end) {
             int tag = der[pos] & 0xFF;
-            int[] tlv = readTlv(der, pos);
+            int[] tlv = readTlv(der, pos, end);
             if (tag == TAG_SEQUENCE) {
                 seqCount++;
                 if (seqCount == 5) {
@@ -1431,9 +1580,9 @@ public final class GostCertificate {
 
                     // Извлекаем позицию BIT STRING value внутри SPKI:
                     // SEQUENCE -> AlgorithmIdentifier -> BIT STRING -> value
-                    int[] algTlv = readTlv(der, spkiValueStart);
+                    int[] algTlv = readTlv(der, spkiValueStart, tlv[1]);
                     int bsPos = algTlv[1];
-                    int[] bsTlv = readTlv(der, bsPos);
+                    int[] bsTlv = readTlv(der, bsPos, tlv[1]);
                     // bsTlv[0] — начало BIT STRING value (включая unused-bits байт)
                     // bsTlv[1] — конец BIT STRING value
                     int keyValueOff = bsTlv[0];
@@ -1466,10 +1615,10 @@ public final class GostCertificate {
         int pos = tbsTlv[0];
         int end = tbsTlv[1];
         if (pos < end && (der[pos] & 0xFF) == TAG_CTX_0) {
-            pos = readTlv(der, pos)[1];
+            pos = readTlv(der, pos, end)[1];
         }
         if (pos >= end) return -1;
-        return readTlv(der, pos)[1];
+        return readTlv(der, pos, end)[1];
     }
 
     /**
@@ -1479,17 +1628,21 @@ public final class GostCertificate {
      *
      * @param der    DER-поток сертификата
      * @param tbsTlv [valueStart, valueEnd] TBSCertificate
+     * @param certVersion версия сертификата (1..3)
      * @return результат парсинга расширений
      */
-    private static GostExtensionParser.ExtensionsResult parseExtensions(byte[] der, int[] tbsTlv) {
+    private static GostExtensionParser.ExtensionsResult parseExtensions(
+            byte[] der, int[] tbsTlv, int certVersion) {
         int end = tbsTlv[1];
         int pos = skipVersionAndSerial(der, tbsTlv);
-        if (pos < 0) return GostExtensionParser.ExtensionsResult.empty();
+        if (pos < 0) {
+            throw new IllegalArgumentException("TBSCertificate too short");
+        }
         // Сканируем до 5-й SEQUENCE (SPKI)
         int seqCount = 0;
         while (pos < end) {
             int tag = der[pos] & 0xFF;
-            int[] tlv = readTlv(der, pos);
+            int[] tlv = readTlv(der, pos, end);
             if (tag == TAG_SEQUENCE) {
                 seqCount++;
                 if (seqCount == TBS_SPKI_SEQUENCE_INDEX) {
@@ -1499,19 +1652,40 @@ public final class GostCertificate {
             }
             pos = tlv[1];
         }
-        if (seqCount < TBS_SPKI_SEQUENCE_INDEX) return GostExtensionParser.ExtensionsResult.empty();
+        if (seqCount < TBS_SPKI_SEQUENCE_INDEX) {
+            throw new IllegalArgumentException("No SubjectPublicKeyInfo found in TBSCertificate");
+        }
 
-        // issuerUniqueID [1], subjectUniqueID [2], затем extensions [3]
+        // issuerUniqueID [1], subjectUniqueID [2], затем extensions [3].
+        // Расширения опциональны (v1/v2): пустой результат допустим только если [3]
+        // отсутствует. Любой другой хвост — повреждённая структура, а не «нет расширений».
         while (pos < end) {
             int tag = der[pos] & 0xFF;
-            if (tag == TAG_CTX_1 || tag == TAG_CTX_2) {
-                pos = readTlv(der, pos)[1];
+            // Канонический uniqueID — IMPLICIT BIT STRING (0x81/0x82); constructed-вариант
+            // (0xA1/0xA2) оставлен как раньше.
+            if (tag == TAG_ISSUER_UNIQUE_ID
+                    || tag == TAG_SUBJECT_UNIQUE_ID
+                    || tag == TAG_CTX_1
+                    || tag == TAG_CTX_2) {
+                // RFC 5280 §4.1.2.8: uniqueID допустимы только в сертификатах v2 и v3
+                if (certVersion < CERT_VERSION_V2) {
+                    throw new IllegalArgumentException(
+                            "Unique IDs are not allowed in a v1 certificate");
+                }
+                pos = readTlv(der, pos, end)[1];
                 continue;
             }
             if (tag == TAG_CTX_3) {
-                return GostExtensionParser.parseFromExtensionsBlock(der, pos);
+                // RFC 5280 §4.1.2.9: extensions допустимы только в сертификате v3. Для v1/v2
+                // блок [3] - несогласованная структура, а не набор действующих расширений.
+                if (certVersion < CERT_VERSION_V3) {
+                    throw new IllegalArgumentException(
+                            "Extensions are only allowed in a v3 certificate, got v" + certVersion);
+                }
+                return GostExtensionParser.parseFromExtensionsBlock(der, pos, end);
             }
-            break;
+            throw new IllegalArgumentException(
+                    "Unexpected field in TBSCertificate at offset " + pos);
         }
         return GostExtensionParser.ExtensionsResult.empty();
     }
@@ -1536,14 +1710,14 @@ public final class GostCertificate {
         int pos = skipVersionAndSerial(der, tbsTlv);
         if (pos < 0) throw new IllegalArgumentException("TBSCertificate too short");
         if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-        pos = readTlv(der, pos)[1]; // signature SEQUENCE
+        pos = readTlv(der, pos, end)[1]; // signature SEQUENCE
         for (int i = 0; i < skipSeqs; i++) {
             if (pos >= end) throw new IllegalArgumentException("TBSCertificate too short");
-            pos = readTlv(der, pos)[1];
+            pos = readTlv(der, pos, end)[1];
         }
         while (pos < end) {
             int tag = der[pos] & 0xFF;
-            int[] tlv = readTlv(der, pos);
+            int[] tlv = readTlv(der, pos, end);
             if (tag == TAG_SEQUENCE) {
                 return new int[] {pos, tlv[1] - pos};
             }
@@ -1574,12 +1748,20 @@ public final class GostCertificate {
         int seqCount = 0;
         while (pos < end) {
             int tag = der[pos] & 0xFF;
-            int[] tlv = readTlv(der, pos);
+            int[] tlv = readTlv(der, pos, end);
             if (tag == TAG_SEQUENCE) {
                 seqCount++;
                 if (seqCount == TBS_VALIDITY_SEQUENCE_INDEX) {
+                    // Оба времени лежат целиком внутри Validity и заполняют её без хвоста:
+                    // parseTime проверяет только der.length, а не границы родителя.
+                    int[] notBeforeTlv = readTlv(der, tlv[0], tlv[1]);
+                    int[] notAfterTlv = readTlv(der, notBeforeTlv[1], tlv[1]);
+                    if (notAfterTlv[1] != tlv[1]) {
+                        throw new IllegalArgumentException(
+                                "Trailing bytes after notAfter in Validity");
+                    }
                     Instant notBefore = parseTime(der, tlv[0]);
-                    Instant notAfter = parseTime(der, readTlv(der, tlv[0])[1]);
+                    Instant notAfter = parseTime(der, notBeforeTlv[1]);
                     return new Instant[] {notBefore, notAfter};
                 }
             }
@@ -1672,12 +1854,14 @@ public final class GostCertificate {
     }
 
     /**
-     * Декодирует PEM-формат (Base64 между заголовками) в DER-байты.
-     * <p>Вырезает любые PEM-заголовки {@code -----BEGIN ...-----} / {@code -----END ...-----}
-     * и пробельные символы, декодирует оставшийся Base64.
+     * Декодирует один PEM-блок (Base64 между заголовками) в DER-байты.
+     * <p>Вырезает заголовки {@code -----BEGIN ...-----} / {@code -----END ...-----} и пробельные
+     * символы, декодирует оставшийся Base64. Блок должен быть ровно один; файл с цепочкой
+     * сертификатов читается через {@link #listFromPem(byte[])}.
      *
      * @param pem байты PEM-данных (сертификат, ключ или любой PEM-блок)
      * @return DER-байты
+     * @throws IllegalArgumentException если блоков не один или структура заголовков нарушена
      */
     public static byte[] pemToDer(byte[] pem) {
         return GostPemUtils.pemToDer(pem);

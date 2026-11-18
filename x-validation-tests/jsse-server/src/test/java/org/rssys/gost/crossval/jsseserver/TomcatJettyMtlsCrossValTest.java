@@ -1,5 +1,15 @@
 package org.rssys.gost.crossval.jsseserver;
 
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.Security;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.net.ssl.SSLContext;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -10,20 +20,10 @@ import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
-
-import javax.net.ssl.SSLContext;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.Security;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @DisplayName("JSSE: кросс-валидация mTLS серверов приложений <-> OpenSSL s_client -cert")
 class TomcatJettyMtlsCrossValTest {
@@ -50,10 +50,10 @@ class TomcatJettyMtlsCrossValTest {
             // Самоподписанный клиентский сертификат (self-signed — OpenSSL
             // не может загрузить PEM ГОСТ-серта, подписанного CA: "ca md too weak")
             byte[] cliKu = new byte[]{(byte) 0x80};
-            TlsTestHelper.CertBundle clientBundle = TlsTestHelper.createCertWithKey(
+            PkixCertTestHelper.CertBundle clientBundle = PkixCertTestHelper.createCertWithKey(
                     params, "20240101120000Z", "21060101120000Z",
                     null, cliKu, new String[]{"1.3.6.1.5.5.7.3.2"});
-            PublicKeyParameters clientPub = clientBundle.cert.getPublicKey();
+            GostCertificate clientCert = clientBundle.cert;
             Path clientCertPem = tmpDir.resolve("client-cert.pem");
             Path clientKeyPem = tmpDir.resolve("client-key.pem");
             Files.writeString(clientCertPem, clientBundle.cert.toPem());
@@ -65,9 +65,9 @@ class TomcatJettyMtlsCrossValTest {
             GostX509KeyManager km = ServerOpenSslHelper.createKeyManager(
                     pki.cert(), pki.caCert(), pki.priv());
             SSLContext sslContext = ServerOpenSslHelper.createMtlsSslContext(
-                    km, clientPub);
-            GostX509TrustManager tm = new GostX509TrustManager(
-                    clientPub, false);
+                    km, clientCert);
+            GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+                    TrustAnchors.ofCertificate(clientCert));
 
             int port = ServerOpenSslHelper.findFreePort();
             CountDownLatch ready = new CountDownLatch(1);
@@ -83,7 +83,8 @@ class TomcatJettyMtlsCrossValTest {
                         "Unknown server: " + serverTypeName);
             }
 
-            ready.await(15, TimeUnit.SECONDS);
+            assertTrue(ready.await(15, TimeUnit.SECONDS),
+                    "Сервер " + serverTypeName + " не запущен за 15с");
             assertNull(serverError.get(),
                     "Ошибка сервера " + serverTypeName + ": " + serverError.get());
 

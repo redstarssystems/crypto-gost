@@ -1,11 +1,18 @@
 package org.rssys.gost.crossval.cadest;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.io.IOException;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -18,9 +25,12 @@ import org.rssys.gost.crossval.util.CryptoProChecker;
 import org.rssys.gost.crossval.util.TempDirUtils;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
-import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.pkix.cms.CAdESExtender;
 import org.rssys.gost.pkix.cms.CmsTestUtils;
+import org.rssys.gost.pkix.tsp.TspRequest;
+import org.rssys.gost.pkix.tsp.TspResponse;
+import org.rssys.gost.pkix.tsp.TspResponseBuilder;
+import org.rssys.gost.signature.PrivateKeyParameters;
 
 /**
  * Семантическая кросс-валидация: crypto-gost создаёт CMS/CAdES -> КриптоПро
@@ -36,8 +46,8 @@ import org.rssys.gost.pkix.cms.CmsTestUtils;
  *   <li><b>CAdES opt-in</b> — {@code -cadesbes/-cadest}: дополнительно проверяют
  *       CAdES-атрибуты (signingCertificateV2, метки времени). Эти флаги
  *       ИГНОРИРУЮТ {@code -nochain} и всегда строят цепочку до доверенного корня.
- *       Включаются свойством {@code -Dcryptcp.trustRoot=true} после ручной
- *       установки тест-корня в доверенное хранилище.</li>
+ *       Включаются свойством {@code -Dcrossval.cryptopro.trustRoot=true}: тест-корень ставится
+ *       в доверенное хранилище на время прогона и снимается после него.</li>
  * </ul>
  *
  * <p>Предусловие: установлен КриптоПро CSP + ЭЦП SDK ({@code libcades}).
@@ -45,9 +55,18 @@ import org.rssys.gost.pkix.cms.CmsTestUtils;
 @DisplayName("КриптоПРО: семантическая кросс-валидация CMS / CAdES")
 class CryptoproCAdESCrossValidationTest {
 
+    // RFC 3161 §2.4.2: serialNumber уникален для каждого штампа одного TSA
+    private static final AtomicLong TSA_SERIAL = new AtomicLong(1);
+
+    // Маркеры вывода `tsputil stampinfo`: по ним, а не по exit-code, различаем исходы
+    private static final String STAMP_MATCHES_DATA = "Stamp is corresponding to the data";
+    private static final String STAMP_NOT_MATCHES_DATA = "Stamp is NOT corresponding to the data";
+    private static final String STAMP_SIGNATURE_VALID = "Verification of time-stamp: succeed.";
+
     // Основной подписант — ФИКСИРОВАННЫЙ leaf из CryptoproFixtureGenerator.
-    // Его CA заранее вручную установлен в доверенный корень КриптоПро (uRoot),
-    // что позволяет opt-in CAdES-тестам (-cadesbes/-cadest) строить цепочку.
+    // Его CA ставится в доверенный корень КриптоПро (uRoot) только на время прогона
+    // (-Dcrossval.cryptopro.trustRoot=true), что позволяет opt-in CAdES-тестам
+    // (-cadesbes/-cadest) строить цепочку.
     private static PrivateKeyParameters leafKey;
     private static GostCertificate leafCert;
 
@@ -61,17 +80,38 @@ class CryptoproCAdESCrossValidationTest {
 
     /** DER-файл сертификата подписанта, установленного в личное хранилище uMy. */
     private static Path leafCertDer;
+
     private static boolean signerInstalled;
+
     /** CRL-файл, установленный в uMy для opt-in CAdES-проверок статуса отзыва. */
     private static Path crlFile;
+
     private static boolean crlInstalled;
+
     /** DER-файл TSA-сертификата, установленного в uMy для -cadest. */
     private static Path tsaCertDer;
+
     private static boolean tsaInstalled;
+
+    /** Идентификатор ключа тест-CA: по нему убирается CRL из uMy. */
+    private static byte[] caKeyId;
+
+    /** Хранилища до прогона: после уборки сверяем с ними, чужое не должно измениться. */
+    private static CryptoproFixtureCleanup.Snapshot storesBefore;
+
+    /** Тестовый корень в uRoot на время прогона класса. */
+    private static CryptoproRootTrust rootTrust = CryptoproRootTrust.disabled();
+
+    /** Подпись, которую КриптоПро принял с корнем: после снятия корня её отвергают. */
+    private static byte[] verifiedWithRoot;
 
     @BeforeAll
     static void setUp() throws Exception {
+        if (CryptoProChecker.cryptcpAvailable()) {
+            storesBefore = CryptoproFixtureCleanup.snapshot();
+        }
         CryptoproFixtureGenerator.Fixture ca = CryptoproFixtureGenerator.buildCa();
+        caKeyId = ca.cert().getSubjectKeyIdentifier();
         CryptoproFixtureGenerator.Fixture leaf = CryptoproFixtureGenerator.buildLeaf(ca);
         CryptoproFixtureGenerator.Fixture tsa = CryptoproFixtureGenerator.buildTsa(ca);
         leafKey = leaf.key();
@@ -80,16 +120,16 @@ class CryptoproCAdESCrossValidationTest {
         tsaCert = tsa.cert();
 
         csKp256 = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
-        csCert256 = CmsTestUtils.createSelfSignedCert(
-                csKp256.getPrivate(), csKp256.getPublic());
+        csCert256 = CmsTestUtils.createSelfSignedCert(csKp256.getPrivate(), csKp256.getPublic());
 
         // Сертификат подписанта обязан быть в хранилище, иначе cryptcp даёт
         // 0x200001fb «Signers certificates are not in certificate criterion»
-        // и не доходит до проверки подписи. uMy — личное хранилище, установка
-        // без подтверждения thumbprint (в отличие от корневого uRoot).
+        // и не доходит до проверки подписи. uMy — личное хранилище; тестовый корень ставится
+        // отдельно, в доверенное хранилище uRoot, и только по явному флагу.
         if (CryptoProChecker.cryptcpAvailable()) {
             leafCertDer = Files.createTempFile("cp-leaf-", ".cer");
-            CryptoProChecker.installCert(leafCertDer.getParent(),
+            CryptoProChecker.installCert(
+                    leafCertDer.getParent(),
                     leafCert.getEncoded(),
                     leafCertDer.getFileName().toString());
             signerInstalled = true;
@@ -101,13 +141,17 @@ class CryptoproCAdESCrossValidationTest {
         // Также ставим TSA-сертификат — для -cadest КриптоПро строит цепочку
         // метки времени и должен найти сертификат TSA в хранилище.
         if (cadesTrustAvailable()) {
+            rootTrust = CryptoproRootTrust.open(ca.cert());
+        }
+        if (rootTrust.isAvailable()) {
             crlFile = Files.createTempFile("cp-crl-", ".crl");
             Files.write(crlFile, CryptoproFixtureGenerator.buildCrl(ca));
             CryptoProChecker.installCrl(crlFile);
             crlInstalled = true;
 
             tsaCertDer = Files.createTempFile("cp-tsa-", ".cer");
-            CryptoProChecker.installCert(tsaCertDer.getParent(),
+            CryptoProChecker.installCert(
+                    tsaCertDer.getParent(),
                     tsaCert.getEncoded(),
                     tsaCertDer.getFileName().toString());
             tsaInstalled = true;
@@ -116,20 +160,45 @@ class CryptoproCAdESCrossValidationTest {
 
     @AfterAll
     static void tearDown() throws Exception {
+        List<String> problems = new ArrayList<>();
+        try {
+            // Корень снимаем первым: сразу проверяем, что доверие действительно снято
+            rootTrust.close();
+            if (verifiedWithRoot != null) {
+                problems.addAll(
+                        CryptoproRootTrust.chainFailsWithoutRoot(
+                                CryptoproRootTrust.CHAIN_NOT_BUILT,
+                                verifiedWithRoot,
+                                leafCertDer,
+                                "-attached",
+                                "-cadesbes"));
+            }
+        } catch (Exception e) {
+            problems.add("не удалось снять тестовый корень: " + e.getMessage());
+        }
+        problems.addAll(cleanPersonalStore());
+        if (storesBefore != null) {
+            problems.addAll(CryptoproFixtureCleanup.compareWith(storesBefore));
+        }
+        assertTrue(problems.isEmpty(), String.join("; ", problems));
+    }
+
+    /** Убирает свои сертификаты и CRL из uMy по keyid и возвращает нарушения (пусто - чисто). */
+    private static List<String> cleanPersonalStore() throws IOException {
+        List<byte[]> keyIds = new ArrayList<>();
         if (signerInstalled) {
-            CryptoProChecker.deleteCertByDn("Crossval Test Leaf");
+            keyIds.add(leafCert.getSubjectKeyIdentifier());
             Files.deleteIfExists(leafCertDer);
         }
         if (tsaInstalled) {
-            CryptoProChecker.deleteCertByDn("Crossval Test TSA");
+            keyIds.add(tsaCert.getSubjectKeyIdentifier());
             Files.deleteIfExists(tsaCertDer);
         }
         if (crlInstalled) {
-            // CRL издан тест-CA — удаляем из uMy по DN издателя, чтобы не оседал
-            // в личном хранилище машины после прогона.
-            CryptoProChecker.deleteCrlByIssuerDn("Crossval Test Root CA");
             Files.deleteIfExists(crlFile);
         }
+        return CryptoproFixtureCleanup.remove(
+                keyIds, crlInstalled ? caKeyId : null);
     }
 
     // ========================================================================
@@ -143,18 +212,27 @@ class CryptoproCAdESCrossValidationTest {
         byte[] data = "cryptcp BES semantic".getBytes();
         byte[] cadesBes = TestData.buildCAdESBES(data, leafKey, leafCert);
 
-        TempDirUtils.withTempDir("cp-bes-", dir -> {
-            Path signedPath = TestData.writeDer(dir, "signed.p7s", cadesBes);
-            Path outPath = dir.resolve("out.bin");
-            CryptoProChecker.Result r = CryptoProChecker.runWithConfirm(
-                    CryptoProChecker.resolveCryptcpBinary(),
-                    "-verify", "-nochain", "-f", leafCertDer.toString(),
-                    signedPath.toString(), outPath.toString());
+        TempDirUtils.withTempDir(
+                "cp-bes-",
+                dir -> {
+                    Path signedPath = TestData.writeDer(dir, "signed.p7s", cadesBes);
+                    Path outPath = dir.resolve("out.bin");
+                    CryptoProChecker.Result r =
+                            CryptoProChecker.runWithConfirm(
+                                    CryptoProChecker.resolveCryptcpBinary(),
+                                    "-verify",
+                                    "-nochain",
+                                    "-f",
+                                    leafCertDer.toString(),
+                                    signedPath.toString(),
+                                    outPath.toString());
 
-            assertEquals(0, r.exitCode(),
-                    "КриптоПро должен принять CMS-подпись crypto-gost: " + r.output());
-            return null;
-        });
+                    assertEquals(
+                            0,
+                            r.exitCode(),
+                            "КриптоПро должен принять CMS-подпись crypto-gost: " + r.output());
+                    return null;
+                });
     }
 
     @Test
@@ -163,18 +241,27 @@ class CryptoproCAdESCrossValidationTest {
     void cadesTAccepted() throws Exception {
         byte[] cadesT = buildCadesT("cryptcp CAdES-T semantic".getBytes());
 
-        TempDirUtils.withTempDir("cp-cadest-", dir -> {
-            Path signedPath = TestData.writeDer(dir, "signed-cadest.p7s", cadesT);
-            Path outPath = dir.resolve("out.bin");
-            CryptoProChecker.Result r = CryptoProChecker.runWithConfirm(
-                    CryptoProChecker.resolveCryptcpBinary(),
-                    "-verify", "-nochain", "-f", leafCertDer.toString(),
-                    signedPath.toString(), outPath.toString());
+        TempDirUtils.withTempDir(
+                "cp-cadest-",
+                dir -> {
+                    Path signedPath = TestData.writeDer(dir, "signed-cadest.p7s", cadesT);
+                    Path outPath = dir.resolve("out.bin");
+                    CryptoProChecker.Result r =
+                            CryptoProChecker.runWithConfirm(
+                                    CryptoProChecker.resolveCryptcpBinary(),
+                                    "-verify",
+                                    "-nochain",
+                                    "-f",
+                                    leafCertDer.toString(),
+                                    signedPath.toString(),
+                                    outPath.toString());
 
-            assertEquals(0, r.exitCode(),
-                    "КриптоПро должен принять базовую подпись CAdES-T: " + r.output());
-            return null;
-        });
+                    assertEquals(
+                            0,
+                            r.exitCode(),
+                            "КриптоПро должен принять базовую подпись CAdES-T: " + r.output());
+                    return null;
+                });
     }
 
     @Test
@@ -183,24 +270,33 @@ class CryptoproCAdESCrossValidationTest {
     void countersignatureKeepsBaseSignatureValid() throws Exception {
         byte[] data = "cryptcp BES + CS".getBytes();
         byte[] cadesBes = TestData.buildCAdESBES(data, leafKey, leafCert);
-        byte[] countersigned = CAdESExtender.embedCountersignature(
-                cadesBes, csKp256.getPrivate(), csCert256);
+        byte[] countersigned =
+                CAdESExtender.embedCountersignature(cadesBes, csKp256.getPrivate(), csCert256);
 
-        TempDirUtils.withTempDir("cp-bes-cs-", dir -> {
-            Path signedPath = TestData.writeDer(dir, "signed.p7s", countersigned);
-            Path outPath = dir.resolve("out.bin");
-            CryptoProChecker.Result r = CryptoProChecker.runWithConfirm(
-                    CryptoProChecker.resolveCryptcpBinary(),
-                    "-verify", "-nochain", "-f", leafCertDer.toString(),
-                    signedPath.toString(), outPath.toString());
+        TempDirUtils.withTempDir(
+                "cp-bes-cs-",
+                dir -> {
+                    Path signedPath = TestData.writeDer(dir, "signed.p7s", countersigned);
+                    Path outPath = dir.resolve("out.bin");
+                    CryptoProChecker.Result r =
+                            CryptoProChecker.runWithConfirm(
+                                    CryptoProChecker.resolveCryptcpBinary(),
+                                    "-verify",
+                                    "-nochain",
+                                    "-f",
+                                    leafCertDer.toString(),
+                                    signedPath.toString(),
+                                    outPath.toString());
 
-            // добавление countersignature (unsigned-атрибут) не должно ломать
-            // проверку базовой подписи
-            assertEquals(0, r.exitCode(),
-                    "базовая подпись должна остаться валидной после countersign: "
-                            + r.output());
-            return null;
-        });
+                    // добавление countersignature (unsigned-атрибут) не должно ломать
+                    // проверку базовой подписи
+                    assertEquals(
+                            0,
+                            r.exitCode(),
+                            "базовая подпись должна остаться валидной после countersign: "
+                                    + r.output());
+                    return null;
+                });
     }
 
     // ========================================================================
@@ -217,18 +313,27 @@ class CryptoproCAdESCrossValidationTest {
         // искажаем область значения подписи (ближе к концу структуры)
         tampered[tampered.length - 10] ^= 0xFF;
 
-        TempDirUtils.withTempDir("cp-tampered-", dir -> {
-            Path signedPath = TestData.writeDer(dir, "tampered.p7s", tampered);
-            Path outPath = dir.resolve("out.bin");
-            CryptoProChecker.Result r = CryptoProChecker.runWithConfirm(
-                    CryptoProChecker.resolveCryptcpBinary(),
-                    "-verify", "-nochain", "-f", leafCertDer.toString(),
-                    signedPath.toString(), outPath.toString());
+        TempDirUtils.withTempDir(
+                "cp-tampered-",
+                dir -> {
+                    Path signedPath = TestData.writeDer(dir, "tampered.p7s", tampered);
+                    Path outPath = dir.resolve("out.bin");
+                    CryptoProChecker.Result r =
+                            CryptoProChecker.runWithConfirm(
+                                    CryptoProChecker.resolveCryptcpBinary(),
+                                    "-verify",
+                                    "-nochain",
+                                    "-f",
+                                    leafCertDer.toString(),
+                                    signedPath.toString(),
+                                    outPath.toString());
 
-            assertNotEquals(0, r.exitCode(),
-                    "cryptcp должен отклонить искажённую подпись: " + r.output());
-            return null;
-        });
+                    assertNotEquals(
+                            0,
+                            r.exitCode(),
+                            "cryptcp должен отклонить искажённую подпись: " + r.output());
+                    return null;
+                });
     }
 
     // ========================================================================
@@ -245,45 +350,68 @@ class CryptoproCAdESCrossValidationTest {
     @EnabledIf("cadesTrustAvailable")
     @DisplayName("[opt-in] CAdES-BES -> cryptcp -cadesbes: атрибуты валидны (exit=0)")
     void cadesBesSemanticWithTrust() throws Exception {
+        rootTrust.requireAvailable();
         byte[] data = "cryptcp cadesbes trust".getBytes();
         byte[] cadesBes = TestData.buildCAdESBES(data, leafKey, leafCert);
 
-        TempDirUtils.withTempDir("cp-cadesbes-", dir -> {
-            Path signedPath = TestData.writeDer(dir, "signed.p7s", cadesBes);
-            Path outPath = dir.resolve("out.bin");
-            CryptoProChecker.Result r = CryptoProChecker.runWithConfirm(
-                    CryptoProChecker.resolveCryptcpBinary(),
-                    "-verify", "-attached", "-cadesbes", "-norev",
-                    "-f", leafCertDer.toString(),
-                    signedPath.toString(), outPath.toString());
+        TempDirUtils.withTempDir(
+                "cp-cadesbes-",
+                dir -> {
+                    Path signedPath = TestData.writeDer(dir, "signed.p7s", cadesBes);
+                    Path outPath = dir.resolve("out.bin");
+                    CryptoProChecker.Result r =
+                            CryptoProChecker.runWithConfirm(
+                                    CryptoProChecker.resolveCryptcpBinary(),
+                                    "-verify",
+                                    "-attached",
+                                    "-cadesbes",
+                                    "-norev",
+                                    "-f",
+                                    leafCertDer.toString(),
+                                    signedPath.toString(),
+                                    outPath.toString());
 
-            assertEquals(0, r.exitCode(),
-                    "cryptcp -cadesbes должен принять CAdES-BES crypto-gost: "
-                            + r.output());
-            return null;
-        });
+                    assertEquals(
+                            0,
+                            r.exitCode(),
+                            "cryptcp -cadesbes должен принять CAdES-BES crypto-gost: "
+                                    + r.output());
+                    verifiedWithRoot = cadesBes;
+                    return null;
+                });
     }
 
     @Test
     @EnabledIf("cadesTrustAvailable")
     @DisplayName("[opt-in] CAdES-T -> cryptcp -cadest: подпись+метка времени валидны (exit=0)")
     void cadesTSemanticWithTrust() throws Exception {
+        rootTrust.requireAvailable();
         byte[] cadesT = buildCadesT("cryptcp cadest trust".getBytes());
 
-        TempDirUtils.withTempDir("cp-cadest-trust-", dir -> {
-            Path signedPath = TestData.writeDer(dir, "signed-cadest.p7s", cadesT);
-            Path outPath = dir.resolve("out.bin");
-            CryptoProChecker.Result r = CryptoProChecker.runWithConfirm(
-                    CryptoProChecker.resolveCryptcpBinary(),
-                    "-verify", "-attached", "-cadest", "-norev",
-                    "-f", leafCertDer.toString(),
-                    signedPath.toString(), outPath.toString());
+        TempDirUtils.withTempDir(
+                "cp-cadest-trust-",
+                dir -> {
+                    Path signedPath = TestData.writeDer(dir, "signed-cadest.p7s", cadesT);
+                    Path outPath = dir.resolve("out.bin");
+                    CryptoProChecker.Result r =
+                            CryptoProChecker.runWithConfirm(
+                                    CryptoProChecker.resolveCryptcpBinary(),
+                                    "-verify",
+                                    "-attached",
+                                    "-cadest",
+                                    "-norev",
+                                    "-f",
+                                    leafCertDer.toString(),
+                                    signedPath.toString(),
+                                    outPath.toString());
 
-            assertEquals(0, r.exitCode(),
-                    "cryptcp -cadest должен принять CAdES-T с реальной меткой TSA: "
-                            + r.output());
-            return null;
-        });
+                    assertEquals(
+                            0,
+                            r.exitCode(),
+                            "cryptcp -cadest должен принять CAdES-T с реальной меткой TSA: "
+                                    + r.output());
+                    return null;
+                });
     }
 
     // ========================================================================
@@ -297,37 +425,169 @@ class CryptoproCAdESCrossValidationTest {
         byte[] hash = Digest.digest256("TSP request test".getBytes());
         byte[] tspReq = TestData.buildTspRequest(hash, GostOids.DIGEST_256);
 
-        TempDirUtils.withTempDir("cp-tsreq-", dir -> {
-            Path reqPath = TestData.writeDer(dir, "request.tsq", tspReq);
-            int code = CryptoProChecker.run(
-                    tsputilBinary(), "-e", "reqinfo", reqPath.toString());
-            assertEquals(0, code, "tsputil должен распарсить TimeStampReq");
-            return null;
-        });
+        TempDirUtils.withTempDir(
+                "cp-tsreq-",
+                dir -> {
+                    Path reqPath = TestData.writeDer(dir, "request.tsq", tspReq);
+                    int code =
+                            CryptoProChecker.run(
+                                    tsputilBinary(), "-e", "reqinfo", reqPath.toString());
+                    assertEquals(0, code, "tsputil должен распарсить TimeStampReq");
+                    return null;
+                });
     }
 
     @Test
     @EnabledIf("tsputilAvailable")
-    @DisplayName("tsputil makereq на ГОСТ-хэш -> файл запроса создан")
+    @DisplayName("tsputil makereq на ГОСТ-хэш -> запрос создан и разбирается библиотекой")
     void tsputilMakereqForGostHash() throws Exception {
         byte[] hash = Digest.digest256("tsputil makereq test".getBytes());
 
-        TempDirUtils.withTempDir("cp-tsmakereq-", dir -> {
-            Path dataPath = TestData.writeDer(dir, "data.bin", hash);
-            Path reqPath = dir.resolve("request.tsq");
-            CryptoProChecker.run(
-                    tsputilBinary(), "-e", "makereq", "-t", "hash",
-                    "-a", "1.2.643.7.1.1.2.2",
-                    dataPath.toString(), reqPath.toString());
-            assertTrue(reqPath.toFile().exists() && reqPath.toFile().length() > 0,
-                    "tsputil makereq должен создать файл запроса");
-            return null;
-        });
+        TempDirUtils.withTempDir(
+                "cp-tsmakereq-",
+                dir -> {
+                    Path hashPath = TestData.writeDer(dir, "data.bin", hash);
+                    Path reqPath = dir.resolve("request.tsq");
+                    CryptoProChecker.Result result =
+                            CryptoProChecker.runResult(
+                                    tsputilBinary(),
+                                    "-e",
+                                    "makereq",
+                                    "-t",
+                                    "hash",
+                                    "-a",
+                                    GostOids.DIGEST_256,
+                                    hashPath.toString(),
+                                    reqPath.toString());
+                    assertEquals(
+                            0,
+                            result.exitCode(),
+                            "tsputil makereq должен завершиться успешно: " + result.output());
+                    assertTrue(
+                            Files.size(reqPath) > 0, "tsputil makereq должен создать файл запроса");
+
+                    // запрос КриптоПро обязан читаться нашим разбором: иначе ГОСТ-хэш в нём
+                    // закодирован иначе
+                    TspRequest parsed = TspRequest.fromDer(Files.readAllBytes(reqPath));
+                    assertEquals(
+                            GostOids.DIGEST_256,
+                            parsed.messageImprintAlgOid(),
+                            "OID хэша в запросе tsputil должен быть Стрибог-256");
+                    assertArrayEquals(
+                            hash,
+                            parsed.messageImprintHash(),
+                            "хэш в запросе tsputil должен совпасть с исходным");
+                    return null;
+                });
+    }
+
+    @Test
+    @EnabledIf("tsputilAvailable")
+    @DisplayName(
+            "штамп crypto-gost -> tsputil stampinfo: подпись штампа проверена, данные соответствуют")
+    void tsputilStampinfoVerifiesData() throws Exception {
+        byte[] data = "tsputil stampinfo test".getBytes();
+
+        TempDirUtils.withTempDir(
+                "cp-tsstamp-",
+                dir -> {
+                    CryptoProChecker.Result result =
+                            runStampinfo(dir, buildTimeStampTokenFor(data), data);
+                    // exit-code не используем: он отражает проверку цепочки TSA и отзыва, которая
+                    // офлайн
+                    // недоступна; соответствие данным и подпись штампа tsputil сообщает отдельными
+                    // строками
+                    assertTrue(
+                            result.output().contains(STAMP_MATCHES_DATA),
+                            "tsputil должен подтвердить соответствие штампа данным: "
+                                    + result.output());
+                    assertTrue(
+                            result.output().contains(STAMP_SIGNATURE_VALID),
+                            "tsputil должен принять подпись штампа crypto-gost: "
+                                    + result.output());
+                    return null;
+                });
+    }
+
+    @Test
+    @EnabledIf("tsputilAvailable")
+    @DisplayName(
+            "Negative: штамп crypto-gost не соответствует подменённым данным -> tsputil отклоняет")
+    void tsputilStampinfoRejectsOtherData() throws Exception {
+        byte[] data = "tsputil stampinfo test".getBytes();
+        byte[] otherData = "tsputil stampinfo TEST".getBytes();
+
+        TempDirUtils.withTempDir(
+                "cp-tsstamp-neg-",
+                dir -> {
+                    CryptoProChecker.Result result =
+                            runStampinfo(dir, buildTimeStampTokenFor(data), otherData);
+                    assertTrue(
+                            result.output().contains(STAMP_NOT_MATCHES_DATA),
+                            "tsputil должен сообщить, что штамп не соответствует чужим данным: "
+                                    + result.output());
+                    assertFalse(
+                            result.output().contains(STAMP_MATCHES_DATA),
+                            "tsputil не должен подтверждать соответствие чужим данным");
+                    return null;
+                });
+    }
+
+    @Test
+    @EnabledIf("tsputilAvailable")
+    @DisplayName("Negative: искажённый TimeStampReq -> tsputil reqinfo отклоняет (exit!=0)")
+    void tsputilReqinfoRejectsGarbage() throws Exception {
+        TempDirUtils.withTempDir(
+                "cp-tsbad-",
+                dir -> {
+                    Path reqPath = TestData.writeDer(dir, "bad.tsq", new byte[] {0x01, 0x02, 0x03});
+                    CryptoProChecker.Result result =
+                            CryptoProChecker.runResult(
+                                    tsputilBinary(), "-e", "reqinfo", reqPath.toString());
+                    assertNotEquals(
+                            0,
+                            result.exitCode(),
+                            "tsputil должен отклонить мусор вместо TimeStampReq: "
+                                    + result.output());
+                    return null;
+                });
     }
 
     // ========================================================================
     // Вспомогательное
     // ========================================================================
+
+    /** Сохраняет токен и данные во временный каталог и запускает {@code tsputil stampinfo --verify-data}. */
+    private static CryptoProChecker.Result runStampinfo(Path dir, byte[] token, byte[] data)
+            throws Exception {
+        Path stampPath = TestData.writeDer(dir, "stamp.tsr", token);
+        Path dataPath = TestData.writeDer(dir, "data.bin", data);
+        return CryptoProChecker.runResult(
+                tsputilBinary(),
+                "-e",
+                "stampinfo",
+                "--verify-data=" + dataPath,
+                stampPath.toString());
+    }
+
+    /**
+     * TimeStampToken на Стрибог-256 хэш данных, подписанный тестовой TSA.
+     * Токен отдаётся как есть, без {@link DerAlgorithmIdentifierNormalizer}: проверку подписи штампа
+     * {@code tsputil} проходит именно в таком виде, а нормализованный отвергает (наблюдение
+     * при кросс-валидации, причина не выяснена).
+     */
+    private static byte[] buildTimeStampTokenFor(byte[] data) throws Exception {
+        byte[] request = TestData.buildTspRequest(Digest.digest256(data), GostOids.DIGEST_256);
+        byte[] response =
+                TspResponseBuilder.create(request)
+                        .signer(tsaKey, tsaCert)
+                        .policyOid(TestData.DUMMY_TSA_POLICY_OID)
+                        .serialNumber(BigInteger.valueOf(TSA_SERIAL.getAndIncrement()))
+                        .accuracy(1)
+                        .withCAdES()
+                        .buildGranted();
+        return TspResponse.fromDer(response).timeStampTokenDer();
+    }
 
     private static byte[] buildCadesT(byte[] data) throws Exception {
         byte[] cadesBes = TestData.buildCAdESBES(data, leafKey, leafCert);
@@ -337,19 +597,20 @@ class CryptoproCAdESCrossValidationTest {
         // Полноценный RFC 3161 TimeStampToken через реальный TSP-стек crypto-gost:
         // TSA (с EKU timeStamping) подписывает TSTInfo по messageImprint = хэш
         // значения подписи. withCAdES() добавляет signingCertificateV2 в токен.
-        byte[] tspReq = org.rssys.gost.pkix.tsp.TspRequestBuilder.create()
-                .messageImprint(sigHash, hashOid)
-                .certReq(true)
-                .build();
-        byte[] tspResp = org.rssys.gost.pkix.tsp.TspResponseBuilder.create(tspReq)
-                .signer(tsaKey, tsaCert)
-                .policyOid(TestData.DUMMY_TSA_POLICY_OID)
-                .serialNumber(java.math.BigInteger.ONE)
-                .accuracy(1)
-                .withCAdES()
-                .buildGranted();
-        byte[] tsToken = org.rssys.gost.pkix.tsp.TspResponse.fromDer(tspResp)
-                .timeStampTokenDer();
+        byte[] tspReq =
+                org.rssys.gost.pkix.tsp.TspRequestBuilder.create()
+                        .messageImprint(sigHash, hashOid)
+                        .certReq(true)
+                        .build();
+        byte[] tspResp =
+                org.rssys.gost.pkix.tsp.TspResponseBuilder.create(tspReq)
+                        .signer(tsaKey, tsaCert)
+                        .policyOid(TestData.DUMMY_TSA_POLICY_OID)
+                        .serialNumber(java.math.BigInteger.ONE)
+                        .accuracy(1)
+                        .withCAdES()
+                        .buildGranted();
+        byte[] tsToken = org.rssys.gost.pkix.tsp.TspResponse.fromDer(tspResp).timeStampTokenDer();
         return TestData.buildCAdEST(cadesBes, tsToken);
     }
 
@@ -362,18 +623,17 @@ class CryptoproCAdESCrossValidationTest {
     }
 
     /**
-     * CAdES opt-in доступен только когда есть libcades И явно указано, что
-     * тест-корень установлен в доверенное хранилище ({@code -Dcryptcp.trustRoot=true}).
+     * CAdES opt-in доступен только когда есть libcades И явно разрешено поставить тест-корень в
+     * доверенное хранилище на время прогона ({@code -Dcrossval.cryptopro.trustRoot=true}).
      */
     static boolean cadesTrustAvailable() {
-        return CryptoProChecker.cadesLibraryAvailable()
-                && Boolean.getBoolean("cryptcp.trustRoot");
+        return CryptoProChecker.cadesLibraryAvailable() && CryptoProChecker.trustRootEnabled();
     }
 
     static boolean tsputilAvailable() {
         try {
-            Process p = new ProcessBuilder(tsputilBinary(), "--help")
-                    .redirectErrorStream(true).start();
+            Process p =
+                    new ProcessBuilder(tsputilBinary(), "--help").redirectErrorStream(true).start();
             p.getOutputStream().close();
             int exit = p.waitFor();
             return exit == 0;
@@ -383,7 +643,6 @@ class CryptoproCAdESCrossValidationTest {
     }
 
     static String tsputilBinary() {
-        return System.getProperty("tsputil.binary",
-                "/opt/cprocsp/bin/amd64/tsputil");
+        return System.getProperty("tsputil.binary", "/opt/cprocsp/bin/amd64/tsputil");
     }
 }

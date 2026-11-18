@@ -2,22 +2,22 @@ package org.rssys.gost.pkix.cert;
 
 import java.security.MessageDigest;
 import java.util.Arrays;
-import org.rssys.gost.digest.Digest;
-import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.kdf.Pbkdf2Streebog;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.MacData;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
- * Верификация MAC-целостности PFX (RFC 9548 §7).
+ * Вычисление и проверка MAC целостности PFX (RFC 9548 §7).
  * <p>
- * Алгоритм: PBKDF2(P, salt, iterations, 96) -> K(96 байт).
- * Ключ HMAC = последние 32 байта. HMAC-Streebog-512(authSafe.contents).
+ * Алгоритм: PBKDF2(P, salt, iterations, 96) -> K (96 байт); ключ HMAC - последние 32 байта;
+ * MAC = HMAC-Streebog-512(содержимое authSafe). В {@code macData.mac.digestAlgorithm} записывается
+ * OID хэш-функции {@code id-tc26-gost3411-12-512} (1.2.643.7.1.1.2.3) без параметров; при чтении
+ * параметры допускаются либо отсутствующими, либо NULL (так пишет OpenSSL).
  */
 public final class GostPkcs12Mac {
 
@@ -32,49 +32,45 @@ public final class GostPkcs12Mac {
     /**
      * Проверяет MAC целостности PFX.
      *
-     * @param macData    MacData из PFX
-     * @param password   пароль (UTF-8)
+     * @param macData         MacData из PFX
+     * @param password        пароль (UTF-8)
      * @param authSafeContent содержимое AuthSafe (raw bytes под HMAC)
-     * @throws IllegalArgumentException если MAC не совпадает или алгоритм не поддерживается
+     * @throws IllegalArgumentException если алгоритм не поддерживается, MAC не совпадает
+     *                                  или имеет неверную длину
      */
     public static void verify(MacData macData, byte[] password, byte[] authSafeContent) {
         LOG.log(Level.DEBUG, "Verifying PFX MAC (iterations={0})", macData.getIterations());
-        String digestAlg = macData.getDigestAlgorithm();
-        Digest digest;
-        if (digestAlg == null || GostOids.HMAC_STREEBOG_512.equals(digestAlg)) {
-            digest = new Streebog512();
-        } else if (GostOids.HMAC_STREEBOG_256.equals(digestAlg)) {
-            digest = new Streebog256();
-        } else {
-            throw new IllegalArgumentException("Unsupported MAC digest algorithm: " + digestAlg);
-        }
+        // Структура проверяется до PBKDF2: на заведомо некорректном файле не тратим итерации
+        requireStandardMac(macData);
 
-        // PBKDF2 с dkLen=96, последние 32 байта — ключ HMAC (RFC 9548 §7)
+        // PBKDF2 с dkLen=96, последние 32 байта - ключ HMAC (RFC 9548 §7)
         byte[] km =
                 Pbkdf2Streebog.generate(
                         password, macData.getSalt(), macData.getIterations(), DK_LEN);
         byte[] hmacKey = null;
+        Hmac hmac = new Hmac(new Streebog512());
         try {
             hmacKey = new byte[HMAC_KEY_LEN];
             System.arraycopy(km, km.length - HMAC_KEY_LEN, hmacKey, 0, HMAC_KEY_LEN);
-            // km больше не нужен — раннее затирание; finally страхует от исключения в arraycopy
+            // km больше не нужен - раннее затирание; finally страхует от исключения в arraycopy
             Arrays.fill(km, (byte) 0);
 
-            Hmac hmac = new Hmac(digest);
             hmac.init(hmacKey);
             hmac.update(authSafeContent, 0, authSafeContent.length);
 
-            byte[] computed = new byte[digest.getDigestSize()];
+            byte[] computed = new byte[GostOids.STREEBOG_512_HASH_LEN];
             hmac.doFinal(computed, 0);
-            hmac.clear();
 
+            // MessageDigest.isEqual используется только как сравнение байтов за постоянное время,
+            // а не как дайджест из JCA: сам MAC считает наш HMAC-Streebog
             if (!MessageDigest.isEqual(computed, macData.getDigestValue())) {
                 throw new IllegalArgumentException(
                         "PFX MAC verification failed: "
                                 + "integrity check mismatch (wrong password or corrupted data)");
             }
-            LOG.log(Level.INFO, "PFX MAC verification passed");
+            LOG.log(Level.DEBUG, "PFX MAC verification passed");
         } finally {
+            hmac.destroy();
             if (hmacKey != null) {
                 Arrays.fill(hmacKey, (byte) 0);
             }
@@ -82,8 +78,40 @@ public final class GostPkcs12Mac {
         }
     }
 
+    /**
+     * Проверяет OID алгоритма и длину значения MAC до любых затратных вычислений.
+     * <p>
+     * OID HMAC (1.2.643.7.1.1.4.x) и OID хэша Стрибог-256 в MacData писали прежние версии
+     * библиотеки; стандарт RFC 9548 §7 их не допускает, поэтому такие файлы отвергаются с
+     * подсказкой перевыпустить PFX, а не с общей ошибкой.
+     */
+    static void requireStandardMac(MacData macData) {
+        String digestAlg = macData.getDigestAlgorithm();
+        if (GostOids.HMAC_STREEBOG_256.equals(digestAlg)
+                || GostOids.HMAC_STREEBOG_512.equals(digestAlg)
+                || GostOids.DIGEST_256.equals(digestAlg)) {
+            throw new IllegalArgumentException(
+                    "Legacy or nonstandard PFX MAC algorithm OID "
+                            + digestAlg
+                            + ": RFC 9548 section 7 requires "
+                            + GostOids.DIGEST_512
+                            + "; re-issue the PFX");
+        }
+        if (!GostOids.DIGEST_512.equals(digestAlg)) {
+            throw new IllegalArgumentException("Unsupported MAC digest algorithm: " + digestAlg);
+        }
+        int macLength = macData.getDigestValue().length;
+        if (macLength != GostOids.STREEBOG_512_HASH_LEN) {
+            throw new IllegalArgumentException(
+                    "PFX MAC length must be "
+                            + GostOids.STREEBOG_512_HASH_LEN
+                            + " bytes, got "
+                            + macLength);
+        }
+    }
+
     // ========================================================================
-    // MAC computation (write direction)
+    // Вычисление MAC (направление записи)
     // ========================================================================
 
     /**
@@ -91,56 +119,45 @@ public final class GostPkcs12Mac {
      *
      * @param authSafeContent BER-байты AuthenticatedSafe (raw, на которые считается MAC)
      * @param password        пароль (UTF-8)
-     * @param iterations      кол-во итераций PBKDF2
-     * @param salt            соль (16 байт)
+     * @param iterations      количество итераций PBKDF2
+     * @param salt            соль PBKDF2 (8..32 байта; рекомендуется {@link GostOids#PBKDF2_SALT_LEN})
      * @return DER-байты MacData
+     * @throws IllegalArgumentException если длина соли вне диапазона 8..32
      */
     public static byte[] compute(
             byte[] authSafeContent, byte[] password, int iterations, byte[] salt) {
-        return compute(authSafeContent, password, iterations, salt, GostOids.STREEBOG_512_HASH_LEN);
-    }
-
-    /**
-     * Вычисляет MacData для PFX с выбранным хешем HMAC.
-     *
-     * @param authSafeContent BER-байты AuthenticatedSafe
-     * @param password        пароль (UTF-8)
-     * @param iterations      кол-во итераций PBKDF2
-     * @param salt            соль (16 байт)
-     * @param macHashLen      длина хеша HMAC: 32 (Streebog-256) или 64 (Streebog-512)
-     * @return DER-байты MacData
-     */
-    public static byte[] compute(
-            byte[] authSafeContent, byte[] password, int iterations, byte[] salt, int macHashLen) {
+        // Файл с солью вне диапазона RFC другие реализации и наш загрузчик отвергнут,
+        // поэтому ошибку лучше выдать при записи, а не при чтении
+        if (salt.length < GostOids.MIN_PBKDF2_SALT_LEN
+                || salt.length > GostOids.MAX_PBKDF2_SALT_LEN) {
+            throw new IllegalArgumentException(
+                    "MacData salt length "
+                            + salt.length
+                            + " is outside "
+                            + GostOids.MIN_PBKDF2_SALT_LEN
+                            + ".."
+                            + GostOids.MAX_PBKDF2_SALT_LEN);
+        }
         byte[] km = Pbkdf2Streebog.generate(password, salt, iterations, DK_LEN);
         byte[] hmacKey = null;
+        Hmac hmac = new Hmac(new Streebog512());
         try {
             hmacKey = new byte[HMAC_KEY_LEN];
             System.arraycopy(km, km.length - HMAC_KEY_LEN, hmacKey, 0, HMAC_KEY_LEN);
-            // km больше не нужен — раннее затирание; finally страхует от исключения в arraycopy
+            // km больше не нужен - раннее затирание; finally страхует от исключения в arraycopy
             Arrays.fill(km, (byte) 0);
 
-            Digest digest =
-                    macHashLen == GostOids.STREEBOG_256_HASH_LEN
-                            ? new Streebog256()
-                            : new Streebog512();
-            Hmac hmac = new Hmac(digest);
             hmac.init(hmacKey);
             hmac.update(authSafeContent, 0, authSafeContent.length);
 
             byte[] digestValue = new byte[hmac.getMacSize()];
             hmac.doFinal(digestValue, 0);
-            hmac.clear();
 
-            String hmacOid =
-                    macHashLen == GostOids.STREEBOG_256_HASH_LEN
-                            ? GostOids.HMAC_STREEBOG_256
-                            : GostOids.HMAC_STREEBOG_512;
-
-            // DigestInfo ::= SEQUENCE { AlgorithmIdentifier, OCTET STRING }
+            // DigestInfo ::= SEQUENCE { AlgorithmIdentifier, OCTET STRING }; параметры
+            // AlgorithmIdentifier опущены (RFC 9548 §7)
             byte[] digestInfo =
                     DerCodec.encodeSequence(
-                            DerCodec.encodeSequence(DerCodec.encodeOid(hmacOid)),
+                            DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.DIGEST_512)),
                             DerCodec.encodeOctetString(digestValue));
 
             // MacData ::= SEQUENCE { DigestInfo, OCTET STRING salt, INTEGER iterations }
@@ -149,6 +166,7 @@ public final class GostPkcs12Mac {
                     DerCodec.encodeOctetString(salt),
                     DerCodec.encodeInteger(iterations));
         } finally {
+            hmac.destroy();
             if (hmacKey != null) {
                 Arrays.fill(hmacKey, (byte) 0);
             }

@@ -43,7 +43,7 @@ public final class BcSignHelper {
      */
     public static ECPublicKeyParameters toBcPubKey(PublicKeyParameters gostPub,
                                                     ECDomainParameters bcDomain) {
-        org.rssys.gost.signature.ECPoint q = gostPub.getQ().normalize();
+        org.rssys.gost.signature.ECPoint q = gostPub.getQ();
         ECCurve curve = bcDomain.getCurve();
         org.bouncycastle.math.ec.ECPoint bcQ = curve.createPoint(q.getX(), q.getY());
         return new ECPublicKeyParameters(bcQ, bcDomain);

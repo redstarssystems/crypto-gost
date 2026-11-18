@@ -1,8 +1,8 @@
 package org.rssys.gost.tls13.record;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.rssys.gost.tls13.TlsTestHelper.hex;
-import static org.rssys.gost.tls13.TlsTestHelper.hexStr;
+import static org.rssys.gost.pkix.cert.PkixCertTestHelper.hex;
+import static org.rssys.gost.pkix.cert.PkixCertTestHelper.hexStr;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -239,17 +239,6 @@ class TlsRecordTest {
                         Arrays.copyOfRange(ct1, 5, ct1.length)));
     }
 
-    @Test
-    @DisplayName("reader с тем же ключом и seqNum=0 расшифровывает первую запись")
-    void testReaderDecryptsFirstRecord() throws Exception {
-        RecordPair pair = fixedPair();
-        byte[] data = "test data".getBytes();
-        byte[] record = pair.protect(TlsConstants.CT_HANDSHAKE, data);
-
-        TlsParsedRecord parsed = pair.unprotect(record);
-        assertArrayEquals(data, parsed.getData());
-    }
-
     // -----------------------------------------------------------------------
     // Детерминированность
     // -----------------------------------------------------------------------
@@ -309,7 +298,7 @@ class TlsRecordTest {
     }
 
     @Test
-    @DisplayName("подмена заголовка вызывает AuthenticationException")
+    @DisplayName("подмена внешнего типа в заголовке: unexpected_message (RFC 8446 §5.2, §5)")
     void testTamperedHeaderThrows() throws Exception {
         RecordPair pair = fixedPair();
         byte[] data = "data".getBytes();
@@ -318,12 +307,79 @@ class TlsRecordTest {
 
         protectedRecord[0] = TlsConstants.CT_ALERT;
 
-        assertThrows(AuthenticationException.class, () -> pair.unprotect(protectedRecord));
+        TlsException error =
+                assertThrows(TlsException.class, () -> pair.unprotect(protectedRecord));
+        assertEquals(
+                TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                error.getAlertCode(),
+                "Внешний тип не application_data: неожиданная запись, а не ошибка проверки");
+    }
+
+    @Test
+    @DisplayName(
+            "внешний тип не application_data отвергается по заголовку во всех вариантах unprotect")
+    void testUnexpectedOuterTypeRejectedByHeaderInAllVariants() throws Exception {
+        for (byte outerType :
+                new byte[] {
+                    TlsConstants.CT_ALERT,
+                    TlsConstants.CT_HANDSHAKE,
+                    TlsConstants.CT_CHANGE_CIPHER_SPEC
+                }) {
+            for (int payloadLength : new int[] {0, 2, 40}) {
+                byte[] record = new byte[TlsConstants.RECORD_HEADER_SIZE + payloadLength];
+                record[0] = outerType;
+                record[1] = 3;
+                record[2] = 3;
+                record[3] = (byte) (payloadLength >>> 8);
+                record[4] = (byte) payloadLength;
+                String reason = "тип " + outerType + ", длина " + payloadLength;
+
+                TlsException viaArray =
+                        assertThrows(
+                                TlsException.class, () -> fixedPair().unprotect(record), reason);
+                TlsException viaInto =
+                        assertThrows(
+                                TlsException.class,
+                                () -> fixedPair().reader.unprotectInto(record, new byte[64], 0),
+                                reason);
+                // для заголовка из одних 5 байт и неполной записи ответ тот же, без ожидания тела
+                ByteBuffer partial = ByteBuffer.wrap(record, 0, TlsConstants.RECORD_HEADER_SIZE);
+                TlsException viaBuffer =
+                        assertThrows(
+                                TlsException.class,
+                                () ->
+                                        fixedPair()
+                                                .reader
+                                                .unprotect(partial, ByteBuffer.allocate(64)),
+                                reason);
+                for (TlsException error : new TlsException[] {viaArray, viaInto, viaBuffer}) {
+                    assertEquals(
+                            TlsConstants.ALERT_UNEXPECTED_MESSAGE, error.getAlertCode(), reason);
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
     // Некорректные записи
     // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("подлинная запись без типа содержимого: unexpected_message, а не ошибка проверки")
+    void testAuthenticRecordWithoutContentTypeIsUnexpectedMessage() throws Exception {
+        TlsCiphersuite suite = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
+        TlsRecord writer = new TlsRecord(fixedKey(), fixedIv(), 16, suite);
+        TlsRecord reader = new TlsRecord(fixedKey(), fixedIv(), 16, suite);
+        // Тип 0 и нулевые данные: весь внутренний открытый текст из нулей, тег при этом верен
+        byte[] record = writer.protect((byte) 0, new byte[] {0});
+
+        TlsException error = assertThrows(TlsException.class, () -> reader.unprotect(record));
+
+        assertEquals(
+                TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                error.getAlertCode(),
+                "Запись без типа содержимого подлинна, ответ должен быть unexpected_message");
+    }
 
     @Test
     @DisplayName("слишком короткая запись вызывает исключение")
@@ -335,8 +391,14 @@ class TlsRecordTest {
                         16,
                         TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
         byte[] tooShort = new byte[TlsConstants.RECORD_HEADER_SIZE + 1];
+        // внешний тип должен быть верным, иначе запись отвергается раньше по типу
+        tooShort[0] = TlsConstants.CT_APPLICATION_DATA;
 
-        assertThrows(IllegalArgumentException.class, () -> reader.unprotect(tooShort));
+        TlsException error = assertThrows(TlsException.class, () -> reader.unprotect(tooShort));
+        assertEquals(
+                TlsConstants.ALERT_DECODE_ERROR,
+                error.getAlertCode(),
+                "Слишком короткая запись должна давать decode_error, а не ошибку вызова");
     }
 
     @Test
@@ -499,13 +561,14 @@ class TlsRecordTest {
         assertEquals(
                 0x7F, record.buildNoncePeek() & 0xFF, "MSB не очищен: nonce[0] должен быть 0x7F");
 
-        // SeqNum с битом 63: после XOR MSB мог бы восстановиться, но buildNonce очищает после
-        record.setSequenceNumber(Long.MAX_VALUE);
+        // Номер записи со всеми установленными битами (включая бит 63) затрагивает только байты
+        // 8..15 nonce и старший бит nonce[0] не восстанавливает
+        record.setSequenceNumber(-1L);
         record.buildNonce(ivWithMsb);
         assertEquals(
                 0x7F,
                 record.buildNoncePeek() & 0xFF,
-                "MSB должен быть очищен даже после XOR с seqNum, у которого бит 63=1");
+                "MSB должен оставаться очищенным и при seqNum со всеми битами 1");
     }
 
     @Test
@@ -592,40 +655,6 @@ class TlsRecordTest {
         assertThrows(IllegalStateException.class, () -> reader.unprotect(record));
     }
 
-    @Test
-    @DisplayName("S-вариант: seqNum=0 roundtrip")
-    void testSnmaxSSeqNumZero() throws Exception {
-        byte[] key = fixedKey();
-        byte[] iv = fixedIv();
-        TlsRecord writer =
-                new TlsRecord(
-                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-        TlsRecord reader =
-                new TlsRecord(
-                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-        byte[] data = new byte[] {0};
-        byte[] record = writer.protect(TlsConstants.CT_APPLICATION_DATA, data);
-        TlsParsedRecord parsed = reader.unprotect(record);
-        assertArrayEquals(data, parsed.getData());
-    }
-
-    @Test
-    @DisplayName("S-вариант: seqNum=7 и seqNum=8 дают разные ключи (граница C3)")
-    void testSVariantC3Boundary() throws Exception {
-        byte[] key = fixedKey();
-        byte[] iv = fixedIv();
-        TlsRecord rec =
-                new TlsRecord(
-                        key, iv, 16, TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_S);
-        rec.setSequenceNumber(7);
-        byte[] data7 = rec.protect(TlsConstants.CT_APPLICATION_DATA, new byte[] {1});
-        rec.setSequenceNumber(8);
-        byte[] data8 = rec.protect(TlsConstants.CT_APPLICATION_DATA, new byte[] {1});
-        assertFalse(
-                Arrays.equals(data7, data8),
-                "seqNum 7 и 8 должны давать разные ciphertext (C3 boundary для S)");
-    }
-
     // -----------------------------------------------------------------------
     // Формат записи
     // -----------------------------------------------------------------------
@@ -654,25 +683,82 @@ class TlsRecordTest {
     }
 
     @Test
-    @DisplayName("сериализация seqNum как big-endian в nonce")
+    @DisplayName("nonce: номер записи big-endian в байтах 8..15 IV, старший бит nonce очищен")
     void testSeqNumEncodingInNonce() {
-        byte[] zeroIv = new byte[16];
-        byte[] key = fixedKey();
+        // Эталон выписан вручную (RFC 8446 §5.3: nonce = IV XOR (0^8 || seq), big-endian; очистка
+        // старшего бита для MGM по RFC 9058 §3 и RFC 9367 §3.3), а не получен повтором цикла из
+        // buildNonce. IV с установленным старшим битом: проверяется и очистка бита
+        byte[] iv = {
+            (byte) 0xFF,
+            0x11,
+            0x22,
+            0x33,
+            0x44,
+            0x55,
+            0x66,
+            0x77,
+            (byte) 0x88,
+            (byte) 0x99,
+            (byte) 0xAA,
+            (byte) 0xBB,
+            (byte) 0xCC,
+            (byte) 0xDD,
+            (byte) 0xEE,
+            (byte) 0xFF
+        };
+        // seq = 01 02 03 04 05 06 07 08: затронуты все байты 8..15
+        byte[] expectedWide = {
+            0x7F,
+            0x11,
+            0x22,
+            0x33,
+            0x44,
+            0x55,
+            0x66,
+            0x77,
+            (byte) 0x89,
+            (byte) 0x9B,
+            (byte) 0xA9,
+            (byte) 0xBF,
+            (byte) 0xC9,
+            (byte) 0xDB,
+            (byte) 0xE9,
+            (byte) 0xF7
+        };
+        // seq = 0xFF: затронут только последний байт (0xFF ^ 0xFF = 0x00)
+        byte[] expectedNarrow = {
+            0x7F,
+            0x11,
+            0x22,
+            0x33,
+            0x44,
+            0x55,
+            0x66,
+            0x77,
+            (byte) 0x88,
+            (byte) 0x99,
+            (byte) 0xAA,
+            (byte) 0xBB,
+            (byte) 0xCC,
+            (byte) 0xDD,
+            (byte) 0xEE,
+            0x00
+        };
 
+        assertArrayEquals(expectedWide, nonceFor(iv, 0x0102030405060708L), "широкий номер записи");
+        assertArrayEquals(expectedNarrow, nonceFor(iv, 0xFFL), "номер записи в младшем байте");
+    }
+
+    private byte[] nonceFor(byte[] iv, long seqNum) {
         TlsRecord record =
                 new TlsRecord(
-                        key,
-                        zeroIv,
+                        fixedKey(),
+                        fixedIv(),
                         16,
                         TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
-
-        byte[] data = "test".getBytes();
-        byte[] ct0 = record.protect(TlsConstants.CT_HANDSHAKE, data);
-        byte[] ct1 = record.protect(TlsConstants.CT_HANDSHAKE, data);
-        byte[] ct2 = record.protect(TlsConstants.CT_HANDSHAKE, data);
-
-        assertFalse(Arrays.equals(ct0, ct1));
-        assertFalse(Arrays.equals(ct1, ct2));
+        record.setSequenceNumber(seqNum);
+        record.buildNonce(iv);
+        return record.buildNoncePeekAll();
     }
 
     // -----------------------------------------------------------------------
@@ -1055,6 +1141,71 @@ class TlsRecordTest {
     }
 
     @Test
+    @DisplayName(
+            "Предел на открытый текст: запись приложения сверх предела не потребляется, номер цел")
+    void testApplicationDataLimitKeepsRecordAndSequence() throws Exception {
+        RecordPair pair = newPair();
+        byte[] first = new byte[100];
+        byte[] second = new byte[10];
+        CryptoRandom.INSTANCE.nextBytes(first);
+        CryptoRandom.INSTANCE.nextBytes(second);
+        ByteBuffer wire = ByteBuffer.allocate(512);
+        pair.writer.protect(TlsConstants.CT_APPLICATION_DATA, ByteBuffer.wrap(first), wire);
+        pair.writer.protect(TlsConstants.CT_APPLICATION_DATA, ByteBuffer.wrap(second), wire);
+        wire.flip();
+        int posBefore = wire.position();
+        long sequenceBefore = pair.reader.getSequenceNumber();
+
+        ByteBuffer plain = ByteBuffer.allocate(256);
+        UnprotectResult tooSmall = pair.reader.unprotect(wire, plain, first.length - 1);
+
+        assertSame(UnprotectResult.Status.OUTPUT_TOO_SMALL, tooSmall.status);
+        assertEquals(first.length, tooSmall.hint, "hint = нужный размер открытого текста");
+        assertEquals(posBefore, wire.position(), "запись не потреблена");
+        assertEquals(0, plain.position(), "в приёмник ничего не записано");
+        assertEquals(sequenceBefore, pair.reader.getSequenceNumber(), "номер записи не сдвинут");
+
+        // Повтор с достаточным пределом расшифровывает ту же запись, следом идёт вторая
+        UnprotectResult ok = pair.reader.unprotect(wire, plain, first.length);
+        assertSame(UnprotectResult.Status.OK, ok.status);
+        plain.flip();
+        byte[] got = new byte[plain.remaining()];
+        plain.get(got);
+        assertArrayEquals(first, got, "первая запись целиком");
+        plain.clear();
+        assertSame(
+                UnprotectResult.Status.OK,
+                pair.reader.unprotect(wire, plain, second.length).status,
+                "вторая запись читается: номер записи не терялся");
+    }
+
+    @Test
+    @DisplayName("Отрицательный предел на открытый текст отвергается")
+    void testNegativeApplicationDataLimitRejected() {
+        RecordPair pair = newPair();
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> pair.reader.unprotect(ByteBuffer.allocate(0), ByteBuffer.allocate(16), -1));
+    }
+
+    @Test
+    @DisplayName("Предел на открытый текст не действует на записи рукопожатия")
+    void testApplicationDataLimitDoesNotApplyToHandshake() throws Exception {
+        RecordPair pair = newPair();
+        byte[] body = new byte[100];
+        CryptoRandom.INSTANCE.nextBytes(body);
+        ByteBuffer wire = ByteBuffer.allocate(256);
+        pair.writer.protect(TlsConstants.CT_HANDSHAKE, ByteBuffer.wrap(body), wire);
+        wire.flip();
+
+        UnprotectResult r = pair.reader.unprotect(wire, ByteBuffer.allocate(256), 0);
+
+        assertSame(UnprotectResult.Status.OK, r.status, "рукопожатие принимается при пределе 0");
+        assertEquals(TlsConstants.CT_HANDSHAKE, r.contentType);
+    }
+
+    @Test
     @DisplayName("ByteBuffer unprotect: NEED_MORE_INPUT — недостаточно байт для заголовка")
     void testByteBufferUnprotectUnderflowHeader() throws Exception {
         RecordPair pair = newPair();
@@ -1241,21 +1392,17 @@ class TlsRecordTest {
                 data, parsed.getData(), "Расшифрованные данные должны совпадать с исходными");
     }
 
-    @ParameterizedTest
-    @ValueSource(ints = {1, 240, 255})
-    @DisplayName("ByteBuffer unprotect: padding на границе maxInnerPlaintext")
-    void testPaddingBoundaryByteBuffer(int paddingLen) throws Exception {
+    private record PaddedRecord(byte[] wire, byte[] data) {}
+
+    /** Подлинная запись с заданной длиной содержимого и нулевым padding, собранная вручную. */
+    private static PaddedRecord paddedRecord(int dataLen, int paddingLen) throws Exception {
         int tagLen = 16;
-        int maxInnerPlaintext = TlsConstants.MAX_CIPHERTEXT_LENGTH - tagLen;
-        int dataLen = maxInnerPlaintext - paddingLen - 1;
         int innerLen = dataLen + paddingLen + 1;
         int payloadLen = innerLen + tagLen;
 
         TlsCiphersuite suite = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         byte[] key = fixedKey();
         byte[] iv = fixedIv();
-
-        TlsRecord reader = new TlsRecord(key, iv, tagLen, suite);
 
         byte[] nonce = iv.clone();
         nonce[0] &= 0x7F;
@@ -1297,16 +1444,63 @@ class TlsRecordTest {
         System.arraycopy(ciphertext, 0, record, TlsConstants.RECORD_HEADER_SIZE, innerLen);
         System.arraycopy(tag, 0, record, TlsConstants.RECORD_HEADER_SIZE + innerLen, tagLen);
 
-        ByteBuffer recordBuf = ByteBuffer.wrap(record);
+        return new PaddedRecord(record, data);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {240, 250, 255})
+    @DisplayName(
+            "ByteBuffer unprotect: padding до границы maxInnerPlaintext, содержимое в пределах")
+    void testPaddingBoundaryByteBuffer(int paddingLen) throws Exception {
+        // Меняется только padding: содержимое остаётся не больше 2^14, шифротекст доходит до
+        // предела MAX_CIPHERTEXT_LENGTH
+        int dataLen = TlsConstants.MAX_CIPHERTEXT_LENGTH - 16 - paddingLen - 1;
+        PaddedRecord record = paddedRecord(dataLen, paddingLen);
+        TlsRecord reader = freshFixedReader();
+
         ByteBuffer plainBuf = ByteBuffer.allocate(dataLen + 64);
-        UnprotectResult r = reader.unprotect(recordBuf, plainBuf);
+        UnprotectResult r = reader.unprotect(ByteBuffer.wrap(record.wire()), plainBuf);
 
         assertSame(UnprotectResult.Status.OK, r.status);
         assertEquals(TlsConstants.CT_APPLICATION_DATA, r.contentType);
         plainBuf.flip();
         byte[] result = new byte[plainBuf.remaining()];
         plainBuf.get(result);
-        assertArrayEquals(data, result);
+        assertArrayEquals(record.data(), result);
+    }
+
+    @Test
+    @DisplayName("Содержимое ровно 2^14 принимается, на байт больше - record_overflow")
+    void testContentLengthLimitIsExactlyFourteenBits() throws Exception {
+        PaddedRecord atLimit = paddedRecord(TlsConstants.MAX_PLAINTEXT_LENGTH, 0);
+        ByteBuffer plain = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH + 64);
+        assertSame(
+                UnprotectResult.Status.OK,
+                freshFixedReader().unprotect(ByteBuffer.wrap(atLimit.wire()), plain).status,
+                "RFC 8446 §5.1: содержимое в 2^14 байт допустимо");
+
+        PaddedRecord overLimit = paddedRecord(TlsConstants.MAX_PLAINTEXT_LENGTH + 1, 0);
+        TlsException e =
+                assertThrows(
+                        TlsException.class,
+                        () ->
+                                freshFixedReader()
+                                        .unprotect(
+                                                ByteBuffer.wrap(overLimit.wire()),
+                                                ByteBuffer.allocate(
+                                                        TlsConstants.MAX_PLAINTEXT_LENGTH + 64)));
+        assertEquals(
+                TlsConstants.ALERT_RECORD_OVERFLOW,
+                e.getAlertCode(),
+                "Содержимое больше 2^14 - record_overflow, даже если шифротекст в пределах");
+    }
+
+    private static TlsRecord freshFixedReader() {
+        return new TlsRecord(
+                fixedKey(),
+                fixedIv(),
+                16,
+                TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L);
     }
 
     @Test

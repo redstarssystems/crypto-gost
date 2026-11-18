@@ -22,6 +22,7 @@ import org.rssys.gost.jsse.socket.GostSSLServerSocket;
 import org.rssys.gost.jsse.socket.GostSSLSocket;
 import org.rssys.gost.jsse.testkit.GostTestCerts;
 import org.rssys.gost.jsse.testkit.GostTestCerts.CertChain;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.tls13.TlsCiphersuite;
 
 /**
@@ -58,10 +59,12 @@ class GostSSLSocketReconnectTest {
 
         serverKm = new GostX509KeyManager();
         serverKm.addKeyEntry("server", certs.toJca(), certs.key());
-        serverTm = new GostX509TrustManager(certs.caKey(), false);
+        serverTm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(certs.caCert()));
 
         clientKm = new GostX509KeyManager();
-        clientTm = new GostX509TrustManager(certs.caKey(), false);
+        clientTm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(certs.caCert()));
 
         // Раздельные session context'ы для клиента и сервера.
         // Сервер хранит тикеты, которые выдаёт клиентам; клиент хранит полученные NST.
@@ -69,8 +72,8 @@ class GostSSLSocketReconnectTest {
         // в клиентский контекст, что сломает PSK-механизм (баг, который мы
         // обнаружили на ревью).
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        clientSessionCtx = new GostSSLSessionContext(cs, cs.getHashLen());
-        serverSessionCtx = new GostSSLSessionContext(cs, cs.getHashLen());
+        clientSessionCtx = new GostSSLSessionContext(cs);
+        serverSessionCtx = new GostSSLSessionContext(cs);
 
         serverSocket = new GostSSLServerSocket(0, serverKm, serverTm, serverSessionCtx);
         port = serverSocket.getLocalPort();

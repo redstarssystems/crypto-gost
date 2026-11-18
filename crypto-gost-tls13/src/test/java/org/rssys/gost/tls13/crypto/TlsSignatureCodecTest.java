@@ -123,13 +123,40 @@ class TlsSignatureCodecTest {
     }
 
     @Test
-    @DisplayName("sign: детерминизм (одинаковые ключи+данные -> одинаковая подпись)")
-    void testSignDeterminism() throws Exception {
+    @DisplayName("sign по умолчанию гибридный: повторная подпись того же хэша другая, обе верны")
+    void testSignIsHedgedByDefault() throws Exception {
+        for (Object[] row :
+                new Object[][] {
+                    {ECParameters.tc26a256(), ROLEN_256}, {ECParameters.tc26a512(), ROLEN_512}
+                }) {
+            ECParameters params = (ECParameters) row[0];
+            int rolen = (Integer) row[1];
+            org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
+            byte[] hash =
+                    params.hlen == 32
+                            ? Digest.digest256(
+                                    "hedged".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                            : Digest.digest512(
+                                    "hedged".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+            byte[] first = TlsSignatureCodec.sign(hash, kp.getPrivate(), rolen);
+            byte[] second = TlsSignatureCodec.sign(hash, kp.getPrivate(), rolen);
+
+            assertFalse(
+                    java.util.Arrays.equals(first, second),
+                    params.hlen + ": TLS-подпись по умолчанию детерминирована");
+            assertTrue(TlsSignatureCodec.verify(hash, first, kp.getPublic(), rolen));
+            assertTrue(TlsSignatureCodec.verify(hash, second, kp.getPublic(), rolen));
+        }
+    }
+
+    @Test
+    @DisplayName("ECDSASigner + encode: подпись проверяется TlsSignatureCodec.verify")
+    void testSignerOutputVerifiedByCodec() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] hash =
-                Digest.digest256(
-                        "deterministic test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Digest.digest256("signer output".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         Supplier<org.rssys.gost.digest.Digest> factory = Streebog256::new;
         ECDSASigner signer = new ECDSASigner(factory);
@@ -259,6 +286,54 @@ class TlsSignatureCodecTest {
 
         byte[] sig = TlsSignatureCodec.sign(hash, kp1.getPrivate(), ROLEN_512);
         assertFalse(TlsSignatureCodec.verify(hash, sig, kp2.getPublic(), ROLEN_512));
+    }
+
+    // ========================================================================
+    // Длина компонент подписи должна соответствовать кривой
+    // ========================================================================
+
+    @Test
+    @DisplayName("sign: rolen не по кривой (32 для 512-бит) -> IllegalArgumentException")
+    void testSignRejectsRolenNotMatchingCurve() throws Exception {
+        ECParameters params = ECParameters.tc26a512();
+        org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] hash =
+                Digest.digest512("rolen sign".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_256),
+                "rolen короче порядка кривой обязан отвергаться при подписи");
+
+        // Слишком длинный rolen без проверки молча дополнил бы компоненты нулями
+        ECParameters narrow = ECParameters.tc26a256();
+        org.rssys.gost.api.KeyPair narrowKeys = KeyGenerator.generateKeyPair(narrow);
+        byte[] narrowHash =
+                Digest.digest256("rolen long".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> TlsSignatureCodec.sign(narrowHash, narrowKeys.getPrivate(), ROLEN_512),
+                "rolen длиннее порядка кривой обязан отвергаться при подписи");
+    }
+
+    @Test
+    @DisplayName("verify: rolen не по кривой (64 для 256-бит) -> IllegalArgumentException")
+    void testVerifyRejectsRolenNotMatchingCurve() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        org.rssys.gost.api.KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] hash =
+                Digest.digest256("rolen verify".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] sig = TlsSignatureCodec.sign(hash, kp.getPrivate(), ROLEN_256);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        TlsSignatureCodec.verify(
+                                hash, new byte[2 * ROLEN_512], kp.getPublic(), ROLEN_512),
+                "rolen длиннее порядка кривой обязан отвергаться при проверке");
+        assertTrue(
+                TlsSignatureCodec.verify(hash, sig, kp.getPublic(), ROLEN_256),
+                "верный rolen обязан по-прежнему работать");
     }
 
     // ========================================================================

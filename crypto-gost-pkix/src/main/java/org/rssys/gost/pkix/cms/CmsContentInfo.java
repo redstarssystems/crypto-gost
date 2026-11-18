@@ -61,6 +61,19 @@ public final class CmsContentInfo {
      * @return декодированный ContentInfo
      */
     public static CmsContentInfo decode(byte[] der) throws PkixException {
+        // Разбор недоверенных байтов: ошибка DER-парсера — это битый вход, а не программная ошибка,
+        // поэтому наружу она выходит PkixException, как и остальные отказы разбора.
+        try {
+            return decodeUnchecked(der);
+        } catch (IllegalArgumentException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "Malformed ContentInfo: " + e.getMessage(),
+                    e);
+        }
+    }
+
+    private static CmsContentInfo decodeUnchecked(byte[] der) throws PkixException {
         byte[][] parts = DerCodec.parseSequenceContents(der, 0);
         if (parts.length < 1) {
             throw new PkixException(

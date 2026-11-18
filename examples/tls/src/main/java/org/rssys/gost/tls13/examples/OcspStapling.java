@@ -8,6 +8,7 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.*;
@@ -64,7 +65,7 @@ public final class OcspStapling {
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs, ca.getPublicKey())
+                                new TlsClientConfig(cs, TrustAnchors.ofCertificate(ca))
                                         .withServerHostname("localhost"),
                                 clientTp)) {
 

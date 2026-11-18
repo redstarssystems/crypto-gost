@@ -16,7 +16,7 @@ import org.rssys.gost.util.CryptoRandom;
  *
  * <p>Фиксируют byte-for-byte эквивалентность единых хелперов прежним разрозненным развилкам
  * (тому же результату, что давали {@code Digest.digest256/512} напрямую) — защита от регрессии
- * рефакторинга плана №245, и проверяют fail-closed поведение на неизвестном дискриминаторе.
+ * при унификации хелперов; проверяют fail-closed поведение на неизвестном дискриминаторе.
  */
 @DisplayName("GostSignatureHelper: диспетчеризация дайджеста")
 class GostSignatureHelperDigestTest {

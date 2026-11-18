@@ -82,6 +82,26 @@ class BcSignCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curveParams")
+    @DisplayName("BC: по умолчанию два раза подписали одно сообщение - подписи разные, BC принимает обе")
+    void crossValidateDefaultIsHedged(TestData.CurveSpec spec) {
+        // BouncyCastle гибридно не подписывает, он только проверяет. Тест доказывает, что на
+        // пути кросс-валидации умолчание гибридное (подписи разные), а проверяющий их принимает
+        CurveCtx c = ctx.get(spec);
+        for (int i = 0; i < 10; i++) {
+            byte[] msg = messages[i];
+            byte[] first = Signature.sign(msg, c.gostPriv);
+            byte[] second = Signature.sign(msg, c.gostPriv);
+            assertFalse(java.util.Arrays.equals(first, second),
+                    spec.name() + ": подпись по умолчанию детерминирована msg[" + i + "]");
+            assertTrue(BcSignHelper.bcVerify(msg, first, c.bcPub, spec.rolen()),
+                    spec.name() + ": BC не принял первую подпись msg[" + i + "]");
+            assertTrue(BcSignHelper.bcVerify(msg, second, c.bcPub, spec.rolen()),
+                    spec.name() + ": BC не принял вторую подпись msg[" + i + "]");
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("curveParams")
     @DisplayName("BC tamper: испорченная подпись отклоняется обеими библиотеками")
     void crossValidateTamper(TestData.CurveSpec spec) {
         CurveCtx c = ctx.get(spec);

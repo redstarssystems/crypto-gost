@@ -7,10 +7,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.signature.*;
+import org.rssys.gost.signature.NonceMode;
 
 // -----------------------------------------------------------------------
 // RFC 7091 §7: тест-векторы из официального приложения к ГОСТ Р 34.10-2012
@@ -35,7 +38,7 @@ import org.rssys.gost.signature.*;
 //   s  = 0x1456C64BA4642A1653C235A98A60249BCD6D3F746B631DF928014F6C5BF9C40
 // -----------------------------------------------------------------------
 
-@DisplayName("GOST R 34.10-2012 Signature Tests")
+@DisplayName("ГОСТ Р 34.10-2012: подпись и эталонные векторы")
 class SignatureTest {
 
     // -----------------------------------------------------------------------
@@ -50,7 +53,7 @@ class SignatureTest {
     }
 
     @Test
-    @DisplayName("Tc26-256-paramSetA: roundtrip sign/verify")
+    @DisplayName("Tc26-256-paramSetA: подпись и проверка")
     void testRoundtrip256() {
         roundtrip(
                 ECParameters.tc26a256(),
@@ -59,7 +62,7 @@ class SignatureTest {
     }
 
     @Test
-    @DisplayName("Tc26-512-paramSetA: roundtrip sign/verify")
+    @DisplayName("Tc26-512-paramSetA: подпись и проверка")
     void testRoundtrip512() {
         roundtrip(
                 ECParameters.tc26a512(),
@@ -79,7 +82,7 @@ class SignatureTest {
         byte[] msg = "test message for GOST signature".getBytes(StandardCharsets.UTF_8);
         byte[] hash = doHash(digestFactory.get(), msg);
 
-        ECDSASigner signer = new ECDSASigner(digestFactory);
+        ECDSASigner signer = new ECDSASigner(digestFactory, NonceMode.DETERMINISTIC, null);
         signer.init(true, priv);
         BigInteger[] sig = signer.generateSignature(hash);
 
@@ -95,63 +98,11 @@ class SignatureTest {
     }
 
     // -----------------------------------------------------------------------
-    // DigestSigner integration (hashes internally)
-    // -----------------------------------------------------------------------
-
-    @Test
-    @DisplayName("DigestSigner: roundtrip Streebog256")
-    void testDigestSigner256() {
-        digestRoundtrip(
-                ECParameters.tc26a256(),
-                Streebog256::new,
-                "0A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F");
-    }
-
-    @Test
-    @DisplayName("DigestSigner: roundtrip Streebog512")
-    void testDigestSigner512() {
-        digestRoundtrip(
-                ECParameters.tc26a512(),
-                Streebog512::new,
-                "1C5B9A9D9C5B7AD29A2D74A4D4A3B9E4D5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8");
-    }
-
-    private void digestRoundtrip(
-            ECParameters params, Supplier<Digest> digestFactory, String privKeyHex) {
-        BigInteger d = new BigInteger(privKeyHex, 16);
-        ECPoint g = ECPoint.affine(params.gx, params.gy, params);
-        ECPoint Q = g.multiply(d);
-
-        PrivateKeyParameters priv = new PrivateKeyParameters(d, params);
-        PublicKeyParameters pub = new PublicKeyParameters(Q, params);
-
-        ECDSASigner signer = new ECDSASigner(digestFactory);
-        DigestSigner ds = new DigestSigner(signer, digestFactory.get());
-
-        byte[] msg = "DigestSigner integration test".getBytes(StandardCharsets.UTF_8);
-
-        ds.init(true, priv);
-        ds.update(msg, 0, msg.length);
-        byte[] sig = ds.sign();
-
-        ds.init(false, pub);
-        ds.update(msg, 0, msg.length);
-        assertTrue(ds.verify(sig), "DigestSigner roundtrip");
-
-        // tampered signature
-        byte[] badSig = sig.clone();
-        badSig[0] ^= 0x01;
-        ds.init(false, pub);
-        ds.update(msg, 0, msg.length);
-        assertFalse(ds.verify(badSig), "tampered signature rejected");
-    }
-
-    // -----------------------------------------------------------------------
     // Curve validation
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("All curves: base point is on curve, n*G = infinity")
+    @DisplayName("Все кривые: базовая точка лежит на кривой, n·G равно бесконечности")
     void testBasePointOnCurve() {
         ECParameters[] curves = {
             ECParameters.tc26a256(),
@@ -173,82 +124,66 @@ class SignatureTest {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Новые кривые: roundtrip sign/verify
-    // -----------------------------------------------------------------------
+    /** Закрытые ключи для прямого прохода {@code DigestSigner}: 256 и 512 бит. */
+    private static final String DIGEST_SIGNER_KEY_256_HEX =
+            "0A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F";
 
-    @Test
-    @DisplayName("TC26-512-paramSetB: roundtrip sign/verify")
-    void testRoundtripTc26b512() {
-        roundtrip(
-                ECParameters.tc26b512(),
-                Streebog512::new,
-                "1C5B9A9D9C5B7AD29A2D74A4D4A3B9E4D5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8");
+    private static final String DIGEST_SIGNER_KEY_512_HEX =
+            "1C5B9A9D9C5B7AD29A2D74A4D4A3B9E4D5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8";
+
+    /**
+     * Прямой проход {@code DigestSigner}: он открытый и работает без {@code api.Signature}, поэтому
+     * покрытие через высокоуровневый API его самого не заменяет.
+     */
+    @ParameterizedTest(
+            name =
+                    "DigestSigner, {0} бит: подпись и проверка, изменённые сообщение и подпись отвергаются")
+    @ValueSource(ints = {256, 512})
+    void testDigestSignerRoundtrip(int bits) {
+        boolean is256 = bits == 256;
+        ECParameters params = is256 ? ECParameters.tc26a256() : ECParameters.tc26a512();
+        Supplier<Digest> digestFactory = is256 ? Streebog256::new : Streebog512::new;
+        BigInteger d =
+                new BigInteger(is256 ? DIGEST_SIGNER_KEY_256_HEX : DIGEST_SIGNER_KEY_512_HEX, 16);
+        ECPoint q = ECPoint.affine(params.gx, params.gy, params).multiply(d);
+        PrivateKeyParameters priv = new PrivateKeyParameters(d, params);
+        PublicKeyParameters pub = new PublicKeyParameters(q, params);
+
+        DigestSigner signer =
+                new DigestSigner(
+                        new ECDSASigner(digestFactory, NonceMode.DETERMINISTIC, null),
+                        digestFactory.get());
+        byte[] message = "DigestSigner: прямой проход".getBytes(StandardCharsets.UTF_8);
+
+        signer.init(true, priv);
+        signer.update(message, 0, message.length);
+        byte[] signature = signer.sign();
+        assertEquals(bits / 4, signature.length, "длина подписи: две компоненты по bits / 8 байт");
+
+        signer.init(false, pub);
+        signer.update(message, 0, message.length);
+        assertTrue(signer.verify(signature), "подпись должна проверяться");
+
+        byte[] changedMessage = message.clone();
+        changedMessage[0] ^= 0x01;
+        signer.init(false, pub);
+        signer.update(changedMessage, 0, changedMessage.length);
+        assertFalse(signer.verify(signature), "изменённое сообщение должно отвергаться");
+
+        byte[] changedSignature = signature.clone();
+        changedSignature[0] ^= 0x01;
+        signer.init(false, pub);
+        signer.update(message, 0, message.length);
+        assertFalse(signer.verify(changedSignature), "изменённая подпись должна отвергаться");
     }
 
     @Test
-    @DisplayName("TC26-512-paramSetC: roundtrip sign/verify")
-    void testRoundtripTc26c512() {
-        roundtrip(
-                ECParameters.tc26c512(),
-                Streebog512::new,
-                "2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F2");
-    }
-
-    @Test
-    @DisplayName("CryptoPro-A: roundtrip sign/verify")
-    void testRoundtripCryptoProA() {
-        roundtrip(
-                ECParameters.cryptoProA(),
-                Streebog256::new,
-                "0A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F");
-    }
-
-    @Test
-    @DisplayName("CryptoPro-B: roundtrip sign/verify")
-    void testRoundtripCryptoProB() {
-        roundtrip(
-                ECParameters.cryptoProB(),
-                Streebog256::new,
-                "1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F2A");
-    }
-
-    @Test
-    @DisplayName("CryptoPro-C: roundtrip sign/verify")
-    void testRoundtripCryptoProC() {
-        roundtrip(
-                ECParameters.cryptoProC(),
-                Streebog256::new,
-                "2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F2A3B");
-    }
-
-    @Test
-    @DisplayName("Point at infinity")
+    @DisplayName("Точка в бесконечности")
     void testInfinity() {
         ECPoint inf = ECPoint.infinity(ECParameters.tc26a256());
         assertTrue(inf.isInfinity());
         ECPoint norm = inf.normalize();
         assertTrue(norm.isInfinity());
-    }
-
-    @Test
-    @DisplayName("DigestSigner: sign() returns 64 bytes for 256-bit curve")
-    void testSignatureLength256() {
-        ECParameters params = ECParameters.tc26a256();
-        BigInteger d =
-                new BigInteger(
-                        "0A1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8090A1B2C3D4E5F6A7B8C9D0E1F", 16);
-        ECPoint Q = ECPoint.affine(params.gx, params.gy, params).multiply(d);
-
-        PrivateKeyParameters priv = new PrivateKeyParameters(d, params);
-        PublicKeyParameters pub = new PublicKeyParameters(Q, params);
-
-        DigestSigner ds = new DigestSigner(new ECDSASigner(Streebog256::new), new Streebog256());
-        ds.init(true, priv);
-        ds.update("hello".getBytes(), 0, 5);
-        byte[] sig = ds.sign();
-
-        assertEquals(64, sig.length, "256-bit signature is 64 bytes");
     }
 
     // -----------------------------------------------------------------------
@@ -437,7 +372,7 @@ class SignatureTest {
         byte[] hash =
                 reverseBytes(eBytes); // ECDSASigner сделает reverseBytes внутри -> вернёт eBytes
 
-        ECDSASigner signer = new ECDSASigner(Streebog256::new);
+        ECDSASigner signer = new ECDSASigner(Streebog256::new, NonceMode.DETERMINISTIC, null);
         signer.init(false, new PublicKeyParameters(Q, params));
 
         assertTrue(
@@ -450,11 +385,16 @@ class SignatureTest {
     //
     // generateK — private метод, тестируется косвенно через generateSignature.
     // r = (k·G).x mod q — если k одинаков, r одинаков.
-    // Golden r вычислен от реализации generateK(byte[] hash) — RFC 6979-корректной
-    // версии, где bits2octets принимает raw big-endian хэш, а не ГОСТ LE-integer.
+    // Затравка HMAC-DRBG - int2octets(e), где e - число из уравнения подписи (ГОСТ читает хэш
+    // младшим байтом вперёд). Затравка из байт хэша в прямом порядке позволяла двум разным e
+    // получить один k и раскрывала закрытый ключ, см. DeterministicNonceTest.
     //
-    // Если кто-то откатит generateK к варианту generateK(BigInteger e),
-    // эти тесты упадут с несовпадением golden r — это и есть цель.
+    // Оба golden r (кривая RFC 7091 и CryptoPro-A, обе 256 бит без сдвига хэша) получены
+    // независимо: HMAC-DRBG на HMAC-Стрибог из BouncyCastle, которому подан int2octets(e) и
+    // идентификатор кривой (NonceOracle в x-validation-tests/sign). Остальные кривые, в том
+    // числе со сдвигом хэша, покрывает DeterministicNonceTest и сверка с эталоном. Если затравка
+    // снова станет производной от байт хэша или потеряет привязку к кривой, golden r перестанет
+    // совпадать.
     // -----------------------------------------------------------------------
 
     @Test
@@ -478,7 +418,7 @@ class SignatureTest {
         ECPoint Q = ECPoint.affine(params.gx, params.gy, params).multiply(d);
         PublicKeyParameters pub = new PublicKeyParameters(Q, params);
 
-        ECDSASigner signer = new ECDSASigner(Streebog256::new);
+        ECDSASigner signer = new ECDSASigner(Streebog256::new, NonceMode.DETERMINISTIC, null);
 
         // Подписываем дважды — r обязан совпасть (детерминированность)
         signer.init(true, priv);
@@ -491,15 +431,15 @@ class SignatureTest {
                 sig2[0],
                 "RFC 6979: одинаковый (d, hash) должен давать одинаковый k -> одинаковый r");
 
-        // Golden r — зафиксирован от RFC 6979-корректной реализации generateK(byte[] hash).
+        // Golden r - от затравки int2octets(e) и идентификатора кривой (независимый эталон).
         // hash (BE): e53e042b67e6ec678e2e02b12a0352ce1fc6eee0529cc088119ad872b3c1fb2d
         BigInteger expectedR =
                 new BigInteger(
-                        "6156bcb52562ad7c23ef808ccf9b39f1d59db14f6ea5008b616f950608c4ba9f", 16);
+                        "29a8c74af529d9e9605fa5ba6e54f21d3f9f172a013f9f74e7d6199954e0c70d", 16);
         assertEquals(
                 expectedR,
                 sig1[0],
-                "RFC 6979: golden r не совпал — возможно откат к generateK(BigInteger e)");
+                "RFC 6979: golden r не совпал - затравка нонса больше не int2octets(e)");
 
         // Подпись должна верифицироваться
         signer.init(false, pub);
@@ -531,7 +471,7 @@ class SignatureTest {
         ECPoint Q = ECPoint.affine(params.gx, params.gy, params).multiply(d);
         PublicKeyParameters pub = new PublicKeyParameters(Q, params);
 
-        ECDSASigner signer = new ECDSASigner(Streebog256::new);
+        ECDSASigner signer = new ECDSASigner(Streebog256::new, NonceMode.DETERMINISTIC, null);
 
         // Детерминированность
         signer.init(true, priv);
@@ -544,15 +484,15 @@ class SignatureTest {
                 sig2[0],
                 "RFC 6979: одинаковый (d, hash) должен давать одинаковый k -> одинаковый r");
 
-        // Golden r — зафиксирован от RFC 6979-корректной реализации generateK(byte[] hash).
+        // Golden r - от затравки int2octets(e) и идентификатора кривой (независимый эталон).
         // Кривая CryptoPro-A (RFC 4357 §11.2 = TC26-256-paramSetB).
         BigInteger expectedR =
                 new BigInteger(
-                        "26c659d65638ad9afaf22dfa2421b58878eb7cfd7ae8a25d15c09b2db1c5cf53", 16);
+                        "77ee6e5be024073a8dc0926b84078f82415c9d036a819176d8507f288a63b3cb", 16);
         assertEquals(
                 expectedR,
                 sig1[0],
-                "RFC 6979: golden r для CryptoPro-A не совпал — возможно откат к generateK(BigInteger e)");
+                "RFC 6979: golden r для CryptoPro-A не совпал - затравка нонса больше не int2octets(e)");
 
         // Верификация
         signer.init(false, pub);

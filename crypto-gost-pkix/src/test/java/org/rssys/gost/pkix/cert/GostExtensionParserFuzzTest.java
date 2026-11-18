@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 
 /**
  * Fuzz-тест для {@link GostExtensionParser}.
@@ -28,7 +29,7 @@ class GostExtensionParserFuzzTest {
         try {
             GostExtensionParser.parseExtensionsFromSequence(der, 0);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -37,9 +38,9 @@ class GostExtensionParserFuzzTest {
         byte[] der = data.consumeRemainingAsBytes();
         if (der.length == 0) return;
         try {
-            GostExtensionParser.parseFromExtensionsBlock(der, 0);
+            GostExtensionParser.parseFromExtensionsBlock(der, 0, der.length);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -98,7 +99,7 @@ class GostExtensionParserFuzzTest {
         try {
             GostExtensionParser.parseExtensionsFromSequence(input, 0);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -152,20 +153,7 @@ class GostExtensionParserFuzzTest {
         try {
             GostExtensionParser.parseExtensionsFromSequence(input, 0);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    /**
-     * Перебрасывает RuntimeException, если это баг (AIOOBE, NPE,
-     * NegativeArraySizeException). Иначе — проглатывает.
-     */
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -219,7 +207,7 @@ class GostExtensionParserFuzzTest {
         try {
             GostExtensionParser.parseExtensionsFromSequence(input, 0);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -266,7 +254,7 @@ class GostExtensionParserFuzzTest {
         try {
             GostExtensionParser.parseExtensionsFromSequence(input, 0);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -306,7 +294,7 @@ class GostExtensionParserFuzzTest {
         try {
             GostExtensionParser.parseExtensionsFromSequence(input, 0);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

@@ -5,11 +5,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.TestHex;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.AuthenticationException;
 
 @DisplayName("KeyExport: KExp15/KImp15 (RFC 9189 §8.2.1)")
 class KeyExportTest {
+
+    /** Размер ключа Кузнечика в байтах. */
+    private static final int KEY_LENGTH = 32;
 
     // -----------------------------------------------------------------------
     // KAT: RFC 9189 Appendix A.1.3.2 — TLS_GOSTR341112_256_WITH_KUZNYECHIK_CTR_OMAC
@@ -93,8 +97,8 @@ class KeyExportTest {
     private void roundTrip(byte[] secret) throws AuthenticationException {
         byte[] iv = new byte[KeyExport.IV_LENGTH];
         Arrays.fill(iv, (byte) 0x55);
-        byte[] encKeyBytes = new byte[KeyExport.KEY_LENGTH];
-        byte[] macKeyBytes = new byte[KeyExport.KEY_LENGTH];
+        byte[] encKeyBytes = new byte[KEY_LENGTH];
+        byte[] macKeyBytes = new byte[KEY_LENGTH];
         Arrays.fill(encKeyBytes, (byte) 0x11);
         Arrays.fill(macKeyBytes, (byte) 0x22);
         SymmetricKey encKey = new SymmetricKey(encKeyBytes);
@@ -113,7 +117,7 @@ class KeyExportTest {
 
     @Test
     @DisplayName("kImp15: повреждён шифртекст (1 бит) -> AuthenticationException")
-    void testTamperedCiphertext() {
+    void testChangedCiphertext() {
         byte[] wrapped = KeyExport.kExp15(KAT_SECRET, KAT_MAC_KEY, KAT_ENC_KEY, KAT_IV);
         wrapped[0] ^= 0x01; // флип бита
         assertThrows(
@@ -123,7 +127,7 @@ class KeyExportTest {
 
     @Test
     @DisplayName("kImp15: повреждён MAC-блок -> AuthenticationException")
-    void testTamperedMacBlock() {
+    void testChangedMacBlock() {
         byte[] wrapped = KeyExport.kExp15(KAT_SECRET, KAT_MAC_KEY, KAT_ENC_KEY, KAT_IV);
         wrapped[wrapped.length - 1] ^= 0x01; // флип бита в последнем байте (MAC)
         assertThrows(
@@ -134,7 +138,7 @@ class KeyExportTest {
     @Test
     @DisplayName("kImp15: неверный K_MAC -> AuthenticationException")
     void testWrongMacKey() {
-        byte[] badKeyBytes = new byte[KeyExport.KEY_LENGTH];
+        byte[] badKeyBytes = new byte[KEY_LENGTH];
         Arrays.fill(badKeyBytes, (byte) 0xFF);
         SymmetricKey badKey = new SymmetricKey(badKeyBytes);
         assertThrows(
@@ -145,7 +149,7 @@ class KeyExportTest {
     @Test
     @DisplayName("kImp15: неверный K_ENC -> AuthenticationException")
     void testWrongEncKey() {
-        byte[] badKeyBytes = new byte[KeyExport.KEY_LENGTH];
+        byte[] badKeyBytes = new byte[KEY_LENGTH];
         Arrays.fill(badKeyBytes, (byte) 0xFF);
         SymmetricKey badKey = new SymmetricKey(badKeyBytes);
         assertThrows(
@@ -263,15 +267,6 @@ class KeyExportTest {
     // -----------------------------------------------------------------------
 
     private static byte[] hex(String s) {
-        String cleaned = s.replaceAll("\\s+", "");
-        int len = cleaned.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] =
-                    (byte)
-                            ((Character.digit(cleaned.charAt(i), 16) << 4)
-                                    + Character.digit(cleaned.charAt(i + 1), 16));
-        }
-        return data;
+        return TestHex.bytes(s);
     }
 }

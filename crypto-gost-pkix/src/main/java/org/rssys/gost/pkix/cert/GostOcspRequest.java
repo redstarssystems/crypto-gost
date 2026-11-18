@@ -89,10 +89,8 @@ public final class GostOcspRequest {
             int tbsPos = tbsSeq[0];
             int tbsEnd = tbsSeq[1];
 
-            // version [0] EXPLICIT (опционально, пропускаем)
-            if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
-                tbsPos = readTlv(der, tbsPos)[1];
-            }
+            // version [0] EXPLICIT (опционально): допустима только v1 (RFC 6960 §4.1.1)
+            tbsPos = skipOcspVersionV1(der, tbsPos, tbsEnd);
 
             // requestorName [1] EXPLICIT (опционально, пропускаем)
             if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_1) {
@@ -158,21 +156,19 @@ public final class GostOcspRequest {
         return new CertId(hashAlgOid, issuerNameHash, issuerKeyHash, serialNumber);
     }
 
-    private static byte[] parseNonce(byte[] der, int pos, int end) {
+    private static byte[] parseNonce(byte[] der, int pos, int end) throws PkixException {
         // requestExtensions [2] EXPLICIT (DerCodec.TAG_CTX_BASE | 2 = 0xA2)
         if (pos >= end || (der[pos] & 0xFF) != (DerCodec.TAG_CTX_BASE | 2)) {
             return null;
         }
-        int[] extExplTlv;
-        try {
-            extExplTlv = readTlv(der, pos);
-        } catch (RuntimeException e) {
-            return null;
-        }
+        // Если [2] присутствует, но не разбирается — это ошибка разбора запроса, а не «nonce нет»:
+        // IllegalArgumentException от readTlv оборачивает конструктор в PkixException
+        int[] extExplTlv = readTlv(der, pos);
         int[] extSeq = parseSequence(der, extExplTlv[0]);
         int extPos = extSeq[0];
         int extEnd = extSeq[1];
 
+        byte[] parsedNonce = null;
         while (extPos < extEnd) {
             int[] extTlv = parseSequence(der, extPos);
             int extContent = extTlv[0];
@@ -189,20 +185,29 @@ public final class GostOcspRequest {
             extContent = extOidTlv[1];
 
             if (isNonce) {
+                // Полный проход по расширениям нужен, чтобы увидеть дубликат: неоднозначность
+                // «какой из двух nonce верный» недопустима
+                if (parsedNonce != null) {
+                    throw new PkixException("OCSP request: duplicate nonce extension");
+                }
                 // Критическое расширение: BOOLEAN true (опционально)
                 if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x01) {
                     int[] boolTlv = readTlv(der, extContent);
                     extContent = boolTlv[1];
                 }
                 if (extContent >= extContentEnd || (der[extContent] & 0xFF) != 0x04) {
-                    return null;
+                    throw new PkixException(
+                            "OCSP request: nonce extension without extnValue OCTET STRING");
                 }
-                int[] nonceOctTlv = readTlv(der, extContent);
-                return Arrays.copyOfRange(der, nonceOctTlv[0], nonceOctTlv[1]);
+                int[] extnValueTlv = readTlv(der, extContent);
+                if (extnValueTlv[1] != extContentEnd) {
+                    throw new PkixException("OCSP request: trailing data after nonce extnValue");
+                }
+                parsedNonce = OcspNonceCodec.parseExtnValue(der, extnValueTlv[0], extnValueTlv[1]);
             }
             extPos = extTlv[1];
         }
-        return null;
+        return parsedNonce;
     }
 
     /**
@@ -256,7 +261,12 @@ public final class GostOcspRequest {
     }
 
     /**
-     * @return nonce из запроса или {@code null} если отсутствует
+     * Возвращает nonce из requestExtensions (RFC 8954).
+     *
+     * <p>Это сырые байты значения {@code Nonce} (1..32 байта) без обёрток OCTET STRING;
+     * именно их передают в {@link GostOcspResponseBuilder#nonce(byte[])} для эхо-ответа.
+     *
+     * @return копия nonce или {@code null}, если расширение отсутствует
      */
     public byte[] getNonce() {
         return nonce != null ? nonce.clone() : null;
@@ -292,7 +302,9 @@ public final class GostOcspRequest {
         digest.update(tbsRaw, 0, tbsRaw.length);
         byte[] hash = digest.digest();
 
-        if (!Signature.verifyHash(hash, sigValue, pubKey)) {
+        // Длина подписи берётся из недоверенного DER: неверная длина даёт false, а не исключение
+        boolean signatureValid = Signature.verifyHash(hash, sigValue, pubKey);
+        if (!signatureValid) {
             throw new PkixException(
                     PkixException.Reason.SIGNATURE_INVALID,
                     "OCSP request: signature verification failed");

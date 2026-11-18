@@ -11,12 +11,12 @@ import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.EncryptedPrivateKeyInfo;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.Pbes2Params;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Расшифровка PKCS8ShroudedKeyBag по PBES2 (RFC 9337 §5, §7).
@@ -73,7 +73,6 @@ public final class GostPbes2 {
         byte[] privateKeyInfoDer = null;
         try {
             privateKeyInfoDer = decryptKeyData(dk, params, epki.getEncryptedData());
-            GostDerCodec.checkNotMasked(privateKeyInfoDer);
             return GostDerCodec.decodePrivateKey(privateKeyInfoDer);
         } finally {
             Arrays.fill(dk, (byte) 0);
@@ -88,9 +87,18 @@ public final class GostPbes2 {
      */
     public static byte[] deriveKey(byte[] password, Pbes2Params params) {
         Hmac hmac = createPrf(params.getPrfOid());
-        hmac.init(password);
-        return Pbkdf2Streebog.generate(
-                hmac, params.getSalt(), params.getIterationCount(), GostOids.KUZNYECHIK_KEY_LEN);
+        // ipad/opad HMAC выведены из пароля, поэтому PRF уничтожается сразу после выработки ключа:
+        // Pbkdf2Streebog.generate(Mac, ...) чужой HMAC не затирает
+        try {
+            hmac.init(password);
+            return Pbkdf2Streebog.generate(
+                    hmac,
+                    params.getSalt(),
+                    params.getIterationCount(),
+                    GostOids.KUZNYECHIK_KEY_LEN);
+        } finally {
+            hmac.destroy();
+        }
     }
 
     /**
@@ -100,6 +108,10 @@ public final class GostPbes2 {
         SymmetricKey key = new SymmetricKey(dk);
         String encOid = params.getEncryptionSchemeOid();
         boolean useOmac = GostOids.KUZ_CTR_ACPKM_OMAC.equals(encOid);
+        if (!useOmac && !GostOids.KUZ_CTR_ACPKM.equals(encOid)) {
+            key.destroy();
+            throw new IllegalArgumentException("PBES2: unsupported encryption scheme " + encOid);
+        }
 
         try {
             if (useOmac) {
@@ -139,16 +151,18 @@ public final class GostPbes2 {
                             + GostOids.KUZ_CTR_ACPKM);
         }
 
+        // PKCS#8 содержит закрытый ключ в открытом виде: затирается на любом пути выхода, в том
+        // числе когда PBKDF2 или шифрование бросают исключение
         byte[] privateKeyInfoDer = GostDerCodec.encodePrivateKey(privKey);
-        byte[] salt = new byte[GostOids.PBES2_SALT_LEN];
-        CryptoRandom.INSTANCE.nextBytes(salt);
-        byte[] ukm = new byte[GostOids.PBES2_UKM_LEN];
-        CryptoRandom.INSTANCE.nextBytes(ukm);
-        byte[] dk =
-                Pbkdf2Streebog.generate(password, salt, iterations, GostOids.KUZNYECHIK_KEY_LEN);
-
+        byte[] dk = null;
         SymmetricKey symKey = null;
         try {
+            byte[] salt = new byte[GostOids.PBKDF2_SALT_LEN];
+            CryptoRandom.INSTANCE.nextBytes(salt);
+            byte[] ukm = new byte[GostOids.PBES2_UKM_LEN];
+            CryptoRandom.INSTANCE.nextBytes(ukm);
+            dk = Pbkdf2Streebog.generate(password, salt, iterations, GostOids.KUZNYECHIK_KEY_LEN);
+
             symKey = new SymmetricKey(dk);
             byte[] encryptedData;
             if (GostOids.KUZ_CTR_ACPKM_OMAC.equals(encSchemeOid)) {
@@ -160,7 +174,10 @@ public final class GostPbes2 {
             byte[] pbes2Params = buildPbes2Params(salt, iterations, ukm, prfOid, encSchemeOid);
             return buildEncryptedPrivateKeyInfo(pbes2Params, encryptedData);
         } finally {
-            Arrays.fill(dk, (byte) 0);
+            Arrays.fill(privateKeyInfoDer, (byte) 0);
+            if (dk != null) {
+                Arrays.fill(dk, (byte) 0);
+            }
             if (symKey != null) {
                 symKey.destroy();
             }
@@ -172,7 +189,10 @@ public final class GostPbes2 {
      */
     static byte[] buildPbes2Params(
             byte[] salt, int iterations, byte[] ukm, String prfOid, String encOid) {
-        byte[] prfAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(prfOid));
+        // RFC 9337 §7.1 требует NULL в параметрах PRF. На вывод ключа они не влияют, поэтому
+        // при чтении допускаются оба варианта (с NULL и без), а пишем строго по RFC.
+        byte[] prfAlgId =
+                DerCodec.encodeSequence(DerCodec.encodeOid(prfOid), DerCodec.encodeNull());
         byte[] encParams = DerCodec.encodeSequence(DerCodec.encodeOctetString(ukm));
         byte[] encAlgId = DerCodec.encodeSequence(DerCodec.encodeOid(encOid), encParams);
         byte[] kdfParams =

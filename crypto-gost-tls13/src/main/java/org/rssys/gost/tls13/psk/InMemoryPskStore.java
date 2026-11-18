@@ -4,14 +4,15 @@ import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.rssys.gost.tls13.TlsConstants;
 
 /**
  * In-memory реализация {@link PskStore} для session resumption (RFC 8446 §2.2).
  *
- * <p>Используйте один экземпляр на один сервер. Смешивание тикетов
- * от разных серверов — неопределённое поведение: разные серверы
- * могут иметь несовместимые ротации ключей, идентификаторы
- * или политики безопасности.</p>
+ * <p>Клиентский экземпляр может держать тикеты многих серверов:
+ * {@link #getForResumption(PskBinding)} фильтрует записи по равенству привязки. Серверный
+ * экземпляр ищет тикет по байтам без привязки — используйте один экземпляр на одну
+ * идентичность сервера. Клиент и сервер не должны делить один экземпляр.</p>
  *
  * <p>0-RTT и external PSK не поддерживаются.</p>
  *
@@ -22,7 +23,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p>Выбор {@code maxSize}:</p>
  * <ul>
  *   <li><b>Клиент:</b> достаточно 10-100. Клиент хранит 1-5 PSK на
- *       каждый сервер. 100 — запас на десятки серверов.</li>
+ *       каждый сервер (привязка исключает путаницу серверов). 100 — запас на десятки серверов.</li>
  *   <li><b>Сервер:</b> PSK живёт от handshake до истечения
  *       {@code ticket_lifetime} секунд. В хранилище одновременно живут
  *       все PSK, выданные за последние {@code ticket_lifetime} секунд.
@@ -60,9 +61,11 @@ public final class InMemoryPskStore implements PskStore {
     @Override
     public void onTicketReceived(PskEntry entry) {
         byte[] ticket = entry.getTicket();
-        if (ticket == null || ticket.length < 1 || ticket.length > 65535) {
+        if (ticket == null || ticket.length < 1 || ticket.length > TlsConstants.MAX_TICKET_LENGTH) {
             throw new IllegalArgumentException(
-                    "ticket length must be 1..65535, got "
+                    "ticket length must be 1.."
+                            + TlsConstants.MAX_TICKET_LENGTH
+                            + ", got "
                             + (ticket == null ? "null" : ticket.length));
         }
 
@@ -132,7 +135,10 @@ public final class InMemoryPskStore implements PskStore {
     }
 
     @Override
-    public PskEntry getForResumption() {
+    public PskEntry getForResumption(PskBinding binding) {
+        if (binding == null) {
+            throw new IllegalArgumentException("binding must not be null");
+        }
         // Принудительная очистка просроченных — контракт требует
         // «MUST не возвращать expired», без неё expired entry мог бы
         // висеть в store до следующей периодической чистки в onTicketReceived.
@@ -142,7 +148,9 @@ public final class InMemoryPskStore implements PskStore {
         long maxIssueTime = Long.MIN_VALUE;
         for (PskEntry entry : store.values()) {
             long issueTime = entry.getIssueTime();
-            if (!entry.isExpired(now) && issueTime > maxIssueTime) {
+            if (binding.equals(entry.getBinding())
+                    && !entry.isExpired(now)
+                    && issueTime > maxIssueTime) {
                 maxIssueTime = issueTime;
                 best = entry;
             }

@@ -1,7 +1,7 @@
 // asciidoc -b docbook -o - angie-reverse-proxy-gost-tls13.adoc | pandoc -f docbook -t markdown_strict --wrap=preserved -o angie-reverse-proxy-gost-tls13.md
 = Reverse Proxy Angie + GOST TLS 1.3 + crypto-gost
 :author: Red Stars Systems
-:revnumber: 0.7.0
+:revnumber: 0.8.0
 :lang: ru
 
 == Введение
@@ -274,11 +274,11 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk
 export JAVA_HOME
 CDIR=$HOME/projects/crypto-gost
 
-JAR=$CDIR/examples/jsse/target/examples-jsse-0.7.0-SNAPSHOT.jar
+JAR=$CDIR/examples/jsse/target/examples-jsse-0.8.0-SNAPSHOT.jar
 CLASSPATH=$JAR
 
-# Только 0.7.0+ — старые версии содержат ошибку
-for jar in $(find $HOME/.m2/repository/org/rssys -name "*-0.7.0-SNAPSHOT.jar" \
+# Только 0.8.0+ — старые версии содержат ошибку
+for jar in $(find $HOME/.m2/repository/org/rssys -name "*-0.8.0.jar" \
     ! -name "*sources*" ! -name "*javadoc*" ! -name "*tests*"); do
     CLASSPATH=$CLASSPATH:$jar
 done
@@ -567,9 +567,9 @@ csptest -keyset -expcert /tmp/container-cert.cer \
 
 # 3. Подписать от тестового ЦА (через crypto-gost)
 cd ~/projects/crypto-gost
-sudo java -cp examples/pkix/target/crypto-gost-pkix-examples-0.7.1.jar:\
-crypto-gost-pkix/target/crypto-gost-pkix-0.7.0-SNAPSHOT.jar:\
-crypto-gost-core/target/crypto-gost-core-0.7.0-SNAPSHOT.jar \
+sudo java -cp examples/pkix/target/crypto-gost-pkix-examples-0.8.0-SNAPSHOT.jar:\
+crypto-gost-pkix/target/crypto-gost-pkix-0.8.0-SNAPSHOT.jar:\
+crypto-gost-core/target/crypto-gost-core-0.8.0-SNAPSHOT.jar \
   org.rssys.gost.pkix.examples.SignContainerCert \
   --container-cert /tmp/container-cert.cer \
   --ca-key /etc/angie/ca-key.pem \

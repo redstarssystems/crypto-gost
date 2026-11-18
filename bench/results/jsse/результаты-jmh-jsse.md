@@ -38,13 +38,17 @@
 
 Цифры стабильные, относительная погрешность ±1-2 %.
 
+Замеры выполнены с `TlsClientConfig.withCaPublicKey(...)`. В 0.8.0 этот
+API заменён на `withTrustAnchorCertificate(...)`; имена методов и цифры
+ниже оставлены как исторические.
+
 # Что измеряет этот прогон
 
 Уровень `crypto-gost-jsse` — **JSSE-обёртка поверх crypto-gost-tls13**.
 Замеры идут через `SSLEngine` (стандартный JSSE-API, который используют
 Tomcat, Jetty, Netty, HttpsURLConnection). Между `SSLEngine` и ядром
-протокола — слой `GostSSLEngine`, `CertificateBridge`, `KeyBridge`,
-`IanaMapper`, JCA-конверсии типов, `ByteBuffer`↔`byte[]` копирования.
+протокола — слой `GostSSLEngine`, `CertificateBridge`, JCA-конверсии
+типов, `ByteBuffer`↔`byte[]` копирования.
 
 # Важный disclaimer: TrustManager в бенчах
 
@@ -133,7 +137,7 @@ verify на сервере). Это согласуется с измеренны
 
 - **Стоимость cert-validation в TrustManager.** Бенч обходит её через
   null-impl. Реальная стоимость требует прогона с `GostX509TrustManager`
-  и хотя бы `OcspPolicy.DISABLED`.
+  и хотя бы с политикой `OcspPolicy.IF_PRESENT`.
 
 - **PSK resumption через `SSLSession`/`SSLSessionContext`.**
   JSSE-уровневый resume требует корректной настройки
@@ -327,9 +331,9 @@ Wrap throughput на 16 KB: jsse vs tls13, ops/sec
 tls13-бенч.
 
 **Стоимость самой JSSE-обёртки** (ByteBuffer↔byte\[\] copy, lock
-acquisition, JCA conversions, IanaMapper, CertificateBridge, KeyBridge)
-**не измерена напрямую** — для этого нужен бенч с одинаковым
-TrustManager-поведением на обоих уровнях.
+acquisition, JCA conversions, CertificateBridge) **не измерена
+напрямую** — для этого нужен бенч с одинаковым TrustManager-поведением
+на обоих уровнях.
 
 **На record-layer’е JSSE-обёртка действительно тонкая**, что
 подтверждается совпадением `wrap` и `protect` цифр в пределах
@@ -487,7 +491,7 @@ N. JVM lock contention, GC, scheduling — всё влияет на реальн
 
 1.  **Стоимость cert-validation в `GostX509TrustManager`.** Текущие
     цифры — без неё. Нужен парный бенч с реальным TrustManager (хотя бы
-    с `OcspPolicy.DISABLED`), чтобы измерить разницу.
+    с `OcspPolicy.IF_PRESENT`), чтобы измерить разницу.
 
 2.  **JSSE-уровневое PSK resumption.** `JsseHandshakeBench.resume`
     намеренно удалён из текущей версии — он не делал реальный

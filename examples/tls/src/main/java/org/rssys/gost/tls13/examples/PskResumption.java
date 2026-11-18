@@ -3,6 +3,7 @@ package org.rssys.gost.tls13.examples;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.concurrent.*;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
@@ -15,7 +16,7 @@ import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
  * <p>
  * Полный handshake -> сервер выдаёт NewSessionTicket -> клиент сохраняет PSK.
  * Второе соединение использует аббревиатурный handshake без Certificate/CertificateVerify.
- * Демонстрирует shared PskStore + setPskStore + естественный fallback при неизвестном тикете.
+ * Демонстрирует отдельные PskStore клиента и сервера + setPskStore + естественный fallback при неизвестном тикете.
  */
 public final class PskResumption {
 
@@ -26,8 +27,10 @@ public final class PskResumption {
         ExampleUtils.CertBundle caBundle = ExampleUtils.createRootCABundle();
         ExampleUtils.CertBundle serverBundle = ExampleUtils.createServerCertBundle(caBundle);
 
-        // 2. Shared PskStore — одно хранилище для сервера и клиента
-        PskStore sharedStore = new InMemoryPskStore(256); // макс. 256 PSK-тикетов
+        // 2. Раздельные PskStore: клиент и сервер в реальности не делят память, а запись клиента
+        // (с привязкой к серверу) и запись сервера с одним тикетом затирали бы друг друга
+        PskStore serverStore = new InMemoryPskStore(256); // макс. 256 PSK-тикетов
+        PskStore clientStore = new InMemoryPskStore(256);
 
         // === Первое соединение: полный handshake + NewSessionTicket ===
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
@@ -43,11 +46,11 @@ public final class PskResumption {
                                 serverTp1);
                 TlsSession client1 =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
+                                new TlsClientConfig(cs, TrustAnchors.ofCertificate(caBundle.cert()))
                                         .withServerHostname("localhost"),
                                 clientTp1)) {
-            server1.setPskStore(sharedStore);
-            client1.setPskStore(sharedStore);
+            server1.setPskStore(serverStore);
+            client1.setPskStore(clientStore);
 
             ExecutorService exec = Executors.newSingleThreadExecutor();
             try {
@@ -69,7 +72,7 @@ public final class PskResumption {
             }
         }
 
-        System.out.println("Full handshake done, PSK stored: " + sharedStore.size());
+        System.out.println("Full handshake done, PSK stored: " + clientStore.size());
 
         // === Второе соединение: аббревиатурный handshake (PSK) ===
         InMemoryTlsTransport.Pair pair2 = InMemoryTlsTransport.newPair();
@@ -85,11 +88,11 @@ public final class PskResumption {
                                 serverTp2);
                 TlsSession client2 =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
+                                new TlsClientConfig(cs, TrustAnchors.ofCertificate(caBundle.cert()))
                                         .withServerHostname("localhost"),
                                 clientTp2)) {
-            server2.setPskStore(sharedStore);
-            client2.setPskStore(sharedStore);
+            server2.setPskStore(serverStore);
+            client2.setPskStore(clientStore);
 
             ExecutorService exec2 = Executors.newSingleThreadExecutor();
             try {

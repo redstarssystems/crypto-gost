@@ -1,4 +1,4 @@
-# Реализация протокола TLS 1.3 с ГОСТ алгоритмами в соответствии с RFC 9367 — crypto-gost-tls13
+# Реализация протокола TLS 1.3 с ГОСТ-алгоритмами по RFC 9367 — crypto-gost-tls13
 
 Модуль `crypto-gost-tls13` содержит реализацию **TLS 1.3** (RFC 8446 +
 RFC 9367) с ГОСТ-криптографией:
@@ -6,40 +6,52 @@ RFC 9367) с ГОСТ-криптографией:
 1.  **Протоколы:**
 
     - **Handshake**: полный (client/server), сокращённый (`PSK`),
-      взаимный (`mTLS`).
+      взаимный (`mTLS`, режимы `need`/`want`).
 
     - **ALPN (RFC 7301)** — согласование протокола прикладного уровня
       (HTTP/2, HTTP/1.1).
 
-    - **SNI (RFC 6066)** — указание имени сервера для multi-tenant
-      развёртываний.
+    - **SNI (RFC 6066)** — имя сервера в ClientHello и выбор учётных
+      данных для нескольких доменов.
 
     - **KeyUpdate (RFC 8446 §4.6.3)** — обновление ключей шифрования
       трафика.
 
-    - **Cipher suites**: `TLS_KUZNYECHIK_MGM_STREEBOG_256_L/S`.
+    - **Cipher suites**: `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L/S`
+      (`TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L/S`,
+      RFC 9367 §3.1.2).
 
-    - **ECDHE**: GC256A/B/C/D (256-bit), GC512A/B/C (512-bit) — 7
-      именованных групп по RFC 9367 §3.1
+    - **ECDHE**: GC256A/B/C/D (256 бит), GC512A/B/C (512 бит) — семь
+      именованных групп по RFC 9367 §3.1; стартовая группа задаётся, по
+      умолчанию GC256B.
 
-    - **Per-record TLSTREE re-keying** — смена ключа шифрования на
-      каждую TLS-запись.
+    - **Per-record TLSTREE re-keying** — свой ключ шифрования на каждую
+      TLS-запись.
 
-    - **Фрагментация и сборка** рукопожатий и записей (RFC 8446 §5.1).
+    - **Фрагментация и сборка** рукопожатий и записей (RFC 8446 §5.1),
+      согласование `max_fragment_length` (RFC 6066 §4).
 
-    - **Session resumption**: `PSK` через `NewSessionTicket`
-      (`InMemoryPskStore` in-memory, single-use).
+    - **Session resumption**: PSK через `NewSessionTicket`.
+      `InMemoryPskStore` на сервере расходует билет (single-use), на
+      клиенте хранит полученные.
 
-    - **OCSP stapling**: сервер прикладывает OCSP-ответ к сертификату.
+    - **OCSP stapling**: сервер прикладывает ответ к своему сертификату;
+      сервер может запросить и проверить staple клиентского сертификата
+      (`ClientOcspPolicy`).
 
-    - **Post-handshake messages**: `NewSessionTicket` (сохранение для
-      `PSK`).
+    - **Post-handshake messages**: `NewSessionTicket` и `KeyUpdate`.
 
     - **HRR (RFC 8446 §4.1.3)** — смена ECDHE-группы через
       HelloRetryRequest, включая пересчёт PSK binder для второго
       ClientHello.
 
-2.  **Криптография**:
+    - **oid\_filters (RFC 8446 §4.2.5)** — выбор клиентского сертификата
+      по OID-фильтрам.
+
+    - **Экспорт ключевого материала (RFC 8446 §7.5)** —
+      `TlsSession.exportKeyingMaterial` для привязки к каналу.
+
+2.  **Криптография:**
 
     - **Key schedule**: `HKDF-Streebog` (RFC 5869) по схеме TLS 1.3 (RFC
       8446 §7.1).
@@ -47,92 +59,281 @@ RFC 9367) с ГОСТ-криптографией:
     - **Защита записей**: `MGM-AEAD` (Kuznyechik) с nonce по RFC 8446
       §5.3.
 
-    - Эфемерные ключи затираются после использования.
+    - Эфемерные ключи и трафик-ключи затираются после использования.
 
 3.  **Сертификаты:**
 
-    - Парсинг X.509v3 (GOST R 34.10-2012) — делегирован в
-      `GostCertificate` (модуль `crypto-gost-pkix`).
+    - Разбор X.509v3 (ГОСТ Р 34.10-2012) делегирован `GostCertificate`
+      (модуль `crypto-gost-pkix`).
 
-    - Валидация цепочки: подписи, DN (issuer → subject),
-      `Basic Constraints`, `Key Usage`, `Extended Key Usage`
-      (`serverAuth` / `clientAuth`), pathLen.
+    - Проверка цепочки: подписи, DN (issuer → subject),
+      `BasicConstraints`, `KeyUsage`, `ExtendedKeyUsage` (`serverAuth` /
+      `clientAuth`), pathLen, `NameConstraints` якоря.
 
-    - Проверка hostname: dNSName + iPAddress (RFC 6125).
+    - Проверка имени: dNSName и iPAddress (RFC 6125), IDN приводится к
+      A-label.
 
-    - Верификация OCSP-ответов (RFC 6960).
+    - Проверка OCSP-ответов (RFC 6960) и возраста ответа.
 
 4.  **Транспорт:**
 
-    - `TlsTransport` — интерфейс.
+    - `TlsTransport` — интерфейс записи `[header(5) || body(length)]`.
 
-    - `InMemoryTlsTransport` — для тестов и однопроцессных сценариев
-      (in-memory очередь).
+    - `InMemoryTlsTransport` — в памяти, для тестов и связи сессий в
+      одной JVM.
 
-    - `SocketTlsTransport` — blocking I/O через `java.net.Socket`.
+    - `SocketTlsTransport` — блокирующий ввод-вывод через
+      `java.net.Socket`.
 
-    - `ChannelTlsTransport` — NIO `SocketChannel`-based transport
-      (blocking mode, interruptible).
+    - `ChannelTlsTransport` — `SocketChannel` в блокирующем режиме,
+      чтение прерывается `Thread.interrupt()`.
 
-5.  **Пошаговый handshake:**
+5.  **Пошаговое рукопожатие:**
 
-    - `TlsHandshakeEngine` — state machine для handshake (отвязан от
-      I/O). Используется `TlsSession` как оркестратор; пригоден для
-      интеграции с JSSE (`SSLEngine`).
+    - `TlsHandshakeEngine` — состояние рукопожатия без ввода-вывода;
+      `TlsSession` использует его как оркестратор, JSSE — для
+      `SSLEngine`.
 
 6.  **ByteBuffer API:**
 
-    - `TlsRecord.protect/unprotect` — ByteBuffer-перегрузки для
-      zero-copy интеграции с NIO.
+    - `TlsRecord.protect/unprotect` — перегрузки для интеграции с NIO
+      без промежуточных массивов.
 
 7.  **Загрузка ключей:**
 
-    - `GostPkcs12Loader` — чтение PFX (PKCS#12) с нативной поддержкой
-      ГОСТ PBE: PBKDF2-HMAC-Streebog + Кузнечик CTR-ACPKM (RFC
-      9337/9548) и fallback на JDK KeyStore.
+    - `GostPkcs12Loader` — чтение PFX с ГОСТ PBE (PBKDF2-HMAC-Streebog,
+      Кузнечик CTR-ACPKM, RFC 9337/9548); откат на JDK KeyStore только
+      при явном `allowJdkFallback=true`.
 
 8.  **Завершение сессии:**
 
-    - `close_notify` — корректное закрытие по протоколу.
+    - `close_notify` — закрытие по протоколу; `PeerClosedException`
+      отличает его от обрыва транспорта.
 
-    - Затирание ключевого материала при закрытии или ошибке.
+    - Затирание ключевого материала при закрытии и при ошибке.
 
-    - Обработка alert: `fatal` — немедленное закрытие + затирание.
+    - Fatal alert — немедленное закрытие и затирание.
 
 9.  **Безопасность реализации:**
 
-    - Constant-time сравнения для verify\_data и PSK binders (защита от
-      timing attacks)
+    - Сравнение verify\_data и PSK binder без раннего выхода
+      (constant-time).
 
-    - Затирание ключевого материала при close, fatal alert, exception в
-      handshake
+    - Затирание ключевого материала при close, fatal alert и ошибке
+      рукопожатия.
 
-    - Защита от DoS: лимиты на длину цепочки сертификатов (10),
-      post-handshake messages, размер записей.
+    - Пределы против исчерпания ресурсов: длина цепочки сертификатов
+      (10), служебные сообщения после рукопожатия, размер записи,
+      частота KeyUpdate от собеседника.
 
-10. **Ограничения:**
+10. **Логирование:**
 
-    - Только resumption PSK (0-RTT и external PSK не поддерживаются).
+    - `java.util.logging` под `org.rssys.gost.tls13.*`, метка соединения
+      `[conn#N]`, имена alert и наборов шифров (раздел «Логирование»).
 
-    - Только `psk_dhe_ke` (pure PSK без ECDHE не поддерживается).
+11. **Ограничения:**
 
-    - Только ГОСТ (non-GOST cipher suites не поддерживаются).
+    - Только ГОСТ-наборы; non-GOST не поддерживаются.
 
-    - `exporter_secret` (RFC 8446 §7.5) не реализован —
-      `exportKeyingMaterial()` и channel binding не поддерживаются.
+    - Только resumption PSK: 0-RTT и external PSK не поддерживаются.
 
-    Все криптографические операции выполняются встроенными средствами
-    библиотеки — без внешних зависимостей.
+    - Только `psk_dhe_ke`: ECDHE выполняется всегда, pure PSK без ECDHE
+      не поддерживается.
 
-Для работы TLS необходим транспортный уровень — реализация интерфейса
-`TlsTransport`:
+    - mTLS и PSK несовместимы: при запросе клиентского сертификата тикет
+      не выдаётся.
+
+    - Прямой путь не загружает CRL и OCSP по сети: сертификат сервера
+      проверяется по присланному staple (обязательность —
+      `withRequireOcspStapling`), клиентский — по staple и только при
+      `withClientOcspPolicy`.
+
+    - DN сравнивается побайтно: семантическая нормализация RFC 5280 §7.1
+      не реализована.
+
+    - Экспорт ключевого материала — по схеме RFC 8446 с хэшем Стрибог;
+      RFC 9367 его не определяет.
+
+    - Повторное рукопожатие в одной сессии не поддерживается.
+
+    Требования: Java 21, Android 14+. Сторонних зависимостей нет: модуль
+    опирается только на `crypto-gost-core` и `crypto-gost-pkix`.
+
+## Как читать примеры
+
+Примеры показывают приём, а не готовую программу: без `main`, объявлений
+и обработки исключений. Импорты указаны там, где пакет класса не
+угадать. Условные обозначения:
+
+<table>
+<colgroup>
+<col style="width: 28%" />
+<col style="width: 71%" />
+</colgroup>
+<tbody>
+<tr>
+<td style="text-align: left;"><p><code>cs</code></p></td>
+<td
+style="text-align: left;"><p><code>TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L</code>
+или <code>..._S</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>transport</code></p></td>
+<td style="text-align: left;"><p><code>TlsTransport</code>; в примерах с
+сокетом — <code>SocketTlsTransport</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>serverConfig</code>,
+<code>clientConfig</code></p></td>
+<td style="text-align: left;"><p><code>TlsServerConfig</code>,
+<code>TlsClientConfig</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>serverTransport</code>,
+<code>clientTransport</code></p></td>
+<td style="text-align: left;"><p>транспорты сторон одного
+соединения</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>server</code>,
+<code>client</code>, <code>session</code></p></td>
+<td style="text-align: left;"><p><code>TlsSession</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>chain</code></p></td>
+<td
+style="text-align: left;"><p><code>List&lt;GostCertificate&gt;</code>,
+лист первым, корень последним</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>key</code>,
+<code>privateKey</code></p></td>
+<td
+style="text-align: left;"><p><code>PrivateKeyParameters</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>caCert</code></p></td>
+<td style="text-align: left;"><p><code>GostCertificate</code>-якорь
+доверия</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>anchors</code></p></td>
+<td style="text-align: left;"><p><code>TrustAnchors</code> с этим
+якорем</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>password</code></p></td>
+<td style="text-align: left;"><p><code>char[]</code> из хранилища
+секретов; в примерах не литерал, затирается после использования</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>data</code></p></td>
+<td style="text-align: left;"><p><code>byte[]</code> с данными
+приложения</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>certDer</code>,
+<code>certPem</code>, <code>pfx</code></p></td>
+<td style="text-align: left;"><p>байты соответствующего файла</p></td>
+</tr>
+</tbody>
+</table>
+
+### Что выбрать
+
+<table>
+<colgroup>
+<col style="width: 30%" />
+<col style="width: 30%" />
+<col style="width: 40%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Задача</th>
+<th style="text-align: left;">Класс</th>
+<th style="text-align: left;">Чего избегать</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><p>Одно соединение, блокирующий
+ввод-вывод</p></td>
+<td style="text-align: left;"><p><code>TlsSession</code> +
+<code>SocketTlsTransport</code> или
+<code>ChannelTlsTransport</code></p></td>
+<td style="text-align: left;"><p>собирать записи вручную</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Нестандартный транспорт, свой цикл,
+JSSE</p></td>
+<td style="text-align: left;"><p><code>TlsHandshakeEngine</code> +
+<code>TlsRecord</code></p></td>
+<td style="text-align: left;"><p>ждать от <code>TlsSession</code>
+неблокирующего ввода-вывода</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Тест без сокетов</p></td>
+<td
+style="text-align: left;"><p><code>InMemoryTlsTransport.newPair()</code></p></td>
+<td style="text-align: left;"><p>запускать сервер и клиент в одном
+потоке</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Проверка сервера</p></td>
+<td style="text-align: left;"><p><code>TlsClientConfig</code> +
+<code>TrustAnchors</code> + <code>withServerHostname</code></p></td>
+<td
+style="text-align: left;"><p><code>createClientWithoutServerAuth</code>
+в боевом коде</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Несколько доменов на сервере</p></td>
+<td
+style="text-align: left;"><p><code>TlsServerConfig.withSniSelector</code></p></td>
+<td style="text-align: left;"><p>отдельный порт на каждый домен</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Возобновление по PSK</p></td>
+<td style="text-align: left;"><p><code>InMemoryPskStore</code>,
+раздельные для клиента и сервера</p></td>
+<td style="text-align: left;"><p>общее хранилище на обе стороны</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Выбор клиентского сертификата</p></td>
+<td
+style="text-align: left;"><p><code>ClientCertificateSelector</code></p></td>
+<td style="text-align: left;"><p>цепочка в конфиге при включённых
+<code>oid_filters</code></p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Хранение ключа и цепочки</p></td>
+<td
+style="text-align: left;"><p><code>GostPkcs12Loader.load(..., false)</code></p></td>
+<td style="text-align: left;"><p><code>allowJdkFallback=true</code> без
+причины</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p>Свой транспорт</p></td>
+<td style="text-align: left;"><p>реализация
+<code>TlsTransport</code></p></td>
+<td style="text-align: left;"><p>возвращать из
+<code>receiveRecord()</code> больше одной записи</p></td>
+</tr>
+</tbody>
+</table>
+
+## Транспорт
+
+TLS работает поверх готового соединения: модуль отправляет и принимает
+целые записи `[header(5) || body(length)]` через интерфейс
+`TlsTransport`.
 
     public interface TlsTransport extends AutoCloseable {
         /** Отправляет полную TLS-запись: [header(5) || body(length)]. */
         void sendRecord(byte[] record) throws IOException;
         /** Блокирующее чтение: [header(5) || body(length)]. */
         byte[] receiveRecord() throws IOException;
-        /** Zero-alloc перегрузка: читает запись напрямую в переданный ByteBuffer. */
+        /** Чтение в ByteBuffer; встроенные транспорты переопределяют без промежуточного массива. */
         default int receiveRecord(ByteBuffer dst) throws IOException {
             byte[] record = receiveRecord();
             dst.put(record);
@@ -141,744 +342,914 @@ RFC 9367) с ГОСТ-криптографией:
         void close() throws IOException;
     }
 
-Реализация `receiveRecord()` должна сначала прочитать 5-байтовый
-заголовок записи (RFC 8446 §5), извлечь длину тела из байт `[3..4]`,
-затем дочитать тело. Рекомендуется `InputStream.readNBytes()`.
+`TlsSession` транспорт не закрывает: владелец — вызывающий код. В
+try-with-resources транспорт объявляется раньше сессии, тогда закрытие
+идёт в обратном порядке: сначала сессия отправляет `close_notify`, затем
+закрывается соединение.
 
-## Создание TlsTransport для TCP
+    try (TlsTransport transport = new SocketTlsTransport(socket);
+         TlsSession session = TlsSession.createClient(clientConfig, transport)) {
+        session.handshakeAsClient();
+        session.write(data);
+    }
 
-Готовый адаптер `SocketTlsTransport` в пакете
-`org.rssys.gost.tls13.transport`:
+### Готовые реализации
+
+Сокет TCP
+
+`SocketTlsTransport` работает поверх `java.net.Socket`:
 
     import org.rssys.gost.tls13.transport.SocketTlsTransport;
     import java.net.Socket;
 
     Socket socket = new Socket("host", 443);
-    socket.setSoTimeout(5000);  // обязательно!
+    socket.setSoTimeout(5000);   // без таймаута чтение тела записи может ждать бесконечно
     TlsTransport transport = new SocketTlsTransport(socket);
 
-Реализация `receiveRecord()` использует явный цикл read loop (не
-`readFully`/`readNBytes`) и проверяет флаг закрытия на каждой итерации.
-Перед использованием обязательно установите `socket.setSoTimeout()` —
-без таймаута злоумышленник может повесить сессию навсегда.
+`receiveRecord()` читает заголовок и тело циклом и проверяет флаг
+закрытия на каждой итерации. Транспорт не потокобезопасен: один
+экземпляр на одно TLS-соединение.
 
-Для сценариев, требующих прерывания потока при блокирующем чтении
-(InterruptibleChannel), используйте `ChannelTlsTransport` (пакет
-`org.rssys.gost.tls13.transport`), который работает в блокирующем режиме
-поверх `SocketChannel` и поддерживает `Thread.interrupt()`:
+Канал NIO
+
+`ChannelTlsTransport` работает поверх `SocketChannel` в блокирующем
+режиме и прерывается `Thread.interrupt()`:
 
     import org.rssys.gost.tls13.transport.ChannelTlsTransport;
     import java.net.InetSocketAddress;
     import java.nio.channels.SocketChannel;
 
     SocketChannel channel = SocketChannel.open(new InetSocketAddress("host", 443));
-    channel.configureBlocking(true);
+    channel.configureBlocking(true);   // иначе конструктор бросит IllegalArgumentException
     TlsTransport transport = new ChannelTlsTransport(channel);
 
-Для тестов и взаимодействия в рамках одной JVM используйте
-`InMemoryTlsTransport` (пакет `org.rssys.gost.tls13.transport`):
+у `SocketChannel` нет таймаута чтения: `setSoTimeout` не действует, а
+`Selector` несовместим с обязательным блокирующим режимом. Ограничивайте
+ожидание `Thread.interrupt()`; после него канал закрыт.
+
+В памяти
+
+`InMemoryTlsTransport` соединяет сессии в одной JVM — в тестах и в
+приложениях без сокетов:
 
     import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
-    // Single-ended
+    // Одна сторона: входящие записи кладёт inject(), исходящие — в ту же очередь
     InMemoryTlsTransport transport = new InMemoryTlsTransport();
-    transport.inject(record);  // эмулировать входящую запись
+    transport.inject(record);
     byte[] recv = transport.receiveRecord();
 
-    // Двунаправленный (клиент-сервер)
+    // Пара «клиент — сервер»
     InMemoryTlsTransport.Pair pair = InMemoryTlsTransport.newPair();
     TlsTransport clientTransport = pair.getClientTransport();
     TlsTransport serverTransport = pair.getServerTransport();
 
-## Серверная сессия с цепочкой сертификатов
+Потокобезопасен; ожидание записи — до 10 с. `close()` закрывает пару
+целиком, уже поставленные записи `receiveRecord()` отдаст до
+`IOException`. `inject()` после закрытия даёт `IllegalStateException`.
 
-Сервер использует `TlsServerConfig` для конфигурации. Цепочка
-сертификатов передаётся списком: серверный сертификат (end-entity),
-затем промежуточные CA, последним — корневой CA.
+### Свой транспорт
 
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.signature.PrivateKeyParameters;
+Реализация должна вернуть из `receiveRecord()` ровно одну запись:
+5-байтовый заголовок (RFC 8446 §5), затем тело длиной из байт `[3..4]`.
+Длину больше `TlsConstants.MAX_CIPHERTEXT_LENGTH` нужно отвергать до
+чтения тела, иначе заявленный размер займёт память. Для `InputStream`
+подойдёт `readNBytes()`, но таймаут соединения обязателен: иначе
+ожидание тела может не закончиться. Перегрузка
+`receiveRecord(ByteBuffer)` сдвигает позицию `dst`; вызывающий делает
+`flip()` перед чтением. Потокобезопасность — на усмотрение реализации;
+встроенные `SocketTlsTransport` и `ChannelTlsTransport` не
+потокобезопасны.
+
+## Загрузка ключей и сертификатов
+
+Учётные данные — цепочка сертификатов (лист первым, корень последним) и
+закрытый ключ для подписи `CertificateVerify`. Сертификаты читаются из
+DER или PEM, ключ — из PKCS#8 (незашифрованного или зашифрованного
+PBES2-ГОСТ), PFX хранит ключ и цепочку вместе.
+
+Сертификаты: DER и PEM
+
     import org.rssys.gost.pkix.cert.GostCertificate;
-    import org.rssys.gost.tls13.config.TlsServerConfig;
-    import org.rssys.gost.tls13.transport.SocketTlsTransport;
-    import java.net.ServerSocket;
-    import java.nio.charset.StandardCharsets;
     import java.nio.file.Files;
-    import java.nio.file.Paths;
+    import java.nio.file.Path;
     import java.util.List;
 
-    // Загружаем сертификаты (серверный + промежуточные + корневой)
-    byte[] certDer = Files.readAllBytes(Paths.get("server.der"));
-    byte[] caDer   = Files.readAllBytes(Paths.get("intermediate.der"));
-    byte[] rootDer = Files.readAllBytes(Paths.get("root.der"));
-    byte[] keyDer  = Files.readAllBytes(Paths.get("server.key"));
+    GostCertificate cert = GostCertificate.fromPemOrDer(
+            Files.readAllBytes(Path.of("server.pem")));          // формат определяется сам
+    List<GostCertificate> chain = GostCertificate.listFromPem(
+            Files.readAllBytes(Path.of("chain.pem")));           // один или несколько блоков
 
-    List<GostCertificate> chain = List.of(
-            new GostCertificate(certDer),      // серверный (leaf)
-            new GostCertificate(caDer),        // промежуточный CA
-            new GostCertificate(rootDer));      // корневой CA (самоподписанный)
+    String certPem = cert.toPem();
+    String chainPem = GostCertificate.chainToPem(chain);
 
-    PrivateKeyParameters priv = org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(keyDer);
-    byte[] ocspDer = Files.readAllBytes(Paths.get("ocsp.der"));
+`fromPemOrDer` принимает ровно один PEM-блок; для файла с цепочкой
+служит `listFromPem`.
 
-    // Принимаем TCP-подключение
-    ServerSocket ss = new ServerSocket(8443);
-    Socket socket = ss.accept();
-    SocketTlsTransport transport = new SocketTlsTransport(socket);
+Закрытый ключ: PKCS#8
 
-    // Сервер через TlsServerConfig
-    TlsSession server = TlsSession.createServer(
-            new TlsServerConfig(
-                    TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                    chain, priv)
-                    .withOcspStaplingResponse(ocspDer), transport);  // OCSP stapling (RFC 6960)
-
-    try {
-        server.handshakeAsServer();
-
-        // Принимаем данные от клиента
-        byte[] request = server.read();
-        System.out.println("Получено: " + new String(request, StandardCharsets.UTF_8));
-
-        // Отвечаем
-        server.write("Hello from GOST TLS 1.3 server!".getBytes(StandardCharsets.UTF_8));
-    } finally {
-        server.close();
-        ss.close();
-    }
-
-Сервер не валидирует свою цепочку — она проверяется клиентом. Для
-проверки со стороны клиента передайте публичный ключ CA в конструктор
-`new TlsClientConfig(cs, caPublicKey)` (см. «Клиент с полной
-валидацией»).
-
-Для multi-tenant серверов (разные сертификаты под разные SNI)
-используйте `TlsServerConfig.withSniSelector()`:
-
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.tls13.config.TlsServerConfig;
-    import org.rssys.gost.tls13.config.TlsServerCredentials;
-
-    TlsSession server = TlsSession.createServer(
-        new TlsServerConfig(cs, defaultChain, defaultKey)
-            .withSniSelector(sni -> {
-                if ("foo.example.com".equals(sni))
-                    return new TlsServerCredentials(fooChain, fooKey, null);
-                return null; // fallback на default-сертификат
-            }), transport);
-
-Реализация `SniCertificateSelector` MUST быть thread-safe (может
-вызываться конкурентно из разных handshake-потоков). Лямбда с захватом
-локальных переменных без дополнительной синхронизации — только для
-однопоточных сценариев.
-
-## Клиентская сессия (анонимная)
-
-Анонимный клиент (без сертификата, без валидации сервера) использует
-фабрику `createClientWithoutServerAuth`.
-
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.tls13.transport.SocketTlsTransport;
-    import java.net.Socket;
-    import java.nio.charset.StandardCharsets;
-
-    Socket socket = new Socket("gost-server.example.com", 8443);
-    SocketTlsTransport transport = new SocketTlsTransport(socket);
-
-    TlsSession client = TlsSession.createClientWithoutServerAuth(
-            transport,
-            TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-            null, null);
-
-    try {
-        client.handshakeAsClient();
-        client.write("Hello from client!".getBytes(StandardCharsets.UTF_8));
-
-        byte[] response = client.read();
-        System.out.println("Ответ: " + new String(response, StandardCharsets.UTF_8));
-    } finally {
-        client.close();
-    }
-
-Для валидации сервера (проверка сертификата, hostname, OCSP) используйте
-`TlsClientConfig(cs, caPublicKey)` и фабрику
-`TlsSession.createClient(config, transport)`.
-
-Клиент с полной валидацией сертификата сервера (CA-ключ + hostname +
-OCSP):
-
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.signature.PublicKeyParameters;
-    import org.rssys.gost.pkix.cert.GostCertificate;
-    import org.rssys.gost.tls13.config.TlsClientConfig;
-    import java.net.Socket;
-    import java.nio.charset.StandardCharsets;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
-
-    // Загружаем ключ CA для проверки сертификата сервера
-    byte[] caDer = Files.readAllBytes(Paths.get("ca.der"));
-    GostCertificate caCert = new GostCertificate(caDer);
-    PublicKeyParameters caKey = caCert.getPublicKey();
-
-    TlsSession client = TlsSession.createClient(
-            new TlsClientConfig(
-                    TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                    caKey)
-                    .withServerHostname("gost.example.com")
-                    .withRequireOcspStapling(true),
-            transport);
-
-    try {
-        client.handshakeAsClient();
-        client.write("Hello!".getBytes(StandardCharsets.UTF_8));
-        byte[] response = client.read();
-    } finally {
-        client.close();
-    }
-
-Для соединений по IP-адресу или внутренних mesh-сервисов, где DNS-имя не
-используется, вместо `withServerHostname()` вызовите
-`withoutHostnameVerification()` — CA-проверка остаётся активной.
-
-Для SNI, ALPN, OCSP stapling, mTLS и выбора клиентского сертификата по
-OID-фильтрам используйте `TlsClientConfig` / `TlsServerConfig`.
-
-ALPN: клиент предлагает протоколы прикладного уровня:
-
-    TlsSession client = TlsSession.createClient(
-        new TlsClientConfig(cs, caPublicKey)
-            .withAlpnProtocols(List.of("h2", "http/1.1")), transport);
-
-Сервер настраивается через `TlsServerConfig.withAlpnProtocols()`. После
-handshake согласованный протокол доступен через
-`session.getAlpnProtocol()`.
-
-Для снижения фрагментации на каналах с малым MTU (IoT, спутниковая
-связь) клиент может запросить уменьшенный размер фрагмента через
-`session.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512)` до
-handshake. Поддерживаются значения 512, 1024, 2048, 4096 (RFC 6066 §4).
-Согласованное значение доступно через `session.getMaxFragmentLength()`.
-
-## Взаимная аутентификация узлов (mTLS)
-
-Сервер запрашивает сертификат клиента через `withCaPublicKey()` в
-`TlsServerConfig`.
-
-Клиент передаёт свой сертификат и закрытый ключ через
-`withClientCertificateChain()` (один сертификат или полная цепочка) и
-`withClientPrivateKey()`.
-
-    // Сервер (mTLS)
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.signature.PrivateKeyParameters;
-    import org.rssys.gost.signature.PublicKeyParameters;
-    import org.rssys.gost.pkix.cert.GostCertificate;
-    import org.rssys.gost.tls13.config.TlsServerConfig;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
-
-    byte[] caDer   = Files.readAllBytes(Paths.get("ca.der"));
-    byte[] certDer = Files.readAllBytes(Paths.get("server.der"));
-    byte[] keyDer  = Files.readAllBytes(Paths.get("server.key"));
-
-    PublicKeyParameters caKey    = new GostCertificate(caDer).getPublicKey();
-    PrivateKeyParameters priv    = org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(keyDer);
-    List<GostCertificate> chain  = List.of(new GostCertificate(certDer));
-
-    TlsSession server = TlsSession.createServer(
-            new TlsServerConfig(
-                    TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                    chain, priv)
-            .withCaPublicKey(caKey), transport);  // ← запрашивать сертификат клиента
-
-    try {
-        server.handshakeAsServer();
-        // После handshake сертификат клиента проверен
-        List<GostCertificate> peerCerts = server.getPeerCertificates();
-        // peerCerts.get(0) — сертификат клиента
-        byte[] data = server.read();
-    } finally {
-        server.close();
-    }
-
-    // Клиент (mTLS)
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.signature.PrivateKeyParameters;
-    import org.rssys.gost.signature.PublicKeyParameters;
-    import org.rssys.gost.pkix.cert.GostCertificate;
-    import org.rssys.gost.tls13.config.TlsClientConfig;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
-
-    byte[] caDer          = Files.readAllBytes(Paths.get("ca.der"));
-    byte[] clientCertDer  = Files.readAllBytes(Paths.get("client.der"));
-    byte[] clientKeyDer   = Files.readAllBytes(Paths.get("client.key"));
-
-    PublicKeyParameters caKey     = new GostCertificate(caDer).getPublicKey();
-    GostCertificate clientCert    = new GostCertificate(clientCertDer);
-    PrivateKeyParameters clientPriv = org.rssys.gost.jca.spec.GostDerCodec.decodePrivateKey(clientKeyDer);
-
-    TlsSession client = TlsSession.createClient(
-            new TlsClientConfig(
-                    TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L,
-                    caKey)
-            .withServerHostname("gost.example.com")  // hostname обязателен
-            .withClientCertificateChain(clientCert)
-            .withClientPrivateKey(clientPriv), transport);
-    // Альтернативы:
-    // .withoutHostnameVerification()  — CA-проверка остаётся, hostname не сверяется (IP, mesh-сервисы)
-    // createClientWithoutServerAuth() — без проверки сервера вообще (только тесты/отладка)
-
-    try {
-        client.handshakeAsClient();
-        client.write("Hello from mTLS client!".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    } finally {
-        client.close();
-    }
-
-Для цепочки из нескольких сертификатов (leaf + промежуточные CA)
-используйте
-`withClientCertificateChain(List.of(leaf, intermediate, root))`.
-
-## Выбор клиентского сертификата по OID-фильтрам (oid\_filters)
-
-Сервер может включить в `CertificateRequest` расширение `oid_filters`
-(RFC 8446 §4.2.5) — список OID-критериев для выбора подходящего
-клиентского сертификата. Типичный ГОСТ-сценарий: сервер требует
-сертификат с CertificatePolicies KC1 (`1.2.643.100.113.1`) или KC2
-(`1.2.643.100.113.2`).
-
-Сервер — передать фильтры через `withOidFilters()`:
-
-    import org.rssys.gost.tls13.config.TlsServerConfig;
-    import org.rssys.gost.tls13.config.OIDFilter;
-    import org.rssys.gost.pkix.cert.GostDerParser;
-
-    // Фильтр: клиент должен предъявить сертификат с CertificatePolicies KC1
-    // filterOid = OID расширения CertificatePolicies (2.5.29.32), filterValues = DER SEQUENCE { OID KC1 }
-    byte[] oidTlv = new byte[2 + GostDerParser.KC1_OID_BYTES.length];
-    oidTlv[0] = 0x06; // TAG_OID
-    oidTlv[1] = (byte) GostDerParser.KC1_OID_BYTES.length;
-    System.arraycopy(GostDerParser.KC1_OID_BYTES, 0, oidTlv, 2, GostDerParser.KC1_OID_BYTES.length);
-    byte[] filterValues = new byte[2 + oidTlv.length];
-    filterValues[0] = 0x30; // TAG_SEQUENCE
-    filterValues[1] = (byte) oidTlv.length;
-    System.arraycopy(oidTlv, 0, filterValues, 2, oidTlv.length);
-
-    OIDFilter kc1Filter = new OIDFilter(GostDerParser.CP_OID_BYTES, filterValues);
-
-    TlsSession server = TlsSession.createServer(
-            new TlsServerConfig(ciphersuite, chain, priv)
-                    .withCaPublicKey(caKey)
-                    .withOidFilters(List.of(kc1Filter)),
-            transport);
-    server.handshakeAsServer();
-
-Клиент — передать `ClientCertificateSelector` через
-`withClientCertificateSelector()`:
-
-    import org.rssys.gost.tls13.config.TlsClientConfig;
-    import org.rssys.gost.tls13.config.ClientCertificateSelector;
-    import org.rssys.gost.tls13.config.TlsClientCredentials;
-    import org.rssys.gost.tls13.cert.TlsCertUtils;
-
-    // Два сертификата: KC1 (clientAuth + KC1 CertificatePolicies) и обычный (clientAuth)
-    ClientCertificateSelector selector = (caDns, oidFilters) -> {
-        for (var entry : List.of(
-                Map.entry(kc1Cert, kc1Key),
-                Map.entry(simpleCert, simpleKey))) {
-            GostCertificate cert = entry.getKey();
-            boolean ok = oidFilters.stream().allMatch(f -> TlsCertUtils.matchesOidFilter(cert, f));
-            if (ok) return new TlsClientCredentials(List.of(cert), entry.getValue());
-        }
-        return null; // нет подходящего → отправляется пустой certificate_list
-    };
-
-    TlsSession client = TlsSession.createClient(
-            new TlsClientConfig(ciphersuite, caPublicKey)
-                    .withServerHostname("gost.example.com")
-                    .withClientCertificateSelector(selector),
-            transport);
-    client.handshakeAsClient();
-
-Если `selector` возвращает `null` — клиент отправляет пустой
-`certificate_list` (RFC 8446 §4.4.2). Сервер сам решает, прерывать ли
-handshake.
-
-Встроенные константы OID: `GostOids.POLICY_KC1` = `1.2.643.100.113.1`,
-`GostOids.POLICY_KC2` = `1.2.643.100.113.2`. Байтовые константы:
-`GostDerParser.KC1_OID_BYTES`, `GostDerParser.KC2_OID_BYTES`,
-`GostDerParser.CP_OID_BYTES`. Фильтр по EKU остаётся — используйте
-`GostDerParser.EKU_OID_BYTES` с `GostDerParser.CLIENT_AUTH_OID_BYTES`
-для clientAuth.
-
-## Возобновление сессии по предварительно согласованному ключу (PSK session resumption)
-
-После полного *handshake* сервер автоматически отправляет клиенту
-PSK-билет (сообщение `NewSessionTicket`) При следующем подключении
-клиент может использовать этот билет для сокращённого *handshake* — без
-*ECDHE* и проверки сертификатов. Это заменяет дорогую асимметричную
-криптографию на симметричную HMAC-операцию, что значительно ускоряет
-повторные подключения и снижает нагрузку на ЦП.
-
-Для этого сервер и клиент имеют независимые `PskStore`. Сервер сохраняет
-тикет с PSK при отправке `NewSessionTicket`, клиент — при получении:
-
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.tls13.psk.PskStore;
-    import org.rssys.gost.tls13.psk.InMemoryPskStore;
-
-    InMemoryPskStore serverStore = new InMemoryPskStore(1000); // макс. 1000 PSK-тикетов (см. PskStore javadoc)
-
-    // Сервер
-    TlsSession server1 = TlsSession.createServer(/* TlsServerConfig */, transport);
-    server1.setPskStore(serverStore);
-    server1.handshakeAsServer();
-    server1.write("ready".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    server1.close();
-
-    // клиент
-    InMemoryPskStore clientStore = new InMemoryPskStore(100);  // макс. 100 PSK-тикетов (см. PskStore javadoc)
-
-    TlsSession client1 = TlsSession.createClient(/* TlsClientConfig */, transport);
-    client1.setPskStore(clientStore);
-    client1.handshakeAsClient();
-    // read() обрабатывает NST внутри, возвращает данные сервера
-    byte[] data = client1.read();
-    client1.close();
-
-    // Второе подключение — сокращённый handshake (PSK)
-    // Клиент автоматически находит тикет в PskStore
-    TlsSession client2 = TlsSession.createClient(/* TlsClientConfig */, transport);
-    client2.setPskStore(clientStore);
-    client2.handshakeAsClient();
-    boolean resumed = client2.wasResumed(); // true — сокращённый, false — полный handshake
-    client2.write("Resumed!".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-    client2.close();
-
-    TlsSession server2 = TlsSession.createServer(/* TlsServerConfig */, transport);
-    server2.setPskStore(serverStore);
-    server2.handshakeAsServer();
-    server2.close();
-
-PSK-билеты одноразовые (RFC 8446 §8.1).  
-После успешного сокращённого рукопожатия *handshake* билет удаляется из
-`PskStore`.
-
-Если билет не подошёл или устарел, сервер автоматически выполнит обычный
-полный handshake — без ошибки.
-
-Метод `read()` обрабатывает не более 8 post-handshake сообщений за один
-вызов (`MAX_POST_HANDSHAKE`). Это защита от flood-атак: если пир шлёт 9+
-сообщений подряд, `read()` бросает
-`TlsException(ALERT_UNEXPECTED_MESSAGE)`. При необходимости обработать
-больше 8 билетов вызывайте `read()` повторно — счётчик сбрасывается.
-
-## Потоковая передача данных
-
-Методы `read()` и `write()` можно вызывать многократно — одна TLS-сессия
-поддерживает произвольное количество записей в обе стороны.
-
-### Серверный цикл обработки
-
-Сервер принимает несколько запросов от клиента, на каждый отвечает:
-
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.util.AuthenticationException;
-    import java.io.IOException;
-    import java.nio.charset.StandardCharsets;
-
-    // после handshakeAsServer()
-    while (true) {
-        try {
-            byte[] request = server.read();
-            server.write(process(request).getBytes(StandardCharsets.UTF_8));
-        } catch (IOException e) {
-            if (e.getCause() instanceof AuthenticationException) {
-                System.err.println("Ошибка целостности записи — возможна атака");
-            }
-            break;
-        }
-    }
-
-### Передача файла
-
-Клиент читает файл с диска и отправляет его частями. Сервер собирает
-части и записывает в новый файл. В примере клиент сначала передаёт длину
-файла (8 байт, `long`), затем сами данные. Такой подход надёжнее, чем
-маркер конца.
-
-    // Клиент
-    import org.rssys.gost.tls13.*;
-    import java.nio.*;
-    import java.nio.file.*;
-
-    client.handshakeAsClient();
-
-    byte[] fileBytes = Files.readAllBytes(Paths.get("data.bin"));
-
-    // Сначала длина файла
-    client.write(ByteBuffer.allocate(8).putLong(fileBytes.length).array());
-
-    // MAX_PLAINTEXT_LENGTH - 1: 1 байт резервируется под inner_type (RFC 8446 §5.2)
-    int chunkSize = TlsConstants.MAX_PLAINTEXT_LENGTH - 1; // 16383 — макс. payload одного TLS-record
-    for (int off = 0; off < fileBytes.length; off += chunkSize) {
-        int len = Math.min(chunkSize, fileBytes.length - off);
-        byte[] chunk = new byte[len];
-        System.arraycopy(fileBytes, off, chunk, 0, len);
-        client.write(chunk);
-    }
-
-    // Сервер
-    import org.rssys.gost.tls13.*;
-    import java.io.*;
-    import java.nio.*;
-    import java.nio.file.*;
-
-    server.handshakeAsServer();
-
-    // Читаем длину файла
-    byte[] lenBytes = server.read();
-    long fileLength = ByteBuffer.wrap(lenBytes).getLong();
-
-    ByteArrayOutputStream data = new ByteArrayOutputStream();
-    long totalRead = 0;
-    while (totalRead < fileLength) {
-        // read() возвращает данные из одного TLS record.
-        // Клиент может дробить данные через write() на части любого размера —
-        // сервер всё равно получит их целиком, просто вызывайте read() в цикле,
-        // пока сумма chunk.length не сравняется с fileLength.
-        // Идея в том, что TLS — потоковый протокол с гарантией доставки, поэтому куски гарантированно соберутся.
-        byte[] chunk = server.read();
-        data.write(chunk);
-        totalRead += chunk.length;
-    }
-
-    Files.write(Paths.get("received.bin"), data.toByteArray());
-
-### Обновление ключей шифрования (KeyUpdate)
-
-Для длительных сессий можно принудительно сменить трафик-ключи через
-`initiateKeyUpdate()`. Если параметр `request == true`, удалённая
-сторона также обновит свои ключи отправки:
-
-    // После передачи большого объёма данных
-    session.initiateKeyUpdate(true); // запросить встречное обновление
-    // Ключи записи/чтения обновлены; старые данные более не расшифруются
-    session.write("data after key update".getBytes(StandardCharsets.UTF_8));
-
-Старые ключи затираются немедленно — данные, зашифрованные до вызова, не
-могут быть расшифрованы после.
-
-## Обработка ошибок
-
-Методы `handshakeAsClient()`, `handshakeAsServer()`, `read()` и
-`write()` бросают `IOException`. При нарушении целостности записи
-(подмена ciphertext, неверный тег MGM) в `getCause()` находится
-исключение `AuthenticationException`. Удалённой стороне при этом
-отправляется *fatal alert* с кодом ошибки (`decrypt_error`,
-`bad_certificate` и т.д.)
-
-Когда узел штатно закрывает сессию (`close_notify`), то метод `read()`
-бросает `EOFException` — это нормальный сигнал завершения сессии. При
-получении *fatal alert* от узла выбрасывается `IOException`, а ключи
-сессии уничтожаются.
-
-Для протокольных ошибок используется `TlsException extends IOException`
-с методом `getAlertCode()`, возвращающим код алерта по RFC 8446
-(`ALERT_DECRYPT_ERROR`, `ALERT_BAD_CERTIFICATE` и т.д.).
-
-Максимальный размер TLS-записи ограничен 16640 байтами
-(`MAX_CIPHERTEXT_LENGTH`, `ALERT_RECORD_OVERFLOW`). Записи большего
-размера отклоняются с алертом — защита от OOM через поддельный заголовок
-длины.
-
-Рекомендуется оборачивать в try/catch всю сессию целиком.
-
-    import org.rssys.gost.tls13.*;
-    import org.rssys.gost.tls13.config.TlsServerConfig;
-    import org.rssys.gost.util.AuthenticationException;
-    import java.io.IOException;
-    import java.nio.charset.StandardCharsets;
-    import java.util.List;
-
-    try (TlsSession server = TlsSession.createServer(
-            new TlsServerConfig(cs, chain, priv), transport)) {
-        server.handshakeAsServer();
-        byte[] request = server.read();
-        server.write("OK".getBytes(StandardCharsets.UTF_8));
-    } catch (IOException e) {
-        if (e.getCause() instanceof AuthenticationException) {
-            System.err.println("Ошибка целостности данных");
-        } else {
-            System.err.println("Ошибка протокола: " + e.getMessage());
-        }
-    }
-
-## Потокобезопасность (Thread safety)
-
-`TlsSession` не thread-safe! Используйсте один экземпляр на одну
-TLS-сессию в одном потоке. Для параллельных соединений используйте
-отдельный `TlsSession` на каждое подключение.
-
-`InMemoryPskStore` thread-safe: его можно разделять между сессиями
-(например, для PSK resumption на сервере).
-
-`TlsTransport` — thread safety определяется реализацией. Встроенные
-транспорты (`InMemoryTlsTransport`, `SocketTlsTransport`,
-`ChannelTlsTransport`) не thread-safe.
-
-## Загрузка сертификата
-
-Серверный сертификат передаётся в формате DER (X.509 с ГОСТ R 34.10-2012
-ключом).
-
-Пример загрузки ключа из файла:
-
-    import org.rssys.gost.pkix.cert.GostCertificate;
-    import java.nio.file.Files;
-    import java.nio.file.Paths;
-
-    byte[] certDer = Files.readAllBytes(Paths.get("server.der"));
-    GostCertificate cert = new GostCertificate(certDer);
-
-    // Открытый ключ из сертификата
-    org.rssys.gost.signature.PublicKeyParameters pubKey = cert.getPublicKey();
-
-    // Проверка самоподписанного сертификата (CA = тот же ключ)
-    boolean valid = cert.verifySignature(pubKey);
-
-    // В типовом сценарии серверный сертификат проверяется по CA:
-    GostCertificate caCert = new GostCertificate(Files.readAllBytes(Paths.get("ca.der")));
-    GostCertificate serverCert = new GostCertificate(Files.readAllBytes(Paths.get("server.der")));
-    boolean serverValid = serverCert.verifySignature(caCert.getPublicKey());
-
-Пример загрузки из PKCS#12-файла — рекомендуется для production (ключ и
-цепочка в одном файле):
-
+    import org.rssys.gost.jca.spec.GostDerCodec;
+    import org.rssys.gost.pkix.cert.GostPemUtils;
     import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+    import org.rssys.gost.signature.PrivateKeyParameters;
     import java.nio.file.Files;
-    import java.nio.file.Paths;
+    import java.nio.file.Path;
+
+    // DER PrivateKeyInfo
+    PrivateKeyParameters key = GostDerCodec.decodePrivateKey(
+            Files.readAllBytes(Path.of("server.key")));
+
+    // PEM -----BEGIN PRIVATE KEY-----
+    PrivateKeyParameters fromPem = GostDerCodec.decodePrivateKey(
+            GostPemUtils.pemToDer(Files.readAllBytes(Path.of("server-key.pem"))));
+
+    // PEM -----BEGIN ENCRYPTED PRIVATE KEY----- (PBES2-ГОСТ)
+    PrivateKeyParameters decrypted = GostPkcs12Loader.decryptPrivateKey(
+            GostPemUtils.pemToDer(Files.readAllBytes(Path.of("server-key-enc.pem"))), password);
+
+PFX: ключ и цепочка вместе
+
+    import org.rssys.gost.pkix.cert.GostCertificate;
+    import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+    import org.rssys.gost.signature.PrivateKeyParameters;
+    import java.nio.file.Files;
+    import java.nio.file.Path;
+    import java.util.List;
 
     GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(
-            Files.readAllBytes(Paths.get("server.p12")), "password".toCharArray(), true);
-    PrivateKeyParameters key   = p12.getPrivateKey();
-    List<GostCertificate> chain = p12.getCertificateChain(); // leaf — первый элемент
+            Files.readAllBytes(Path.of("server.p12")), password, false);  // false: без отката на JDK KeyStore
+    PrivateKeyParameters key = p12.getPrivateKey();
+    List<GostCertificate> chain = p12.getCertificateChain();  // от листа до последнего CA в контейнере
+    List<GostCertificate> all = p12.getAllCertificates();     // все кандидаты, включая вне цепочки
+    int dropped = p12.getDroppedCertificateCount();
 
-ГОСТ PBE поддерживается нативно: PBKDF2-HMAC-Стрибог-512 + Кузнечик
-CTR-ACPKM(-OMAC) по RFC 9337/9548. Не-ГОСТ схемы — прозрачный fallback
-на JDK KeyStore.
+`allowJdkFallback=false` — только ГОСТ; `true` разрешает не-ГОСТ
+контейнеры через JDK `KeyStore` (лишний путь доверия). MAC обязателен;
+`ALLOW_MISSING` — только для legacy из доверенного источника.
+`getCertificateChain()` может не содержать корень. Пароль — `char[]`:
+загрузчик затирает свою копию, свою затрите сами.
 
-Пример создания PFX-контейнера ГОСТ — для упаковки сгенерированного
-ключа и сертификата:
+Создание PFX
 
     import org.rssys.gost.pkix.cert.GostPkcs12Builder;
     import java.nio.file.Path;
 
-    // Минимальный вариант: ключ + leaf-сертификат
     byte[] pfx = GostPkcs12Builder.create()
-            .key(privateKey)
-            .certificate(leafCert)
-            .password("changeit".toCharArray())
-            .build();
-
-    // С цепочкой CA и записью в файл
-    GostPkcs12Builder.create()
-            .key(privateKey)
+            .key(key)
             .certificate(leafCert)
             .caCertificate(intermediateCert)
             .caCertificate(rootCert)
-            .password("changeit".toCharArray())
+            .password(password)                 // char[], не литерал
             .friendlyName("server-cert")
-            .buildAndWriteTo(Path.of("server.p12")); // temp + atomic rename
+            .build();
 
-По умолчанию используются: Кузнечик CTR-ACPKM-OMAC, 2000 итераций
-PBKDF2.
+    GostPkcs12Builder.create()
+            .key(key)
+            .certificate(leafCert)
+            .password(password)
+            .buildAndWriteTo(Path.of("server.p12"));   // временный файл и атомарное переименование
 
-Для совместимости с системами без поддержки OMAC —
-`.encScheme(GostOids.KUZ_CTR_ACPKM)`. Созданный PFX читается
-`GostPkcs12Loader.load(..., true)` и проходит структурную валидацию
-OpenSSL.
+По умолчанию: Кузнечик CTR-ACPKM-OMAC, 2000 итераций PBKDF2, MAC
+HMAC-Streebog-512. Билдер проверяет, что сертификат соответствует ключу.
+`build()` затирает свою копию пароля и делает билдер непригодным для
+повторного использования; `buildAndWriteTo` делает то же и пишет файл
+атомарно. Для совместимости с системами без OMAC —
+`.encScheme(GostOids.KUZ_CTR_ACPKM)`.
 
-Для тестовой разработки можно использовать самоподписанный сертификат:
-`TlsTestHelper.createCertWithKey(params)` (класс находится в `src/test/`
-— **недоступен в production-сборке**, только для тестов).
+Выпуск сертификатов и цепочек — в README `crypto-gost-pkix` (разделы
+«Сертификаты» и «PKCS#12 — хранение ключей и сертификатов»).
+
+## Быстрый старт
+
+Сервер читает `server.p12` (ключ и цепочка), клиент проверяет сервер по
+`ca.pem`. Сервер и клиент — разные процессы: каждый пример блокируется
+на рукопожатии.
+
+Сервер
+
+    import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+    import org.rssys.gost.tls13.*;
+    import org.rssys.gost.tls13.config.TlsServerConfig;
+    import org.rssys.gost.tls13.transport.SocketTlsTransport;
+    import java.net.ServerSocket;
+    import java.net.Socket;
+    import java.nio.charset.StandardCharsets;
+    import java.nio.file.Files;
+    import java.nio.file.Path;
+    import java.util.Arrays;
+
+    byte[] pfx = Files.readAllBytes(Path.of("server.p12"));
+    // password — char[] из хранилища секретов (см. «Как читать примеры»)
+
+    GostPkcs12Loader.Result p12 = GostPkcs12Loader.load(pfx, password, false);
+    Arrays.fill(password, '\0');                         // загрузчик затирает только свою копию
+
+    try (ServerSocket listener = new ServerSocket(8443)) {
+        listener.setSoTimeout(30_000);
+        try (Socket socket = listener.accept();
+             TlsTransport transport = new SocketTlsTransport(socket);
+             TlsSession session = TlsSession.createServer(
+                     new TlsServerConfig(cs, p12.getCertificateChain(), p12.getPrivateKey()),
+                     transport)) {
+            socket.setSoTimeout(5_000);                  // до чтения записей
+            session.handshakeAsServer();
+            byte[] request = session.read();
+            session.write("Hello from GOST TLS 1.3".getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+Клиент
+
+    import org.rssys.gost.pkix.cert.GostCertificate;
+    import org.rssys.gost.pkix.cert.TrustAnchors;
+    import org.rssys.gost.tls13.*;
+    import org.rssys.gost.tls13.config.TlsClientConfig;
+    import org.rssys.gost.tls13.transport.SocketTlsTransport;
+    import java.net.Socket;
+    import java.nio.charset.StandardCharsets;
+    import java.nio.file.Files;
+    import java.nio.file.Path;
+
+    GostCertificate ca = GostCertificate.fromPemOrDer(Files.readAllBytes(Path.of("ca.pem")));
+
+    try (Socket socket = new Socket("localhost", 8443);
+         TlsTransport transport = new SocketTlsTransport(socket);
+         TlsSession session = TlsSession.createClient(
+                 new TlsClientConfig(cs, TrustAnchors.ofCertificate(ca))
+                         .withServerHostname("localhost"),   // имя должно быть в SAN сертификата
+                 transport)) {
+        socket.setSoTimeout(5_000);
+        session.handshakeAsClient();
+        session.write("GET / HTTP/1.0".getBytes(StandardCharsets.UTF_8));
+        System.out.println(new String(session.read(), StandardCharsets.UTF_8));
+    }
+
+`TrustAnchors.ofCertificate(ca)` — закреплённый сертификат-якорь:
+цепочка не строится, но срок, KeyUsage, EKU и имя проверяются. Если
+сервер прислал цепочку, передайте её через
+`TrustAnchors.ofCertificates(List.of(rootCa))`; подробности — в разделе
+«Клиент».
+
+`socket.setSoTimeout()` вызывается до
+`handshakeAsServer()`/`handshakeAsClient()`: без таймаута зависший
+собеседник остановит поток навсегда.
+
+## Сервер
+
+`TlsServerConfig` задаёт набор шифров, цепочку сертификатов и закрытый
+ключ. Цепочка — лист первым, затем промежуточные CA; корень можно не
+включать, если он есть у клиента. Сервер собственную цепочку не
+проверяет: её проверяет клиент, а сервер проверяет клиентский сертификат
+только при `needClientAuth`/`wantClientAuth` (раздел «Взаимная
+аутентификация»).
+
+    import org.rssys.gost.tls13.TlsSession;
+    import org.rssys.gost.tls13.config.TlsServerConfig;
+    import java.nio.charset.StandardCharsets;
+
+    TlsServerConfig config = new TlsServerConfig(cs, chain, key)
+            .withOcspStaplingResponse(ocspDer);   // ответ уходит, если клиент запросил staple
+
+    try (TlsSession server = TlsSession.createServer(config, transport)) {
+        server.handshakeAsServer();
+        System.out.println("SNI: " + server.getRequestedServerName());
+        server.write("Hello".getBytes(StandardCharsets.UTF_8));
+    }
+
+Набор шифров в конфигурации — предпочтение сервера: клиент предлагает
+оба ГОСТ-набора, сервер выбирает свой, если клиент его предложил, иначе
+другой из предложенных. Поэтому `server.getCipherSuite()` после
+рукопожатия может отличаться от настроенного. Non-GOST наборы не
+поддерживаются.
+
+OCSP stapling
+
+Ответ — сырой `OCSPResponse` DER. Он уходит только если клиент запросил
+`status_request`; `null` отключает stapling, пустой массив отвергается.
+Сервер ответ не проверяет (проверяет клиент). Для каждого имени из SNI
+свой staple задаётся в `TlsServerCredentials`.
+
+SNI: несколько доменов
+
+    import org.rssys.gost.tls13.config.SniCertificateSelector;
+    import org.rssys.gost.tls13.config.TlsServerConfig;
+    import org.rssys.gost.tls13.config.TlsServerCredentials;
+
+    SniCertificateSelector byName = name -> {
+        if ("foo.example.com".equals(name)) {
+            return new TlsServerCredentials(fooChain, fooKey, fooOcspDer);
+        }
+        return null;   // учётные данные по умолчанию
+    };
+
+    TlsServerConfig config = new TlsServerConfig(cs, chain, key)
+            .withSniSelector(byName);
+
+Селектор получает нормализованное имя (lowercase, без точки) только при
+наличии `server_name`; он работает внутри рукопожатия, поэтому должен
+быть потокобезопасным и неблокирующим. `null` — учётные данные по
+умолчанию. Невалидное имя (длиннее 253, пустые метки, управляющие
+символы) отвергается до селектора с `unrecognized_name`.
+
+Тикеты возобновления
+
+    TlsServerConfig config = new TlsServerConfig(cs, chain, key).withTicketsToSend(2);
+
+    TlsSession server = TlsSession.createServer(config, transport);
+    server.setPskStore(pskStore);   // до handshakeAsServer()
+    server.handshakeAsServer();
+
+`withTicketsToSend(n)` — от 1 до `TlsConstants.MAX_TICKETS_TO_SEND` (5),
+по умолчанию 1. Без `setPskStore` тикеты не выдаются; при
+`needClientAuth`/`wantClientAuth` — тоже (возобновление обошло бы
+повторную проверку клиента). Подробности — в разделе «PSK».
+
+Состояние сервера
+
+`getRequestedServerName()` — проверенное имя из SNI или `null`;
+`getCipherSuite()` — согласованный набор; `isHandshakeDone()` и
+`isClosed()` — стадии; `hasPeerCertificate()` и `getPeerCertificates()`
+заполняются только при mTLS, при PSK сертификатов нет.
+
+## Клиент
+
+Клиент проверяет сервер по доверенным якорям и имени. Без
+`withServerHostname()` (и без явного `withoutHostnameVerification()`)
+`TlsSession.createClient` бросает `IllegalArgumentException`: забытое
+имя не должно молча отключать сверку.
+
+    import org.rssys.gost.pkix.cert.GostCertificate;
+    import org.rssys.gost.pkix.cert.TrustAnchors;
+    import org.rssys.gost.tls13.TlsSession;
+    import org.rssys.gost.tls13.config.TlsClientConfig;
+    import java.nio.charset.StandardCharsets;
+    import java.nio.file.Files;
+    import java.nio.file.Path;
+
+    GostCertificate ca = GostCertificate.fromPemOrDer(Files.readAllBytes(Path.of("ca.pem")));
+
+    TlsClientConfig config = new TlsClientConfig(cs, TrustAnchors.ofCertificate(ca))
+            .withServerHostname("gost.example.com");   // SNI и сверка имени
+
+    try (TlsSession client = TlsSession.createClient(config, transport)) {
+        client.handshakeAsClient();
+        client.write("Hello".getBytes(StandardCharsets.UTF_8));
+    }
+
+`withServerHostname` задаёт и SNI, и ожидаемое имя. Unicode-имя один раз
+приводится к A-label и в этом виде уходит в SNI и сверяется с
+сертификатом; адреса с `ß`, `ς`, ZWNJ или ZWJ отвергаются как
+неоднозначные для IDNA2003. IP-литерал проверяется по `iPAddress` SAN и
+в SNI не отправляется — для соединения по адресу передавайте сам адрес,
+а не отключайте проверку имени. Имя длиннее 253 символов, с пустыми
+метками или управляющими символами отвергается
+`IllegalArgumentException`; сервер на такое имя отвечает
+`unrecognized_name`.
+
+Если сверка имени не нужна (mesh, внутренние адреса), отключите её явно:
+`withoutHostnameVerification()`. CA-проверка при этом остаётся; имя,
+заданное `withServerHostname`, по-прежнему уходит в SNI. Для отладки без
+проверки цепочки есть
+`createClientWithoutServerAuth(transport, cs, clientCertificate, clientKey)`:
+он не проверяет цепочку и имя, но сохраняет проверки срока, KU, EKU и
+OCSP листа; клиентский сертификат в нём передать можно, поэтому
+«анонимным» его называть нельзя.
+
+Якоря и срок
+
+    import org.rssys.gost.pkix.cert.AnchorExpiryPolicy;
+    import org.rssys.gost.pkix.cert.TrustAnchors;
+    import java.util.List;
+
+    TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(rootCa))
+            .withExpiryPolicy(AnchorExpiryPolicy.REJECT);   // истёкший якорь — отказ
+
+Доверие — только сертификатами: `TlsClientConfig` или
+`withTrustAnchors`. Якорь аутентифицирует `pathLen` и `NameConstraints`
+корня, даже если сервер его не прислал; цепочка строится снизу вверх,
+поэтому перевыпущенный корень и закреплённый промежуточный CA
+поддерживаются. Срок якоря при нескольких сертификатах не блокирует
+соединение (`WARN`); `AnchorExpiryPolicy.REJECT` ужесточает. Одиночный
+закреплённый сертификат проверяется как лист. DN сравнивается побайтно:
+нормализации RFC 5280 §7.1 нет.
+
+OCSP сервера
+
+Присланный staple проверяется всегда; без него рукопожатие проходит,
+пока не задан `withRequireOcspStapling(true)`. Возраст без `nextUpdate`
+— до 24 ч (`GostOids.MAX_OCSP_AGE_MS`). Предел `thisUpdate`
+настраивается только в `TlsPeerPolicy` (проверка вне сессии и JSSE).
+
+ClientHello без `supported_versions` или без TLS 1.3 сервер отвергает
+алертом `protocol_version`; ServerHello и HelloRetryRequest без
+`supported_versions` или с другой версией клиент отвергает
+(`protocol_version`, `illegal_parameter`).
 
 ## Проверка сертификата
 
-После загрузки сертификата доступны следующие методы для проверки:
+В рукопожатии `TlsSession` проверяет сертификат собеседника сам:
+цепочку, срок, `KeyUsage`, `ExtendedKeyUsage`, имя (на клиенте) и
+присланный OCSP-staple. Настройка — якоря и режим (`TlsClientConfig`,
+`needClientAuth`/`wantClientAuth`); отдельного «включить проверку» нет.
+
+- Цепочка: подпись каждого звена, `issuer -> subject` побайтно,
+  `BasicConstraints`, `keyCertSign`, `pathLen`, `NameConstraints` якоря.
+
+- Лист: срок, `KeyUsage` (если задан — нужен `digitalSignature`),
+  `ExtendedKeyUsage` (`serverAuth`/`clientAuth`, если задан), имя
+  сервера.
+
+- Отзыв: присланный staple, если он есть; обязательность —
+  `withRequireOcspStapling()` на клиенте и `withClientOcspPolicy()` на
+  сервере.
+
+Отказ приходит как `TlsException`, код — `getAlertCode()`:
+
+- `certificate_expired` (45) — истёк лист или промежуточный сертификат;
+
+- `certificate_revoked` (44) — отзыв по OCSP;
+
+- `unknown_ca` (48) — якорь не найден или корень не подписан;
+
+- `bad_certificate` (42) — подпись, KU, EKU, имя или формат.
+
+Проверка вне сессии
+
+Тот же валидатор доступен напрямую — до рукопожатия или без него:
+
+    import org.rssys.gost.tls13.cert.TlsCertificateValidator;
+    import org.rssys.gost.tls13.cert.TlsPeerPolicy;
+    import org.rssys.gost.pkix.cert.GostCertificate;
+    import org.rssys.gost.pkix.cert.TrustAnchors;
+    import java.util.List;
+
+    TlsPeerPolicy policy = TlsPeerPolicy.server("gost.example.com", anchors)
+            .requireOcspStaple(true);
+    List<GostCertificate> effective =
+            TlsCertificateValidator.validate(chain, policy);   // цепочка + лист + отзыв
+
+`TlsPeerPolicy` — та же модель доверия: `server(hostname, anchors)`,
+`client(anchors)`, явные `serverLeafOnly`/`clientLeafOnly` и
+`*WithoutHostnameVerification`. Имя обязательно;
+`maxOcspAge`/`maxThisUpdateAge` — только здесь (`TlsClientConfig` их не
+выставляет).
+
+Базовые проверки `GostCertificate`
+
+    boolean expired = cert.isExpired();                       // notBefore и notAfter
+    boolean hostnameOk = cert.verifyHostname("gost.example.com");
+    boolean ipOk = cert.verifyAddress("192.168.1.1");          // iPAddress SAN
+    boolean kuValid = cert.isKeyUsageValid();
+    boolean ekuServer = cert.isEkuValidForServer();
+    boolean isCa = cert.isCA();
+    int pathLen = cert.getPathLen();                          // -1, если не задано
+    boolean sigValid = cert.verifySignature(ca.getPublicKey());
+
+`KeyUsage`: если расширение задано, для TLS нужен `digitalSignature`
+(RFC 8446 §4.4.2.2); отсутствие расширения означает отсутствие
+ограничений. То же для `ExtendedKeyUsage`: отсутствие допускается, иначе
+нужен `serverAuth`/`clientAuth`.
+
+Подробности полей, DN, SAN и расширений — в README `crypto-gost-pkix`
+(раздел «Сертификаты»). Проверка ответа OCSP —
+`TlsCertUtils.verifyOcspResponse(cert, issuer)` и перегрузка с
+`maxOcspAgeMs`/`maxThisUpdateAge`.
+
+## Согласование параметров
+
+Набор шифров
+
+Клиент предлагает оба набора; сервер выбирает свой, если клиент его
+предложил, иначе другой. `getCipherSuite()` после рукопожатия может
+отличаться от настроенного. L и S различаются масками TLSTREE и SNMAX
+(RFC 9367 §3.1.2); `TlsCiphersuite.byId`/`byIanaName`/`values()` — для
+разбора и перечисления.
+
+Группы ECDHE и HelloRetryRequest
+
+Семь групп RFC 9367 §3.1; стартовая по умолчанию — GC256B.
+`withSelectedNamedGroup` задаёт её на клиенте и сервере. Если
+`key_share` не совпал с группой сервера, сервер отвечает
+HelloRetryRequest (лишний обмен); задайте одну группу с обеих сторон.
+Binder после HRR пересчитывается (RFC 8446 §4.2.11.2).
+
+ALPN
+
+    TlsClientConfig clientConfig = new TlsClientConfig(cs, anchors)
+            .withServerHostname("gost.example.com")
+            .withAlpnProtocols(List.of("h2", "http/1.1"));
+
+    TlsServerConfig serverConfig = new TlsServerConfig(cs, chain, key)
+            .withAlpnProtocols(List.of("http/1.1", "h2"));
+
+Сервер выбирает первый свой протокол, который предложил клиент: порядок
+сервера важнее. Без общего протокола — fatal `no_application_protocol`
+(120). Без ALPN у клиента `getAlpnProtocol()` — `null`. Имена — байты
+ISO-8859-1.
+
+max\_fragment\_length
+
+    session.setMaxFragmentLengthRequest(TlsConstants.MAX_FRAG_LEN_512);  // до handshake
+    // после рукопожатия:
+    int code = session.getMaxFragmentLength();       // 1..4 или 0
+    int bytes = TlsUtils.maxFragmentLength(code);    // 512, 1024, 2048, 4096 или 16384
+
+Коды: 1 — 512, 2 — 1024, 3 — 2048, 4 — 4096 (RFC 6066 §4); 0 — не
+запрашивать. Метод принимает код, а не байты:
+`setMaxFragmentLengthRequest(512)` молча превращается в 0. Вызывать до
+рукопожатия; после — `IllegalStateException`. Согласованный лимит
+действует и на записи рукопожатия, и после KeyUpdate. Сервер может
+ограничить исходящий фрагмент через `setMaxSendFragment(code)`; неверный
+код там тоже даёт значение по умолчанию.
+
+Interop с openssl-gost-provider
+
+    TlsServerConfig config = new TlsServerConfig(cs, chain, key)
+            .withInteropAcceptGostBaseSigScheme(true);
+
+openssl-gost-provider v3.6.0 присылает базовую схему (0x0709/0x070D)
+независимо от кривой; RFC 9367 §5 требует точного соответствия, поэтому
+по умолчанию ответ отвергается. Флаг принимает его для ключа того же
+размера — осознанное ослабление, WARNING один раз на процесс. Есть на
+обеих сторонах.
+
+## Взаимная аутентификация (mTLS)
+
+Сервер задаёт режим и якоря одним вызовом:
+
+- `needClientAuth(anchors)` — сертификат обязателен; без него клиент
+  получает `certificate_required`;
+
+- `wantClientAuth(anchors)` — сертификат запрашивается, но не
+  обязателен; предъявленный проверяется так же строго. Приложение
+  обязано проверить `session.hasPeerCertificate()`.
+
+Повторный вызов заменяет режим и якоря целиком; текущие значения —
+`getClientAuthMode()` и `getTrustAnchors()`. Без вызова mTLS выключен
+(`ClientAuth.NONE`), отдельного «выключателя» через `null` нет.
+
+    import org.rssys.gost.pkix.cert.TrustAnchors;
+    import org.rssys.gost.tls13.config.ClientOcspPolicy;
+    import org.rssys.gost.tls13.config.TlsClientConfig;
+    import org.rssys.gost.tls13.config.TlsServerConfig;
+
+    TlsServerConfig serverConfig = new TlsServerConfig(cs, chain, key)
+            .needClientAuth(TrustAnchors.ofCertificate(caCert))
+            .withClientOcspPolicy(ClientOcspPolicy.REQUIRE);
+
+    TlsClientConfig clientConfig = new TlsClientConfig(cs, TrustAnchors.ofCertificate(caCert))
+            .withServerHostname("gost.example.com")
+            .withClientCertificateChain(clientCert)      // или List.of(leaf, intermediate, root)
+            .withClientPrivateKey(clientKey)
+            .withOcspStaplingResponse(clientOcspDer);    // по запросу сервера
+
+Клиент передаёт цепочку лист-первым и ключ; при нескольких сертификатах
+— перегрузкой `withClientCertificateChain(List.of(...))`. Сервер после
+рукопожатия отдаёт проверенную цепочку: `getPeerCertificates()` (лист
+первым) и `hasPeerCertificate()`.
+
+mTLS и PSK несовместимы: при `need`/`want` тикет не выдаётся и PSK не
+принимается, иначе возобновление обошло бы проверку клиента. При PSK
+сертификатов нет, и `hasPeerCertificate()` даёт `false`.
+
+Отзыв клиентского сертификата
+
+Прямой путь не загружает CRL и OCSP по сети. По умолчанию staple не
+запрашивается, а присланный отвергается (`unsupported_extension`).
+`withClientOcspPolicy(REQUEST)` проверяет ответ, если он прислан;
+`REQUIRE` требует его (`bad_certificate`). Чужой или просроченный staple
+отвергается; политика без mTLS — `IllegalArgumentException`. CRL и
+сетевой OCSP — в JSSE.
+
+### oid\_filters: выбор клиентского сертификата
+
+Сервер может ограничить выбор расширением `oid_filters` (RFC 8446
+§4.2.5). Типичный ГОСТ-сценарий — сертификат с CertificatePolicies KC1
+(`1.2.643.100.113.1`) или KC2.
+
+    import org.rssys.gost.pkix.GostOids;
+    import org.rssys.gost.tls13.config.OIDFilter;
+    import org.rssys.gost.util.DerCodec;
+
+    // extensionOid — OID расширения без тега и длины (CertificatePolicies 2.5.29.32)
+    byte[] cpOid = {0x55, 0x1D, 0x20};
+    byte[] kc1Values = DerCodec.encodeSequence(DerCodec.encodeOid(GostOids.POLICY_KC1));
+
+    OIDFilter kc1 = new OIDFilter(cpOid, kc1Values);
+
+    TlsServerConfig serverConfig = new TlsServerConfig(cs, chain, key)
+            .needClientAuth(TrustAnchors.ofCertificate(caCert))
+            .withOidFilters(List.of(kc1));
+
+Значение фильтра — DER `extnValue`: для EKU и CertificatePolicies —
+`SEQUENCE` из OID, для KeyUsage — `BIT STRING`
+(`DerCodec.encodeBitString`). Пустое значение требует лишь наличия
+расширения; сертификат без расширения не подходит. Фабрик `OIDFilter`
+пока нет: OID расширения — байтами, значения — `DerCodec`.
+
+Клиент выбирает сертификат селектором:
 
     import org.rssys.gost.pkix.cert.GostCertificate;
+    import org.rssys.gost.tls13.cert.TlsCertUtils;
+    import org.rssys.gost.tls13.config.ClientCertificateSelector;
+    import org.rssys.gost.tls13.config.TlsClientCredentials;
+    import java.util.List;
+    import java.util.Map;
 
-    GostCertificate cert = new GostCertificate(certDer);
+    ClientCertificateSelector selector = request -> {
+        for (var entry : List.of(
+                Map.entry(kc1Cert, kc1Key),
+                Map.entry(simpleCert, simpleKey))) {
+            GostCertificate cert = entry.getKey();
+            boolean ok = request.oidFilters().stream()
+                    .allMatch(f -> TlsCertUtils.matchesOidFilter(cert, f));
+            if (ok) return new TlsClientCredentials(List.of(cert), entry.getValue());
+        }
+        return null;   // подходящего нет — уйдёт пустой certificate_list
+    };
 
-    // Срок действия (RFC 5280 §4.1.2.5)
-    boolean expired = cert.isExpired();
+    TlsClientConfig clientConfig = new TlsClientConfig(cs, TrustAnchors.ofCertificate(caCert))
+            .withServerHostname("gost.example.com")
+            .withClientCertificateSelector(selector);
 
-    // Hostname по SubjectAltName/dNSName (RFC 6125)
-    boolean hostnameOk = cert.verifyHostname("gost.example.com");   // точное совпадение
-    boolean wildcardOk = cert.verifyHostname("www.gost.example.com"); // *.gost.example.com
+Селектор вызывается на каждый `CertificateRequest` (в том числе без
+фильтров) и получает его целиком. Он единственный источник учётных
+данных: `null` — пустой `certificate_list`, цепочка из конфигурации не
+подставляется.
 
-    // IP-адрес (iPAddress в SAN, RFC 5280 §4.2.1.6)
-    boolean ipOk = cert.verifyHostname("192.168.1.1");
-    byte[][] sanIps = cert.getSanIpAddresses(); // 4 или 16 байт (IPv4/IPv6)
+## Возобновление сессии по PSK
 
-    // KeyUsage: digitalSignature обязателен для TLS (RFC 5246 §7.4.6)
-    boolean kuValid = cert.isKeyUsageValid();
+После полного рукопожатия сервер с хранилищем (`setPskStore` до
+рукопожатия) отправляет билет `NewSessionTicket`. При следующем
+подключении клиент предъявляет билет, и рукопожатие идёт без
+сертификатов и `CertificateVerify`: владение PSK подтверждает
+имитовставка. ECDHE выполняется всегда (`psk_dhe_ke`). mTLS и PSK
+несовместимы.
 
-    // ExtendedKeyUsage: serverAuth для серверного сертификата
-    boolean ekuServer = cert.isEkuValidForServer();
-    // ExtendedKeyUsage: clientAuth для клиентского сертификата (mTLS)
-    boolean ekuClient = cert.isEkuValidForClient();
+    import org.rssys.gost.tls13.psk.InMemoryPskStore;
 
-    // CA-сертификат: BasicConstraints + keyCertSign (RFC 5280 §4.2.1.9, §4.2.1.2)
-    boolean isCA = cert.isCA();
-    int pathLen = cert.getPathLen(); // -1 если не задано
-    boolean hasKeyCertSign = cert.isKeyCertSignSet();
+    InMemoryPskStore serverStore = new InMemoryPskStore(1000);
+    InMemoryPskStore clientStore = new InMemoryPskStore(100);
 
-    // Distinguished Name (RFC 5280 §4.1.2.4, §4.1.2.6)
-    // Возвращается как DER-кодированный SEQUENCE — подходит для сравнения Arrays.equals
-    byte[] issuer  = cert.getIssuerDnBytes();
-    byte[] subject = cert.getSubjectDnBytes();
-    // Проверка issuer == subject предыдущего сертификата в цепочке
-    boolean dnMatch = Arrays.equals(issuer, parentSubject);
+    // Первое подключение: сервер выдаёт билет, клиент сохраняет его при read()
+    TlsSession server = TlsSession.createServer(serverConfig, serverTransport);
+    server.setPskStore(serverStore);
+    TlsSession client = TlsSession.createClient(clientConfig, clientTransport);
+    client.setPskStore(clientStore);
+    server.write("ready".getBytes(StandardCharsets.UTF_8));
+    byte[] data = client.read();       // обрабатывает NewSessionTicket, затем отдаёт данные
 
-    // OCSP Stapling (RFC 6960): проверка ответа
-    // cert.getOcspResponse() — сырой OCSPResponse из CertificateEntry
-    // TlsCertUtils.verifyOcspResponse(cert, issuer)        — проверяет подпись, serialNumber и срок (24 ч)
-    // TlsCertUtils.verifyOcspResponse(cert, issuer, maxMs) — с настраиваемой политикой свежести
+    // Второе подключение — по билету
+    TlsSession resumed = TlsSession.createClient(clientConfig, newClientTransport);
+    resumed.setPskStore(clientStore);
+    resumed.handshakeAsClient();
+    boolean wasResumed = resumed.wasResumed();
 
-    // Проверка консистентности алгоритма (RFC 5280 §4.1.1.2)
-    boolean algOk = cert.isAlgConsistent();
+`read()` обрабатывает билет внутри: до первого `read()` клиентское
+хранилище пусто. `wasResumed()` до завершения рукопожатия бросает
+`IllegalStateException`.
 
-    // Проверка подписи сертификата (CA = издатель)
-    boolean sigValid = cert.verifySignature(caPublicKey);
+- Серверное хранилище расходует билет при предъявлении; клиентское
+  хранит полученные.
 
-## Выбор API
+- `getForResumption` берёт самый новый билет с подходящей привязкой.
 
-Для работы с TLS рекомендуется **`TlsSession`** — единая точка входа,
-которая закрывает весь цикл: рукопожатие *handshake*, шифрование
-записей, фрагментацию, закрытие сессии.
+- Без `read()` нового билета нет: старый сервер отвергнет, будет полное
+  рукопожатие.
 
-**TlsSession** подходит для большинства сценариев:
+- RFC 8446, приложение C.4, не рекомендует переиспользовать билет —
+  ограничивайте размер.
 
-- Клиент-серверное взаимодействие поверх TCP (Socket / SocketChannel).
+Билет привязан к SNI, якорям и их сроку, режиму проверки имени,
+требованию staple и набору шифров. Билет сервера A не предлагается
+серверу B. Клиентское и серверное хранилища — разные экземпляры;
+серверное — одно на одну идентичность.
 
-- Односторонняя / взаимная аутентификация, PSK resumption.
+`PskStore` не должен удерживать массив `ticket` из
+`get`/`peek`/`remove`: стек затирает его после возврата.
 
-- Одно TLS-соединение — один экземпляр `TlsSession`.
+Граница доверия: запись несёт `validUntil` — наименьший `notAfter` среди
+сертификатов, по которым сервер принят (срок якоря-корня не учитывается;
+в режиме «только leaf» — срок листа). Срок тикета не выходит за границу;
+сервер так же ограничивает `ticket_lifetime` сроком цепочки.
 
-    try (TlsSession session = TlsSession.createClient(config, transport)) {
-        session.handshakeAsClient();
-        session.write(data);
-        byte[] response = session.read();
+Кросс-валидация: OpenSSL (gostprov) и КриптоПро CSP, наборы L и S, в обе
+стороны; работает и через HelloRetryRequest (binder по RFC 8446
+§4.2.11.2).
+
+`read()` — не более 8 служебных сообщений и ограниченный бюджет записей
+(`MAX_POST_HANDSHAKE`, `MAX_POST_HANDSHAKE_RECORDS`); сверх —
+`ALERT_UNEXPECTED_MESSAGE`. Повторный `read()` сбрасывает счётчики.
+
+## Обмен данными
+
+`read()` и `write()` можно вызывать многократно. `write(data)` сам режет
+данные на записи по `maxPayload` (16383 байта), `read()` возвращает
+данные одной записи. Пустой `write()` ничего не отправляет.
+
+Серверный цикл
+
+    import org.rssys.gost.tls13.*;
+    import java.io.IOException;
+    import java.nio.charset.StandardCharsets;
+
+    while (true) {
+        try {
+            byte[] request = server.read();
+            server.write(process(request).getBytes(StandardCharsets.UTF_8));
+        } catch (PeerClosedException e) {
+            break;                                   // штатное close_notify
+        } catch (TlsException e) {
+            System.err.println("Отказ: " + TlsAlerts.forLog(e.getAlertCode()));
+            break;
+        } catch (IOException e) {
+            break;                                   // обрыв транспорта
+        }
     }
 
-**`TlsHandshakeEngine`** — это более сложная пошаговая стейт машина,
-отвязанная от I/O. Она предназначена для нестандартных сценариев:
-асинхронный транспорт, собственный selector-цикл, интеграция с JSSE
-(`SSLEngine`). `TlsSession` использует `TlsHandshakeEngine` внутри. .
+`PeerClosedException` — штатное закрытие пиром. `TlsException` —
+протокольный отказ или испорченная запись: `getAlertCode()` даёт
+`bad_record_mac`, причина — `AuthenticationException`.
+
+Передача файла
+
+Клиент отправляет длину и файл; `write()` режет сам. Сервер накапливает
+данные до `8 + длина`, поэтому границы записей не важны.
+
+    // Клиент
+    import java.nio.ByteBuffer;
+    import java.nio.file.Files;
+    import java.nio.file.Path;
+
+    byte[] file = Files.readAllBytes(Path.of("data.bin"));
+    client.write(ByteBuffer.allocate(8).putLong(file.length).array());
+    client.write(file);                              // нарезка внутри write()
+
+    // Сервер
+    import java.io.ByteArrayOutputStream;
+    import java.nio.ByteBuffer;
+    import java.nio.file.Files;
+    import java.nio.file.Path;
+    import java.util.Arrays;
+
+    ByteArrayOutputStream received = new ByteArrayOutputStream();
+    long fileLength = -1;
+    while (fileLength < 0 || received.size() < 8 + fileLength) {
+        received.write(server.read());
+        if (fileLength < 0 && received.size() >= 8) {
+            fileLength = ByteBuffer.wrap(received.toByteArray(), 0, 8).getLong();
+        }
+    }
+    byte[] all = received.toByteArray();
+    Files.write(Path.of("received.bin"), Arrays.copyOfRange(all, 8, (int) (8 + fileLength)));
+
+Пример копит файл в памяти; для больших файлов пишите в поток по мере
+чтения.
+
+Обновление ключей (KeyUpdate)
+
+    session.initiateKeyUpdate(true);   // просит собеседника тоже обновить ключи
+    session.write("data after key update".getBytes(StandardCharsets.UTF_8));
+
+Сразу меняется ключ отправки; ключ приёма — после встречного KeyUpdate,
+который обрабатывается при следующем `read()`. Повторный вызов до
+отправки объединяется с первым, запрос ответного обновления не теряется.
+Вне рукопожатия — `TlsException`.
+
+Состояние сессии
+
+- `isHandshakeDone()`, `isClosed()` — стадии;
+
+- `getCipherSuite()`, `getProtocol()` — согласованный набор и `TLSv1.3`;
+
+- `getPeerHostname()` — имя сервера у клиента,
+  `getRequestedServerName()` — SNI у сервера;
+
+- `hasPeerCertificate()`, `getPeerCertificates()` — сертификат пира при
+  mTLS;
+
+- `getAlpnProtocol()`, `getMaxFragmentLength()`, `wasResumed()`.
+
+## Экспорт ключевого материала
+
+После рукопожатия обе стороны выводят одинаковые секретные байты (RFC
+8446 §7.5) — для привязки к каналу (`tls-exporter`, RFC 9266,
+SCRAM-PLUS), EAP-TLS 1.3, NTS. Значение зависит только от этого
+рукопожатия.
+
+    import org.rssys.gost.tls13.TlsUtils;
+
+    byte[] binding = session.exportKeyingMaterial("EXPORTER-Channel-Binding", null, 32);
+    try {
+        // передать в протокол аутентификации: та же метка и контекст на другой стороне
+    } finally {
+        TlsUtils.wipeArray(binding);           // значение секретное
+    }
+
+- Метка — непустая, до 249 байт UTF-8, чувствительна к регистру; для
+  привязки берётся из реестра IANA «TLS Exporter Labels».
+
+- Контекст — до 65535 байт; `null` и пустой массив дают одно значение.
+
+- Длина — от 1 до 255 × длины хэша (8160 для Стрибога-256).
+
+- До рукопожатия и после закрытия — `IllegalStateException`: секрет
+  затирается с ключами.
+
+- При PSK значение новое; `KeyUpdate` его не меняет.
+
+RFC 9367 экспорт для ГОСТ-наборов не определяет: схема взята из RFC 8446
+с хэшем Стрибог. Сверено с OpenSSL gost-provider (`-keymatexport`) в обе
+стороны; с другими ГОСТ-реализациями не проверялось.
+
+## Ошибки и закрытие
+
+`handshakeAsClient()`, `handshakeAsServer()`, `read()` и `write()`
+бросают `IOException`.
+
+- `PeerClosedException` (наследник `EOFException`) — пир прислал
+  `close_notify`; штатное закрытие.
+
+- `TlsException` — протокольный отказ: `getAlertCode()` даёт код RFC
+  8446, `isFromPeer()` — пришёл ли alert от пира. Испорченная запись —
+  `bad_record_mac` (20); неверные `Finished`, `CertificateVerify` и PSK
+  binder — `decrypt_error` (51).
+
+- Остальной `IOException` — сбой транспорта.
+
+После ошибки, `close_notify` и fatal alert сессия непригодна: `read()` и
+`write()` дают `IllegalStateException`, `isClosed()` — `true`. Локальный
+отказ отправляет пиру fatal alert; на alert пира ответ не отправляется.
+`close()` идемпотентен и отправляет `close_notify`.
+
+Зашифрованная запись — до `MAX_CIPHERTEXT_LENGTH` (16640), открытый
+текст — до 2¹⁴ (16384); больше — `record_overflow`. Это предел против
+исчерпания памяти по поддельному заголовку.
+
+    try (TlsSession server = TlsSession.createServer(serverConfig, transport)) {
+        server.handshakeAsServer();
+        byte[] request = server.read();
+        server.write("OK".getBytes(StandardCharsets.UTF_8));
+    } catch (PeerClosedException e) {
+        // штатное закрытие пиром
+    } catch (TlsException e) {
+        System.err.println("Отказ: " + TlsAlerts.forLog(e.getAlertCode()));
+    } catch (IOException e) {
+        // обрыв транспорта
+    }
+
+## Логирование
+
+Модуль пишет в `java.util.logging` под `org.rssys.gost.tls13.*` через
+`GostLogger`; записи сессии и движка помечены `[conn#N]`. Уровни и
+настройка — в README `crypto-gost-core`, раздел «Логирование».
+
+На `DEBUG`: стадии рукопожатия, набор и группа, HRR, SNI, PSK
+(предложение, причина пропуска, выдача билета), итог рукопожатия,
+отправленные и принятые alert, KeyUpdate. Отказы по данным собеседника
+(binder, возраст билета, схемы подписи) выше `DEBUG` не поднимаются.
+
+`WARNING`: чужая привязка и просроченная запись PSK, сбой вывода PSK или
+`onTicketReceived`, включённый `interopAcceptGostBaseSigScheme`,
+неверная подпись `CertificateVerify` (серийный номер; DN — на `DEBUG`),
+непредвиденный сбой библиотеки. Ключевой материал и тикеты в журнал не
+попадают.
+
+## Потокобезопасность
+
+`TlsSession` не потокобезопасен: один экземпляр — одно соединение и один
+поток. Для параллельных соединений создавайте отдельную сессию на
+каждое.
+
+Закрытие из другого потока во время рукопожатия не поддерживается: поля
+ключевого материала не синхронизированы. Чтобы прервать зависшее
+рукопожатие, закройте транспорт (у `InMemoryTlsTransport` ждущий
+`receiveRecord()` проснётся с `IOException`), дождитесь потока-владельца
+и только затем вызовите `close()`.
+
+`InMemoryPskStore` потокобезопасен и может разделяться между сессиями.
+`TlsTransport` — по реализации: `InMemoryTlsTransport` потокобезопасен,
+`SocketTlsTransport` и `ChannelTlsTransport` — нет.
+`SniCertificateSelector` и `ClientCertificateSelector` вызываются из
+потока рукопожатия и должны быть потокобезопасными.
+
+## TlsHandshakeEngine (низкоуровневый API)
+
+`TlsHandshakeEngine` — пошаговое рукопожатие без ввода-вывода:
+`start()`, `receive(frame)`, `poll()`. `TlsSession` использует его
+внутри, JSSE — для `SSLEngine`.
+
+Вызывающий сам:
+
+- режет и собирает записи (`TlsRecord`), применяет смены ключей;
+
+- проверяет сертификат пира (`needsCertificateValidation()`,
+  `acknowledgeCertificateValidation()`);
+
+- обрабатывает сообщения после рукопожатия (`receivePostHandshake`).
+
+Для блокирующего соединения он не нужен — берите `TlsSession` (см. «Что
+выбрать»).
 
 ## Запуск тестов производительности и устойчивости
 
@@ -907,31 +1278,28 @@ throughput](doc/tls-session-stress.md).
 
 ### Смешанная нагрузка (стресс-тест)
 
-Проверка устойчивости `TlsSession` под смешанной нагрузкой: утечки
-памяти, зависания, обрывы, максимум одновременных сессий.  
+`stressTest` — 5 минут смешанной нагрузки: короткие, средние и длинные
+соединения, обрывы; следит за памятью и зависаниями. Отдельный
+`maxConcurrentSessions` ищет потолок одновременных сессий.
 
-Описание методики: [Методика измерения стабильности под смешнанной
+Методика: [Методика измерения стабильности под смешанной
 нагрузкой](doc/tls-session-stress-mixed.md).
 
-Управление длительностью и параметрами через свойства `-Dstress.*`:
-
-    # Полный прогон (5 минут)
+    # Makefile: только stressTest, 5 минут
     make test-stress-tlssession-mixed
 
-    # Быстрый прогон (1 минута)
-    make test-stress-tlssession-mixed ARGS=-Dstress.duration=1
-
-    # Прогон для вердикта об утечке (30 минут)
-    make test-stress-tlssession-mixed ARGS=-Dstress.duration=30
-
-    # Через Maven напрямую
+    # Тот же тест через Maven
     mvn test -pl crypto-gost-tls13 -am \
-      -Dtest="org.rssys.gost.tls13.stress.TlsSessionStressTest" \
+      -Dtest="org.rssys.gost.tls13.stress.TlsSessionStressTest#stressTest" \
       -Dsurefire.excludedGroups= \
       -Dsurefire.failIfNoSpecifiedTests=false \
       -Dstress.duration=5
 
-Доступные параметры:
+    # Потолок одновременных сессий
+    mvn test -pl crypto-gost-tls13 -am \
+      -Dtest="org.rssys.gost.tls13.stress.TlsSessionStressTest#maxConcurrentSessions" \
+      -Dsurefire.excludedGroups= \
+      -Dsurefire.failIfNoSpecifiedTests=false
 
 <table>
 <colgroup>
@@ -939,54 +1307,55 @@ throughput](doc/tls-session-stress.md).
 <col style="width: 16%" />
 <col style="width: 33%" />
 </colgroup>
-<tbody>
+<thead>
 <tr>
-<td style="text-align: left;"><p>Свойство</p></td>
-<td style="text-align: left;"><p>По умолч.</p></td>
-<td style="text-align: left;"><p>Описание</p></td>
+<th style="text-align: left;">Свойство</th>
+<th style="text-align: left;">По умолч.</th>
+<th style="text-align: left;">Для чего</th>
 </tr>
+</thead>
+<tbody>
 <tr>
 <td style="text-align: left;"><p><code>stress.duration</code></p></td>
 <td style="text-align: left;"><p>5</p></td>
-<td style="text-align: left;"><p>Длительность смешанной нагрузки,
+<td style="text-align: left;"><p>Длительность <code>stressTest</code>,
 минут</p></td>
 </tr>
 <tr>
 <td
 style="text-align: left;"><p><code>stress.maxSessions</code></p></td>
 <td style="text-align: left;"><p>10000</p></td>
-<td style="text-align: left;"><p>Потолок цикла в
-maxConcurrentSessions</p></td>
+<td style="text-align: left;"><p>Потолок
+<code>maxConcurrentSessions</code></p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p><code>stress.step</code></p></td>
 <td style="text-align: left;"><p>50</p></td>
-<td style="text-align: left;"><p>Шаг наращивания в
-maxConcurrentSessions</p></td>
+<td style="text-align: left;"><p>Шаг наращивания
+<code>maxConcurrentSessions</code></p></td>
 </tr>
 </tbody>
 </table>
 
 ## Кросс-валидация
 
-### PKCS#12 (PFX-контейнеры)
+### TLS 1.3
 
-Для модуля `crypto-gost-tls13` выполнена двусторонняя кросс-валидация
-формата PFX (PKCS#12) с ГОСТ-алгоритмами.
+Полное рукопожатие, возобновление по PSK, экспорт и ответные расширения
+проверяются в обе стороны. `x-validation-tests/tls13` — OpenSSL 3.6 с
+gost-provider (4 класса); `x-validation-tests/cryptopro` —
+`CryptoproTlsInteropTest` и `CryptoproTlsResumptionTest`. Методика и
+предусловия: [Кросс-валидация TLS 1.3
+ГОСТ](../x-validation-tests/tls13/doc/tls13-cross-validation.md).
 
-**OpenSSL → crypto-gost**: `GostPkcs12Loader` загружает PFX, созданный
-OpenSSL (`genpkey` → `req` → `pkcs12 -export`). Проверяется: чтение
-ключа и сертификата, соответствие публичного ключа (`Q = d×G`),
-подпись/верификация, реакция на повреждённые данные и неверный пароль.
+    mvn -Pcrossval -pl x-validation-tests/tls13 -am test -Dexec.skip=true
 
-**crypto-gost → OpenSSL**: `GostPkcs12Builder` создаёт PFX, OpenSSL
-выполняет структурную валидацию (`pkcs12 -info`). Затем PFX
-перечитывается `GostPkcs12Loader` и выполняется roundtrip sign/verify.
-Покрыты все 5 кривых ГОСТ.
+### PKCS#12
 
-Все тесты в модуле `x-validation-tests/pkcs12`. OpenSSL должен быть
-собран с [поддержкой
-ГОСТ](../x-validation-tests/doc/openssl-3.6-gost-how-to.md).
+`GostPkcs12Loader` читает контейнеры OpenSSL; `GostPkcs12Builder`
+создаёт контейнеры, которые OpenSSL валидирует, а затем перечитывает
+загрузчик. Покрыты пять наборов параметров (256 A/B/C, 512 A/B).
+Подробности — в README `crypto-gost-pkix`, раздел «Кросс-валидация».
 
     mvn -Pcrossval -pl x-validation-tests/pkcs12 -am test -Dexec.skip=true
 

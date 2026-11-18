@@ -10,7 +10,8 @@ import org.junit.jupiter.api.Test;
  * Тесты граничных значений d в конструкторе {@link PrivateKeyParameters}.
  * <p>
  * Конструктор должен reject d ≤ 0 и d ≥ n, accept 0 < d < n.
- * Отрицательные d теряют знак при toByteArray() -> нормализуются в положительные.
+ * Диапазон проверяется по исходному значению: отрицательные и слишком длинные d отвергаются,
+ * а не усекаются до rolen байт.
  */
 @DisplayName("PrivateKeyParameters: граничные значения d")
 class PrivateKeyParametersTest {
@@ -57,15 +58,52 @@ class PrivateKeyParametersTest {
     }
 
     @Test
-    @DisplayName("d = -1 -> accept (toByteArray() теряет знак, 0xFF нормализуется в 255)")
-    void testAcceptDNegativeNormalizes() {
+    @DisplayName("d = -1 -> IllegalArgumentException (знак не теряется при нормализации)")
+    void testRejectDNegative() {
         for (ECParameters p : CURVES) {
-            PrivateKeyParameters priv = new PrivateKeyParameters(BigInteger.valueOf(-1), p);
-            // -1 -> [0xFF] -> new BigInteger(1, [0xFF]) = 255
-            assertEquals(
-                    255,
-                    priv.getD().intValue(),
-                    "d=-1 после нормализации byte[] должен стать 255: " + p.n);
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> new PrivateKeyParameters(BigInteger.valueOf(-1), p),
+                    "d=-1 должен быть отвергнут, а не превращён в 255: " + p.n);
+        }
+    }
+
+    @Test
+    @DisplayName("d = 2^(8·rolen)+5 -> IllegalArgumentException (старшие байты не усекаются)")
+    void testRejectDOversizedNotTruncated() {
+        for (ECParameters p : CURVES) {
+            int rolen = (p.n.bitLength() + 7) / 8;
+            BigInteger oversized = BigInteger.ONE.shiftLeft(8 * rolen).add(BigInteger.valueOf(5));
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> new PrivateKeyParameters(oversized, p),
+                    "d длиннее rolen байт должен быть отвергнут, а не усечён до 5: " + p.n);
+        }
+    }
+
+    @Test
+    @DisplayName(
+            "маскированный I = K_M + M·2^(8n) на входе конструктора -> IllegalArgumentException")
+    void testRejectDMaskedValueFromConstructor() {
+        for (ECParameters p : CURVES) {
+            int rolen = (p.n.bitLength() + 7) / 8;
+            BigInteger km = p.n.subtract(BigInteger.TWO);
+            BigInteger mask = BigInteger.valueOf(0x1234_5678L);
+            BigInteger combined = mask.shiftLeft(8 * rolen).add(km);
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> new PrivateKeyParameters(combined, p),
+                    "значение K_M + M·2^(8n) не должно усекаться до K_M: " + p.n);
+        }
+    }
+
+    @Test
+    @DisplayName("d со старшим битом (toByteArray даёт ведущий 0x00) -> принимается без изменений")
+    void testAcceptDWithHighBitSigned() {
+        for (ECParameters p : CURVES) {
+            BigInteger d = p.n.subtract(BigInteger.ONE);
+            PrivateKeyParameters priv = new PrivateKeyParameters(d, p);
+            assertEquals(d, priv.getD(), "d = n-1 должен сохраниться без искажений: " + p.n);
             priv.destroy();
         }
     }
@@ -75,7 +113,7 @@ class PrivateKeyParametersTest {
     // ========================================================================
 
     @Test
-    @DisplayName("d = 1 -> accept, getD() == 1")
+    @DisplayName("d = 1 -> принимается, getD() == 1")
     void testAcceptDOne() {
         for (ECParameters p : CURVES) {
             PrivateKeyParameters priv = new PrivateKeyParameters(BigInteger.ONE, p);
@@ -88,7 +126,7 @@ class PrivateKeyParametersTest {
     }
 
     @Test
-    @DisplayName("d = n-1 -> accept, getD() == n-1")
+    @DisplayName("d = n-1 -> принимается, getD() == n-1")
     void testAcceptDNminus1() {
         for (ECParameters p : CURVES) {
             BigInteger d = p.n.subtract(BigInteger.ONE);
@@ -100,7 +138,7 @@ class PrivateKeyParametersTest {
     }
 
     @Test
-    @DisplayName("d = n-2 -> accept, getD() == n-2")
+    @DisplayName("d = n-2 -> принимается, getD() == n-2")
     void testAcceptDNminus2() {
         for (ECParameters p : CURVES) {
             BigInteger d = p.n.subtract(BigInteger.valueOf(2));
@@ -112,7 +150,7 @@ class PrivateKeyParametersTest {
     }
 
     @Test
-    @DisplayName("d = 2 -> accept, getD() == 2")
+    @DisplayName("d = 2 -> принимается, getD() == 2")
     void testAcceptDTwo() {
         for (ECParameters p : CURVES) {
             PrivateKeyParameters priv = new PrivateKeyParameters(BigInteger.valueOf(2), p);

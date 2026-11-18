@@ -2,7 +2,9 @@ package org.rssys.gost.pkix.cert;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -10,11 +12,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+import java.util.logging.Level;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.LogCapture;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -42,9 +47,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(ca1);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca1.cert, ca2.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     // ========================================================================
@@ -64,9 +69,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(ca1);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca1.cert, ca2.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     // ========================================================================
@@ -85,9 +90,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(intermediate);
 
         List<GostCertificate> chain = List.of(leaf.cert, intermediate.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     // ========================================================================
@@ -106,9 +111,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(ca);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -123,9 +128,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(ca);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     // ========================================================================
@@ -147,9 +152,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(caSelf);
 
         List<GostCertificate> chain = List.of(leaf.cert, caSelf.cert, intermediate.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -165,9 +170,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(ca);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, intermediate.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     // ========================================================================
@@ -177,10 +182,12 @@ class ChainValidatorTest {
     @Test
     @DisplayName("Пустая цепочка -> PkixException")
     void testEmptyChain() throws Exception {
-        var unusedKey = KeyGenerator.generateKeyPair(PARAMS).getPublic();
+        CertBundle root = createRootCa();
         assertThrows(
                 PkixException.class,
-                () -> ChainValidator.validateChain(List.of(), List.of(unusedKey)));
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(), TrustAnchors.ofCertificate(root.cert)));
     }
 
     // ========================================================================
@@ -201,12 +208,11 @@ class ChainValidatorTest {
         GostCertificate brokenLeaf = new GostCertificate(corruptedDer);
 
         List<GostCertificate> chain = List.of(brokenLeaf, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
         PkixException ex =
                 assertThrows(
-                        PkixException.class,
-                        () -> ChainValidator.validateChain(chain, trustedKeys));
+                        PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
         assertEquals(
                 PkixException.Reason.ALG_MISMATCH,
                 ex.reason(),
@@ -229,9 +235,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithUnknownCriticalExt(root);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     // ========================================================================
@@ -244,11 +250,11 @@ class ChainValidatorTest {
         CertBundle root = createRootCa();
         CertBundle leaf = createLeaf(root);
 
-        var wrongKp = KeyGenerator.generateKeyPair(PARAMS);
+        CertBundle wrongRoot = createRootCa();
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(wrongKp.getPublic());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(wrongRoot.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     // ========================================================================
@@ -267,9 +273,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -284,9 +290,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -301,9 +307,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "evil.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -318,9 +324,48 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "notexample.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    /**
+     * CA: NC permitted=example.com, leaf SAN=[host.example.com, bank.ru].
+     * Второе имя вне permitted — цепочка должна быть отклонена (RFC 5280 §4.2.1.10).
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName — любой SAN вне namespace -> REJECT")
+    void testNameConstraintsPermittedDnsRejectsAnySanOutside() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf =
+                createLeafWithSans(
+                        ca, new String[] {"host.example.com", "bank.ru"}, null, null, null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    /**
+     * Все DNS-имена SAN входят в permitted — цепочка валидна.
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName — все SAN внутри namespace -> OK")
+    void testNameConstraintsPermittedDnsAllSansInside() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf =
+                createLeafWithSans(
+                        ca, new String[] {"host.example.com", "api.example.com"}, null, null, null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -336,9 +381,34 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "bad.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    /**
+     * Default locale не должен влиять на нормализацию имён: под tr-TR
+     * toLowerCase("I") даёт "ı", из-за чего excluded-ограничение могло не сработать.
+     */
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName срабатывает под tr-TR")
+    void testNameConstraintsExcludedDnsIsLocaleIndependent() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedDns("istanbul.example"));
+        CertBundle leaf = createLeafWithSan(ca, "ISTANBUL.EXAMPLE", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 
     /**
@@ -353,9 +423,231 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "sub.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName — wildcard-SAN не обходит запрет")
+    void testNameConstraintsExcludedDnsRejectsWildcardCoveringExcludedName() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedDns("pay.example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName — регистр wildcard-SAN не обходит запрет")
+    void testNameConstraintsExcludedDnsWildcardCaseInsensitive() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedDns("pay.example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.EXAMPLE.COM", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName — wildcard вне зоны запрета разрешён")
+    void testNameConstraintsExcludedDnsAllowsWildcardOutsideExcludedSubtree() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedDns("a.pay.example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName — wildcard внутри namespace разрешён")
+    void testNameConstraintsPermittedDnsWildcardInside() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName — wildcard вне namespace отклоняется")
+    void testNameConstraintsPermittedDnsWildcardOutside() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedDns("foo.example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: wildcard в самом NC отклоняется")
+    void testNameConstraintsWildcardInConstraintRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("*.example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName с ведущей точкой — поддомен запрещён")
+    void testNameConstraintsExcludedDnsLeadingDotRejectsSubdomain() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedDns(".example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "pay.example.com", null);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName с ведущей точкой — apex разрешён")
+    void testNameConstraintsExcludedDnsLeadingDotAllowsApex() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedDns(".example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "example.com", null);
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName с ведущей точкой — apex отклоняется")
+    void testNameConstraintsPermittedDnsLeadingDotRejectsApex() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns(".example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "example.com", null);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName с ведущей точкой — поддомен разрешён")
+    void testNameConstraintsPermittedDnsLeadingDotAllowsSubdomain() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns(".example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "pay.example.com", null);
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName с ведущей точкой — wildcard внутри разрешён")
+    void testNameConstraintsPermittedDnsWildcardInsideLeadingDot() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns(".example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.example.com", null);
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted dNSName с ведущей точкой — wildcard вне отклоняется")
+    void testNameConstraintsPermittedDnsWildcardOutsideLeadingDot() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedDns(".pay.example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.example.com", null);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded dNSName с завершающей точкой нормализуется")
+    void testNameConstraintsExcludedDnsTrailingDot() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedDns("pay.example.com."));
+        CertBundle leaf = createLeafWithSan(ca, "pay.example.com", null);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded .example.com — wildcard поддомена не обходит")
+    void testNameConstraintsExcludedDnsWildcardUnderLeadingDotAncestor() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedDns(".example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.pay.example.com", null);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded .pay.example.com не пересекается с *.example.com")
+    void testNameConstraintsExcludedDnsLeadingDotNoOverlap() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedDns(".pay.example.com"));
+        CertBundle leaf = createLeafWithSan(ca, "*.example.com", null);
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
     }
 
     /**
@@ -371,9 +663,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -395,9 +687,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -428,9 +720,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -448,9 +740,37 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(caSelf, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, caSelf.cert, intermediate.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: self-issued leaf с SAN вне permitted -> отказ")
+    void testNameConstraintsSelfIssuedLeafPermittedRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf = createSelfIssuedLeaf(intermediate, "evil.com");
+
+        List<GostCertificate> chain = List.of(leaf.cert, intermediate.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: self-issued leaf с SAN в excluded -> отказ")
+    void testNameConstraintsSelfIssuedLeafExcludedRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedDns("evil.com"));
+        CertBundle leaf = createSelfIssuedLeaf(intermediate, "evil.com");
+
+        List<GostCertificate> chain = List.of(leaf.cert, intermediate.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -465,9 +785,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(subCa, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, subCa.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -480,9 +800,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(root, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -495,9 +815,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(root, "evil.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -510,9 +830,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(root);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -539,9 +859,71 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, null, "192.168.1.5");
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    /**
+     * CA: NC permitted=192.168.1.0/28, leaf SAN=[192.168.1.5, 8.8.8.8].
+     * Второй iPAddress вне permitted — цепочка должна быть отклонена.
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted iPAddress — любой SAN вне префикса -> REJECT")
+    void testNameConstraintsPermittedIpRejectsAnySanOutside() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root,
+                        buildNcPermittedIp(
+                                new byte[] {
+                                    (byte) 0xC0,
+                                    (byte) 0xA8,
+                                    0x01,
+                                    0x00,
+                                    (byte) 0xFF,
+                                    (byte) 0xFF,
+                                    (byte) 0xFF,
+                                    (byte) 0xF0
+                                }));
+        CertBundle leaf =
+                createLeafWithSans(ca, null, new String[] {"192.168.1.5", "8.8.8.8"}, null, null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    /**
+     * Все iPAddress SAN входят в permitted-префикс — цепочка валидна.
+     */
+    @Test
+    @DisplayName("NameConstraints: permitted iPAddress — все SAN внутри префикса -> OK")
+    void testNameConstraintsPermittedIpAllSansInside() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root,
+                        buildNcPermittedIp(
+                                new byte[] {
+                                    (byte) 0xC0,
+                                    (byte) 0xA8,
+                                    0x01,
+                                    0x00,
+                                    (byte) 0xFF,
+                                    (byte) 0xFF,
+                                    (byte) 0xFF,
+                                    (byte) 0xF0
+                                }));
+        CertBundle leaf =
+                createLeafWithSans(
+                        ca, null, new String[] {"192.168.1.5", "192.168.1.6"}, null, null);
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     /**
@@ -557,9 +939,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, null, null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     // ========================================================================
@@ -576,10 +958,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(
-                () -> ChainValidator.validateChain(chain, trustedKeys, GostOids.POLICY_KC1));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors, GostOids.POLICY_KC1));
     }
 
     /**
@@ -592,10 +973,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithPolicy(root, GostOids.ANY_POLICY);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(
-                () -> ChainValidator.validateChain(chain, trustedKeys, GostOids.POLICY_KC1));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors, GostOids.POLICY_KC1));
     }
 
     /**
@@ -608,14 +988,12 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC2);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
         PkixException ex =
                 assertThrows(
                         PkixException.class,
-                        () ->
-                                ChainValidator.validateChain(
-                                        chain, trustedKeys, GostOids.POLICY_KC1));
+                        () -> ChainValidator.validateChain(chain, anchors, GostOids.POLICY_KC1));
         assertEquals(
                 PkixException.Reason.POLICY_VIOLATION,
                 ex.reason(),
@@ -632,14 +1010,12 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(root);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
         PkixException ex =
                 assertThrows(
                         PkixException.class,
-                        () ->
-                                ChainValidator.validateChain(
-                                        chain, trustedKeys, GostOids.POLICY_KC1));
+                        () -> ChainValidator.validateChain(chain, anchors, GostOids.POLICY_KC1));
         assertEquals(
                 PkixException.Reason.POLICY_VIOLATION,
                 ex.reason(),
@@ -656,12 +1032,12 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
         assertDoesNotThrow(
                 () ->
                         ChainValidator.validateChain(
-                                chain, trustedKeys, GostOids.POLICY_KC1, GostOids.POLICY_KC2));
+                                chain, anchors, GostOids.POLICY_KC1, GostOids.POLICY_KC2));
     }
 
     /**
@@ -674,10 +1050,10 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithPolicy(root, GostOids.POLICY_KC1);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys, (String[]) null));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors, (String[]) null));
     }
 
     // ========================================================================
@@ -694,13 +1070,45 @@ class ChainValidatorTest {
                 GostCrlBuilder.create(root.dn).nextUpdate("21000101000000Z").sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
         List<CertRevocationData> rd =
                 Arrays.asList(
                         new CertRevocationData(null, crlDer), null); // leaf, root (не проверяется)
 
-        assertDoesNotThrow(
-                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+        assertDoesNotThrow(() -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
+    }
+
+    @Test
+    @DisplayName(
+            "validateChainWithRevocation: partial CRL не покрывает leaf -> фатальный IDP_NOT_SUPPORTED")
+    void testRevocationPartialCrlNotCoveringLeafIsFatal() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        // onlyContainsCACerts: CRL подписан УЦ, но листовой сертификат не покрывает
+        byte[] idp =
+                RawCrlTestSupport.extension(
+                        RawCrlTestSupport.OID_IDP,
+                        true,
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeTlv(0x82, new byte[] {(byte) 0xFF})));
+        byte[] crlDer =
+                RawCrlTestSupport.crl(
+                        root.priv,
+                        ECParameters.tc26a256(),
+                        root.dn,
+                        RawCrlTestSupport.crlExtensions(idp));
+
+        List<GostCertificate> chain = List.of(leaf.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+        List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(null, crlDer), null);
+
+        PkixException e =
+                assertThrows(
+                        PkixException.class,
+                        () -> ChainValidator.validateChainWithRevocation(chain, anchors, rd),
+                        "Один CRL на сертификат: не покрывающий CRL не доказывает «не отозван»");
+        assertEquals(PkixException.Reason.IDP_NOT_SUPPORTED, e.reason());
     }
 
     @Test
@@ -717,11 +1125,10 @@ class ChainValidatorTest {
                         .sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
         List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(ocspGood, null), null);
 
-        assertDoesNotThrow(
-                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+        assertDoesNotThrow(() -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
     }
 
     @Test
@@ -743,11 +1150,10 @@ class ChainValidatorTest {
                         .sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
         List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(ocspGood, crlDer), null);
 
-        assertDoesNotThrow(
-                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+        assertDoesNotThrow(() -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
     }
 
     @Test
@@ -763,12 +1169,12 @@ class ChainValidatorTest {
                         .sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
         List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(null, crlDer), null);
 
         assertThrows(
                 PkixException.class,
-                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+                () -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
     }
 
     @Test
@@ -785,13 +1191,13 @@ class ChainValidatorTest {
                         .sign(root.priv);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
         List<CertRevocationData> rd =
                 Arrays.asList(new CertRevocationData(ocspRevoked, null), null);
 
         assertThrows(
                 PkixException.class,
-                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+                () -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
     }
 
     @Test
@@ -803,15 +1209,15 @@ class ChainValidatorTest {
         byte[] crlDer =
                 GostCrlBuilder.create(root.dn).nextUpdate("21000101000000Z").sign(root.priv);
 
-        var wrongKp = KeyGenerator.generateKeyPair(PARAMS);
+        CertBundle wrongRoot = createRootCa();
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(wrongKp.getPublic());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(wrongRoot.cert);
         List<CertRevocationData> rd = Arrays.asList(new CertRevocationData(null, crlDer), null);
 
         PkixException ex =
                 assertThrows(
                         PkixException.class,
-                        () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+                        () -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
         assertEquals(
                 PkixException.Reason.ROOT_NOT_SIGNED,
                 ex.reason(),
@@ -825,11 +1231,10 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(root);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
         List<CertRevocationData> rd = Arrays.asList(null, null);
 
-        assertDoesNotThrow(
-                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+        assertDoesNotThrow(() -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
     }
 
     @Test
@@ -839,12 +1244,11 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(root);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
         List<CertRevocationData> rd =
                 new ArrayList<>(Collections.nCopies(chain.size(), (CertRevocationData) null));
 
-        assertDoesNotThrow(
-                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+        assertDoesNotThrow(() -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
     }
 
     @Test
@@ -855,12 +1259,12 @@ class ChainValidatorTest {
         CertBundle leaf = createLeaf(root);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
         List<CertRevocationData> rd = List.of(); // пустой список при chain.size()=2
 
         assertThrows(
                 IllegalArgumentException.class,
-                () -> ChainValidator.validateChainWithRevocation(chain, trustedKeys, rd));
+                () -> ChainValidator.validateChainWithRevocation(chain, anchors, rd));
     }
 
     // ========================================================================
@@ -877,9 +1281,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithRfc822(ca, "user@example.com");
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     @Test
@@ -892,9 +1296,128 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithRfc822(ca, "user@evil.com");
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted rfc822Name — любой адрес вне permitted -> REJECT")
+    void testNcPermittedRfc822RejectsAnyNameOutside() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedRfc822("example.com"));
+        CertBundle leaf = createLeafWithRfc822(ca, "user@example.com", "user@bank.ru");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded rfc822Name — wildcard-домен не обходит запрет")
+    void testNcExcludedRfc822RejectsWildcardCoveringExcludedDomain() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedRfc822("pay.example.com"));
+        CertBundle leaf = createLeafWithRfc822(ca, "user@*.example.com");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName(
+            "NameConstraints: excluded rfc822 с ведущей точкой — поддомен запрещён, apex разрешён")
+    void testNcExcludedRfc822LeadingDot() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExcludedRfc822(".example.com"));
+        CertBundle sub = createLeafWithRfc822(ca, "u@pay.example.com");
+        CertBundle apex = createLeafWithRfc822(ca, "u@example.com");
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(sub.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(apex.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted rfc822 bare — только сам хост, не поддомены")
+    void testNcPermittedRfc822BareHostOnly() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedRfc822("example.com"));
+        CertBundle apex = createLeafWithRfc822(ca, "u@example.com");
+        CertBundle sub = createLeafWithRfc822(ca, "u@pay.example.com");
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(apex.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(sub.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: excluded rfc822 bare — поддомен разрешён, apex запрещён")
+    void testNcExcludedRfc822BareHostOnly() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedRfc822("example.com"));
+        CertBundle sub = createLeafWithRfc822(ca, "u@pay.example.com");
+        CertBundle apex = createLeafWithRfc822(ca, "u@example.com");
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(sub.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(apex.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: rfc822 SAN без @ или с пустым доменом отклоняется")
+    void testNcRfc822InvalidMailboxFormRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedRfc822("example.com"));
+        CertBundle noAt = createLeafWithRfc822(ca, "user");
+        CertBundle emptyDomain = createLeafWithRfc822(ca, "user@");
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(noAt.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(emptyDomain.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
     }
 
     @Test
@@ -905,22 +1428,165 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithUpn(ca, "user@domain.ru");
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     @Test
-    @DisplayName("NameConstraints: otherName + leaf без otherName — WARNING (безопасно)")
+    @DisplayName(
+            "NameConstraints: otherName + leaf без otherName -> принят, запись только на DEBUG")
     void testNcOtherNameLeafNoOtherName() throws Exception {
         CertBundle root = createRootCa();
         CertBundle ca = createIntermediateCaWithNameConstraints(root, buildNcWithOtherName());
         CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        try (LogCapture log = LogCapture.start(LogCapture.PKIX)) {
+            assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+
+            // Ограничение на форму, которой в сертификате нет, не применяется: это штатный
+            // исход, оператору вмешиваться не нужно
+            assertEquals(
+                    List.of(),
+                    log.messagesAtOrAbove(Level.WARNING),
+                    "неприменимое ограничение не должно давать WARNING");
+            assertTrue(
+                    log.messages(Level.FINE).stream()
+                            .anyMatch(m -> m.contains("constraints not applicable")),
+                    "причина должна быть видна на DEBUG: " + log.messages(Level.FINE));
+        }
+    }
+
+    @Test
+    @DisplayName("Отзыв: данных нет у двух сертификатов -> одна запись WARNING и две DEBUG")
+    void testMissingRevocationDataIsWarnedOncePerValidation() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithDn(root, "CN=Int", "20240101000000Z", "21060101000000Z");
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+        List<CertRevocationData> noData = Arrays.asList(null, null, null);
+
+        try (LogCapture log = LogCapture.start(LogCapture.PKIX)) {
+            assertDoesNotThrow(
+                    () -> ChainValidator.validateChainWithRevocation(chain, anchors, noData));
+
+            List<String> warnings = log.messagesAtOrAbove(Level.WARNING);
+            assertEquals(
+                    1, warnings.size(), "одна запись на проверку, а не на сертификат: " + warnings);
+            assertTrue(
+                    warnings.get(0).contains("Revocation not checked for 2 of 2"),
+                    "число пропущенных и всего: " + warnings.get(0));
+            assertTrue(
+                    warnings.get(0).contains(leaf.cert.getSerialNumberBigInt().toString(16)),
+                    "серийный номер листа: " + warnings.get(0));
+            assertEquals(
+                    2,
+                    log.messages(Level.FINE).stream()
+                            .filter(m -> m.contains("No revocation data"))
+                            .count(),
+                    "по сертификату запись на DEBUG");
+        }
+    }
+
+    @Test
+    @DisplayName("NameConstraints: registeredID + leaf с registeredID в SAN -> отказ")
+    void testNcRegisteredIdLeafHasRegisteredId() throws Exception {
+        assertNcFormChain(
+                buildNcWithForm(TAG_REGISTERED_ID, new byte[] {0x2B, 0x06, 0x01}),
+                TAG_REGISTERED_ID,
+                new byte[] {0x2B, 0x06, 0x01, 0x04},
+                false);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: x400Address + leaf с x400Address в SAN -> отказ")
+    void testNcX400LeafHasX400() throws Exception {
+        assertNcFormChain(
+                buildNcWithForm(TAG_X400, new byte[] {0x30, 0x00}),
+                TAG_X400,
+                new byte[] {0x30, 0x00},
+                false);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: ediPartyName + leaf с ediPartyName в SAN -> отказ")
+    void testNcEdiLeafHasEdi() throws Exception {
+        assertNcFormChain(
+                buildNcWithForm(TAG_EDI, new byte[] {0x30, 0x00}),
+                TAG_EDI,
+                new byte[] {(byte) 0xA1, 0x00},
+                false);
+    }
+
+    @Test
+    @DisplayName(
+            "NameConstraints: registeredID + leaf с x400Address в SAN -> принят (формы разные)")
+    void testNcRegisteredIdLeafHasX400Accepted() throws Exception {
+        assertNcFormChain(
+                buildNcWithForm(TAG_REGISTERED_ID, new byte[] {0x2B, 0x06, 0x01}),
+                TAG_X400,
+                new byte[] {0x30, 0x00},
+                true);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: registeredID + leaf с otherName в SAN -> принят (формы разные)")
+    void testNcRegisteredIdLeafHasOtherNameAccepted() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcWithForm(TAG_REGISTERED_ID, new byte[] {0x2B, 0x06, 0x01}));
+        CertBundle leaf = createLeafWithUpn(ca, "user@domain.ru");
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "ограничение registeredID не относится к otherName");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: неподдерживаемая форма + leaf без таких имён -> принят")
+    void testNcUnsupportedFormLeafWithoutSuchNamesAccepted() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcWithForm(TAG_REGISTERED_ID, new byte[] {0x2B, 0x06, 0x01}));
+        CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "ограничение неприменимо, если в SAN нет имён этой формы");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: registeredID в IssuerAltName не влияет на проверку")
+    void testNcRegisteredIdInIanIgnored() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcWithForm(TAG_REGISTERED_ID, new byte[] {0x2B, 0x06, 0x01}));
+        byte[] ianValue =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeTlv(TAG_REGISTERED_ID, new byte[] {0x2B, 6, 1}));
+        byte[] ianExt = buildNcExtension(new byte[] {0x55, 0x1D, 0x12}, false, ianValue);
+        CertBundle leaf = createLeafWithRawExtensions(ca, ianExt);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "NameConstraints применяются к SAN, а не к IAN");
     }
 
     @Test
@@ -931,9 +1597,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithRfc822(subCa, "user@example.com");
 
         List<GostCertificate> chain = List.of(leaf.cert, subCa.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     @Test
@@ -947,9 +1613,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithRfc822(ca, "admin@example.com");
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
     }
 
     @Test
@@ -963,9 +1629,9 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithSan(ca, "host.example.com", null);
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
     }
 
     @Test
@@ -979,11 +1645,10 @@ class ChainValidatorTest {
 
         List<GostCertificate> chainMatch = List.of(leafMatch.cert, ca.cert, root.cert);
         List<GostCertificate> chainExact = List.of(leafExact.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chainMatch, trustedKeys));
-        assertThrows(
-                PkixException.class, () -> ChainValidator.validateChain(chainExact, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chainMatch, anchors));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chainExact, anchors));
     }
 
     @Test
@@ -997,11 +1662,144 @@ class ChainValidatorTest {
 
         List<GostCertificate> chainMatch = List.of(leafMatch.cert, ca.cert, root.cert);
         List<GostCertificate> chainSub = List.of(leafSub.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertDoesNotThrow(() -> ChainValidator.validateChain(chainMatch, trustedKeys));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chainMatch, anchors));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chainSub, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: завершающая точка в URI-хосте не обходит excluded")
+    void testNcUriTrailingDotDoesNotEscapeExcluded() throws Exception {
+        CertBundle root = createRootCa();
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        for (String constraint : new String[] {".evil.com", "evil.com"}) {
+            CertBundle ca =
+                    createIntermediateCaWithNameConstraints(root, buildNcExcludedUri(constraint));
+            String host = constraint.startsWith(".") ? "a.evil.com." : "evil.com.";
+            CertBundle leaf = createLeafWithUri(ca, "https://" + host + "/path");
+            List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+            assertThrows(
+                    PkixException.class,
+                    () -> ChainValidator.validateChain(chain, anchors),
+                    "Хост с завершающей точкой должен попадать под запрет " + constraint);
+        }
+    }
+
+    @Test
+    @DisplayName("NameConstraints: завершающая точка в URI-хосте не мешает permitted")
+    void testNcUriTrailingDotStillPermitted() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedUri(".example.com"));
+        CertBundle leaf = createLeafWithUri(ca, "https://a.example.com./path");
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChain(chain, TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: регистр хоста и ограничения в URI не имеет значения")
+    void testNcUriCaseInsensitive() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedUri(".Evil.COM"));
+        CertBundle leaf = createLeafWithUri(ca, "https://A.EVIL.com/path");
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+
         assertThrows(
-                PkixException.class, () -> ChainValidator.validateChain(chainSub, trustedKeys));
+                PkixException.class,
+                () -> ChainValidator.validateChain(chain, TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: URI-хост с пустой меткой отвергается, а не сравнивается")
+    void testNcUriEmptyLabelHostRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedUri(".other.org"));
+        CertBundle leaf = createLeafWithUri(ca, "https://evil.com../path");
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+
+        assertThrows(
+                PkixException.class,
+                () -> ChainValidator.validateChain(chain, TrustAnchors.ofCertificate(root.cert)),
+                "Две точки подряд - это пустая метка, имя не нормализуется");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: SAN 10.0.0.1 попадает под excluded ::ffff:10.0.0.0/120")
+    void testNcExcludedMappedConstraintCatchesIpv4San() throws Exception {
+        CertBundle root = createRootCa();
+        byte[] mappedConstraint = new byte[32];
+        mappedConstraint[10] = (byte) 0xFF;
+        mappedConstraint[11] = (byte) 0xFF;
+        mappedConstraint[12] = 10;
+        // маска /120: первые 15 байт 0xFF, последний 0x00
+        java.util.Arrays.fill(mappedConstraint, 16, 31, (byte) 0xFF);
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedIp(mappedConstraint));
+        CertBundle leaf = createLeafWithSan(ca, null, "10.0.0.1");
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+
+        assertThrows(
+                PkixException.class,
+                () -> ChainValidator.validateChain(chain, TrustAnchors.ofCertificate(root.cert)),
+                "IPv4-адрес в mapped-ограничении не должен обходить запрет");
+    }
+
+    @Test
+    @DisplayName("isIpInExcludedSubtrees: обе формы адреса против ограничений обоих семейств")
+    void testExcludedIpBothFormsAgainstBothFamilies() {
+        byte[] ipv4 = {10, 0, 0, 1};
+        byte[] mapped = new byte[16];
+        mapped[10] = (byte) 0xFF;
+        mapped[11] = (byte) 0xFF;
+        System.arraycopy(ipv4, 0, mapped, 12, 4);
+        byte[] outsideMapped = mapped.clone();
+        outsideMapped[12] = 11;
+
+        byte[] v4Constraint = {10, 0, 0, 0, (byte) 0xFF, 0, 0, 0};
+        byte[] mappedConstraint = new byte[32];
+        mappedConstraint[10] = (byte) 0xFF;
+        mappedConstraint[11] = (byte) 0xFF;
+        mappedConstraint[12] = 10;
+        java.util.Arrays.fill(mappedConstraint, 16, 31, (byte) 0xFF);
+        // ::/80: покрывает адреса, у которых первые 80 бит нулевые, в том числе mapped
+        byte[] wideConstraint = new byte[32];
+        java.util.Arrays.fill(wideConstraint, 16, 26, (byte) 0xFF);
+
+        assertTrue(
+                ChainValidator.isIpInExcludedSubtrees(mapped, new byte[][] {v4Constraint}),
+                "mapped SAN под IPv4-запретом 10.0.0.0/8");
+        assertTrue(
+                ChainValidator.isIpInExcludedSubtrees(ipv4, new byte[][] {mappedConstraint}),
+                "IPv4 SAN под mapped-запретом");
+        assertTrue(
+                ChainValidator.isIpInExcludedSubtrees(ipv4, new byte[][] {wideConstraint}),
+                "IPv4 SAN под запретом ::/80 (маска не доходит до границы IPv4)");
+        assertFalse(
+                ChainValidator.isIpInExcludedSubtrees(outsideMapped, new byte[][] {v4Constraint}),
+                "mapped SAN вне запрета не должен попадать");
+        assertFalse(
+                ChainValidator.isIpInExcludedSubtrees(new byte[16], new byte[][] {v4Constraint}),
+                "не mapped IPv6 не пересчитывается в IPv4");
+    }
+
+    @Test
+    @DisplayName("isIpInSubtrees (permitted): адрес другой формы не принимается, fail-closed")
+    void testPermittedIpDoesNotMixFamilies() {
+        byte[] mapped = new byte[16];
+        mapped[10] = (byte) 0xFF;
+        mapped[11] = (byte) 0xFF;
+        mapped[12] = 10;
+        byte[] v4Constraint = {10, 0, 0, 0, (byte) 0xFF, 0, 0, 0};
+
+        assertFalse(
+                ChainValidator.isIpInSubtrees(mapped, new byte[][] {v4Constraint}),
+                "под permitted mapped SAN не принимается IPv4-ограничением");
     }
 
     @Test
@@ -1013,9 +1811,1141 @@ class ChainValidatorTest {
         CertBundle leaf = createLeafWithUri(ca, "https://1.2.3.4/path");
 
         List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
-        List<PublicKeyParameters> trustedKeys = List.of(root.cert.getPublicKey());
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
 
-        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, trustedKeys));
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName(
+            "NameConstraints: IPv4 с ведущими нулями в URI-хосте отвергается как IP-хост, а не"
+                    + " проходит как DNS-имя")
+    void testNcUriLeadingZeroIpv4RejectedAsIpHost() throws Exception {
+        CertBundle root = createRootCa();
+        // Под excluded-ограничением неподходящее DNS-имя прошло бы; IP-хост обязан отвергаться
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedUri("example.com"));
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        // Строгий IPv4-детектор не считает такие хосты адресом (ведущий ноль), но java.net.URI
+        // разбирает их как IPv4: отказ обязан сохраниться через предикат числовых форм.
+        for (String host : new String[] {"1.2.3.4", "0177.0.0.1", "09.0.0.1", "00.0.0.0"}) {
+            CertBundle leaf = createLeafWithUri(ca, "https://" + host + "/path");
+            List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+            PkixException ex =
+                    assertThrows(
+                            PkixException.class,
+                            () -> ChainValidator.validateChain(chain, anchors),
+                            "IPv4-хост " + host + " обязан отвергаться");
+            assertTrue(
+                    ex.getMessage().contains("IP address as host"),
+                    "отказ именно как IP-хост, а не по другой причине: " + ex.getMessage());
+        }
+    }
+
+    @Test
+    @DisplayName("NameConstraints: числовые формы IPv4, которые URI не считает хостом, отвергаются")
+    void testNcUriNumericIpv4FormsReject() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedUri("example.com"));
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        for (String host : new String[] {"2130706433", "127.1", "0x7f000001"}) {
+            CertBundle leaf = createLeafWithUri(ca, "https://" + host + "/path");
+            List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+            assertThrows(
+                    PkixException.class,
+                    () -> ChainValidator.validateChain(chain, anchors),
+                    "числовая форма IPv4 " + host + " обязана отвергаться");
+        }
+    }
+
+    @Test
+    @DisplayName("NameConstraints: permitted URI — любой URI вне permitted -> REJECT")
+    void testNcPermittedUriRejectsAnyNameOutside() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedUri("example.com"));
+        CertBundle leaf = createLeafWithUri(ca, "https://example.com/ok", "https://bank.ru/bad");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("NameConstraints: URI wildcard-SAN под URI-NC — fail-closed")
+    void testNcUriWildcardSanFailClosed() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedUri("example.com"));
+        CertBundle leaf = createLeafWithUri(ca, "https://*.example.com/path");
+
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertThrows(PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName(
+            "NameConstraints: excluded URI с ведущей точкой — поддомен запрещён, apex разрешён")
+    void testNcExcludedUriLeadingDot() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcExcludedUri(".example.com"));
+        CertBundle sub = createLeafWithUri(ca, "https://pay.example.com/");
+        CertBundle apex = createLeafWithUri(ca, "https://example.com/");
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(sub.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(apex.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    // ========================================================================
+    // Якорь доверия и обход basicConstraints
+    // ========================================================================
+
+    @Test
+    @DisplayName("basicConstraints: не-CA верхний сертификат, подписанный якорем, -> NOT_CA")
+    void testNonCaTopCertificateSignedByAnchorRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle attackerEe = createLeaf(root);
+        CertBundle forgedLeaf = createLeafWithSan(attackerEe, "bank.example.com", null);
+
+        List<GostCertificate> chain = List.of(forgedLeaf.cert, attackerEe.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+        assertEquals(PkixException.Reason.NOT_CA, ex.reason());
+    }
+
+    @Test
+    @DisplayName("basicConstraints: верхний CA без keyCertSign -> MISSING_KEY_CERT_SIGN")
+    void testTopCaWithoutKeyCertSignRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle caWithoutKeyCertSign = createCaWithoutKeyCertSign(root);
+        CertBundle leaf = createLeaf(caWithoutKeyCertSign);
+
+        List<GostCertificate> chain = List.of(leaf.cert, caWithoutKeyCertSign.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+        assertEquals(PkixException.Reason.MISSING_KEY_CERT_SIGN, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Якорь: одиночный leaf, выпущенный якорем, -> успех")
+    void testSingleLeafIssuedByAnchorAccepted() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle leaf = createLeaf(root);
+
+        List<GostCertificate> chain = List.of(leaf.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("Якорь: self-signed якорь как единственный сертификат -> успех")
+    void testSingleSelfSignedAnchorAccepted() throws Exception {
+        CertBundle root = createRootCa();
+
+        List<GostCertificate> chain = List.of(root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName(
+            "Якорь: поддельный якорь с ключом доверенного CA и чужой подписью -> ROOT_NOT_SIGNED")
+    void testFakeAnchorWithTrustedKeyAndForeignSignatureRejected() throws Exception {
+        CertBundle root = createRootCa();
+        var attackerKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] attackerDn = GostDnParser.encodeDn("CN=Attacker");
+        GostCertificate fakeAnchor =
+                createFakeAnchorWithTrustedKey(root.pub, attackerKp.getPrivate(), attackerDn);
+
+        List<GostCertificate> chain = List.of(fakeAnchor);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class, () -> ChainValidator.validateChain(chain, anchors));
+        assertEquals(PkixException.Reason.ROOT_NOT_SIGNED, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Якорь: закреплённый промежуточный CA, подписанный внешним корнем, -> успех")
+    void testPinnedIntermediateAnchorAccepted() throws Exception {
+        CertBundle externalRoot = createRootCa();
+        CertBundle pinnedIntermediate = createIntermediateCa(externalRoot, null);
+        CertBundle leaf = createLeaf(pinnedIntermediate);
+
+        List<GostCertificate> chain = List.of(leaf.cert, pinnedIntermediate.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(pinnedIntermediate.cert);
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("Якорь: сертификаты выше закреплённого якоря игнорируются -> успех")
+    void testChainAbovePinnedAnchorIgnored() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle pinnedIntermediate = createIntermediateCa(root, null);
+        CertBundle leaf = createLeaf(pinnedIntermediate);
+
+        List<GostCertificate> chain = List.of(leaf.cert, pinnedIntermediate.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(pinnedIntermediate.cert);
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, anchors));
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: NameConstraints корня проверяются при опущенном корне")
+    void testCertAnchorRootNameConstraintsEnforcedWithOmittedRoot() throws Exception {
+        CertBundle root = createRootCaWithNameConstraints(buildNcPermittedDns("example.com"));
+        CertBundle intermediate = createIntermediateCa(root, null);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(root.cert));
+
+        CertBundle evilLeaf = createLeafWithSan(intermediate, "evil.com", null);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(evilLeaf.cert, intermediate.cert), anchors));
+
+        CertBundle goodLeaf = createLeafWithSan(intermediate, "host.example.com", null);
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(goodLeaf.cert, intermediate.cert), anchors));
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: pathLen корня проверяется при опущенном корне")
+    void testCertAnchorRootPathLenEnforcedWithOmittedRoot() throws Exception {
+        CertBundle root0 = createRootCa(0);
+        CertBundle intermediate0 = createIntermediateCa(root0, null);
+        CertBundle leaf0 = createLeaf(intermediate0);
+        TrustAnchors anchors0 = TrustAnchors.ofCertificates(List.of(root0.cert));
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                ChainValidator.validateChain(
+                                        List.of(leaf0.cert, intermediate0.cert), anchors0));
+        assertEquals(PkixException.Reason.PATH_LEN_EXCEEDED, ex.reason());
+
+        CertBundle root1 = createRootCa(1);
+        CertBundle intermediate1 = createIntermediateCa(root1, null);
+        CertBundle leaf1 = createLeaf(intermediate1);
+        TrustAnchors anchors1 = TrustAnchors.ofCertificates(List.of(root1.cert));
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf1.cert, intermediate1.cert), anchors1));
+    }
+
+    @Test
+    @DisplayName(
+            "Cert-якорь: перевыпущенный корень с тем же ключом принимается через локальный якорь")
+    void testCertAnchorAcceptsReissuedRootWithSameKey() throws Exception {
+        CertBundle oldRoot = createRootCaWithNameConstraints(buildNcPermittedDns("example.com"));
+        CertBundle intermediate = createIntermediateCa(oldRoot, null);
+        CertBundle newRoot =
+                createReissuedRoot(
+                        oldRoot, BigInteger.valueOf(2), "20250101120000Z", "21150101120000Z");
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(oldRoot.cert));
+
+        CertBundle goodLeaf = createLeafWithSan(intermediate, "host.example.com", null);
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(goodLeaf.cert, intermediate.cert, newRoot.cert), anchors));
+
+        CertBundle evilLeaf = createLeafWithSan(intermediate, "evil.com", null);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(evilLeaf.cert, intermediate.cert, newRoot.cert), anchors));
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: поддельный корень выше якоря игнорируется")
+    void testCertAnchorIgnoresFakeRootAboveAnchorIssuedIntermediate() throws Exception {
+        var attackerKp = KeyGenerator.generateKeyPair(PARAMS);
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCa(root, null);
+        CertBundle leaf = createLeaf(intermediate);
+        GostCertificate fakeRoot =
+                createFakeAnchorWithTrustedKey(
+                        root.pub, attackerKp.getPrivate(), GostDnParser.encodeDn("CN=Attacker"));
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(root.cert));
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, fakeRoot), anchors));
+
+        CertBundle ncRoot = createRootCaWithNameConstraints(buildNcPermittedDns("example.com"));
+        CertBundle ncIntermediate = createIntermediateCa(ncRoot, null);
+        CertBundle evilLeaf = createLeafWithSan(ncIntermediate, "evil.com", null);
+        GostCertificate ncFakeRoot =
+                createFakeAnchorWithTrustedKey(
+                        ncRoot.pub, attackerKp.getPrivate(), GostDnParser.encodeDn("CN=Attacker"));
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(evilLeaf.cert, ncIntermediate.cert, ncFakeRoot),
+                                TrustAnchors.ofCertificates(List.of(ncRoot.cert))));
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: чужая цепочка с тем же DN корня -> ROOT_NOT_SIGNED")
+    void testCertAnchorRejectsUnrelatedChain() throws Exception {
+        CertBundle rootA = createRootCa();
+        CertBundle rootB = createRootCa();
+        CertBundle intermediateB = createIntermediateCa(rootB, null);
+        CertBundle leafB = createLeaf(intermediateB);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(rootA.cert));
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                ChainValidator.validateChain(
+                                        List.of(leafB.cert, intermediateB.cert), anchors));
+        assertEquals(PkixException.Reason.ROOT_NOT_SIGNED, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: поддельный leaf с ключом якоря и чужой подписью -> ROOT_NOT_SIGNED")
+    void testCertAnchorRejectsFakeLeafWithTrustedKey() throws Exception {
+        var attackerKp = KeyGenerator.generateKeyPair(PARAMS);
+        CertBundle root = createRootCa();
+        GostCertificate fakeLeaf =
+                createFakeAnchorWithTrustedKey(root.pub, attackerKp.getPrivate(), root.dn);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(root.cert));
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () -> ChainValidator.validateChain(List.of(fakeLeaf), anchors));
+        assertEquals(PkixException.Reason.ROOT_NOT_SIGNED, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: закреплённый промежуточный CA обрезает цепочку выше")
+    void testCertAnchorPinnedIntermediateTruncatesChainAbove() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle pinnedIntermediate = createIntermediateCa(root, null);
+        CertBundle leaf = createLeaf(pinnedIntermediate);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(pinnedIntermediate.cert));
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, pinnedIntermediate.cert, root.cert), anchors));
+
+        CertBundle ncRoot = createRootCa();
+        CertBundle ncIntermediate =
+                createIntermediateCaWithNameConstraints(ncRoot, buildNcPermittedDns("example.com"));
+        TrustAnchors ncAnchors = TrustAnchors.ofCertificates(List.of(ncIntermediate.cert));
+        CertBundle goodLeaf = createLeafWithSan(ncIntermediate, "host.example.com", null);
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(goodLeaf.cert, ncIntermediate.cert, ncRoot.cert),
+                                ncAnchors));
+        CertBundle evilLeaf = createLeafWithSan(ncIntermediate, "evil.com", null);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(evilLeaf.cert, ncIntermediate.cert, ncRoot.cert),
+                                ncAnchors));
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: истёкший корень при n > 1 принимается с WARNING")
+    void testCertAnchorExpiredRootWithIntermediateAccepted() throws Exception {
+        CertBundle expiredRoot = createRootCaWithValidity("20200101120000Z", "20210101120000Z");
+        CertBundle intermediate = createIntermediateCa(expiredRoot, null);
+        CertBundle leaf = createLeaf(intermediate);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(expiredRoot.cert));
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChain(List.of(leaf.cert, intermediate.cert), anchors));
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: явный WARN принимает истёкший корень при n > 1, как DEFAULT")
+    void testCertAnchorExpiredRootExplicitWarnAccepted() throws Exception {
+        CertBundle expiredRoot = createRootCaWithValidity("20200101120000Z", "20210101120000Z");
+        CertBundle intermediate = createIntermediateCa(expiredRoot, null);
+        CertBundle leaf = createLeaf(intermediate);
+        TrustAnchors anchors =
+                TrustAnchors.ofCertificates(List.of(expiredRoot.cert))
+                        .withExpiryPolicy(AnchorExpiryPolicy.WARN);
+
+        assertDoesNotThrow(
+                () -> ChainValidator.validateChain(List.of(leaf.cert, intermediate.cert), anchors),
+                "WARN должен пропускать истёкший корень при n > 1");
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: явный REJECT отклоняет истёкший корень при n > 1")
+    void testCertAnchorExpiredRootRejectPolicyRejected() throws Exception {
+        CertBundle expiredRoot = createRootCaWithValidity("20200101120000Z", "20210101120000Z");
+        CertBundle intermediate = createIntermediateCa(expiredRoot, null);
+        CertBundle leaf = createLeaf(intermediate);
+        TrustAnchors anchors =
+                TrustAnchors.ofCertificates(List.of(expiredRoot.cert))
+                        .withExpiryPolicy(AnchorExpiryPolicy.REJECT);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                ChainValidator.validateChain(
+                                        List.of(leaf.cert, intermediate.cert), anchors));
+        assertEquals(
+                PkixException.Reason.EXPIRED, ex.reason(), "REJECT должен давать причину EXPIRED");
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: REJECT отклоняет и истёкший закреплённый промежуточный CA")
+    void testCertAnchorExpiredPinnedIntermediateRejectPolicyRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle expiredIntermediate =
+                createIntermediateCaWithDn(
+                        root, "CN=Expired Intermediate", "20200101120000Z", "20210101120000Z");
+        CertBundle leaf = createLeaf(expiredIntermediate);
+        TrustAnchors anchors =
+                TrustAnchors.ofCertificates(List.of(expiredIntermediate.cert))
+                        .withExpiryPolicy(AnchorExpiryPolicy.REJECT);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                ChainValidator.validateChain(
+                                        List.of(leaf.cert, expiredIntermediate.cert), anchors));
+        assertEquals(PkixException.Reason.EXPIRED, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: закреплённый leaf при n == 1 отклоняется при любой политике")
+    void testCertAnchorExpiredPinnedLeafRejectedForEveryPolicy() throws Exception {
+        CertBundle expiredRoot = createRootCaWithValidity("20200101120000Z", "20210101120000Z");
+        for (AnchorExpiryPolicy policy : AnchorExpiryPolicy.values()) {
+            TrustAnchors anchors =
+                    TrustAnchors.ofCertificates(List.of(expiredRoot.cert)).withExpiryPolicy(policy);
+            PkixException ex =
+                    assertThrows(
+                            PkixException.class,
+                            () -> ChainValidator.validateChain(List.of(expiredRoot.cert), anchors),
+                            "Закреплённый leaf должен отклоняться при политике " + policy);
+            assertEquals(PkixException.Reason.EXPIRED, ex.reason());
+        }
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: истёкший закреплённый leaf при n == 1 отклоняется")
+    void testCertAnchorExpiredPinnedLeafRejected() throws Exception {
+        CertBundle expiredRoot = createRootCaWithValidity("20200101120000Z", "20210101120000Z");
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(expiredRoot.cert));
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () -> ChainValidator.validateChain(List.of(expiredRoot.cert), anchors));
+        assertEquals(PkixException.Reason.EXPIRED, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: истёкший закреплённый промежуточный CA принимается")
+    void testCertAnchorExpiredPinnedIntermediateAccepted() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle expiredIntermediate =
+                createIntermediateCaWithDn(
+                        root, "CN=Expired Intermediate", "20200101120000Z", "20210101120000Z");
+        CertBundle leaf = createLeaf(expiredIntermediate);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(expiredIntermediate.cert));
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, expiredIntermediate.cert), anchors));
+    }
+
+    @Test
+    @DisplayName("Cert-якорь: лимит длины цепочки считает только сертификаты пира")
+    void testCertAnchorPeerChainLimitExcludesAppendedAnchor() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle current = root;
+        List<CertBundle> intermediates = new ArrayList<>();
+        for (int i = 1; i <= 9; i++) {
+            current =
+                    createIntermediateCaWithDn(
+                            current, "CN=Chain CA " + i, "20240501120000Z", "21060101120000Z");
+            intermediates.add(current);
+        }
+        CertBundle leaf = createLeaf(current);
+
+        List<GostCertificate> peerChain = new ArrayList<>();
+        peerChain.add(leaf.cert);
+        for (int i = intermediates.size() - 1; i >= 0; i--) {
+            peerChain.add(intermediates.get(i).cert);
+        }
+        assertEquals(10, peerChain.size());
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(root.cert));
+        assertDoesNotThrow(() -> ChainValidator.validateChain(peerChain, anchors));
+
+        List<GostCertificate> tooLong = new ArrayList<>(peerChain);
+        tooLong.add(root.cert);
+        PkixException ex =
+                assertThrows(
+                        PkixException.class, () -> ChainValidator.validateChain(tooLong, anchors));
+        assertEquals(PkixException.Reason.CHAIN_TOO_LONG, ex.reason());
+    }
+
+    @Test
+    @DisplayName(
+            "validateChain: 10 peer + локальный якорь допустимы, возвращается эффективная цепочка")
+    void testValidateChainReturnsEffectiveChainWithAnchor() throws Exception {
+        CertBundle root = createRootCa();
+        List<GostCertificate> peerChain = createPeerChain(root, 9);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(root.cert));
+
+        List<GostCertificate> effective = ChainValidator.validateChain(peerChain, anchors);
+
+        assertEquals(11, effective.size(), "10 peer-сертификатов плюс локальный якорь");
+        assertEquals(
+                root.cert,
+                effective.get(effective.size() - 1),
+                "Последним должен быть сохранённый сертификат якоря");
+        assertEquals(
+                effective,
+                ChainValidator.resolveChain(peerChain, anchors),
+                "validateChain должен возвращать ту же цепочку, что и resolveChain");
+    }
+
+    @Test
+    @DisplayName("Внешний IMPLICIT NameConstraints применяется end-to-end")
+    void testExternalImplicitNameConstraintsEnforcedEndToEnd() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExtension(NC_OID_BYTES, true, EXTERNAL_IMPLICIT_NC));
+        CertBundle good = createLeafWithSan(intermediate, "host.example.com", null);
+        CertBundle bad = createLeafWithSan(intermediate, "evil.com", null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(good.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(bad.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("Legacy EXPLICIT NameConstraints продолжает применяться end-to-end")
+    void testLegacyExplicitNameConstraintsEnforcedEndToEnd() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcExtension(NC_OID_BYTES, true, LEGACY_EXPLICIT_NC));
+        CertBundle good = createLeafWithSan(intermediate, "host.example.com", null);
+        CertBundle bad = createLeafWithSan(intermediate, "evil.com", null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(good.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(bad.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("Malformed NameConstraints отклоняются fail-closed")
+    void testMalformedNameConstraintsFailClosed() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNameConstraintsExtension(null, null, true));
+        CertBundle leaf = createLeaf(intermediate);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                ChainValidator.validateChain(
+                                        List.of(leaf.cert, intermediate.cert, root.cert),
+                                        TrustAnchors.ofCertificate(root.cert)));
+        assertTrue(
+                ex.getMessage().contains("malformed NameConstraints"),
+                "ожидался отказ из-за malformed NameConstraints, было: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("directoryName: excluded subject -> отказ")
+    void testDirectoryNameExcludedSubjectRejected() throws Exception {
+        byte[] nc = buildDirectoryNameNc(null, GostDnParser.encodeDn("O=Evil"));
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, GostDnParser.encodeDn("O=Evil,CN=x"), null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: excluded, лишний AVA в RDN subject не обходит запрет -> отказ")
+    void testDirectoryNameExcludedMultiValuedRdnRejected() throws Exception {
+        byte[] nc = buildDirectoryNameNc(null, GostDnParser.encodeDn("O=Evil"));
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, dnMultiValuedOWithOu("Evil", "x"), null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: excluded, многозначный RDN с другим O не срабатывает -> успех")
+    void testDirectoryNameExcludedMultiValuedRdnOtherValueAccepted() throws Exception {
+        byte[] nc = buildDirectoryNameNc(null, GostDnParser.encodeDn("O=Evil"));
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, dnMultiValuedOWithOu("Good", "x"), null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: permitted, многозначный RDN шире поддерева -> отказ")
+    void testDirectoryNamePermittedMultiValuedRdnRejected() throws Exception {
+        byte[] nc = buildDirectoryNameNc(GostDnParser.encodeDn("O=Evil"), null);
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, dnMultiValuedOWithOu("Evil", "x"), null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: permitted subject вне поддерева -> отказ")
+    void testDirectoryNamePermittedSubjectRejected() throws Exception {
+        byte[] nc = buildDirectoryNameNc(GostDnParser.encodeDn("O=Good"), null);
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, GostDnParser.encodeDn("O=Other,CN=x"), null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: permitted без SAN, пустой subject -> vacuous")
+    void testDirectoryNamePermittedEmptySubjectVacuous() throws Exception {
+        byte[] nc = buildDirectoryNameNc(GostDnParser.encodeDn("O=Good"), null);
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf = createLeafWithSubjectAndDirSan(intermediate, null, null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: permitted SAN внутри поддерева -> успех")
+    void testDirectoryNamePermittedSanAccepted() throws Exception {
+        byte[] nc = buildDirectoryNameNc(GostDnParser.encodeDn("O=Good"), null);
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, null, GostDnParser.encodeDn("O=Good,CN=x"));
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: subject в permitted, SAN вне -> отказ")
+    void testDirectoryNameSubjectAndSanOneOutside() throws Exception {
+        byte[] nc = buildDirectoryNameNc(GostDnParser.encodeDn("O=Good"), null);
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate,
+                        GostDnParser.encodeDn("O=Good,CN=a"),
+                        GostDnParser.encodeDn("O=Evil,CN=b"));
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: excluded SAN -> отказ")
+    void testDirectoryNameExcludedSanRejected() throws Exception {
+        byte[] nc = buildDirectoryNameNc(null, GostDnParser.encodeDn("O=Evil"));
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, null, GostDnParser.encodeDn("O=Evil,CN=x"));
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: пустое ограничение -> fail-closed")
+    void testDirectoryNameEmptyConstraintRejected() throws Exception {
+        byte[] nc = buildDirectoryNameNc(new byte[] {0x30, 0x00}, null);
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf = createLeafWithSubjectAndDirSan(intermediate, null, null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: excluded PrintableString против UTF8String -> отказ")
+    void testDirectoryNameExcludedPrintableVsUtf8() throws Exception {
+        byte[] nc = buildDirectoryNameNc(null, dnPrintableO("Evil"));
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, GostDnParser.encodeDn("O=Evil,CN=x"), null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("directoryName: NC корня с cert-якорем при опущенном корне -> отказ")
+    void testDirectoryNameRootNcCertAnchorOmittedRoot() throws Exception {
+        byte[] nc = buildDirectoryNameNc(GostDnParser.encodeDn("O=Good"), null);
+        CertBundle root = createRootCaWithNameConstraints(nc);
+        CertBundle intermediate = createIntermediateCa(root, null);
+        CertBundle leaf =
+                createLeafWithSubjectAndDirSan(
+                        intermediate, GostDnParser.encodeDn("O=Evil,CN=x"), null);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(List.of(root.cert));
+
+        assertThrows(
+                PkixException.class,
+                () -> ChainValidator.validateChain(List.of(leaf.cert, intermediate.cert), anchors));
+    }
+
+    @Test
+    @DisplayName("directoryName: self-issued leaf с SAN в excluded -> отказ")
+    void testDirectoryNameSelfIssuedLeafSanRejected() throws Exception {
+        byte[] nc = buildDirectoryNameNc(null, GostDnParser.encodeDn("O=Evil"));
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(
+                        root, GostDnParser.encodeDn("O=Good,CN=SubCA"), nc);
+        CertBundle leaf =
+                createSelfIssuedLeafWithDirSan(intermediate, GostDnParser.encodeDn("O=Evil,CN=x"));
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("NC только dNSName: legacy subject DN не разбирается и не мешает")
+    void testDnsOnlyNcDoesNotParseLegacySubject() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(root, buildNcPermittedDns("example.com"));
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        ca, legacyCyrillicPrintableDn(), "host.example.com", null, null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "subject DN не участвует в DNS-ограничении и не должен разбираться");
+    }
+
+    @Test
+    @DisplayName("NC directoryName: legacy subject DN разбирается строго")
+    void testDirectoryNameNcParsesLegacySubjectStrictly() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca =
+                createIntermediateCaWithNameConstraints(
+                        root, buildDirectoryNameNc(null, GostDnParser.encodeDn("O=Evil")));
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        ca, legacyCyrillicPrintableDn(), "host.example.com", null, null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, ca.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "при активном directoryName некорректная строка DN должна отклоняться");
+    }
+
+    @Test
+    @DisplayName("rfc822Name: emailAddress в subject вне permitted -> отказ")
+    void testRfc822SubjectEmailPermittedRejected() throws Exception {
+        byte[] nc = buildNcPermittedRfc822("example.com");
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        intermediate,
+                        GostDnParser.encodeDn("CN=Leaf,EMAILADDRESS=user@evil.com"),
+                        null,
+                        null,
+                        null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("rfc822Name: emailAddress в subject в permitted -> успех")
+    void testRfc822SubjectEmailPermittedAccepted() throws Exception {
+        byte[] nc = buildNcPermittedRfc822("example.com");
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        intermediate,
+                        GostDnParser.encodeDn("CN=Leaf,EMAILADDRESS=user@example.com"),
+                        null,
+                        null,
+                        null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("rfc822Name: SAN только с dNSName не отключает emailAddress-проверку")
+    void testRfc822SubjectEmailWithDnsSanRejected() throws Exception {
+        byte[] nc = buildNcPermittedRfc822("example.com");
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        intermediate,
+                        GostDnParser.encodeDn("CN=Leaf,EMAILADDRESS=user@evil.com"),
+                        "host.example.com",
+                        null,
+                        null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("rfc822Name: SAN в permitted, но emailAddress в subject вне permitted -> отказ")
+    void testRfc822SanAndSubjectEmailBothChecked() throws Exception {
+        byte[] nc = buildNcPermittedRfc822("example.com");
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        intermediate,
+                        GostDnParser.encodeDn("CN=Leaf,EMAILADDRESS=user@evil.com"),
+                        null,
+                        "user@example.com",
+                        null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "emailAddress в subject вне permitted не должен прятаться за разрешённым SAN");
+    }
+
+    @Test
+    @DisplayName("rfc822Name: SAN допустим, emailAddress в subject в excluded -> отказ")
+    void testRfc822SanAllowedSubjectEmailExcludedRejected() throws Exception {
+        byte[] nc = buildNcExcludedRfc822("evil.com");
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        intermediate,
+                        GostDnParser.encodeDn("CN=Leaf,EMAILADDRESS=user@evil.com"),
+                        null,
+                        "user@example.com",
+                        null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "emailAddress в excluded должен отклоняться и при наличии SAN rfc822");
+    }
+
+    @Test
+    @DisplayName("rfc822Name: SAN и emailAddress в permitted -> принят")
+    void testRfc822SanAndSubjectEmailBothPermittedAccepted() throws Exception {
+        byte[] nc = buildNcPermittedRfc822("example.com");
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        intermediate,
+                        GostDnParser.encodeDn("CN=Leaf,EMAILADDRESS=admin@example.com"),
+                        null,
+                        "user@example.com",
+                        null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "оба адреса в permitted — цепочка должна приниматься");
+    }
+
+    @Test
+    @DisplayName("rfc822Name: NC только с mailbox-формой + leaf только с emailAddress -> отказ")
+    void testRfc822MailboxFormOnlySubjectEmailRejected() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcWithMailboxExcluded("root@example.com"));
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        intermediate,
+                        GostDnParser.encodeDn("CN=Leaf,EMAILADDRESS=user@evil.com"),
+                        "host.example.com",
+                        null,
+                        null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "mailbox-форма не сопоставляется, поэтому subject emailAddress должен давать отказ");
+    }
+
+    @Test
+    @DisplayName("rfc822Name: NC только с mailbox-формой + leaf без email -> принят")
+    void testRfc822MailboxFormOnlyNoEmailAccepted() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcWithMailboxExcluded("root@example.com"));
+        CertBundle leaf = createLeafWithSan(intermediate, "host.example.com", null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "ограничение неприменимо, если у листа нет rfc822-имён");
+    }
+
+    @Test
+    @DisplayName("rfc822Name: NC с host-формой + leaf без email -> принят")
+    void testRfc822HostFormNoEmailAccepted() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(
+                        root, buildNcPermittedRfc822("example.com"));
+        CertBundle leaf = createLeafWithSan(intermediate, "host.example.com", null);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "leaf без rfc822-имён и emailAddress ограничением не затрагивается");
+    }
+
+    @Test
+    @DisplayName("rfc822Name: excluded emailAddress в subject -> отказ")
+    void testRfc822SubjectEmailExcludedRejected() throws Exception {
+        byte[] nc = buildNcExcludedRfc822("evil.com");
+        CertBundle root = createRootCa();
+        CertBundle intermediate = createIntermediateCaWithNameConstraints(root, nc);
+        CertBundle leaf =
+                createLeafWithSubjectAndSans(
+                        intermediate,
+                        GostDnParser.encodeDn("CN=Leaf,EMAILADDRESS=user@evil.com"),
+                        null,
+                        null,
+                        null);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("rfc822Name: self-issued leaf с emailAddress вне permitted -> отказ")
+    void testRfc822SelfIssuedLeafSubjectEmailRejected() throws Exception {
+        byte[] nc = buildNcPermittedRfc822("example.com");
+        CertBundle root = createRootCa();
+        CertBundle intermediate =
+                createIntermediateCaWithNameConstraints(
+                        root, GostDnParser.encodeDn("CN=SubCA,EMAILADDRESS=user@evil.com"), nc);
+        CertBundle leaf = createSelfIssuedLeafWithoutSan(intermediate);
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leaf.cert, intermediate.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)));
+    }
+
+    @Test
+    @DisplayName("validateChainWithRevocation: PoC-цепочка отклоняется до проверки отзыва")
+    void testRevocationVariantRejectsNonCaTop() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle attackerEe = createLeaf(root);
+        CertBundle forgedLeaf = createLeafWithSan(attackerEe, "bank.example.com", null);
+
+        List<GostCertificate> chain = List.of(forgedLeaf.cert, attackerEe.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                ChainValidator.validateChainWithRevocation(
+                                        chain,
+                                        anchors,
+                                        Collections.<CertRevocationData>nCopies(
+                                                chain.size(), null)));
+        assertEquals(PkixException.Reason.NOT_CA, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Якорь: cross-signed якорь с доверенным издателем -> успех")
+    void testCrossSignedAnchorAccepted() throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle crossSignedAnchor = createIntermediateCa(root, null);
+
+        List<GostCertificate> chain = List.of(crossSignedAnchor.cert);
+        TrustAnchors trustAnchors =
+                TrustAnchors.ofCertificates(List.of(crossSignedAnchor.cert, root.cert));
+
+        assertDoesNotThrow(() -> ChainValidator.validateChain(chain, trustAnchors));
     }
 
     // ========================================================================
@@ -1023,6 +2953,55 @@ class ChainValidatorTest {
     // ========================================================================
 
     private static final byte[] NC_OID_BYTES = {0x55, 0x1D, 0x1E};
+
+    // extnValue NameConstraints без OCTET STRING. IMPLICIT-вектор получен OpenSSL:
+    // nameConstraints=critical,permitted;DNS:example.com
+    private static final byte[] EXTERNAL_IMPLICIT_NC = {
+        0x30,
+        0x11,
+        (byte) 0xA0,
+        0x0F,
+        0x30,
+        0x0D,
+        (byte) 0x82,
+        0x0B,
+        0x65,
+        0x78,
+        0x61,
+        0x6D,
+        0x70,
+        0x6C,
+        0x65,
+        0x2E,
+        0x63,
+        0x6F,
+        0x6D
+    };
+
+    // Legacy EXPLICIT-форма старого builder'а библиотеки.
+    private static final byte[] LEGACY_EXPLICIT_NC = {
+        0x30,
+        0x13,
+        (byte) 0xA0,
+        0x11,
+        0x30,
+        0x0F,
+        0x30,
+        0x0D,
+        (byte) 0x82,
+        0x0B,
+        0x65,
+        0x78,
+        0x61,
+        0x6D,
+        0x70,
+        0x6C,
+        0x65,
+        0x2E,
+        0x63,
+        0x6F,
+        0x6D
+    };
 
     /** Сборка одного Extension: SEQUENCE { OID [BOOLEAN] OCTET STRING { value } }. */
     private static byte[] buildNcExtension(byte[] oidBytes, boolean critical, byte[] extValue) {
@@ -1086,6 +3065,15 @@ class ChainValidatorTest {
         return buildNameConstraintsExtension(ps, null, true);
     }
 
+    /** Сборка NameConstraints: только excluded iPAddress. */
+    private static byte[] buildNcExcludedIp(byte[] ipConstraint) {
+        byte[] ip = DerCodec.encodeTlv(0x87, ipConstraint);
+        byte[] st = generalSubtreeNc(ip, null, null);
+        byte[] gs = generalSubtreesNc(st);
+        byte[] es = DerCodec.encodeContextConstructed(1, gs);
+        return buildNameConstraintsExtension(null, es, true);
+    }
+
     /** Сборка NameConstraints: только permitted rfc822Name. */
     private static byte[] buildNcPermittedRfc822(String... names) {
         byte[][] subs = new byte[names.length][];
@@ -1110,6 +3098,53 @@ class ChainValidatorTest {
         return buildNameConstraintsExtension(ps, null, true);
     }
 
+    /** Создаёт peer-цепочку [leaf, intermediate..., firstIntermediate]. */
+    private static List<GostCertificate> createPeerChain(CertBundle root, int intermediateCount)
+            throws Exception {
+        CertBundle current = root;
+        List<CertBundle> intermediates = new ArrayList<>();
+        for (int i = 1; i <= intermediateCount; i++) {
+            current =
+                    createIntermediateCaWithDn(
+                            current,
+                            "CN=Resolved Chain CA " + i,
+                            "20240501120000Z",
+                            "21060101120000Z");
+            intermediates.add(current);
+        }
+        CertBundle leaf = createLeaf(current);
+        List<GostCertificate> chain = new ArrayList<>();
+        chain.add(leaf.cert);
+        for (int i = intermediates.size() - 1; i >= 0; i--) {
+            chain.add(intermediates.get(i).cert);
+        }
+        return chain;
+    }
+
+    /** Сборка NameConstraints: только excluded rfc822Name. */
+    private static byte[] buildNcExcludedRfc822(String... names) {
+        byte[][] subs = new byte[names.length][];
+        for (int i = 0; i < names.length; i++) {
+            byte[] base = DerCodec.encodeTlv(0x81, names[i].getBytes(StandardCharsets.US_ASCII));
+            subs[i] = generalSubtreeNc(base, null, null);
+        }
+        byte[] gs = generalSubtreesNc(subs);
+        byte[] es = DerCodec.encodeContextConstructed(1, gs);
+        return buildNameConstraintsExtension(null, es, true);
+    }
+
+    /** Сборка NameConstraints: только excluded URI. */
+    private static byte[] buildNcExcludedUri(String... uris) {
+        byte[][] subs = new byte[uris.length][];
+        for (int i = 0; i < uris.length; i++) {
+            byte[] base = DerCodec.encodeTlv(0x86, uris[i].getBytes(StandardCharsets.US_ASCII));
+            subs[i] = generalSubtreeNc(base, null, null);
+        }
+        byte[] gs = generalSubtreesNc(subs);
+        byte[] es = DerCodec.encodeContextConstructed(1, gs);
+        return buildNameConstraintsExtension(null, es, true);
+    }
+
     /**
      * Сборка NameConstraints с otherName-записью (тег 0xA0) —
      * парсер не распознаёт otherName и ставит hasUnsupportedNameType=true.
@@ -1120,6 +3155,68 @@ class ChainValidatorTest {
         byte[] gs = generalSubtreesNc(sub);
         byte[] ps = DerCodec.encodeContextConstructed(0, gs);
         return buildNameConstraintsExtension(ps, null, true);
+    }
+
+    private static final int TAG_X400 = 0xA3;
+    private static final int TAG_EDI = 0xA5;
+    private static final int TAG_REGISTERED_ID = 0x88;
+    private static final byte[] SAN_OID_BYTES_TEST = {0x55, 0x1D, 0x11};
+
+    /** Сборка NameConstraints: permitted с одним GeneralName заданной формы. */
+    private static byte[] buildNcWithForm(int tag, byte[] content) {
+        byte[] base = DerCodec.encodeTlv(tag, content);
+        byte[] sub = generalSubtreeNc(base, null, null);
+        byte[] ps = DerCodec.encodeContextConstructed(0, generalSubtreesNc(sub));
+        return buildNameConstraintsExtension(ps, null, true);
+    }
+
+    /** Проверяет цепочку: NC ограничивает одну форму, лист несёт имя другой/той же формы. */
+    private void assertNcFormChain(byte[] nc, int leafTag, byte[] leafContent, boolean accepted)
+            throws Exception {
+        CertBundle root = createRootCa();
+        CertBundle ca = createIntermediateCaWithNameConstraints(root, nc);
+        byte[] sanValue = DerCodec.encodeSequence(DerCodec.encodeTlv(leafTag, leafContent));
+        byte[] sanExt = buildNcExtension(SAN_OID_BYTES_TEST, false, sanValue);
+        CertBundle leaf = createLeafWithRawExtensions(ca, sanExt);
+        List<GostCertificate> chain = List.of(leaf.cert, ca.cert, root.cert);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(root.cert);
+        if (accepted) {
+            assertDoesNotThrow(
+                    () -> ChainValidator.validateChain(chain, anchors),
+                    "разные формы имён не конфликтуют, цепочка должна приниматься");
+        } else {
+            assertThrows(
+                    PkixException.class,
+                    () -> ChainValidator.validateChain(chain, anchors),
+                    "ограничение неподдерживаемой формы + имя той же формы -> отказ");
+        }
+    }
+
+    /** Создаёт leaf с готовыми DER-расширениями (SAN/IAN и т.п.) поверх KU/SKI/AKI. */
+    private static CertBundle createLeafWithRawExtensions(CertBundle issuer, byte[] extraExt)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Leaf Raw");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki, extraExt);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                subjectDn);
     }
 
     /**
@@ -1244,9 +3341,9 @@ class ChainValidatorTest {
         return DerCodec.encodeSequence(bos.toByteArray());
     }
 
-    /** GeneralSubtrees SEQUENCE. */
+    /** Содержимое GeneralSubtrees для IMPLICIT-тега [0]/[1] (RFC 5280). */
     private static byte[] generalSubtreesNc(byte[]... subtrees) {
-        return DerCodec.encodeSequence(subtrees);
+        return concatExtensions(subtrees);
     }
 
     /** [0] permittedSubtrees. */
@@ -1260,6 +3357,85 @@ class ChainValidatorTest {
     // Вспомогательные методы
     // ========================================================================
 
+    @Test
+    @DisplayName("legacy CA: issuer DN из DER проходит, строковая перекодировка — нет")
+    void testLegacyDnEncodingMigration() throws Exception {
+        CertBundle root = createLegacyRootCa();
+        CertBundle leafFromDer = createLeafWithIssuerDn(root, root.dn);
+
+        assertDoesNotThrow(
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leafFromDer.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "issuer DN, взятый из DER старого CA, должен проходить");
+
+        CertBundle leafFromString =
+                createLeafWithIssuerDn(root, GostDnParser.encodeDn("CN=Legacy Root,C=RU"));
+        assertThrows(
+                PkixException.class,
+                () ->
+                        ChainValidator.validateChain(
+                                List.of(leafFromString.cert, root.cert),
+                                TrustAnchors.ofCertificate(root.cert)),
+                "строковая перекодировка DN старого CA не должна совпадать");
+    }
+
+    private static CertBundle createLegacyRootCa() throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] dn = legacyDnWithUtf8Country("Legacy Root");
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, dn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240101000000Z")
+                        .notAfter("20450101000000Z")
+                        .issuerDn(dn)
+                        .keyUsage(
+                                GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                                GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .basicConstraints(true, null)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate())),
+                dn);
+    }
+
+    private static CertBundle createLeafWithIssuerDn(CertBundle issuer, byte[] issuerDn)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Legacy Leaf");
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240101000000Z")
+                        .notAfter("20450101000000Z")
+                        .issuerDn(issuerDn)
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .serial(BigInteger.TWO)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                subjectDn);
+    }
+
+    /** DN старого формата: countryName ещё UTF8String, как до RFC 5280-фикса. */
+    private static byte[] legacyDnWithUtf8Country(String cn) {
+        return DerCodec.encodeSequence(
+                DerCodec.encodeSetOf(
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeOid(GostOids.ATTR_CN),
+                                DerCodec.encodeUTF8String(cn))),
+                DerCodec.encodeSetOf(
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeOid(GostOids.ATTR_C),
+                                DerCodec.encodeUTF8String("RU"))));
+    }
+
     private static CertBundle createRootCa() throws Exception {
         return createRootCa(null);
     }
@@ -1269,8 +3445,13 @@ class ChainValidatorTest {
      */
     private static CertBundle createIntermediateCaWithNameConstraints(
             CertBundle issuer, byte[] ncExtension) throws Exception {
+        return createIntermediateCaWithNameConstraints(
+                issuer, GostDnParser.encodeDn("CN=NC Intermediate CA"), ncExtension);
+    }
+
+    private static CertBundle createIntermediateCaWithNameConstraints(
+            CertBundle issuer, byte[] subjectDn, byte[] ncExtension) throws Exception {
         var kp = KeyGenerator.generateKeyPair(PARAMS);
-        byte[] subjectDn = GostDnParser.encodeDn("CN=NC Intermediate CA");
         byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
         byte[] ku =
                 GostCertificateBuilder.buildKeyUsageExtension(
@@ -1298,6 +3479,11 @@ class ChainValidatorTest {
      * Создаёт root CA с расширением NameConstraints.
      */
     private static CertBundle createRootCaWithNameConstraints(byte[] ncExtension) throws Exception {
+        return createRootCaWithNameConstraints(ncExtension, "20240501120000Z", "21060101120000Z");
+    }
+
+    private static CertBundle createRootCaWithNameConstraints(
+            byte[] ncExtension, String notBefore, String notAfter) throws Exception {
         var kp = KeyGenerator.generateKeyPair(PARAMS);
         byte[] dn = GostDnParser.encodeDn("CN=Root CA NC");
         byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
@@ -1310,8 +3496,8 @@ class ChainValidatorTest {
         byte[] tbs =
                 GostCertificateBuilder.create(PARAMS, dn)
                         .publicKey(kp.getPublic())
-                        .notBefore("20240501120000Z")
-                        .notAfter("21060101120000Z")
+                        .notBefore(notBefore)
+                        .notAfter(notAfter)
                         .additionalExtensions(additional)
                         .issuerDn(dn)
                         .serial(BigInteger.ONE)
@@ -1323,9 +3509,316 @@ class ChainValidatorTest {
                 dn);
     }
 
+    private static CertBundle createRootCaWithValidity(String notBefore, String notAfter)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] dn = GostDnParser.encodeDn("CN=Root CA validity");
+        byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] additional = concatExtensions(bc, ku, ski);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, dn)
+                        .publicKey(kp.getPublic())
+                        .notBefore(notBefore)
+                        .notAfter(notAfter)
+                        .additionalExtensions(additional)
+                        .issuerDn(dn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate())),
+                dn);
+    }
+
+    private static CertBundle createIntermediateCaWithDn(
+            CertBundle issuer, String subjectCn, String notBefore, String notAfter)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn(subjectCn);
+        byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(bc, ku, ski, aki);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore(notBefore)
+                        .notAfter(notAfter)
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                subjectDn);
+    }
+
+    private static CertBundle createReissuedRoot(
+            CertBundle oldRoot, BigInteger serial, String notBefore, String notAfter)
+            throws Exception {
+        byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(oldRoot.pub);
+        byte[] additional = concatExtensions(bc, ku, ski);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, oldRoot.dn)
+                        .publicKey(oldRoot.pub)
+                        .notBefore(notBefore)
+                        .notAfter(notAfter)
+                        .additionalExtensions(additional)
+                        .issuerDn(oldRoot.dn)
+                        .serial(serial)
+                        .buildTbs();
+        return new CertBundle(
+                oldRoot.priv,
+                oldRoot.pub,
+                GostCertificateBuilder.sign(tbs, GostSigner.of(oldRoot.priv)),
+                oldRoot.dn);
+    }
+
+    /**
+     * Создаёт leaf-сертификат с произвольным набором SAN разных типов.
+     * Нужен для проверки, что permitted проверяет каждое имя, а не любое.
+     */
+    private static CertBundle createLeafWithSans(
+            CertBundle issuer,
+            String[] dnsNames,
+            String[] ipAddresses,
+            String[] rfc822Names,
+            String[] uris)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Leaf NC multi");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        GostCertificateBuilder builder =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE);
+        if (dnsNames != null) {
+            builder.sanDns(dnsNames);
+        }
+        if (ipAddresses != null) {
+            builder.sanIp(ipAddresses);
+        }
+        if (rfc822Names != null) {
+            builder.sanRfc822Name(rfc822Names);
+        }
+        if (uris != null) {
+            builder.sanUri(uris);
+        }
+        byte[] tbs = builder.buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                subjectDn);
+    }
+
     /**
      * Создаёт leaf-сертификат с указанным SAN dNSName и/или iPAddress.
      */
+    private static byte[] buildDirectoryNameNc(byte[] permitted, byte[] excluded) {
+        byte[] permittedDer = null;
+        byte[] excludedDer = null;
+        if (permitted != null) {
+            permittedDer =
+                    permittedSubtrees(
+                            generalSubtreesNc(
+                                    generalSubtreeNc(
+                                            GeneralNameCodec.encodeDirectoryName(permitted),
+                                            null,
+                                            null)));
+        }
+        if (excluded != null) {
+            excludedDer =
+                    DerCodec.encodeContextConstructed(
+                            1,
+                            generalSubtreesNc(
+                                    generalSubtreeNc(
+                                            GeneralNameCodec.encodeDirectoryName(excluded),
+                                            null,
+                                            null)));
+        }
+        return buildNameConstraintsExtension(permittedDer, excludedDer, true);
+    }
+
+    /** Subject DN из двух RDN: {@code O=<o>+OU=<ou>} (один многозначный RDN) и {@code CN=x}. */
+    private static byte[] dnMultiValuedOWithOu(String o, String ou) {
+        byte[] oAva =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.ATTR_O),
+                        DerCodec.encodeTlv(
+                                0x0C, o.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        byte[] ouAva =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.ATTR_OU),
+                        DerCodec.encodeTlv(
+                                0x0C, ou.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        byte[] cnAva =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.ATTR_CN),
+                        DerCodec.encodeTlv(
+                                0x0C, "x".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        return DerCodec.encodeSequence(
+                DerCodec.encodeSetOf(oAva, ouAva), DerCodec.encodeSetOf(cnAva));
+    }
+
+    private static byte[] dnPrintableO(String value) {
+        byte[] ava =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.ATTR_O),
+                        DerCodec.encodeTlv(
+                                0x13, value.getBytes(java.nio.charset.StandardCharsets.US_ASCII)));
+        return DerCodec.encodeSequence(DerCodec.encodeSetOf(ava));
+    }
+
+    /** Legacy subject DN: кириллица Windows-1251 в PrintableString (невалидно по X.680). */
+    private static byte[] legacyCyrillicPrintableDn() {
+        byte[] ava =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.ATTR_CN),
+                        DerCodec.encodeTlv(
+                                0x13,
+                                new byte[] {
+                                    (byte) 0xCF, (byte) 0xF0, (byte) 0xE8, (byte) 0xE2, (byte) 0xF2
+                                }));
+        return DerCodec.encodeSequence(DerCodec.encodeSetOf(ava));
+    }
+
+    private static CertBundle createLeafWithSubjectAndSans(
+            CertBundle issuer, byte[] subjectDn, String dns, String rfc822, byte[] directoryNameSan)
+            throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        GostCertificateBuilder builder =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE);
+        if (dns != null) {
+            builder.sanDns(dns);
+        }
+        if (rfc822 != null) {
+            builder.sanRfc822Name(rfc822);
+        }
+        if (directoryNameSan != null) {
+            builder.sanDirectoryName(directoryNameSan);
+        }
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(builder.buildTbs(), GostSigner.of(issuer.priv)),
+                subjectDn);
+    }
+
+    private static CertBundle createSelfIssuedLeafWithoutSan(CertBundle issuer) throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, issuer.dn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                issuer.dn);
+    }
+
+    private static CertBundle createLeafWithSubjectAndDirSan(
+            CertBundle issuer, byte[] subjectDn, byte[] directoryNameSan) throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        GostCertificateBuilder builder =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE);
+        if (directoryNameSan != null) {
+            builder.sanDirectoryName(directoryNameSan);
+        }
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(builder.buildTbs(), GostSigner.of(issuer.priv)),
+                subjectDn != null ? subjectDn : new byte[] {0x30, 0x00});
+    }
+
+    private static CertBundle createSelfIssuedLeafWithDirSan(
+            CertBundle issuer, byte[] directoryNameSan) throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, issuer.dn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .sanDirectoryName(directoryNameSan)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                issuer.dn);
+    }
+
     private static CertBundle createLeafWithSan(CertBundle issuer, String dnsName, String ipAddress)
             throws Exception {
         var kp = KeyGenerator.generateKeyPair(PARAMS);
@@ -1417,6 +3910,62 @@ class ChainValidatorTest {
     }
 
     /**
+     * Создаёт CA с basicConstraints CA=true, но KeyUsage без keyCertSign.
+     * Нужен для проверки, что наличие KeyUsage без нужного бита отклоняется;
+     * при полном отсутствии KeyUsage парсер считает keyCertSign допустимым.
+     */
+    private static CertBundle createCaWithoutKeyCertSign(CertBundle issuer) throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=CA without keyCertSign");
+        byte[] bc = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(bc, ku, ski, aki);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                subjectDn);
+    }
+
+    /**
+     * Создаёт сертификат, у которого subject public key принадлежит доверенному
+     * якорю, но подпись сделана чужим ключом. Такой сертификат не должен
+     * приниматься как якорь: ключ доверенный, а содержимое не заверено.
+     */
+    private static GostCertificate createFakeAnchorWithTrustedKey(
+            PublicKeyParameters subjectKey, PrivateKeyParameters signingKey, byte[] issuerDn)
+            throws Exception {
+        byte[] subjectDn = GostDnParser.encodeDn("CN=bank.example");
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, subjectDn)
+                        .publicKey(subjectKey)
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .sanDns("bank.example")
+                        .additionalExtensions(ku)
+                        .issuerDn(issuerDn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return GostCertificateBuilder.sign(tbs, GostSigner.of(signingKey));
+    }
+
+    /**
      * Создаёт self-issued intermediate CA: subjectDN == issuerDN.
      * Используется для проверки, что self-issued сертификаты не считаются против pathLen.
      */
@@ -1436,6 +3985,31 @@ class ChainValidatorTest {
                         .notAfter("21060101120000Z")
                         .additionalExtensions(additional)
                         .issuerDn(issuer.dn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+        return new CertBundle(
+                kp.getPrivate(),
+                kp.getPublic(),
+                GostCertificateBuilder.sign(tbs, GostSigner.of(issuer.priv)),
+                issuer.dn);
+    }
+
+    private static CertBundle createSelfIssuedLeaf(CertBundle issuer, String dns) throws Exception {
+        var kp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] ku =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        byte[] ski = GostCertificateBuilder.buildSkiExtension(kp.getPublic());
+        byte[] aki = GostCertificateBuilder.buildAkiExtension(issuer.pub);
+        byte[] additional = concatExtensions(ku, ski, aki);
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, issuer.dn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .additionalExtensions(additional)
+                        .issuerDn(issuer.dn)
+                        .sanDns(dns)
                         .serial(BigInteger.ONE)
                         .buildTbs();
         return new CertBundle(

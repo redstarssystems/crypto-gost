@@ -13,8 +13,8 @@ import org.rssys.gost.jsse.manager.GostX509TrustManager;
  * SSLSocketFactory для ГОСТ TLS 1.3.
  * <p>
  * Создаёт {@link GostSSLSocket} с переданными менеджерами ключей/доверия.
- * Все socket-методы используют новый TCP-соединение (не-layered) или оборачивают
- * существующий socket (layered — для HttpsURLConnection через прокси).
+ * Все методы создания сокета открывают новое TCP-соединение (не-layered) или оборачивают
+ * существующий сокет (layered — для HttpsURLConnection через прокси).
  */
 public final class GostSSLSocketFactory extends SSLSocketFactory {
 
@@ -22,6 +22,13 @@ public final class GostSSLSocketFactory extends SSLSocketFactory {
     private final GostX509TrustManager trustManager;
     private final GostSSLSessionContext sessionContext;
 
+    /**
+     * Создаёт фабрику клиентских сокетов.
+     *
+     * @param keyManager     менеджер ключей
+     * @param trustManager   менеджер доверия
+     * @param sessionContext контекст сессий
+     */
     public GostSSLSocketFactory(
             GostX509KeyManager keyManager,
             GostX509TrustManager trustManager,
@@ -40,12 +47,12 @@ public final class GostSSLSocketFactory extends SSLSocketFactory {
 
     @Override
     public String[] getDefaultCipherSuites() {
-        return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+        return GostJsseConstants.supportedCipherSuites();
     }
 
     @Override
     public String[] getSupportedCipherSuites() {
-        return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+        return GostJsseConstants.supportedCipherSuites();
     }
 
     @Override

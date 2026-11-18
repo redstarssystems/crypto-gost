@@ -1,34 +1,46 @@
 package org.rssys.gost.pkix.cms;
 
+import static org.rssys.gost.pkix.cms.CAdESSupport.addIfAbsent;
+import static org.rssys.gost.pkix.cms.CAdESSupport.buildEscHashInput;
+import static org.rssys.gost.pkix.cms.CAdESSupport.computeTspMessageImprint;
+import static org.rssys.gost.pkix.cms.CAdESSupport.containsDer;
+import static org.rssys.gost.pkix.cms.CAdESSupport.extractEmbeddedCerts;
+import static org.rssys.gost.pkix.cms.CAdESSupport.findUnsignedAttrsIndex;
+import static org.rssys.gost.pkix.cms.CAdESSupport.mergeCertsIntoField;
+import static org.rssys.gost.pkix.cms.CAdESSupport.parseAttributeTlvs;
+import static org.rssys.gost.pkix.cms.CAdESSupport.unsignedAttrsContent;
+
 import java.io.IOException;
-import java.math.BigInteger;
-import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import org.rssys.gost.api.GostSigner;
-import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.CertRevocationData;
+import org.rssys.gost.pkix.cert.CertRevocationEvidence;
 import org.rssys.gost.pkix.cert.ChainValidator;
+import org.rssys.gost.pkix.cert.CrlLimits;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.GostSignatureHelper;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.RevocationEvidenceWindow;
+import org.rssys.gost.pkix.cert.RevocationFreshnessPolicy;
+import org.rssys.gost.pkix.cms.CAdESSupport.SignatureHashResult;
 import org.rssys.gost.pkix.tsp.TspRequestBuilder;
 import org.rssys.gost.pkix.tsp.TspResponse;
 import org.rssys.gost.pkix.tsp.TspTransport;
-import org.rssys.gost.pkix.tsp.TstInfo;
-import org.rssys.gost.pkix.util.GostLogger;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
 
 /**
- * CAdES-T extender: встраивание и верификация меток времени (ETSI EN 319 122-2).
+ * Сборка CAdES: встраивание меток времени, контрподписей, ссылок и значений (ETSI EN 319 122-1/2).
+ * Проверка подписей выполняется в {@link CAdESVerifier}.
  *
  * <p>Поддерживает одного и нескольких подписантов:
  * для каждого подписанта запрашивается отдельная метка (messageImprint = hash(его-подписи)),
@@ -322,73 +334,6 @@ public final class CAdESExtender {
         return embedCountersignature(cadesDer, GostSigner.of(countersignerKey), countersignerCert);
     }
 
-    /**
-     * Добавляет сертификаты в поле certificates [0] IMPLICIT.
-     * Сохраняет существующие, удаляет DER-дубликаты, сортирует, кодирует.
-     *
-     * @param existingCertsField существующее поле [0] или null
-     * @param newCertDers        DER-байты новых сертификатов
-     * @param maxTotalCerts      максимум сертификатов после слияния (DoS)
-     * @return новое поле [0] или null если пусто
-     */
-    private static byte[] mergeCertsIntoField(
-            byte[] existingCertsField, List<byte[]> newCertDers, int maxTotalCerts)
-            throws PkixException {
-        List<byte[]> allCerts = new ArrayList<>();
-
-        if (existingCertsField != null) {
-            int[] lenInfo = DerCodec.decodeLength(existingCertsField, 1);
-            int contentOff = 1 + lenInfo[1];
-            int pos = contentOff;
-            int end = existingCertsField.length;
-            while (pos < end) {
-                if (allCerts.size() >= maxTotalCerts) {
-                    throw new PkixException(
-                            PkixException.Reason.OTHER,
-                            "Too many certificates in SignedData: "
-                                    + (allCerts.size() + 1)
-                                    + " (max "
-                                    + maxTotalCerts
-                                    + ")");
-                }
-                int[] certLen = DerCodec.decodeLength(existingCertsField, pos + 1);
-                int certTotal = 1 + certLen[1] + certLen[0];
-                allCerts.add(
-                        java.util.Arrays.copyOfRange(existingCertsField, pos, pos + certTotal));
-                pos += certTotal;
-            }
-        }
-
-        for (byte[] certDer : newCertDers) {
-            boolean duplicate = false;
-            for (byte[] existing : allCerts) {
-                if (java.util.Arrays.equals(existing, certDer)) {
-                    duplicate = true;
-                    break;
-                }
-            }
-            if (!duplicate) {
-                if (allCerts.size() >= maxTotalCerts) {
-                    throw new PkixException(
-                            PkixException.Reason.OTHER,
-                            "Too many certificates in SignedData: "
-                                    + (allCerts.size() + 1)
-                                    + " (max "
-                                    + maxTotalCerts
-                                    + ")");
-                }
-                allCerts.add(certDer);
-            }
-        }
-
-        if (allCerts.isEmpty()) {
-            return null;
-        }
-        byte[][] sorted = allCerts.toArray(new byte[0][]);
-        DerCodec.sortDer(sorted);
-        return DerCodec.encodeContextConstructed(0, DerCodec.concat(sorted));
-    }
-
     /** Добавляет сертификат countersigner'а в существующее поле certificates [0] IMPLICIT. */
     private static byte[] mergeCountersignerCert(
             byte[] existingCertsField, GostCertificate countersignerCert) throws PkixException {
@@ -403,48 +348,71 @@ public final class CAdESExtender {
     // ========================================================================
 
     /**
-     * Встраивает CAdES-C атрибуты в CAdES-BES/T подпись — основной метод.
-     *
-     * <p>Добавляет complete-certificate-references и complete-revocation-references
-     * в unsignedAttrs каждого подписанта (RFC 5126 §6.2). Принимает CAdES-BES или CAdES-T
-     * и возвращает CAdES-C.
-     *
-     * <p>Цепочка сертификатов строится вызывающим кодом — метод ожидает уже построенную,
-     * валидированную цепочку. CRL-данные передаются как доменные объекты.
-     *
-     * @param cadesDer      CAdES-BES или CAdES-T подпись (CMS SignedData)
-     * @param chain         цепочка [signer, intermediates..., trustedRoot]
-     * @param crlsForChain  список CRL по одному на элемент chain; допускается null
-     * @param ocspForChain  список OCSP-ответов по одному на элемент chain; допускается null
-     * @return CAdES-C подпись (CMS SignedData с C-атрибутами)
-     * @throws PkixException при ошибке разбора или несоответствии размеров списков
+     * Строит DER-атрибуты complete-certificate-references и
+     * complete-revocation-references без встраивания в SignedData.
      */
-    public static byte[] embedCompleteRefs(
-            byte[] cadesDer,
+    private static byte[][] buildCompleteRefsAttributes(
             List<GostCertificate> chain,
             List<GostCrl> crlsForChain,
             List<GostOcspResponse> ocspForChain)
             throws PkixException {
-        Objects.requireNonNull(cadesDer, "cadesDer must not be null");
-        Objects.requireNonNull(chain, "chain must not be null");
-        Objects.requireNonNull(crlsForChain, "crlsForChain must not be null");
-        Objects.requireNonNull(ocspForChain, "ocspForChain must not be null");
-
         CAdESCompleteData.CompleteRefsResult result =
-                CAdESCompleteData.buildCompleteRefsResult(chain, crlsForChain, ocspForChain);
+                CAdESCompleteData.buildCompleteRefsResult(
+                        chain,
+                        crlsForChain,
+                        ocspForChain,
+                        ocspResponderCertificates(chain, ocspForChain));
+        return encodeCompleteRefsAttributes(result);
+    }
 
-        CmsContentInfo contentInfo = CmsContentInfo.decode(cadesDer);
-        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER, "Not a SignedData: " + contentInfo.contentType());
+    /**
+     * Собирает делегированные сертификаты OCSP-ответчиков из переданных ответов.
+     *
+     * <p>Сертификаты цепочки и дубликаты пропускаются. Подпись ответа и права ответчика
+     * (EKU, ocsp-nocheck, цепочка) проверяет {@code OcspVerifier} при проверке свежести
+     * доказательств, поэтому здесь отбор только по составу и лимиту.</p>
+     *
+     * @throws PkixException если ссылок получилось больше {@link CmsConstants#MAX_CERT_REFS}
+     */
+    private static List<GostCertificate> ocspResponderCertificates(
+            List<GostCertificate> chain, List<GostOcspResponse> ocspForChain) throws PkixException {
+        List<GostCertificate> responders = new ArrayList<>();
+        for (GostOcspResponse ocsp : ocspForChain) {
+            if (ocsp == null) {
+                continue;
+            }
+            for (byte[] der : ocsp.getDelegatedCertificates()) {
+                // certs взят из ещё не проверенного ответа: конструктор на мусоре вправе бросить
+                // любое RuntimeException. Нераспознанный сертификат не может быть ответчиком
+                // (OcspVerifier пропускает его так же), поэтому в ссылки он не попадает.
+                // DER и исключение не пишем в журнал: ввод недоверенный.
+                GostCertificate cert;
+                try {
+                    cert = new GostCertificate(der);
+                } catch (RuntimeException e) {
+                    LOG.log(
+                            GostLogger.Level.DEBUG,
+                            "Skipping unparsable certificate in OCSP response certs ({0} bytes)",
+                            der.length);
+                    continue;
+                }
+                if (!containsDer(chain, cert) && !containsDer(responders, cert)) {
+                    responders.add(cert);
+                }
+            }
         }
-        byte[] signedDataBody = contentInfo.content();
-        SignedDataParts sd = SignedDataParts.parse(signedDataBody);
-        byte[] existingCerts = sd.certs();
+        if (Math.max(0, chain.size() - 1) + responders.size() > CmsConstants.MAX_CERT_REFS) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-C: too many certificate references including OCSP responders: "
+                            + (chain.size() - 1 + responders.size()));
+        }
+        return responders;
+    }
 
-        byte[][] origSignerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
-
-        // Кодируем атрибуты CompleteCertificateRefs и CompleteRevocationRefs
+    /** Кодирует уже построенный результат в DER-атрибуты ссылок. */
+    private static byte[][] encodeCompleteRefsAttributes(
+            CAdESCompleteData.CompleteRefsResult result) throws PkixException {
         List<byte[]> certRefDerList = new ArrayList<>();
         for (CAdESCompleteData.OtherCertID certId : result.certRefs()) {
             byte[] hashDer =
@@ -485,8 +453,60 @@ public final class CAdESExtender {
         }
         byte[] revocRefsDer = CAdESCompleteData.encodeCompleteRevocationRefs(revocRefDerList);
         byte[] revocRefsAttr = CmsAttribute.encode(GostOids.COMPLETE_REVOCATION_REFS, revocRefsDer);
+        return new byte[][] {certRefsAttr, revocRefsAttr};
+    }
 
-        // Встраиваем оба атрибута в каждый SignerInfo
+    /**
+     * Встраивает CAdES-C атрибуты в CAdES-BES/T подпись — основной метод.
+     *
+     * <p>Добавляет complete-certificate-references и complete-revocation-references
+     * в unsignedAttrs каждого подписанта (RFC 5126 §6.2). Принимает CAdES-T или
+     * CAdES-C (то есть подпись, у которой уже есть signature-time-stamp).
+     * CAdES-BES без метки отклоняется: CAdES-C обязан строиться на CAdES-T.
+     *
+     * <p>Цепочка сертификатов строится вызывающим кодом — метод ожидает уже построенную,
+     * валидированную цепочку. CRL-данные передаются как доменные объекты.
+     *
+     * @param cadesDer      CAdES-T или CAdES-C подпись (CMS SignedData)
+     * @param chain         цепочка [signer, intermediates..., trustedRoot]
+     * @param crlsForChain  список CRL по одному на элемент chain; допускается null
+     * @param ocspForChain  список OCSP-ответов по одному на элемент chain; допускается null
+     * @return CAdES-C подпись (CMS SignedData с C-атрибутами)
+     * @throws PkixException при ошибке разбора, отсутствии signature-time-stamp
+     *                       или несоответствии размеров списков
+     */
+    public static byte[] embedCompleteRefs(
+            byte[] cadesDer,
+            List<GostCertificate> chain,
+            List<GostCrl> crlsForChain,
+            List<GostOcspResponse> ocspForChain)
+            throws PkixException {
+        Objects.requireNonNull(cadesDer, "cadesDer must not be null");
+        Objects.requireNonNull(chain, "chain must not be null");
+        Objects.requireNonNull(crlsForChain, "crlsForChain must not be null");
+        Objects.requireNonNull(ocspForChain, "ocspForChain must not be null");
+
+        CmsContentInfo contentInfo = CmsContentInfo.decode(cadesDer);
+        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "Not a SignedData: " + contentInfo.contentType());
+        }
+        byte[] signedDataBody = contentInfo.content();
+        SignedDataParts sd = SignedDataParts.parse(signedDataBody);
+        byte[] existingCerts = sd.certs();
+        byte[][] origSignerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
+        for (byte[] signerInfoDer : origSignerInfos) {
+            if (!hasSignatureTimeEvidence(signerInfoDer)) {
+                throw new PkixException(
+                        PkixException.Reason.OTHER,
+                        "CAdES-T input required: signature-time-stamp missing or malformed");
+            }
+        }
+
+        byte[][] attrs = buildCompleteRefsAttributes(chain, crlsForChain, ocspForChain);
+        byte[] certRefsAttr = attrs[0];
+        byte[] revocRefsAttr = attrs[1];
+
         List<byte[]> modifiedSignerInfos = new ArrayList<>();
         for (byte[] signerInfoDer : origSignerInfos) {
             byte[] modified = injectUnsignedAttrDer(signerInfoDer, certRefsAttr);
@@ -494,13 +514,9 @@ public final class CAdESExtender {
             modifiedSignerInfos.add(modified);
         }
 
-        // Добавляем сертификаты цепочки в certificates [0]
         byte[] newCerts = mergeChainCerts(existingCerts, chain);
-
         byte[] newSignerInfos = DerCodec.encodeSetOf(modifiedSignerInfos.toArray(new byte[0][]));
-
         byte[] newSignedData = sd.rebuild(newCerts, newSignerInfos);
-
         return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, newSignedData);
     }
 
@@ -511,24 +527,28 @@ public final class CAdESExtender {
     /**
      * Строит CAdES-X Long Type 1: CAdES-C + certificate-values + revocation-values.
      *
-     * <p>Принимает CAdES-BES (с content-time-stamp) или CAdES-T/C DER.
-     * Автоматически достраивает недостающие уровни: T-метку (signature-time-stamp),
-     * C-референсы (embedCompleteRefs), затем встраивает X-Long атрибуты
-     * (certificate-values, revocation-values).
+     * <p>Принимает CAdES-T или CAdES-C (подпись с signature-time-stamp).
+     * Автоматически достраивает недостающие уровни: если задан {@code tspUrl} -
+     * T-метку (signature-time-stamp), затем C-референсы (embedCompleteRefs),
+     * затем встраивает X-Long атрибуты (certificate-values, revocation-values).
+     * BES без метки отклоняется: X Long обязан строиться на CAdES-T.
      *
      * <p>Сертификаты цепочки добавляются в поле {@code certificates [0]} SignedData
      * через {@link #mergeCertsIntoField} — дедупликация по DER с лимитом
      * {@link CmsConstants#MAX_EMBEDDED_CERTS}.
      *
-     * @param cadesDer       CAdES-BES (с content-time-stamp) или CAdES-T/C DER
+     * @param cadesDer       CAdES-T или CAdES-C DER
      * @param chain          цепочка [signer, intermediates..., trustedRoot]
      * @param crlsForChain   CRL для каждого элемента chain (parallel list, null допускается)
      * @param ocspForChain   OCSP-ответы (parallel list, null допускается)
      * @param tspUrl         TSA URL для signature-time-stamp (null если уже есть)
      * @param tspTransport   HTTP-транспорт для TSP
-     * @param trustedTsaCerts доверенные сертификаты TSA (fail-closed)
+     * @param trustedTsaCerts якоря доверия TSA (fail-closed): корень или сам сертификат TSA;
+     *                        корень цепочки подписанта сюда не подставляется. Для вложенных
+     *                        доказательств цепочка TSA обязана строиться до одного из них
      * @return CAdES-X Long Type 1 DER
-     * @throws PkixException при ошибке разбора или несоответствии размеров списков
+     * @throws PkixException при ошибке разбора, отсутствии signature-time-stamp
+     *                       или несоответствии размеров списков
      * @throws IOException   при ошибке TSP-запроса
      */
     public static byte[] embedXLongType1(
@@ -540,12 +560,95 @@ public final class CAdESExtender {
             TspTransport tspTransport,
             GostCertificate... trustedTsaCerts)
             throws PkixException, IOException {
+        return embedXLongType1(
+                cadesDer,
+                chain,
+                crlsForChain,
+                ocspForChain,
+                tspUrl,
+                tspTransport,
+                RevocationFreshnessPolicy.STRICT,
+                trustedTsaCerts);
+    }
+
+    /**
+     * Строит CAdES-X Long Type 1 с явной политикой свежести отзыва.
+     *
+     * <p>{@code tspUrl}/{@code tspTransport} обязательны: без TSA нельзя
+     * построить {@code escTimeStamp}. Перед встраиванием проверяется, что
+     * переданные CRL/OCSP удовлетворяют выбранной политике; при нарушении
+     * выбрасывается {@link PkixException} с указанием, что делать.</p>
+     *
+     * @param cadesDer       CAdES-T или CAdES-C DER
+     * @param chain          цепочка [signer, intermediates..., trustedRoot]
+     * @param crlsForChain   CRL для каждого элемента chain
+     * @param ocspForChain   OCSP-ответы для каждого элемента chain
+     * @param tspUrl         TSA URL для signature-time-stamp и escTimeStamp
+     * @param tspTransport   HTTP-транспорт для TSP
+     * @param policy         политика свежести отзыва
+     * @param trustedTsaCerts якоря доверия TSA: корень или сам сертификат TSA; корень цепочки
+     *                        подписанта не подставляется, цепочка TSA обязана строиться до якоря
+     * @return CAdES-X Long Type 1 DER
+     * @throws PkixException при ошибке разбора, порядке меток, нарушении
+     *         политики или несоответствии размеров списков
+     * @throws IOException   при ошибке TSP-запроса
+     */
+    public static byte[] embedXLongType1(
+            byte[] cadesDer,
+            List<GostCertificate> chain,
+            List<GostCrl> crlsForChain,
+            List<GostOcspResponse> ocspForChain,
+            String tspUrl,
+            TspTransport tspTransport,
+            RevocationFreshnessPolicy policy,
+            GostCertificate... trustedTsaCerts)
+            throws PkixException, IOException {
+        return embedXLongType1(
+                cadesDer,
+                chain,
+                crlsForChain,
+                ocspForChain,
+                tspUrl,
+                tspTransport,
+                policy,
+                CrlLimits.DEFAULT,
+                trustedTsaCerts);
+    }
+
+    /**
+     * Строит CAdES-X Long Type 1 с явной политикой свежести отзыва и пределами CRL.
+     *
+     * <p>Пределы действуют на проверку переданных CRL перед встраиванием: превышение размера или
+     * числа записей даёт {@link PkixException} с причиной
+     * {@link PkixException.Reason#CRL_LIMIT_EXCEEDED}. Остальные параметры - как у
+     * {@link #embedXLongType1(byte[], List, List, List, String, TspTransport,
+     * RevocationFreshnessPolicy, GostCertificate...)}.</p>
+     *
+     * @param limits пределы размера и числа записей CRL (не null)
+     * @return CAdES-X Long Type 1 DER
+     * @throws PkixException при ошибке разбора, порядке меток, нарушении политики, превышении
+     *         пределов CRL или несоответствии размеров списков
+     * @throws IOException   при ошибке TSP-запроса
+     * @throws NullPointerException если {@code limits} (как и остальные обязательные аргументы)
+     *     равен null
+     */
+    public static byte[] embedXLongType1(
+            byte[] cadesDer,
+            List<GostCertificate> chain,
+            List<GostCrl> crlsForChain,
+            List<GostOcspResponse> ocspForChain,
+            String tspUrl,
+            TspTransport tspTransport,
+            RevocationFreshnessPolicy policy,
+            CrlLimits limits,
+            GostCertificate... trustedTsaCerts)
+            throws PkixException, IOException {
         Objects.requireNonNull(cadesDer, "cadesDer must not be null");
+        Objects.requireNonNull(limits, "limits must not be null");
         Objects.requireNonNull(chain, "chain must not be null");
         Objects.requireNonNull(crlsForChain, "crlsForChain must not be null");
         Objects.requireNonNull(ocspForChain, "ocspForChain must not be null");
-
-        byte[] current = cadesDer.clone();
+        Objects.requireNonNull(policy, "policy must not be null");
 
         if (crlsForChain.size() != chain.size()) {
             throw new PkixException(
@@ -555,14 +658,394 @@ public final class CAdESExtender {
             throw new PkixException(
                     "ocspForChain size " + ocspForChain.size() + " != chain size " + chain.size());
         }
+        if (tspUrl == null || tspTransport == null) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-X Long Type 1 requires TSP URL/transport for escTimeStamp");
+        }
 
-        if (tspUrl != null) {
+        requireNoEscTimestamp(cadesDer);
+        TimestampPresence presence = signatureTimestampPresence(cadesDer);
+        if (presence == TimestampPresence.MIXED) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-X Long: signature-time-stamp is present for some signers only");
+        }
+
+        byte[] current = cadesDer.clone();
+        if (presence == TimestampPresence.NONE) {
             current = addTimestamp(current, tspUrl, tspTransport, trustedTsaCerts);
         }
 
-        current = embedCompleteRefs(current, chain, crlsForChain, ocspForChain);
+        // КриптоПро считает действительным только такой signature-time-stamp,
+        // внутри которого уже лежат X-Long-доказательства для цепочки TSA:
+        // CertificateRefs, RevocationRefs, certificate-values и revocation-values.
+        // Эти атрибуты не входят в подпись TST (она покрывает только signedAttrs),
+        // поэтому их можно добавить после получения токена. Обновлённый токен
+        // обязан попасть в esc-хеш, поэтому шаг выполняется до escTimeStamp.
+        current =
+                injectTimestampChainEvidence(
+                        current, chain, crlsForChain, ocspForChain, trustedTsaCerts);
 
-        return embedXLongValues(current, chain, crlsForChain, ocspForChain);
+        byte[][] refs = buildCompleteRefsAttributes(chain, crlsForChain, ocspForChain);
+        current =
+                replaceUnsignedAttrs(
+                        current,
+                        new String[] {
+                            GostOids.COMPLETE_CERTIFICATE_REFS, GostOids.COMPLETE_REVOCATION_REFS
+                        },
+                        refs);
+
+        List<Instant> signatureTimes = extractSignatureTimestampInstants(current);
+        Instant tSigMin = minInstant(signatureTimes);
+        Instant tSigMax = maxInstant(signatureTimes);
+        List<CertRevocationEvidence> evidence =
+                buildEvidenceForChain(chain, crlsForChain, ocspForChain);
+
+        // Ранняя проверка без esc-запроса: collection = now (не раньше t_sig).
+        Instant preCollection = Instant.now();
+        if (preCollection.isBefore(tSigMin)) {
+            preCollection = tSigMin;
+        }
+        validateEmbedEvidence(
+                chain,
+                evidence,
+                new RevocationEvidenceWindow(tSigMin, preCollection),
+                policy,
+                limits);
+
+        EscEmbedResult esc = embedEscTimestamps(current, tspUrl, tspTransport, trustedTsaCerts);
+        Instant tEsc = esc.minGenTime();
+        if (tSigMax.isAfter(tEsc.plusMillis(GostOids.CLOCK_SKEW_MS))) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-X Long: escTimeStamp is earlier than signature-time-stamp");
+        }
+        if (tSigMin.isAfter(tEsc)) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-X Long: signature-time-stamp is after escTimeStamp");
+        }
+
+        validateEmbedEvidence(
+                chain, evidence, new RevocationEvidenceWindow(tSigMin, tEsc), policy, limits);
+
+        return embedXLongValues(esc.cadesDer(), chain, crlsForChain, ocspForChain);
+    }
+
+    private static void validateEmbedEvidence(
+            List<GostCertificate> chain,
+            List<CertRevocationEvidence> evidence,
+            RevocationEvidenceWindow window,
+            RevocationFreshnessPolicy policy,
+            CrlLimits limits)
+            throws PkixException {
+        try {
+            ChainValidator.validateRevocationEvidence(chain, evidence, window, policy, limits);
+        } catch (PkixException e) {
+            String hint =
+                    policy == RevocationFreshnessPolicy.STRICT
+                                    && e.reason()
+                                            == PkixException.Reason
+                                                    .REVOCATION_EVIDENCE_OUT_OF_WINDOW
+                            ? "; evidence issued before signature time; obtain a fresh CRL/OCSP "
+                                    + "or select ETSI_DEFAULT"
+                            : "";
+            throw new PkixException(
+                    e.reason(),
+                    "CAdES-X Long: revocation evidence does not satisfy "
+                            + policy
+                            + " ("
+                            + e.getMessage()
+                            + ")"
+                            + hint,
+                    e);
+        }
+    }
+
+    /**
+     * Добавляет X-Long-доказательства в каждый signature-time-stamp токен.
+     *
+     * <p>ПОЧЕМУ: КриптоПро при проверке escTimeStamp строит цепочку TSA не из
+     * хранилища, а из вложенных в токен ссылок и значений. Без них токен
+     * отклоняется как недействительный штамп. Подпись TST покрывает только
+     * signedAttrs, поэтому unsignedAttrs можно добавить без перевычисления
+     * подписи. Обновлённый токен обязан попасть в esc-хеш, поэтому метод
+     * вызывается до запроса escTimeStamp.</p>
+     */
+    private static byte[] injectTimestampChainEvidence(
+            byte[] cadesDer,
+            List<GostCertificate> mainChain,
+            List<GostCrl> crlsForChain,
+            List<GostOcspResponse> ocspForChain,
+            GostCertificate... trustedTsaCerts)
+            throws PkixException {
+
+        CmsContentInfo contentInfo = CmsContentInfo.decode(cadesDer);
+        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "Not a SignedData: " + contentInfo.contentType());
+        }
+        SignedDataParts sd = SignedDataParts.parse(contentInfo.content());
+        byte[][] signerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
+
+        List<GostCertificate> candidates = new ArrayList<>(mainChain);
+        for (GostCertificate cert : extractEmbeddedCerts(cadesDer)) {
+            addIfAbsent(candidates, cert);
+        }
+
+        List<byte[]> modified = new ArrayList<>(signerInfos.length);
+        for (byte[] signerInfo : signerInfos) {
+            modified.add(
+                    addEvidenceToTimestampAttrs(
+                            signerInfo, candidates, crlsForChain, ocspForChain, trustedTsaCerts));
+        }
+        byte[] newSignerInfos = DerCodec.encodeSetOf(modified.toArray(new byte[0][]));
+        byte[] newSignedData = sd.rebuild(sd.certs(), newSignerInfos);
+        return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, newSignedData);
+    }
+
+    private static byte[] addEvidenceToTimestampAttrs(
+            byte[] signerInfoDer,
+            List<GostCertificate> candidates,
+            List<GostCrl> crlsForChain,
+            List<GostOcspResponse> ocspForChain,
+            GostCertificate... trustedTsaCerts)
+            throws PkixException {
+        byte[][] siParts = DerCodec.parseSequenceContents(signerInfoDer, 0);
+        int unsignedIdx = findUnsignedAttrsIndex(siParts);
+        if (unsignedIdx < 0) {
+            return signerInfoDer;
+        }
+        byte[] content = unsignedAttrsContent(siParts);
+        List<byte[]> attrs = new ArrayList<>();
+        for (byte[] attrDer : parseAttributeTlvs(content)) {
+            CmsAttribute attr = CmsAttribute.decode(attrDer);
+            if (!GostOids.SIGNATURE_TIME_STAMP.equals(attr.attrType())) {
+                attrs.add(attrDer);
+                continue;
+            }
+            byte[][] values = attr.attrValues();
+            byte[][] updatedValues = new byte[values.length][];
+            for (int i = 0; i < values.length; i++) {
+                updatedValues[i] =
+                        addEvidenceToTimestampToken(
+                                values[i],
+                                candidates,
+                                crlsForChain,
+                                ocspForChain,
+                                false,
+                                trustedTsaCerts);
+            }
+            attrs.add(CmsAttribute.encode(attr.attrType(), updatedValues));
+        }
+        byte[][] sorted = attrs.toArray(new byte[0][]);
+        DerCodec.sortDer(sorted);
+        siParts[unsignedIdx] = DerCodec.encodeContextConstructed(1, DerCodec.concat(sorted));
+        return DerCodec.encodeSequence(siParts);
+    }
+
+    private static byte[] addEvidenceToTimestampToken(
+            byte[] tokenDer,
+            List<GostCertificate> candidates,
+            List<GostCrl> crlsForChain,
+            List<GostOcspResponse> ocspForChain,
+            boolean keepCertificates,
+            GostCertificate... trustedTsaCerts)
+            throws PkixException {
+        CmsContentInfo contentInfo = CmsContentInfo.decode(tokenDer);
+        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "TimeStampToken is not SignedData: " + contentInfo.contentType());
+        }
+        SignedDataParts sd = SignedDataParts.parse(contentInfo.content());
+        List<GostCertificate> tokenCerts = extractEmbeddedCerts(tokenDer);
+
+        byte[][] tstSignerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
+        if (tstSignerInfos.length == 0) {
+            throw new PkixException(PkixException.Reason.OTHER, "TimeStampToken has no SignerInfo");
+        }
+        GostCertificate tsaCert =
+                findTimestampSignerCert(tstSignerInfos[0], tokenCerts, candidates);
+        if (tsaCert == null) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-X Long: TSA signer certificate not found in timestamp token");
+        }
+
+        List<GostCertificate> pool = new ArrayList<>(tokenCerts);
+        for (GostCertificate cert : candidates) {
+            addIfAbsent(pool, cert);
+        }
+        // Якоря цепочки TSA - только явно переданные доверенные сертификаты TSA.
+        // Корень цепочки подписанта сюда не подставляется: он не обязан доверять
+        // чужому TSA. Если TSA сам доверенный, buildChain вернёт [TSA], и вложение
+        // будет содержать только его сертификат без ссылок.
+        List<GostCertificate> anchors = new ArrayList<>(Arrays.asList(trustedTsaCerts));
+        List<GostCertificate> tsaChain;
+        try {
+            tsaChain = CertChainBuilder.buildChain(tsaCert, pool, anchors);
+        } catch (PkixException e) {
+            // Без вложенных доказательств КриптоПро отвергает штамп подписи, поэтому
+            // тихий пропуск выпускал бы заведомо невалидный X Long.
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-X Long: cannot build TSA certificate chain for embedded evidence;"
+                            + " pass the TSA root as trusted: "
+                            + e.getMessage(),
+                    e);
+        }
+
+        CAdESCompleteData.CompleteRefsResult refs = buildTimestampChainRefs(tsaChain, crlsForChain);
+        byte[][] refAttrs = encodeCompleteRefsAttributes(refs);
+
+        List<GostCertificate> reversedChain = new ArrayList<>(tsaChain);
+        Collections.reverse(reversedChain);
+        byte[] certValuesAttr =
+                CmsAttribute.encode(
+                        GostOids.CERTIFICATE_VALUES,
+                        CAdESXLongData.encodeCertificateValues(reversedChain));
+
+        GostCrl tsaCrl = findCrlForIssuer(crlsForChain, tsaCert.getIssuerDnBytes());
+        List<GostCrl> tsaCrls = tsaCrl != null ? List.of(tsaCrl) : List.of();
+        byte[] revocValuesAttr =
+                CmsAttribute.encode(
+                        GostOids.REVOCATION_VALUES,
+                        CAdESXLongData.encodeRevocationValues(tsaCrls, List.of()));
+
+        List<byte[]> modified = new ArrayList<>(tstSignerInfos.length);
+        for (byte[] signerInfo : tstSignerInfos) {
+            modified.add(
+                    replaceUnsignedAttrsDer(
+                            signerInfo,
+                            new String[] {
+                                GostOids.COMPLETE_CERTIFICATE_REFS,
+                                GostOids.COMPLETE_REVOCATION_REFS,
+                                GostOids.CERTIFICATE_VALUES,
+                                GostOids.REVOCATION_VALUES
+                            },
+                            new byte[][] {
+                                refAttrs[0], refAttrs[1], certValuesAttr, revocValuesAttr
+                            }));
+        }
+        byte[] newSignerInfos = DerCodec.encodeSetOf(modified.toArray(new byte[0][]));
+        // КриптоПро в signature-time-stamp оставляет certificates пустым, а TSA
+        // и корень берёт из вложенного certValues. Если оставить сертификат TSA
+        // в certificates, без AKI цепочка не строится (0x800B010A).
+        byte[] newSignedData = sd.rebuild(keepCertificates ? sd.certs() : null, newSignerInfos);
+        return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, newSignedData);
+    }
+
+    /**
+     * Строит ссылки для цепочки TSA. В отличие от цепочки подписанта, корень
+     * входит в CertificateRefs: КриптоПро включает его для TSA-цепочки.
+     */
+    private static CAdESCompleteData.CompleteRefsResult buildTimestampChainRefs(
+            List<GostCertificate> tsaChain, List<GostCrl> crlsForChain) throws PkixException {
+        GostCertificate tsaCert = tsaChain.get(0);
+        String hashOid = GostSignatureHelper.keySizeToDigestOid(tsaCert.getKeySize());
+
+        List<CAdESCompleteData.OtherCertID> certRefs = new ArrayList<>();
+        for (int i = 1; i < tsaChain.size(); i++) {
+            GostCertificate ca = tsaChain.get(i);
+            byte[] hash = GostSignatureHelper.digestByOid(hashOid, ca.getEncoded());
+            certRefs.add(
+                    new CAdESCompleteData.OtherCertID(
+                            new CAdESCompleteData.OtherHash(hashOid, hash),
+                            new CAdESCompleteData.IssuerSerial(
+                                    ca.getIssuerDnBytes(), ca.getSerialNumberBigInt())));
+        }
+
+        List<CAdESCompleteData.CrlOcspRef> revocRefs = new ArrayList<>();
+        GostCrl tsaCrl = findCrlForIssuer(crlsForChain, tsaCert.getIssuerDnBytes());
+        List<CAdESCompleteData.CrlValidatedID> crlIds = new ArrayList<>();
+        if (tsaCrl != null) {
+            byte[] crlHash = GostSignatureHelper.digestByOid(hashOid, tsaCrl.getEncoded());
+            crlIds.add(
+                    new CAdESCompleteData.CrlValidatedID(
+                            new CAdESCompleteData.OtherHash(hashOid, crlHash),
+                            new CAdESCompleteData.CrlIdentifier(
+                                    tsaCrl.getIssuerDnBytes(),
+                                    GostSignatureHelper.formatUtcTime(tsaCrl.getThisUpdate()),
+                                    tsaCrl.getCrlNumber())));
+        }
+        revocRefs.add(new CAdESCompleteData.CrlOcspRef(crlIds, List.of()));
+        // По одному CrlOcspRef на каждую запись CertificateRefs, в том же порядке.
+        // Для корня КриптоПро пишет пустой SEQUENCE: отзыва корня в X-Long нет.
+        for (int i = 1; i < tsaChain.size(); i++) {
+            revocRefs.add(new CAdESCompleteData.CrlOcspRef(List.of(), List.of()));
+        }
+        return new CAdESCompleteData.CompleteRefsResult(certRefs, revocRefs);
+    }
+
+    private static GostCertificate findTimestampSignerCert(
+            byte[] signerInfoDer,
+            List<GostCertificate> tokenCerts,
+            List<GostCertificate> candidates)
+            throws PkixException {
+        byte[][] parts = DerCodec.parseSequenceContents(signerInfoDer, 0);
+        if (parts.length < 2) {
+            return null;
+        }
+        CmsIssuerAndSerialNumber sid = CmsIssuerAndSerialNumber.decode(parts[1]);
+        GostCertificate cert = findCertBySid(sid, tokenCerts);
+        if (cert != null) {
+            return cert;
+        }
+        // Сертификат из пула кандидатов привязывается к signingCertificateV2 так же,
+        // как при проверке: иначе подмена на сертификат с тем же sid прошла бы до
+        // построения цепочки.
+        List<GostCertificate> sidMatches = new ArrayList<>();
+        for (GostCertificate candidate : candidates) {
+            if (candidate.getSerialNumberBigInt().equals(sid.serial())
+                    && Arrays.equals(candidate.getIssuerDnBytes(), sid.issuer())
+                    && !containsDer(sidMatches, candidate)) {
+                sidMatches.add(candidate);
+            }
+        }
+        if (sidMatches.isEmpty()) {
+            return null;
+        }
+        return CmsSignedDataVerifier.selectBoundCandidate(sidMatches, signedAttributesOf(parts));
+    }
+
+    /** Разбирает подписанные атрибуты SignerInfo (пустой список, если их нет). */
+    private static List<CmsAttribute> signedAttributesOf(byte[][] signerInfoParts)
+            throws PkixException {
+        List<CmsAttribute> result = new ArrayList<>();
+        for (byte[] part : signerInfoParts) {
+            if (!DerCodec.isContextTag(part, 0)) {
+                continue;
+            }
+            int[] lenInfo = DerCodec.decodeLength(part, 1);
+            byte[] content = Arrays.copyOfRange(part, 1 + lenInfo[1], part.length);
+            for (byte[] attrDer : parseAttributeTlvs(content)) {
+                result.add(CmsAttribute.decode(attrDer));
+            }
+            break;
+        }
+        return result;
+    }
+
+    private static GostCertificate findCertBySid(
+            CmsIssuerAndSerialNumber sid, List<GostCertificate> certs) {
+        for (GostCertificate cert : certs) {
+            if (cert.getSerialNumberBigInt().equals(sid.serial())
+                    && Arrays.equals(cert.getIssuerDnBytes(), sid.issuer())) {
+                return cert;
+            }
+        }
+        return null;
+    }
+
+    private static GostCrl findCrlForIssuer(List<GostCrl> crls, byte[] issuerDn) {
+        for (GostCrl crl : crls) {
+            if (crl != null && Arrays.equals(crl.getIssuerDnBytes(), issuerDn)) {
+                return crl;
+            }
+        }
+        return null;
     }
 
     /**
@@ -590,23 +1073,45 @@ public final class CAdESExtender {
 
         byte[][] origSignerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
 
-        byte[] certValuesDer = CAdESXLongData.encodeCertificateValues(chain);
-        byte[] certValuesAttr = CmsAttribute.encode(GostOids.CERTIFICATE_VALUES, certValuesDer);
+        // КриптоПро кладёт в certificate-values всю цепочку, включая подписанта
+        // и корень. Это допустимо по RFC 5126 §6.3.3 и нужно, чтобы проверка
+        // escTimeStamp могла построить цепочку TSA из самого сообщения.
+        List<GostCertificate> referencedCerts = new ArrayList<>(chain);
+        // Сертификаты делегированных OCSP-ответчиков указаны в ссылках, значит обязаны
+        // лежать и в certificate-values (иначе КриптоПро не найдёт сертификат ответчика).
+        referencedCerts.addAll(ocspResponderCertificates(chain, ocspForChain));
 
-        int revocEnd = Math.max(1, chain.size() - 1);
-        byte[] revocValuesDer =
-                CAdESXLongData.encodeRevocationValues(
-                        crlsForChain.subList(0, revocEnd), ocspForChain.subList(0, revocEnd));
+        // Значения отзыва для всех звеньев, у которых есть доказательство (в том числе
+        // у корня, если его CRL/OCSP передан): хеши ссылок сверяются со значениями.
+        byte[] revocValuesDer = CAdESXLongData.encodeRevocationValues(crlsForChain, ocspForChain);
         byte[] revocValuesAttr = CmsAttribute.encode(GostOids.REVOCATION_VALUES, revocValuesDer);
+
+        List<String> replaceOids = new ArrayList<>();
+        List<byte[]> replaceAttrs = new ArrayList<>();
+        replaceOids.add(GostOids.CERTIFICATE_VALUES);
+        replaceOids.add(GostOids.REVOCATION_VALUES);
+        if (!referencedCerts.isEmpty()) {
+            replaceAttrs.add(
+                    CmsAttribute.encode(
+                            GostOids.CERTIFICATE_VALUES,
+                            CAdESXLongData.encodeCertificateValues(referencedCerts)));
+        } else {
+            replaceAttrs.add(null);
+        }
+        replaceAttrs.add(revocValuesAttr);
 
         List<byte[]> modifiedSignerInfos = new ArrayList<>();
         for (byte[] signerInfoDer : origSignerInfos) {
-            byte[] modified = injectUnsignedAttrDer(signerInfoDer, certValuesAttr);
-            modified = injectUnsignedAttrDer(modified, revocValuesAttr);
+            byte[] modified =
+                    replaceUnsignedAttrsDer(
+                            signerInfoDer,
+                            replaceOids.toArray(new String[0]),
+                            replaceAttrs.toArray(new byte[0][]));
             modifiedSignerInfos.add(modified);
         }
 
-        byte[] newCerts = mergeChainCerts(existingCerts, chain);
+        List<GostCertificate> certCandidates = new ArrayList<>(chain);
+        byte[] newCerts = mergeChainCerts(existingCerts, certCandidates);
 
         byte[] newSignerInfos = DerCodec.encodeSetOf(modifiedSignerInfos.toArray(new byte[0][]));
 
@@ -624,11 +1129,12 @@ public final class CAdESExtender {
      * Внутри преобразует {@code byte[]} в доменные объекты и делегирует в
      * основной метод.
      *
-     * @param cadesDer        CAdES-BES или CAdES-T подпись
+     * @param cadesDer        CAdES-T или CAdES-C подпись
      * @param chain           цепочка [signer, intermediates..., trustedRoot]
      * @param revocationData  данные отзыва — parallel list (допускается null для элемента)
      * @return CAdES-C подпись
-     * @throws PkixException при ошибке разбора или несоответствии размеров списков
+     * @throws PkixException при ошибке разбора, отсутствии signature-time-stamp
+     *                       или несоответствии размеров списков
      */
     public static byte[] embedCompleteRefs(
             byte[] cadesDer, List<GostCertificate> chain, List<CertRevocationData> revocationData)
@@ -681,1082 +1187,6 @@ public final class CAdESExtender {
     }
 
     // ========================================================================
-    // Верификация CAdES-BES / CAdES-T
-    // ========================================================================
-
-    /**
-     * Верифицирует CAdES-BES подпись (без меток времени).
-     *
-     * <p>Для каждого подписанта выполняет:
-     * <ol>
-     *   <li>Проверка CMS-подписи (AND-семантика: все подписанты обязаны пройти)</li>
-     *   <li>Проверка {@code signingCertificateV2} в signed-атрибутах — fail-closed</li>
-     * </ol>
-     *
-     * <p>Метки времени <b>не требуются</b> — в отличие от {@link #verifyCAdEST}, который
-     * дополнительно проверяет {@code signature-time-stamp} в unsigned-атрибутах.
-     * Если на вход передан CAdES-T с метками — метки игнорируются;
-     * для верификации меток используйте {@link #verifyCAdEST}.
-     *
-     * @param cadesBesDer  CAdES-BES подпись (CMS SignedData с signingCertificateV2)
-     * @param trustedCerts доверенные корневые сертификаты подписанта
-     * @return результат с данными и сертификатами подписантов (без меток)
-     * @throws PkixException при любой ошибке верификации (fail-closed)
-     */
-    public static VerifiedCAdESData verifyCAdESBES(
-            byte[] cadesBesDer, GostCertificate... trustedCerts) throws PkixException {
-        Objects.requireNonNull(cadesBesDer, "cadesBesDer must not be null");
-        if (trustedCerts.length == 0) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "CAdES-BES verification requires at least one trusted certificate");
-        }
-
-        MultiSignerVerifiedData cmsResult =
-                CmsSignedDataVerifier.verifyAll(cadesBesDer, trustedCerts);
-
-        List<CAdESSignerResult> signerResults = new ArrayList<>();
-        for (SignerResult sr : cmsResult.signers()) {
-            verifySigningCertV2ForSigner(sr);
-            signerResults.add(
-                    new CAdESSignerResult(
-                            sr.signerCertificate(),
-                            sr.signedAttributes(),
-                            List.of(),
-                            List.of(),
-                            List.of(),
-                            List.of(),
-                            List.of(),
-                            CAdESXLongData.RevocationValuesDecoded.EMPTY,
-                            null));
-        }
-
-        return new VerifiedCAdESData(cmsResult.data(), signerResults);
-    }
-
-    // ========================================================================
-    // Верификация CAdES-T
-    // ========================================================================
-
-    /**
-     * Верифицирует CAdES-T подпись.
-     *
-     * <p>Для каждого подписанта выполняет:
-     * <ol>
-     *   <li>Проверка CMS-подписи (AND-семантика: все подписанты обязаны пройти)</li>
-     *   <li>Проверка {@code signingCertificateV2} в signed-атрибутах — fail-closed</li>
-     *   <li>Проверка {@code signature-time-stamp} в unsigned-атрибутах:
-     *     <ul>
-     *       <li>messageImprint == hash(подписи подписанта)</li>
-     *       <li>Подпись TSA на TimeStampToken валидна</li>
-     *       <li>Цепочка TSA валидна</li>
-     *       <li>Сертификат подписанта действителен на genTime метки</li>
-     *     </ul>
-     *   </li>
-     * </ol>
-     *
-     * @param cadesTDer    CAdES-T подпись (CMS SignedData с signingCertificateV2 и метками)
-     * @param trustedCerts доверенные корневые сертификаты (подписанта + TSA)
-     * @return результат с данными и верифицированными подписантами
-     * @throws PkixException при любой ошибке верификации (fail-closed)
-     *
-     * <p><b>Не проверяет:</b> content-time-stamp (ES-C, signed-атрибут CONTENT_TIME_STAMP).
-     * Верификация content-timestamp — только в {@link #verifyCAdESXLong}.
-     */
-    public static VerifiedCAdESData verifyCAdEST(byte[] cadesTDer, GostCertificate... trustedCerts)
-            throws PkixException {
-        Objects.requireNonNull(cadesTDer, "cadesTDer must not be null");
-        if (trustedCerts.length == 0) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "CAdES-T verification requires at least one trusted certificate");
-        }
-
-        CAdESTInternalResult internal = verifyCAdESTInternal(cadesTDer, trustedCerts);
-        for (CAdESSignerResult sr : internal.signerResults()) {
-            if (sr.timestamps().isEmpty()) {
-                throw new PkixException(
-                        PkixException.Reason.OTHER,
-                        "CAdES-T: no signature-time-stamp in unsignedAttrs for signer");
-            }
-        }
-        return new VerifiedCAdESData(internal.cmsResult().data(), internal.signerResults());
-    }
-
-    // ========================================================================
-    // Верификация CAdES-C (Complete validation data references)
-    // ========================================================================
-
-    /**
-     * Верифицирует CAdES-C подпись (CAdES-T + Complete validation data references).
-     *
-     * <p>Для каждого подписанта выполняет (RFC 5126 §6.2):
-     * <ol>
-     *   <li>Проверка CMS-подписи (AND-семантика)</li>
-     *   <li>Проверка signingCertificateV2 (CAdES-BES)</li>
-     *   <li>Проверка signature-time-stamp (CAdES-T)</li>
-     *   <li>Проверка complete-certificate-references:
-     *     <ul>
-     *       <li>Атрибут присутствует, ровно один экземпляр</li>
-     *       <li>Для каждого OtherCertID: certHash совпадает с сертификатом из embedded certs
-     *           (dispatch строго по OID из OtherHash — whitelist Стрибог-256/512,
-     *           PkixException на любой другой OID)</li>
-     *       <li>Нет дубликатов (issuer + serial)</li>
-     *       <li>Не превышены DoS-лимиты</li>
-     *     </ul>
-     *   </li>
-     *   <li>Проверка complete-revocation-references:
-     *     <ul>
-     *       <li>Атрибут присутствует, ровно один экземпляр</li>
-     *       <li>Количество CrlOcspRef = количество OtherCertID + 1</li>
-     *       <li>Каждый CrlOcspRef содержит хотя бы один crlList ИЛИ ocspList</li>
-     *       <li>crlNumber (если есть) логически non-negative</li>
-     *     </ul>
-     *   </li>
-     * </ol>
-     *
-     * <p>crlHash НЕ сверяется с актуальными CRL — CRL не эмбеддятся в конверт.
-     * Проверка crlHash deferred to X-Long (где CRL встроены в revocation-values).
-     * Фактический статус отзыва сертификатов не проверяется на C-уровне.
-     *
-     * <p><b>Не проверяет:</b> content-time-stamp (ES-C, signed-атрибут CONTENT_TIME_STAMP).
-     * Верификация content-timestamp — только в {@link #verifyCAdESXLong}.
-     *
-     * @param cadesCDer     CAdES-C подпись (CMS SignedData с C-атрибутами)
-     * @param trustedCerts  доверенные корневые сертификаты (подписанта + TSA)
-     * @return результат с C-референсами для каждого подписанта
-     * @throws PkixException при любой ошибке (fail-closed)
-     */
-    public static VerifiedCAdESData verifyCAdESC(byte[] cadesCDer, GostCertificate... trustedCerts)
-            throws PkixException {
-        Objects.requireNonNull(cadesCDer, "cadesCDer must not be null");
-        if (trustedCerts.length == 0) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "CAdES-C verification requires at least one trusted certificate");
-        }
-
-        CAdESTInternalResult internal = verifyCAdESTInternal(cadesCDer, trustedCerts);
-
-        List<CAdESSignerResult> cadescResults = new ArrayList<>();
-        List<SignerResult> signers = internal.cmsResult().signers();
-        for (int i = 0; i < signers.size(); i++) {
-            SignerResult sr = signers.get(i);
-            CAdESSignerResult besTResult = internal.signerResults().get(i);
-
-            List<CAdESCompleteData.OtherCertID> certRefs =
-                    extractAndVerifyCertificateRefs(sr, internal.embeddedCerts());
-            List<CAdESCompleteData.CrlOcspRef> revocRefs =
-                    extractAndVerifyRevocationRefs(sr, certRefs.size() + 1);
-
-            cadescResults.add(
-                    new CAdESSignerResult(
-                            besTResult.signerCertificate(),
-                            besTResult.signedAttributes(),
-                            besTResult.timestamps(),
-                            besTResult.countersignatures(),
-                            certRefs,
-                            revocRefs,
-                            List.of(),
-                            CAdESXLongData.RevocationValuesDecoded.EMPTY,
-                            null));
-        }
-
-        return new VerifiedCAdESData(internal.cmsResult().data(), cadescResults);
-    }
-
-    // ========================================================================
-    // Верификация CAdES-X Long Type 1
-    // ========================================================================
-
-    /**
-     * Верифицирует CAdES-X Long Type 1 (CAdES-C + certificate-values + revocation-values).
-     *
-     * <p>Полная проверка долгосрочной подписи (fail-closed, любое нарушение → PkixException):
-     * <ol>
-     *   <li>CMS-подпись (AND-семантика)</li>
-     *   <li>signingCertificateV2 (CAdES-BES)</li>
-     *   <li>signature-time-stamp (CAdES-T)</li>
-     *   <li>complete-certificate-references + complete-revocation-references (CAdES-C)</li>
-     *   <li>certificate-values: certHash/IssuerSerial каждого OtherCertID совпадает
-     *       с embedded сертификатом, цепочка сертификатов валидна</li>
-     *   <li>revocation-values: crlHash/OcspRepHash каждой CrlOcspRef совпадает с embedded
-     *       CRL/OCSP, подписи CRL/OCSP валидны, сертификаты цепочки НЕ отозваны</li>
-     * </ol>
-     *
-     * <p>Закрывает deferred-проверку crlHash из C-уровня (план 224):
-     * crlHash из complete-revocation-references сверяется с embedded CRL
-     * из revocation-values.
-     *
-     * @param cadesXLongDer CAdES-X Long Type 1 DER
-     * @param trustedCerts  доверенные корневые сертификаты (подписанта + TSA)
-     * @return результат с certificate-values и revocation-values
-     * @throws PkixException при любой ошибке (fail-closed)
-     */
-    public static VerifiedCAdESData verifyCAdESXLong(
-            byte[] cadesXLongDer, GostCertificate... trustedCerts) throws PkixException {
-        Objects.requireNonNull(cadesXLongDer, "cadesXLongDer must not be null");
-        if (trustedCerts.length == 0) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "CAdES-X Long verification requires at least one trusted certificate");
-        }
-
-        CAdESTInternalResult internal = verifyCAdESTInternal(cadesXLongDer, trustedCerts);
-        List<GostCertificate> embeddedCerts = internal.embeddedCerts();
-
-        List<CAdESSignerResult> xlongResults = new ArrayList<>();
-        List<SignerResult> signers = internal.cmsResult().signers();
-        for (int i = 0; i < signers.size(); i++) {
-            SignerResult sr = signers.get(i);
-            CAdESSignerResult besTResult = internal.signerResults().get(i);
-
-            List<CAdESCompleteData.OtherCertID> certRefs =
-                    extractAndVerifyCertificateRefs(sr, embeddedCerts);
-            List<CAdESCompleteData.CrlOcspRef> revocRefs =
-                    extractAndVerifyRevocationRefs(sr, certRefs.size() + 1);
-
-            GostCertificate signerCert = sr.signerCertificate();
-
-            TstInfo contentTimestamp = extractAndVerifyContentTimestamp(sr, trustedCerts);
-
-            CAdESXLongData.RevocationValuesDecoded revocValues =
-                    extractAndVerifyRevocationValues(sr, revocRefs, embeddedCerts);
-            List<GostCertificate> certValues =
-                    extractAndVerifyCertificateValues(
-                            sr,
-                            certRefs,
-                            revocRefs,
-                            embeddedCerts,
-                            revocValues,
-                            signerCert,
-                            trustedCerts);
-
-            xlongResults.add(
-                    new CAdESSignerResult(
-                            signerCert,
-                            besTResult.signedAttributes(),
-                            besTResult.timestamps(),
-                            besTResult.countersignatures(),
-                            certRefs,
-                            revocRefs,
-                            certValues,
-                            revocValues,
-                            contentTimestamp));
-        }
-
-        return new VerifiedCAdESData(internal.cmsResult().data(), xlongResults);
-    }
-
-    /**
-     * Извлекает и верифицирует certificate-values из unsignedAttrs.
-     *
-     * <p>Сверяет каждый embedded сертификат с OtherCertID из C-референсов:
-     * certHash совпадает (dispatch по OID из OtherHash), IssuerSerial совпадает.
-     * Строит и валидирует цепочку сертификатов через ChainValidator.
-     */
-    private static List<GostCertificate> extractAndVerifyCertificateValues(
-            SignerResult sr,
-            List<CAdESCompleteData.OtherCertID> certRefs,
-            List<CAdESCompleteData.CrlOcspRef> revocRefs,
-            List<GostCertificate> embeddedCerts,
-            CAdESXLongData.RevocationValuesDecoded revocValues,
-            GostCertificate signerCert,
-            GostCertificate[] trustedCerts)
-            throws PkixException {
-
-        CmsAttribute attr = findAttrByOid(sr.unsignedAttributes(), GostOids.CERTIFICATE_VALUES);
-        if (attr == null) {
-            throw new PkixException(
-                    "CAdES-X Long: certificate-values attribute not found in unsignedAttrs");
-        }
-        byte[][] attrValues = attr.attrValues();
-        if (attrValues.length != 1) {
-            throw new PkixException(
-                    "CAdES-X Long: expected exactly one certificate-values value, got "
-                            + attrValues.length);
-        }
-
-        if (attrValues[0].length > CmsConstants.MAX_CERT_VALUES_SIZE) {
-            throw new PkixException(
-                    "CAdES-X Long: certificate-values size exceeds limit, size="
-                            + attrValues[0].length);
-        }
-
-        List<GostCertificate> certValues = CAdESXLongData.decodeCertificateValues(attrValues[0]);
-
-        for (CAdESCompleteData.OtherCertID ref : certRefs) {
-            byte[] expectedHash = ref.otherCertHash().hashValue();
-            String hashOid = ref.otherCertHash().hashOid();
-            byte[] expectedIssuerDer = ref.issuerSerial().issuerDer();
-            BigInteger expectedSerial = ref.issuerSerial().serial();
-
-            boolean matched = false;
-            for (GostCertificate cv : certValues) {
-                byte[] actualHash = GostSignatureHelper.digestByOid(hashOid, cv.getEncoded());
-                if (!MessageDigest.isEqual(expectedHash, actualHash)) {
-                    continue;
-                }
-                if (!Arrays.equals(expectedIssuerDer, cv.getIssuerDnBytes())) {
-                    continue;
-                }
-                if (!expectedSerial.equals(cv.getSerialNumberBigInt())) {
-                    continue;
-                }
-                matched = true;
-                break;
-            }
-            if (!matched) {
-                throw new PkixException(
-                        "CAdES-X Long: certHash/IssuerSerial mismatch in certificate-values");
-            }
-        }
-
-        List<GostCertificate> fullChain = new ArrayList<>();
-        fullChain.add(signerCert);
-        for (GostCertificate cv : certValues) {
-            if (!Arrays.equals(cv.getEncoded(), signerCert.getEncoded())) {
-                fullChain.add(cv);
-            }
-        }
-
-        List<PublicKeyParameters> trustedKeys = new ArrayList<>();
-        for (GostCertificate tc : trustedCerts) {
-            trustedKeys.add(tc.getPublicKey());
-        }
-
-        ChainValidator.validateChain(fullChain, trustedKeys);
-
-        List<CertRevocationData> revocationData = new ArrayList<>(fullChain.size());
-        for (int i = 0; i < fullChain.size(); i++) {
-            byte[] crlDer = null;
-            byte[] ocspDer = null;
-            if (i < revocRefs.size()) {
-                CAdESCompleteData.CrlOcspRef ref = revocRefs.get(i);
-                for (CAdESCompleteData.CrlValidatedID cvi : ref.crlList()) {
-                    for (GostCrl crl : revocValues.crls()) {
-                        if (crl == null) continue;
-                        byte[] actualHash =
-                                GostSignatureHelper.digestByOid(
-                                        cvi.crlHash().hashOid(), crl.getEncoded());
-                        if (MessageDigest.isEqual(cvi.crlHash().hashValue(), actualHash)) {
-                            crlDer = crl.getEncoded();
-                            break;
-                        }
-                    }
-                    if (crlDer != null) break;
-                }
-                for (CAdESCompleteData.OcspResponsesID orid : ref.ocspList()) {
-                    for (GostOcspResponse ocsp : revocValues.ocspResponses()) {
-                        if (ocsp == null) continue;
-                        if (orid.ocspRepHash() == null) {
-                            ocspDer = ocsp.getEncoded();
-                            break;
-                        }
-                        byte[] actualHash =
-                                GostSignatureHelper.digestByOid(
-                                        orid.ocspRepHash().hashOid(), ocsp.getEncoded());
-                        if (MessageDigest.isEqual(orid.ocspRepHash().hashValue(), actualHash)) {
-                            ocspDer = ocsp.getEncoded();
-                            break;
-                        }
-                    }
-                    if (ocspDer != null) break;
-                }
-            }
-            if (ocspDer == null && crlDer == null) {
-                revocationData.add(null);
-            } else {
-                revocationData.add(new CertRevocationData(ocspDer, crlDer));
-            }
-        }
-        ChainValidator.validateChainWithRevocation(fullChain, trustedKeys, revocationData);
-
-        return certValues;
-    }
-
-    /**
-     * Извлекает и верифицирует revocation-values из unsignedAttrs.
-     *
-     * <p>Сверяет crlHash/OcspRepHash каждой CrlOcspRef с embedded CRL/OCSP
-     * из revocation-values. Проверяет подписи CRL и OCSP-ответов.
-     * Закрывает deferred-проверку crlHash из плана 224.
-     */
-    private static CAdESXLongData.RevocationValuesDecoded extractAndVerifyRevocationValues(
-            SignerResult sr,
-            List<CAdESCompleteData.CrlOcspRef> revocRefs,
-            List<GostCertificate> embeddedCerts)
-            throws PkixException {
-
-        CmsAttribute attr = findAttrByOid(sr.unsignedAttributes(), GostOids.REVOCATION_VALUES);
-        if (attr == null) {
-            throw new PkixException(
-                    "CAdES-X Long: revocation-values attribute not found in unsignedAttrs");
-        }
-        byte[][] attrValues = attr.attrValues();
-        if (attrValues.length != 1) {
-            throw new PkixException(
-                    "CAdES-X Long: expected exactly one revocation-values value, got "
-                            + attrValues.length);
-        }
-
-        if (attrValues[0].length > CmsConstants.MAX_REVOC_VALUES_SIZE) {
-            throw new PkixException(
-                    "CAdES-X Long: revocation-values size exceeds limit, size="
-                            + attrValues[0].length);
-        }
-
-        CAdESXLongData.RevocationValuesDecoded revocValues =
-                CAdESXLongData.decodeRevocationValues(attrValues[0]);
-
-        if (revocValues.crls().size() > CmsConstants.MAX_EMBEDDED_CRLS) {
-            throw new PkixException(
-                    "CAdES-X Long: CRL count exceeds limit: " + revocValues.crls().size());
-        }
-        if (revocValues.ocspResponses().size() > CmsConstants.MAX_OCSP_VALUES) {
-            throw new PkixException(
-                    "CAdES-X Long: OCSP count exceeds limit: "
-                            + revocValues.ocspResponses().size());
-        }
-
-        for (int i = 0; i < revocRefs.size(); i++) {
-            CAdESCompleteData.CrlOcspRef ref = revocRefs.get(i);
-
-            for (CAdESCompleteData.CrlValidatedID cvi : ref.crlList()) {
-                byte[] expectedCrlHash = cvi.crlHash().hashValue();
-                String hashOid = cvi.crlHash().hashOid();
-                boolean matched = false;
-                for (GostCrl crl : revocValues.crls()) {
-                    if (crl == null) {
-                        continue;
-                    }
-                    byte[] actualCrlHash =
-                            GostSignatureHelper.digestByOid(hashOid, crl.getEncoded());
-                    if (MessageDigest.isEqual(expectedCrlHash, actualCrlHash)) {
-                        matched = true;
-                        break;
-                    }
-                }
-                if (!matched) {
-                    throw new PkixException(
-                            "CAdES-X Long: crlHash mismatch at CrlOcspRef[" + i + "]");
-                }
-            }
-
-            for (CAdESCompleteData.OcspResponsesID orid : ref.ocspList()) {
-                boolean matched = false;
-                if (orid.ocspRepHash() != null) {
-                    byte[] expectedOcspHash = orid.ocspRepHash().hashValue();
-                    String hashOid = orid.ocspRepHash().hashOid();
-                    for (GostOcspResponse ocsp : revocValues.ocspResponses()) {
-                        if (ocsp == null) {
-                            continue;
-                        }
-                        byte[] actualOcspHash =
-                                GostSignatureHelper.digestByOid(hashOid, ocsp.getEncoded());
-                        if (MessageDigest.isEqual(expectedOcspHash, actualOcspHash)) {
-                            matched = true;
-                            break;
-                        }
-                    }
-                } else {
-                    matched = true;
-                }
-                if (!matched) {
-                    throw new PkixException(
-                            "CAdES-X Long: ocspRepHash mismatch at CrlOcspRef[" + i + "]");
-                }
-            }
-        }
-
-        return revocValues;
-    }
-
-    /**
-     * Извлекает и верифицирует content-time-stamp (ES-C) из signed-атрибутов.
-     *
-     * <p>ContentTimestamp = TimeStampToken (SignedData с TSTInfo).
-     * messageImprint = hash(контента) = messageDigest из signedAttrs.
-     * Проверяется: TST-подпись, цепочка TSA, messageImprint, nonce.
-     *
-     * @return TstInfo или null, если атрибут отсутствует
-     */
-    private static TstInfo extractAndVerifyContentTimestamp(
-            SignerResult sr, GostCertificate... trustedCerts) throws PkixException {
-        CmsAttribute attr = findAttrByOid(sr.signedAttributes(), GostOids.CONTENT_TIME_STAMP);
-        if (attr == null) {
-            return null;
-        }
-        byte[][] attrValues = attr.attrValues();
-        if (attrValues.length != 1) {
-            throw new PkixException(
-                    "CAdES-X Long: expected exactly one content-time-stamp value, got "
-                            + attrValues.length);
-        }
-
-        CmsAttribute mdAttr = findAttrByOid(sr.signedAttributes(), GostOids.ATTR_MESSAGE_DIGEST);
-        if (mdAttr == null || mdAttr.attrValues().length < 1) {
-            throw new PkixException(
-                    "CAdES-X Long: messageDigest not found for content-time-stamp check");
-        }
-
-        byte[] digestOctet = mdAttr.attrValues()[0];
-        byte[] contentDigest = DerCodec.parseOctetString(digestOctet, 0);
-
-        TspResponse tspResponse = TspResponse.parseTimeStampToken(attrValues[0]);
-
-        // ГОСТ-ключ жёстко привязан к варианту Стрибог: 256b -> Streebog-256, 512b -> Streebog-512
-        String hashOid =
-                sr.signerCertificate().getKeySize() == 512
-                        ? GostOids.DIGEST_512
-                        : GostOids.DIGEST_256;
-
-        tspResponse.verify(contentDigest, hashOid, null, trustedCerts);
-        checkCertValidityAtTime(sr.signerCertificate(), tspResponse.tstInfo().genTime());
-
-        return tspResponse.tstInfo();
-    }
-
-    /**
-     * Извлекает и верифицирует complete-certificate-references.
-     *
-     * <p>Для каждого OtherCertID ищет соответствующий сертификат
-     * в embedded certs и сверяет certHash. Dispatch по hashAlgorithm OID
-     * из DER — whitelist (Стрибог-256/512), PkixException при незнакомом OID.
-     * Запрещено определять алгоритм по размеру ключа на верификации.
-     */
-    private static List<CAdESCompleteData.OtherCertID> extractAndVerifyCertificateRefs(
-            SignerResult sr, List<GostCertificate> embeddedCerts) throws PkixException {
-
-        CmsAttribute attr =
-                findAttrByOid(sr.unsignedAttributes(), GostOids.COMPLETE_CERTIFICATE_REFS);
-        if (attr == null) {
-            throw new PkixException(
-                    "CAdES-C: complete-certificate-references attribute not found in unsignedAttrs");
-        }
-        byte[][] vals = attr.attrValues();
-        if (vals.length == 0) {
-            throw new PkixException(
-                    "CAdES-C: complete-certificate-references attribute has empty value");
-        }
-
-        // Проверка размера до parseSequenceContents
-        if (vals[0].length > CmsConstants.MAX_CERT_REFS_SIZE) {
-            throw new PkixException(
-                    "CAdES-C: complete-certificate-references size "
-                            + vals[0].length
-                            + " exceeds limit "
-                            + CmsConstants.MAX_CERT_REFS_SIZE);
-        }
-
-        List<CAdESCompleteData.OtherCertID> certRefs;
-        try {
-            certRefs = CAdESCompleteData.decodeCompleteCertificateRefs(vals[0]);
-        } catch (IllegalArgumentException e) {
-            throw new PkixException(
-                    PkixException.Reason.PARSE_ERROR,
-                    "CAdES-C: malformed complete-certificate-references DER: " + e.getMessage(),
-                    e);
-        }
-
-        if (certRefs.size() > CmsConstants.MAX_CERT_REFS) {
-            throw new PkixException(
-                    "CAdES-C: complete-certificate-references has "
-                            + certRefs.size()
-                            + " entries, exceeds limit "
-                            + CmsConstants.MAX_CERT_REFS);
-        }
-
-        // Проверка каждого certHash против embedded certs
-        for (CAdESCompleteData.OtherCertID certId : certRefs) {
-            String hashOid = certId.otherCertHash().hashOid();
-            byte[] expectedHash = certId.otherCertHash().hashValue();
-
-            boolean matched = false;
-            for (GostCertificate embeddedCert : embeddedCerts) {
-                byte[] certDer = embeddedCert.getEncoded();
-                byte[] actualHash;
-                try {
-                    actualHash = GostSignatureHelper.digestByOid(hashOid, certDer);
-                } catch (IllegalArgumentException e) {
-                    throw new PkixException(
-                            "CAdES-C: unsupported hash algorithm OID in OtherHash: "
-                                    + hashOid
-                                    + " (only Streebog-256/512 supported)");
-                }
-                if (java.security.MessageDigest.isEqual(expectedHash, actualHash)) {
-                    matched = true;
-                    break;
-                }
-            }
-            if (!matched) {
-                throw new PkixException(
-                        "CAdES-C: certHash in CompleteCertificateRefs not matched "
-                                + "to any embedded certificate");
-            }
-        }
-
-        // Проверка дубликатов (issuer + serial)
-        for (int i = 0; i < certRefs.size(); i++) {
-            CAdESCompleteData.OtherCertID a = certRefs.get(i);
-            if (a.issuerSerial() == null) continue;
-            for (int j = i + 1; j < certRefs.size(); j++) {
-                CAdESCompleteData.OtherCertID b = certRefs.get(j);
-                if (b.issuerSerial() == null) continue;
-                if (java.util.Arrays.equals(
-                                a.issuerSerial().issuerDer(), b.issuerSerial().issuerDer())
-                        && a.issuerSerial().serial().equals(b.issuerSerial().serial())) {
-                    throw new PkixException(
-                            "CAdES-C: duplicate OtherCertID in CompleteCertificateRefs");
-                }
-            }
-        }
-
-        return certRefs;
-    }
-
-    /**
-     * Извлекает и верифицирует complete-revocation-references.
-     *
-     * <p>Проверяет только структурную целостность: количество, непустоту ссылок,
-     * валидность DER, лимиты. crlHash НЕ сверяется — CRL не эмбеддятся.
-     */
-    private static List<CAdESCompleteData.CrlOcspRef> extractAndVerifyRevocationRefs(
-            SignerResult sr, int expectedCount) throws PkixException {
-
-        CmsAttribute attr =
-                findAttrByOid(sr.unsignedAttributes(), GostOids.COMPLETE_REVOCATION_REFS);
-        if (attr == null) {
-            throw new PkixException(
-                    "CAdES-C: complete-revocation-references attribute not found in unsignedAttrs");
-        }
-        byte[][] vals = attr.attrValues();
-        if (vals.length == 0) {
-            throw new PkixException(
-                    "CAdES-C: complete-revocation-references attribute has empty value");
-        }
-
-        // Проверка размера до parseSequenceContents
-        if (vals[0].length > CmsConstants.MAX_REVOC_REFS_SIZE) {
-            throw new PkixException(
-                    "CAdES-C: complete-revocation-references size "
-                            + vals[0].length
-                            + " exceeds limit "
-                            + CmsConstants.MAX_REVOC_REFS_SIZE);
-        }
-
-        List<CAdESCompleteData.CrlOcspRef> revocRefs;
-        try {
-            revocRefs = CAdESCompleteData.decodeCompleteRevocationRefs(vals[0]);
-        } catch (IllegalArgumentException e) {
-            throw new PkixException(
-                    PkixException.Reason.PARSE_ERROR,
-                    "CAdES-C: malformed complete-revocation-references DER: " + e.getMessage(),
-                    e);
-        }
-
-        // Количество CrlOcspRef должно совпадать с OtherCertID + 1
-        if (revocRefs.size() != expectedCount) {
-            throw new PkixException(
-                    "CAdES-C: CrlOcspRef count "
-                            + revocRefs.size()
-                            + " != OtherCertID count + 1 ("
-                            + expectedCount
-                            + ")");
-        }
-
-        if (revocRefs.size() > CmsConstants.MAX_CRL_REFS) {
-            throw new PkixException(
-                    "CAdES-C: complete-revocation-references has "
-                            + revocRefs.size()
-                            + " entries, exceeds limit "
-                            + CmsConstants.MAX_CRL_REFS);
-        }
-
-        // Проверка каждого CrlOcspRef: хотя бы один механизм отзыва
-        for (int i = 0; i < revocRefs.size(); i++) {
-            CAdESCompleteData.CrlOcspRef ref = revocRefs.get(i);
-            if (ref.crlList().isEmpty() && ref.ocspList().isEmpty()) {
-                throw new PkixException(
-                        "CAdES-C: CrlOcspRef[" + i + "] has no crlList and no ocspList");
-            }
-
-            if (ref.crlList().size() > CmsConstants.MAX_CRL_VALIDATED_IDS) {
-                throw new PkixException(
-                        "CAdES-C: CrlOcspRef["
-                                + i
-                                + "] crlList has "
-                                + ref.crlList().size()
-                                + " entries, exceeds limit "
-                                + CmsConstants.MAX_CRL_VALIDATED_IDS);
-            }
-            if (ref.ocspList().size() > CmsConstants.MAX_OCSP_IDS) {
-                throw new PkixException(
-                        "CAdES-C: CrlOcspRef["
-                                + i
-                                + "] ocspList has "
-                                + ref.ocspList().size()
-                                + " entries, exceeds limit "
-                                + CmsConstants.MAX_OCSP_IDS);
-            }
-
-            // Проверка crlNumber на non-negative
-            for (CAdESCompleteData.CrlValidatedID cvi : ref.crlList()) {
-                if (cvi.crlIdentifier() != null
-                        && cvi.crlIdentifier().crlNumber() != null
-                        && cvi.crlIdentifier().crlNumber().signum() < 0) {
-                    throw new PkixException(
-                            "CAdES-C: negative crlNumber in CrlValidatedID[" + i + "]");
-                }
-            }
-        }
-
-        return revocRefs;
-    }
-
-    /**
-     * Ищет атрибут по OID в списке unsigned-атрибутов.
-     */
-    private static CmsAttribute findAttrByOid(List<CmsAttribute> attrs, String oid) {
-        for (CmsAttribute attr : attrs) {
-            if (oid.equals(attr.attrType())) {
-                return attr;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * Промежуточный результат верификации CAdES-T.
-     * Содержит сырые SignerResult (signatureValue/unsignedAttributes) —
-     * для {@link #verifyCountersignature} нужен доступ к данным countersignature.
-     */
-    private record CAdESTInternalResult(
-            MultiSignerVerifiedData cmsResult,
-            List<CAdESSignerResult> signerResults,
-            List<GostCertificate> embeddedCerts) {}
-
-    /**
-     * Общая часть {@link #verifyCAdEST} и {@link #verifyCountersignature}.
-     * Верифицирует CMS-подписи (AND), проверяет signingCertificateV2 и метки времени.
-     * Возвращает сырые SignerResult для дальнейшей обработки countersignature.
-     */
-    private static CAdESTInternalResult verifyCAdESTInternal(
-            byte[] cadesDer, GostCertificate... trustedCerts) throws PkixException {
-
-        MultiSignerVerifiedData cmsResult = CmsSignedDataVerifier.verifyAll(cadesDer, trustedCerts);
-
-        List<CAdESSignerResult> signerResults = new ArrayList<>();
-        for (SignerResult sr : cmsResult.signers()) {
-            verifySigningCertV2ForSigner(sr);
-            List<TstInfo> timestamps = extractAndVerifyTimestamps(sr, trustedCerts);
-            signerResults.add(
-                    new CAdESSignerResult(
-                            sr.signerCertificate(),
-                            sr.signedAttributes(),
-                            timestamps,
-                            List.of(),
-                            List.of(),
-                            List.of(),
-                            List.of(),
-                            CAdESXLongData.RevocationValuesDecoded.EMPTY,
-                            null));
-        }
-
-        List<GostCertificate> embeddedCerts = extractEmbeddedCerts(cadesDer);
-        return new CAdESTInternalResult(cmsResult, signerResults, embeddedCerts);
-    }
-
-    /**
-     * Извлекает сертификаты из поля {@code [0] IMPLICIT certificates}
-     * SignedData без полной верификации подписей.
-     */
-    private static List<GostCertificate> extractEmbeddedCerts(byte[] signedDataDer)
-            throws PkixException {
-        CmsContentInfo ci = CmsContentInfo.decode(signedDataDer);
-        if (!GostOids.CMS_SIGNED_DATA.equals(ci.contentType())) {
-            return List.of();
-        }
-        byte[][] sdParts = DerCodec.parseSequenceContents(ci.content(), 0);
-        if (sdParts.length < 4) {
-            return List.of();
-        }
-        // Пропускаем version, digestAlgorithms, encapContentInfo
-        int sdIdx = 3;
-        if (sdIdx < sdParts.length && DerCodec.isContextTag(sdParts[sdIdx], 0)) {
-            return CmsSignedDataVerifier.parseEmbeddedCertificates(
-                    sdParts[sdIdx], CmsConstants.MAX_EMBEDDED_CERTS);
-        }
-        return List.of();
-    }
-
-    // ========================================================================
-    // Верификация countersignature
-    // ========================================================================
-
-    /**
-     * Верифицирует countersignature (RFC 5652 §11.4) поверх CAdES-BES/T.
-     *
-     * <p>Для каждого подписанта выполняет:
-     * <ol>
-     *   <li>Проверка CMS-подписи (AND-семантика)</li>
-     *   <li>Проверка signingCertificateV2 (CAdES-BES)</li>
-     *   <li>Проверка signature-time-stamp (CAdES-T)</li>
-     *   <li>Проверка countersignature (RFC 5652 §11.4) — fail-closed:
-     *     <ul>
-     *       <li>Сверка messageDigest = hash(родительской signatureValue contents octets)</li>
-     *       <li>Построение и валидация цепочки countersigner'а до trustedCerts</li>
-     *       <li>Верификация подписи countersigner'а</li>
-     *     </ul>
-     *   </li>
-     * </ol>
-     *
-     * @param countersignedDer CMS SignedData с countersignature в unsignedAttrs
-     * @param trustedCerts     доверенные корневые сертификаты (подписанта + countersigner'а + TSA)
-     * @return результат с countersignature для каждого подписанта
-     * @throws PkixException при любой ошибке верификации (fail-closed)
-     */
-    public static VerifiedCAdESData verifyCountersignature(
-            byte[] countersignedDer, GostCertificate... trustedCerts) throws PkixException {
-        Objects.requireNonNull(countersignedDer, "countersignedDer must not be null");
-        if (trustedCerts.length == 0) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Countersignature verification requires at least one trusted certificate");
-        }
-
-        CAdESTInternalResult internal = verifyCAdESTInternal(countersignedDer, trustedCerts);
-
-        List<CAdESSignerResult> resultsWithCs = new ArrayList<>();
-        List<SignerResult> signers = internal.cmsResult().signers();
-        for (int i = 0; i < signers.size(); i++) {
-            SignerResult sr = signers.get(i);
-            CAdESSignerResult besTResult = internal.signerResults().get(i);
-
-            List<SignerResult> csResults =
-                    verifyCountersignaturesForSigner(sr, internal.embeddedCerts(), trustedCerts);
-
-            resultsWithCs.add(
-                    new CAdESSignerResult(
-                            besTResult.signerCertificate(),
-                            besTResult.signedAttributes(),
-                            besTResult.timestamps(),
-                            csResults,
-                            besTResult.completeCertRefs(),
-                            besTResult.completeRevocRefs(),
-                            List.of(),
-                            CAdESXLongData.RevocationValuesDecoded.EMPTY,
-                            null));
-        }
-
-        return new VerifiedCAdESData(internal.cmsResult().data(), resultsWithCs);
-    }
-
-    /**
-     * Проверяет countersignature в unsignedAttrs подписанта.
-     *
-     * <p>Для каждой найденной countersignature:
-     * <ol>
-     *   <li>Разбирает вложенный SignerInfo (sid, signedAttrs, signatureValue)</li>
-     *   <li>Сверяет messageDigest = hash(родительского signatureValue contents octets)</li>
-     *   <li>Строит и валидирует цепочку сертификата countersigner'а до trustedCerts</li>
-     *   <li>Верифицирует подпись countersigner'а</li>
-     * </ol>
-     *
-     * @param parentSr      результат верификации родительского SignerInfo
-     * @param embeddedCerts сертификаты из SignedData.certificates
-     * @param trustedCerts  доверенные корневые сертификаты
-     * @return список верифицированных countersignature (пустой если атрибут отсутствует)
-     * @throws PkixException если countersignature есть но невалидна (fail-closed)
-     */
-    private static List<SignerResult> verifyCountersignaturesForSigner(
-            SignerResult parentSr,
-            List<GostCertificate> embeddedCerts,
-            GostCertificate... trustedCerts)
-            throws PkixException {
-        List<SignerResult> results = new ArrayList<>();
-
-        int csCount = 0;
-        for (CmsAttribute attr : parentSr.unsignedAttributes()) {
-            if (!GostOids.ATTR_COUNTERSIGNATURE.equals(attr.attrType())) {
-                continue;
-            }
-            byte[][] vals = attr.attrValues();
-            if (vals.length == 0) {
-                continue;
-            }
-            if (vals.length > CmsConstants.MAX_COUNTERSIGNATURES_PER_SIGNER) {
-                throw new PkixException(
-                        PkixException.Reason.OTHER,
-                        "Too many countersignature values: "
-                                + vals.length
-                                + " (max "
-                                + CmsConstants.MAX_COUNTERSIGNATURES_PER_SIGNER
-                                + ")");
-            }
-            // attrValues — SET OF Countersignature (SignerInfo)
-            for (byte[] csSignerInfoDer : vals) {
-                csCount++;
-                if (csCount > CmsConstants.MAX_COUNTERSIGNATURES_PER_SIGNER) {
-                    throw new PkixException(
-                            PkixException.Reason.OTHER,
-                            "Too many countersignatures (max "
-                                    + CmsConstants.MAX_COUNTERSIGNATURES_PER_SIGNER
-                                    + ")");
-                }
-                results.add(
-                        verifyOneCountersignature(
-                                csSignerInfoDer,
-                                parentSr.signatureValue(),
-                                embeddedCerts,
-                                trustedCerts));
-            }
-        }
-
-        if (results.isEmpty()) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Countersignature: not found in unsignedAttrs for signer");
-        }
-        return results;
-    }
-
-    /** Верифицирует один вложенный SignerInfo countersignature. */
-    private static SignerResult verifyOneCountersignature(
-            byte[] csSignerInfoDer,
-            byte[] parentSignatureValue,
-            List<GostCertificate> embeddedCerts,
-            GostCertificate... trustedCerts)
-            throws PkixException {
-
-        byte[][] siParts = DerCodec.parseSequenceContents(csSignerInfoDer, 0);
-        if (siParts.length < 6) {
-            throw new PkixException(
-                    PkixException.Reason.PARSE_ERROR,
-                    "Countersignature SignerInfo too short: expected at least 6 fields");
-        }
-        int idx = 0;
-
-        // [0] version — пропускаем
-        idx++;
-
-        // [1] sid — IssuerAndSerialNumber
-        CmsIssuerAndSerialNumber sid = CmsIssuerAndSerialNumber.decode(siParts[idx++]);
-
-        // [2] digestAlgorithm
-        CmsAlgorithmIdentifier digestAlg = CmsAlgorithmIdentifier.decode(siParts[idx++]);
-        String digestOid = digestAlg.algorithmOid();
-
-        // [3] signedAttrs [0] IMPLICIT
-        if (idx >= siParts.length || !DerCodec.isContextTag(siParts[idx], 0)) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Countersignature SignerInfo does not contain signedAttrs");
-        }
-        byte[] signedAttrsWrapped = siParts[idx++];
-        int[] saLenInfo = DerCodec.decodeLength(signedAttrsWrapped, 1);
-        int saStart = 1 + saLenInfo[1];
-        byte[] signedAttrsContent =
-                java.util.Arrays.copyOfRange(
-                        signedAttrsWrapped, saStart, signedAttrsWrapped.length);
-
-        // Разбираем атрибуты
-        List<byte[]> attrElems = new ArrayList<>();
-        int pos = 0;
-        while (pos < signedAttrsContent.length) {
-            int[] attrLen = DerCodec.decodeLength(signedAttrsContent, pos + 1);
-            int attrTotal = 1 + attrLen[1] + attrLen[0];
-            attrElems.add(java.util.Arrays.copyOfRange(signedAttrsContent, pos, pos + attrTotal));
-            pos += attrTotal;
-        }
-
-        byte[] signedAttrsForHash = DerCodec.encodeSetOf(attrElems.toArray(new byte[0][]));
-
-        // Извлекаем messageDigest
-        byte[] expectedDigest = null;
-        List<CmsAttribute> signedAttributes = new ArrayList<>();
-        for (byte[] attrDer : attrElems) {
-            CmsAttribute attr = CmsAttribute.decode(attrDer);
-            signedAttributes.add(attr);
-            if (GostOids.ATTR_MESSAGE_DIGEST.equals(attr.attrType())) {
-                byte[][] msgVals = attr.attrValues();
-                if (msgVals.length > 0) {
-                    expectedDigest = DerCodec.parseOctetString(msgVals[0], 0);
-                }
-            }
-        }
-
-        if (expectedDigest == null) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Countersignature signedAttrs must contain message-digest");
-        }
-
-        // Сверяем messageDigest: hash(родительской signatureValue contents octets)
-        byte[] actualDigest = digestForCountersig(parentSignatureValue, digestOid);
-        if (!MessageDigest.isEqual(expectedDigest, actualDigest)) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Countersignature messageDigest does not match parent signatureValue");
-        }
-
-        // [4] signatureAlgorithm — пропускаем
-        idx++;
-
-        // [5] signature
-        byte[] sigOctet = siParts[idx];
-        byte[] csSignatureValue = DerCodec.parseOctetString(sigOctet, 0);
-
-        // Находим сертификат countersigner'а по issuer+serial
-        GostCertificate countersignerCert = findCountersignerCertificate(sid, embeddedCerts);
-        if (countersignerCert == null) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Countersigner certificate not found in SignedData certificates");
-        }
-
-        // Строим и валидируем цепочку
-        List<GostCertificate> csChain =
-                CertChainBuilder.buildChain(
-                        countersignerCert, embeddedCerts, Arrays.asList(trustedCerts));
-        List<PublicKeyParameters> caKeys =
-                Arrays.stream(trustedCerts).map(GostCertificate::getPublicKey).toList();
-        ChainValidator.validateChain(csChain, caKeys);
-
-        // Верифицируем подпись countersigner'а
-        byte[] signedAttrsHash = digestForCountersig(signedAttrsForHash, digestOid);
-        if (!Signature.verifyHash(
-                signedAttrsHash, csSignatureValue, countersignerCert.getPublicKey())) {
-            throw new PkixException(
-                    PkixException.Reason.SIGNATURE_INVALID, "Countersignature signature invalid");
-        }
-
-        return new SignerResult(countersignerCert, csSignatureValue, signedAttributes, List.of());
-    }
-
-    private static byte[] digestForCountersig(byte[] data, String digestOid) throws PkixException {
-        try {
-            return GostSignatureHelper.digestByOid(digestOid, data);
-        } catch (IllegalArgumentException e) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER, "Unsupported digest algorithm: " + digestOid);
-        }
-    }
-
-    private static GostCertificate findCountersignerCertificate(
-            CmsIssuerAndSerialNumber sid, List<GostCertificate> certs) {
-        for (GostCertificate c : certs) {
-            if (!c.getSerialNumberBigInt().equals(sid.serial())) {
-                continue;
-            }
-            if (Arrays.equals(c.getIssuerDnBytes(), sid.issuer())) {
-                return c;
-            }
-        }
-        return null;
-    }
-
-    // ========================================================================
     // Приватные утилиты
     // ========================================================================
 
@@ -1781,31 +1211,11 @@ public final class CAdESExtender {
             throw new PkixException(PkixException.Reason.PARSE_ERROR, "SignerInfo is empty");
         }
 
-        int unsignedIdx = -1;
-        for (int i = 0; i < siParts.length; i++) {
-            if (siParts[i].length > 0 && (siParts[i][0] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_1) {
-                unsignedIdx = i;
-                break;
-            }
-        }
+        int unsignedIdx = findUnsignedAttrsIndex(siParts);
 
         byte[] newUnsignedAttrs;
         if (unsignedIdx >= 0) {
-            byte[] existingField = siParts[unsignedIdx];
-            int[] lenInfo = DerCodec.decodeLength(existingField, 1);
-            int contentOff = 1 + lenInfo[1];
-            byte[] existingContent =
-                    java.util.Arrays.copyOfRange(existingField, contentOff, existingField.length);
-
-            // Разбираем существующие атрибуты как TLV-элементы для ресортировки
-            List<byte[]> attrs = new ArrayList<>();
-            int pos = 0;
-            while (pos < existingContent.length) {
-                int[] attrLen = DerCodec.decodeLength(existingContent, pos + 1);
-                int attrTotal = 1 + attrLen[1] + attrLen[0];
-                attrs.add(java.util.Arrays.copyOfRange(existingContent, pos, pos + attrTotal));
-                pos += attrTotal;
-            }
+            List<byte[]> attrs = parseAttributeTlvs(unsignedAttrsContent(siParts));
             attrs.add(attrDer);
             byte[][] sorted = attrs.toArray(new byte[0][]);
             DerCodec.sortDer(sorted);
@@ -1820,6 +1230,156 @@ public final class CAdESExtender {
         }
 
         return DerCodec.encodeSequence(siParts);
+    }
+
+    /**
+     * Заменяет unsigned-атрибуты с указанными OID во всех SignerInfo.
+     * Замена атомарна: при ошибке ни один SignerInfo не возвращается.
+     */
+    private static byte[] replaceUnsignedAttrs(
+            byte[] cadesDer, String[] replaceOids, byte[][] newAttrs) throws PkixException {
+        CmsContentInfo contentInfo = CmsContentInfo.decode(cadesDer);
+        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "Not a SignedData: " + contentInfo.contentType());
+        }
+        SignedDataParts sd = SignedDataParts.parse(contentInfo.content());
+        byte[][] signerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
+        List<byte[]> modified = new ArrayList<>(signerInfos.length);
+        for (byte[] signerInfoDer : signerInfos) {
+            modified.add(replaceUnsignedAttrsDer(signerInfoDer, replaceOids, newAttrs));
+        }
+        byte[] newSignerInfos = DerCodec.encodeSetOf(modified.toArray(new byte[0][]));
+        byte[] newSignedData = sd.rebuild(sd.certs(), newSignerInfos);
+        return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, newSignedData);
+    }
+
+    static byte[] replaceUnsignedAttrsDer(
+            byte[] signerInfoDer, String[] replaceOids, byte[][] newAttrs) throws PkixException {
+        byte[][] siParts = DerCodec.parseSequenceContents(signerInfoDer, 0);
+        if (siParts.length == 0) {
+            throw new PkixException(PkixException.Reason.PARSE_ERROR, "SignerInfo is empty");
+        }
+        int unsignedIdx = findUnsignedAttrsIndex(siParts);
+        List<byte[]> attrs = new ArrayList<>();
+        if (unsignedIdx >= 0) {
+            byte[] content = unsignedAttrsContent(siParts);
+            for (byte[] attrDer : parseAttributeTlvs(content)) {
+                String oid = CmsAttribute.decode(attrDer).attrType();
+                boolean replace = false;
+                for (String candidate : replaceOids) {
+                    if (candidate.equals(oid)) {
+                        replace = true;
+                        break;
+                    }
+                }
+                if (!replace) {
+                    attrs.add(attrDer);
+                }
+            }
+        }
+        for (byte[] attr : newAttrs) {
+            // null означает «не добавлять атрибут»: пустой SEQUENCE недопустим.
+            if (attr != null) {
+                attrs.add(attr);
+            }
+        }
+        byte[][] sorted = attrs.toArray(new byte[0][]);
+        DerCodec.sortDer(sorted);
+        byte[] newUnsignedAttrs = DerCodec.encodeContextConstructed(1, DerCodec.concat(sorted));
+        if (unsignedIdx >= 0) {
+            siParts[unsignedIdx] = newUnsignedAttrs;
+        } else {
+            byte[][] newParts = Arrays.copyOf(siParts, siParts.length + 1);
+            newParts[newParts.length - 1] = newUnsignedAttrs;
+            siParts = newParts;
+        }
+        return DerCodec.encodeSequence(siParts);
+    }
+
+    private enum TimestampPresence {
+        ALL,
+        NONE,
+        MIXED
+    }
+
+    private static TimestampPresence signatureTimestampPresence(byte[] cadesDer)
+            throws PkixException {
+        CmsContentInfo contentInfo = CmsContentInfo.decode(cadesDer);
+        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "Not a SignedData: " + contentInfo.contentType());
+        }
+        SignedDataParts sd = SignedDataParts.parse(contentInfo.content());
+        byte[][] signerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
+        int present = 0;
+        for (byte[] signerInfoDer : signerInfos) {
+            if (hasSignatureTimeEvidence(signerInfoDer)) {
+                present++;
+            }
+        }
+        if (present == 0) {
+            return TimestampPresence.NONE;
+        }
+        return present == signerInfos.length ? TimestampPresence.ALL : TimestampPresence.MIXED;
+    }
+
+    private static void requireNoEscTimestamp(byte[] cadesDer) throws PkixException {
+        CmsContentInfo contentInfo = CmsContentInfo.decode(cadesDer);
+        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "Not a SignedData: " + contentInfo.contentType());
+        }
+        SignedDataParts sd = SignedDataParts.parse(contentInfo.content());
+        byte[][] signerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
+        for (byte[] signerInfoDer : signerInfos) {
+            byte[][] siParts = DerCodec.parseSequenceContents(signerInfoDer, 0);
+            byte[] content = unsignedAttrsContent(siParts);
+            if (content == null) {
+                continue;
+            }
+            for (byte[] attrDer : parseAttributeTlvs(content)) {
+                if (GostOids.ESC_TIME_STAMP.equals(CmsAttribute.decode(attrDer).attrType())) {
+                    throw new PkixException(
+                            PkixException.Reason.OTHER,
+                            "CAdES-X Long Type 1: escTimeStamp already present in input");
+                }
+            }
+        }
+    }
+
+    /**
+     * Структурно проверяет наличие signature-time-stamp с ровно одним значением
+     * в каждом экземпляре атрибута.
+     *
+     * <p>Метод не проверяет подпись TSA и messageImprint - это делает
+     * {@link #extractAndVerifyTimestamps}. Проверка нужна на embed-стороне,
+     * чтобы библиотека не выпускала CAdES-C/X Long из BES без метки или с
+     * заведомо отвергаемым верификатором атрибутом.
+     */
+    private static boolean hasSignatureTimeEvidence(byte[] signerInfoDer) throws PkixException {
+        byte[][] siParts = DerCodec.parseSequenceContents(signerInfoDer, 0);
+        byte[] content = unsignedAttrsContent(siParts);
+        if (content == null) {
+            return false;
+        }
+        boolean found = false;
+        for (byte[] attrDer : parseAttributeTlvs(content)) {
+            CmsAttribute attr;
+            try {
+                attr = CmsAttribute.decode(attrDer);
+            } catch (RuntimeException e) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR, "Malformed unsigned attribute");
+            }
+            if (GostOids.SIGNATURE_TIME_STAMP.equals(attr.attrType())) {
+                if (attr.attrValues().length != 1) {
+                    return false;
+                }
+                found = true;
+            }
+        }
+        return found;
     }
 
     /** Извлекает подписи всех подписантов из SignedData. */
@@ -1868,163 +1428,227 @@ public final class CAdESExtender {
         return signatures;
     }
 
-    /** Объединяет сертификаты из всех TimeStampToken'ов.
-     *  @return DER-кодированное поле certificates или {@code null} если сертификатов нет */
-    private static byte[] mergeCertificates(byte[] existingCertsField, List<byte[]> timeStampTokens)
+    /**
+     * Извлекает genTime всех signature-time-stamp без проверки подписи TSA.
+     * Используется только producer-стороной для ранней проверки окна политики.
+     */
+    private static List<Instant> extractSignatureTimestampInstants(byte[] cadesDer)
             throws PkixException {
-        List<byte[]> allCerts = new ArrayList<>();
+        CmsContentInfo contentInfo = CmsContentInfo.decode(cadesDer);
+        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "Not a SignedData: " + contentInfo.contentType());
+        }
+        SignedDataParts sd = SignedDataParts.parse(contentInfo.content());
+        byte[][] signerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
 
-        if (existingCertsField != null) {
-            int[] lenInfo = DerCodec.decodeLength(existingCertsField, 1);
-            int contentOff = 1 + lenInfo[1];
-            int pos = contentOff;
-            int end = existingCertsField.length;
-            while (pos < end) {
-                int[] certLen = DerCodec.decodeLength(existingCertsField, pos + 1);
-                int certTotal = 1 + certLen[1] + certLen[0];
-                allCerts.add(
-                        java.util.Arrays.copyOfRange(existingCertsField, pos, pos + certTotal));
-                pos += certTotal;
+        List<Instant> result = new ArrayList<>();
+        for (byte[] signerInfoDer : signerInfos) {
+            byte[][] siParts = DerCodec.parseSequenceContents(signerInfoDer, 0);
+            byte[] unsignedContent = unsignedAttrsContent(siParts);
+            if (unsignedContent == null) {
+                continue;
+            }
+            for (byte[] attrDer : parseAttributeTlvs(unsignedContent)) {
+                CmsAttribute attr = CmsAttribute.decode(attrDer);
+                if (GostOids.SIGNATURE_TIME_STAMP.equals(attr.attrType())) {
+                    result.add(parseTimestampGenTime(attr));
+                }
             }
         }
+        if (result.isEmpty()) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-X Long Type 1 requires signature-time-stamp");
+        }
+        return result;
+    }
 
-        for (int tokenIdx = 0; tokenIdx < timeStampTokens.size(); tokenIdx++) {
-            byte[] tsToken = timeStampTokens.get(tokenIdx);
-            try {
-                CmsContentInfo tsCi = CmsContentInfo.decode(tsToken);
-                byte[][] tsSdParts = DerCodec.parseSequenceContents(tsCi.content(), 0);
-                int tsIdx = 3;
-                if (tsIdx < tsSdParts.length && DerCodec.isContextTag(tsSdParts[tsIdx], 0)) {
-                    byte[] tsCerts = tsSdParts[tsIdx];
-                    int[] lenInfo = DerCodec.decodeLength(tsCerts, 1);
-                    int contentOff = 1 + lenInfo[1];
-                    int pos = contentOff;
-                    int end = tsCerts.length;
-                    while (pos < end) {
-                        int[] certLen = DerCodec.decodeLength(tsCerts, pos + 1);
-                        int certTotal = 1 + certLen[1] + certLen[0];
-                        allCerts.add(java.util.Arrays.copyOfRange(tsCerts, pos, pos + certTotal));
-                        pos += certTotal;
+    private static Instant parseTimestampGenTime(CmsAttribute attr) throws PkixException {
+        byte[][] values = attr.attrValues();
+        if (values.length != 1) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "signature-time-stamp: expected exactly one value, got " + values.length);
+        }
+        TspResponse response = TspResponse.parseTimeStampToken(values[0]);
+        return Instant.ofEpochMilli(
+                TspResponse.parseGeneralizedTimeToMs(response.tstInfo().genTime()));
+    }
+
+    /**
+     * Встраивает escTimeStamp каждому подписанту и возвращает минимальный genTime.
+     */
+    private static EscEmbedResult embedEscTimestamps(
+            byte[] cadesDer, String tspUrl, TspTransport transport, GostCertificate... tsaTrusted)
+            throws PkixException, IOException {
+        CmsContentInfo contentInfo = CmsContentInfo.decode(cadesDer);
+        if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "Not a SignedData: " + contentInfo.contentType());
+        }
+        byte[] signedDataBody = contentInfo.content();
+        SignedDataParts sd = SignedDataParts.parse(signedDataBody);
+        byte[][] origSignerInfos = DerCodec.parseSetContents(sd.signerInfosField(), 0);
+
+        List<byte[]> modifiedSignerInfos = new ArrayList<>();
+        List<byte[]> allTokens = new ArrayList<>();
+        List<Instant> genTimes = new ArrayList<>();
+
+        for (byte[] signerInfoDer : origSignerInfos) {
+            byte[][] siParts = DerCodec.parseSequenceContents(signerInfoDer, 0);
+            byte[] unsignedContent = unsignedAttrsContent(siParts);
+            List<CmsAttribute> attrs = new ArrayList<>();
+            if (unsignedContent != null) {
+                for (byte[] attrDer : parseAttributeTlvs(unsignedContent)) {
+                    CmsAttribute attr = CmsAttribute.decode(attrDer);
+                    if (GostOids.ESC_TIME_STAMP.equals(attr.attrType())) {
+                        throw new PkixException(
+                                PkixException.Reason.OTHER,
+                                "CAdES-X Long Type 1: escTimeStamp already present in input");
                     }
+                    attrs.add(attr);
                 }
-            } catch (Exception e) {
-                LOG.log(
-                        GostLogger.Level.WARNING,
-                        "Failed to extract certificates from TimeStampToken #" + tokenIdx,
+            }
+
+            ExtractedSignature signature = extractSignatureFromSignerInfo(signerInfoDer);
+            byte[] escInput = buildEscHashInput(signature.signatureValue(), attrs);
+            SignatureHashResult sh = computeTspMessageImprint(signature.digestAlgOid(), escInput);
+
+            TspRequestBuilder reqBuilder =
+                    TspRequestBuilder.create().messageImprint(sh.hash(), sh.oid()).certReq(true);
+            byte[] tspRespDer = transport.send(reqBuilder.build(), tspUrl);
+            TspResponse tspResponse = TspResponse.fromDer(tspRespDer);
+            tspResponse.verify(sh.hash(), sh.oid(), reqBuilder.getNonce(), tsaTrusted);
+
+            // escTimeStamp остаётся обычным TimeStampToken без вложенных
+            // доказательств: КриптоПро в эталоне принимает именно такую форму.
+            // X-Long-доказательства нужны только в signature-time-stamp.
+            byte[] token = tspResponse.timeStampTokenDer();
+            genTimes.add(
+                    Instant.ofEpochMilli(
+                            TspResponse.parseGeneralizedTimeToMs(tspResponse.tstInfo().genTime())));
+            allTokens.add(token);
+            modifiedSignerInfos.add(
+                    injectUnsignedAttrDer(
+                            signerInfoDer, CmsAttribute.encode(GostOids.ESC_TIME_STAMP, token)));
+        }
+
+        byte[] newCerts = mergeCertificates(sd.certs(), allTokens);
+        byte[] newSignerInfos = DerCodec.encodeSetOf(modifiedSignerInfos.toArray(new byte[0][]));
+        byte[] newSignedData = sd.rebuild(newCerts, newSignerInfos);
+        return new EscEmbedResult(
+                CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, newSignedData), genTimes);
+    }
+
+    private static ExtractedSignature extractSignatureFromSignerInfo(byte[] signerInfoDer)
+            throws PkixException {
+        byte[][] siParts = DerCodec.parseSequenceContents(signerInfoDer, 0);
+        if (siParts.length < 3) {
+            throw new PkixException(PkixException.Reason.PARSE_ERROR, "Malformed SignerInfo");
+        }
+        String digestOid = CmsAlgorithmIdentifier.decode(siParts[2]).algorithmOid();
+        for (int i = siParts.length - 1; i >= 0; i--) {
+            if (siParts[i].length > 0 && (siParts[i][0] & 0xFF) == DerCodec.TAG_OCTET_STRING) {
+                return new ExtractedSignature(DerCodec.parseOctetString(siParts[i], 0), digestOid);
+            }
+        }
+        throw new PkixException(PkixException.Reason.OTHER, "Signature not found in SignerInfo");
+    }
+
+    private static List<CertRevocationEvidence> buildEvidenceForChain(
+            List<GostCertificate> chain,
+            List<GostCrl> crlsForChain,
+            List<GostOcspResponse> ocspForChain) {
+        List<CertRevocationEvidence> result = new ArrayList<>(chain.size());
+        for (int i = 0; i < chain.size(); i++) {
+            GostCrl crl = crlsForChain.get(i);
+            GostOcspResponse ocsp = ocspForChain.get(i);
+            List<byte[]> crlDers = crl != null ? List.of(crl.getEncoded()) : List.of();
+            List<byte[]> ocspDers = ocsp != null ? List.of(ocsp.getEncoded()) : List.of();
+            result.add(new CertRevocationEvidence(crlDers, ocspDers));
+        }
+        return result;
+    }
+
+    private static Instant minInstant(List<Instant> values) {
+        Instant min = values.get(0);
+        for (Instant value : values) {
+            if (value.isBefore(min)) {
+                min = value;
+            }
+        }
+        return min;
+    }
+
+    private static Instant maxInstant(List<Instant> values) {
+        Instant max = values.get(0);
+        for (Instant value : values) {
+            if (value.isAfter(max)) {
+                max = value;
+            }
+        }
+        return max;
+    }
+
+    private record EscEmbedResult(byte[] cadesDer, List<Instant> genTimes) {
+        EscEmbedResult {
+            cadesDer = cadesDer.clone();
+            genTimes = List.copyOf(genTimes);
+        }
+
+        @Override
+        public byte[] cadesDer() {
+            return cadesDer.clone();
+        }
+
+        Instant minGenTime() {
+            return minInstant(genTimes);
+        }
+    }
+
+    /**
+     * Объединяет сертификаты из всех TimeStampToken'ов с уже имеющимися в SignedData.
+     *
+     * <p>Отсутствие поля certificates в токене штатно (КриптоПро кладёт сертификаты TSA
+     * только в вложенный certificate-values), а нечитаемая структура токена и превышение
+     * лимита сертификатов - ошибка: иначе выпуск молча завершился бы неполным результатом
+     * или раздул SignedData. Дубликаты по DER удаляются.
+     *
+     * @return DER-кодированное поле certificates или {@code null} если сертификатов нет
+     * @throws PkixException при нечитаемом токене или превышении
+     *         {@link CmsConstants#MAX_EMBEDDED_CERTS}
+     */
+    static byte[] mergeCertificates(byte[] existingCertsField, List<byte[]> timeStampTokens)
+            throws PkixException {
+        List<byte[]> tokenCerts = new ArrayList<>();
+        for (int tokenIdx = 0; tokenIdx < timeStampTokens.size(); tokenIdx++) {
+            try {
+                CmsContentInfo tsCi = CmsContentInfo.decode(timeStampTokens.get(tokenIdx));
+                byte[][] tsSdParts = DerCodec.parseSequenceContents(tsCi.content(), 0);
+                int certsIdx = 3;
+                if (certsIdx >= tsSdParts.length
+                        || !DerCodec.isContextTag(tsSdParts[certsIdx], 0)) {
+                    continue;
+                }
+                byte[] tsCerts = tsSdParts[certsIdx];
+                int[] lenInfo = DerCodec.decodeLength(tsCerts, 1);
+                int pos = 1 + lenInfo[1];
+                while (pos < tsCerts.length) {
+                    int[] certLen = DerCodec.decodeLength(tsCerts, pos + 1);
+                    int certTotal = 1 + certLen[1] + certLen[0];
+                    tokenCerts.add(java.util.Arrays.copyOfRange(tsCerts, pos, pos + certTotal));
+                    pos += certTotal;
+                }
+            } catch (RuntimeException e) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "Malformed TimeStampToken #" + tokenIdx + ": cannot read certificates",
                         e);
             }
         }
-
-        if (allCerts.isEmpty()) {
-            return null;
-        }
-        byte[][] sorted = allCerts.toArray(new byte[0][]);
-        DerCodec.sortDer(sorted);
-        return DerCodec.encodeContextConstructed(0, DerCodec.concat(sorted));
+        return mergeCertsIntoField(existingCertsField, tokenCerts, CmsConstants.MAX_EMBEDDED_CERTS);
     }
-
-    /**
-     * Проверяет наличие и корректность signingCertificateV2 в signed-атрибутах подписанта.
-     * Fail-closed: отсутствие атрибута — PkixException.
-     *
-     * @param sr результат верификации подписанта (содержит signedAttributes)
-     * @throws PkixException если signingCertificateV2 отсутствует или хэш не совпадает
-     */
-    private static void verifySigningCertV2ForSigner(SignerResult sr) throws PkixException {
-        for (CmsAttribute attr : sr.signedAttributes()) {
-            if (GostOids.SIGNING_CERTIFICATE_V2.equals(attr.attrType())) {
-                byte[][] vals = attr.attrValues();
-                if (vals.length > 0) {
-                    CAdESAttributes.verifySigningCertificateV2(vals[0], sr.signerCertificate());
-                    return;
-                }
-            }
-        }
-        throw new PkixException(
-                PkixException.Reason.OTHER, "CAdES-T: signingCertificateV2 missing in signedAttrs");
-    }
-
-    /**
-     * Извлекает и верифицирует метки времени, не требуя их наличия.
-     * Используется countersignature, где timestamp опционален.
-     */
-    private static List<TstInfo> extractAndVerifyTimestamps(
-            SignerResult sr, GostCertificate... trustedCerts) throws PkixException {
-        List<TstInfo> timestamps = new ArrayList<>();
-        for (CmsAttribute attr : sr.unsignedAttributes()) {
-            if (!GostOids.SIGNATURE_TIME_STAMP.equals(attr.attrType())) continue;
-            byte[][] vals = attr.attrValues();
-            if (vals.length == 0) continue;
-            byte[] tsToken = vals[0];
-
-            TspResponse tspResponse = TspResponse.parseTimeStampToken(tsToken);
-
-            // messageImprint сверяем против подписи этого подписанта; дайджест — по заявленному
-            // размеру ключа подписанта (согласовано с embed-стороной через один и тот же маппинг).
-            byte[] sig = sr.signatureValue();
-            String signerDigestOid =
-                    GostSignatureHelper.keySizeToDigestOid(sr.signerCertificate().getKeySize());
-            SignatureHashResult sh = computeTspMessageImprint(signerDigestOid, sig);
-
-            tspResponse.verify(sh.hash(), sh.oid(), null, trustedCerts);
-
-            checkCertValidityAtTime(sr.signerCertificate(), tspResponse.tstInfo().genTime());
-
-            timestamps.add(tspResponse.tstInfo());
-        }
-        return timestamps;
-    }
-
-    private static void checkCertValidityAtTime(GostCertificate cert, String genTime)
-            throws PkixException {
-        long genTimeMs = TspResponse.parseGeneralizedTimeToMs(genTime);
-        Instant genDate = Instant.ofEpochMilli(genTimeMs);
-
-        Instant notBefore = cert.getNotBefore();
-        Instant notAfter = cert.getNotAfter();
-
-        if (notBefore != null && genDate.isBefore(notBefore.minusMillis(GostOids.CLOCK_SKEW_MS))) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Certificate not yet valid at timestamp genTime: " + genTime + " < notBefore");
-        }
-        if (notAfter != null && genDate.isAfter(notAfter.plusMillis(GostOids.CLOCK_SKEW_MS))) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Certificate expired before timestamp genTime: "
-                            + genTime
-                            + " > notAfter ("
-                            + notAfter
-                            + ")");
-        }
-    }
-
-    /**
-     * Хэш подписи для messageImprint запроса метки времени.
-     *
-     * <p>Дайджест выбирается по <b>заявленному</b> алгоритму подписанта ({@code signerDigestOid}),
-     * а не по длине подписи: критичный параметр messageImprint не выводится из косвенного признака.
-     * Для сырых ГОСТ Р 34.10-2012 подписей длина фиксирована (64/128 байт), но принцип «брать из
-     * объявленного значения» сохраняем как общее правило (fail-closed на неизвестный OID).
-     *
-     * <p>{@code signerDigestOid} приходит из разбора чужого SignerInfo (потенциально недоверенный
-     * вход), поэтому неизвестный OID транслируется в {@link PkixException}, а не в сырой
-     * {@link IllegalArgumentException} — чтобы не нарушить контракт метода для вызывающего кода.
-     */
-    private static SignatureHashResult computeTspMessageImprint(
-            String signerDigestOid, byte[] signature) throws PkixException {
-        try {
-            byte[] sigHash = GostSignatureHelper.digestByOid(signerDigestOid, signature);
-            return new SignatureHashResult(sigHash, signerDigestOid);
-        } catch (IllegalArgumentException e) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "TSP messageImprint: unsupported signer digest algorithm OID: "
-                            + signerDigestOid);
-        }
-    }
-
-    private record SignatureHashResult(byte[] hash, String oid) {}
 
     /** Подпись подписанта вместе с его заявленным OID дайджеста (для messageImprint метки). */
     private record ExtractedSignature(byte[] signatureValue, String digestAlgOid) {}

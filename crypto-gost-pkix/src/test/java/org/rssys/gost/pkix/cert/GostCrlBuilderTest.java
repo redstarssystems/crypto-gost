@@ -30,6 +30,66 @@ class GostCrlBuilderTest {
     private static final byte[] UNUSED_SERIAL = new byte[] {0x77};
 
     @Test
+    @DisplayName("legacy CA: issuer DN CRL берётся из DER, а не перекодируется из строки")
+    void testLegacyCrlIssuerDn() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] legacyDn = legacyDnWithUtf8Country("Legacy Root");
+
+        byte[] fromDer =
+                GostCrlBuilder.create(legacyDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
+        assertArrayEquals(
+                legacyDn,
+                new GostCrl(fromDer).getIssuerDnBytes(),
+                "CRL по DER сохраняет issuer DN старого CA");
+
+        byte[] fromString =
+                GostCrlBuilder.create("CN=Legacy Root,C=RU")
+                        .nextUpdate("20990601120000Z")
+                        .sign(kp.getPrivate());
+        assertFalse(
+                Arrays.equals(legacyDn, new GostCrl(fromString).getIssuerDnBytes()),
+                "строковая перекодировка не совпадает с issuer DN старого CA");
+    }
+
+    private static byte[] legacyDnWithUtf8Country(String cn) {
+        return DerCodec.encodeSequence(
+                DerCodec.encodeSetOf(
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeOid(GostOids.ATTR_CN),
+                                DerCodec.encodeUTF8String(cn))),
+                DerCodec.encodeSetOf(
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeOid(GostOids.ATTR_C),
+                                DerCodec.encodeUTF8String("RU"))));
+    }
+
+    @Test
+    @DisplayName("build: thisUpdate/nextUpdate/revocationDate кодируются по RFC 5280")
+    void testCrlTimeTags() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Time Tags CA,C=RU");
+
+        byte[] crlDer =
+                GostCrlBuilder.create(issuerDn)
+                        .thisUpdate("20240501120000Z")
+                        .nextUpdate("20990601120000Z")
+                        .addRevoked(TEST_SERIAL, "20240601120000Z")
+                        .sign(kp.getPrivate());
+
+        byte[][] certListParts = DerCodec.parseSequenceContents(crlDer, 0);
+        byte[][] tbsParts = DerCodec.parseSequenceContents(certListParts[0], 0);
+        // TBSCertList: version, signature, issuer, thisUpdate, nextUpdate, revoked...
+        assertEquals(0x17, tbsParts[3][0] & 0xFF, "thisUpdate 2024 должен быть UTCTime");
+        assertEquals(0x18, tbsParts[4][0] & 0xFF, "nextUpdate 2099 должен быть GeneralizedTime");
+
+        byte[][] revoked = DerCodec.parseSequenceContents(tbsParts[5], 0);
+        byte[][] entry = DerCodec.parseSequenceContents(revoked[0], 0);
+        assertEquals(0x17, entry[1][0] & 0xFF, "revocationDate 2024 должен быть UTCTime");
+    }
+
+    @Test
     @DisplayName("verify: serial отозванной записи > 20 октетов -> PkixException")
     void testRevokedSerialTooLong() throws Exception {
         ECParameters params = ECParameters.tc26a256();
@@ -46,7 +106,11 @@ class GostCrlBuilderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())),
                 "serial > 20 октетов должен приводить к PkixException");
     }
 
@@ -147,24 +211,47 @@ class GostCrlBuilderTest {
     }
 
     @Test
-    @DisplayName("verify: cRLNumber > 8 октетов -> PkixException")
-    void testCrlNumberTooLong() throws Exception {
+    @DisplayName("Построитель: отрицательный и длиннее 20 октетов cRLNumber отвергается")
+    void testBuilderRejectsInvalidCrlNumber() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostCrlBuilder.create(new byte[0]).withCrlNumber(BigInteger.valueOf(-1)),
+                "Отрицательный cRLNumber построитель выпускать не должен");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostCrlBuilder.create(new byte[0])
+                                .withCrlNumber(BigInteger.ONE.shiftLeft(160)),
+                "cRLNumber длиннее 20 октетов построитель выпускать не должен");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostCrlBuilder.create(new byte[0])
+                                .withDeltaCrlIndicator(BigInteger.ONE.shiftLeft(160)),
+                "То же для BaseCRLNumber");
+    }
+
+    @Test
+    @DisplayName("verify: cRLNumber 16 октетов принимается (RFC 5280 §5.2.3: до 20)")
+    void testCrlNumberSixteenOctetsAccepted() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
-        // cRLNumber 10 октетов (> MAX_CRL_EXT_INTEGER_OCTETS=8)
-        BigInteger oversizedCrlNumber = BigInteger.ONE.shiftLeft(72);
+        BigInteger sixteenOctets = BigInteger.ONE.shiftLeft(120).add(BigInteger.TEN);
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
                         .nextUpdate("20990601120000Z")
-                        .withCrlNumber(oversizedCrlNumber)
+                        .withCrlNumber(sixteenOctets)
                         .sign(kp.getPrivate());
 
-        assertThrows(
-                PkixException.class,
-                () -> CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn),
-                "cRLNumber > 8 октетов должен приводить к PkixException");
+        assertDoesNotThrow(
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())),
+                "cRLNumber в 16 октетов — настоящий случай (CRL ИнфоТеКС)");
     }
 
     @Test
@@ -179,7 +266,10 @@ class GostCrlBuilderTest {
 
         assertNotNull(crlDer);
         assertTrue(crlDer.length > 50);
-        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+        CrlVerifier.verify(
+                crlDer,
+                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                CrlTestCerts.issuerOf(kp.getPublic()));
     }
 
     @Test
@@ -191,7 +281,10 @@ class GostCrlBuilderTest {
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
 
-        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+        CrlVerifier.verify(
+                crlDer,
+                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                CrlTestCerts.issuerOf(kp.getPublic()));
     }
 
     @Test
@@ -213,7 +306,11 @@ class GostCrlBuilderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn));
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(TEST_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())));
     }
 
     @Test
@@ -235,19 +332,34 @@ class GostCrlBuilderTest {
                         .addRevoked(Arrays.asList(entries))
                         .sign(kp.getPrivate());
 
-        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+        CrlVerifier.verify(
+                crlDer,
+                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                CrlTestCerts.issuerOf(kp.getPublic()));
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(TEST_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())),
                 "TEST_SERIAL должен быть отозван");
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, new byte[] {0x05}, kp.getPublic(), issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(new byte[] {0x05}, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())),
                 "Серийный номер 0x05 должен быть отозван");
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, new byte[] {0x10}, kp.getPublic(), issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(new byte[] {0x10}, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())),
                 "Серийный номер 0x10 должен быть отозван");
     }
 
@@ -265,7 +377,10 @@ class GostCrlBuilderTest {
                         .sign(kp.getPrivate());
 
         // Пустой IDP (все флаги false) — не indirect, должен приниматься
-        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+        CrlVerifier.verify(
+                crlDer,
+                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                CrlTestCerts.issuerOf(kp.getPublic()));
     }
 
     @Test
@@ -294,7 +409,11 @@ class GostCrlBuilderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())),
                 "CRL с indirectCRL=true должен быть rejected");
     }
 
@@ -330,7 +449,11 @@ class GostCrlBuilderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())),
                 "CRL с каноническим indirectCRL=true (0x84 01 FF) должен быть rejected");
     }
 
@@ -355,19 +478,65 @@ class GostCrlBuilderTest {
                         false,
                         null);
 
-        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+        CrlVerifier.verify(
+                crlDer,
+                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                CrlTestCerts.issuerOf(kp.getPublic()));
     }
 
     @Test
-    @DisplayName("buildCrl без nextUpdate (null) — должен верифицироваться")
+    @DisplayName("withoutNextUpdate: CRL собирается и разбирается, но проверка его отвергает")
     void testBuildCrlWithoutNextUpdate() throws Exception {
         ECParameters params = ECParameters.tc26a256();
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
-        byte[] crlDer = GostCrlBuilder.create(issuerDn).sign(kp.getPrivate());
+        byte[] crlDer = GostCrlBuilder.create(issuerDn).withoutNextUpdate().sign(kp.getPrivate());
 
-        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+        GostCrl parsed = new GostCrl(crlDer);
+        assertNull(parsed.getNextUpdate(), "Разбор CRL без nextUpdate разрешён, поле отсутствует");
+        PkixException direct =
+                assertThrows(
+                        PkixException.class,
+                        () -> parsed.verify(kp.getPublic()),
+                        "GostCrl.verify должен отвергнуть CRL без nextUpdate");
+        assertEquals(
+                PkixException.Reason.NEXT_UPDATE_MISSING,
+                direct.reason(),
+                "Причина отказа должна быть NEXT_UPDATE_MISSING, а не EXPIRED");
+        PkixException viaVerifier =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CrlVerifier.verify(
+                                        crlDer,
+                                        CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                        CrlTestCerts.issuerOf(kp.getPublic())),
+                        "CrlVerifier.verify должен отвергнуть CRL без nextUpdate");
+        assertEquals(
+                PkixException.Reason.NEXT_UPDATE_MISSING,
+                viaVerifier.reason(),
+                "Причина отказа CrlVerifier должна быть NEXT_UPDATE_MISSING");
+    }
+
+    @Test
+    @DisplayName("sign без nextUpdate и без withoutNextUpdate: построитель не выпускает CRL")
+    void testSignWithoutNextUpdateThrows() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> GostCrlBuilder.create(issuerDn).sign(kp.getPrivate()),
+                "sign без nextUpdate должен падать: свой verifier такой CRL отвергнет");
+        assertThrows(
+                IllegalStateException.class,
+                () ->
+                        GostCrlBuilder.create(issuerDn)
+                                .nextUpdate((String) null)
+                                .sign(kp.getPrivate()),
+                "nextUpdate(null) сбрасывает значение и не разрешает выпуск без него");
     }
 
     @Test
@@ -383,7 +552,11 @@ class GostCrlBuilderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, UNUSED_SERIAL, wrongKp.getPublic(), issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(wrongKp.getPublic())),
                 "Чужой ключ не должен проходить проверку");
     }
 
@@ -406,11 +579,18 @@ class GostCrlBuilderTest {
                         null,
                         null);
         byte[] crlDer =
-                GostCrlBuilder.create(issuerDn).addRevoked(List.of(entry)).sign(kp.getPrivate());
+                GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .addRevoked(List.of(entry))
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(TEST_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())),
                 "Отозванный сертификат должен вызывать PkixException");
 
         assertTrue(
@@ -428,11 +608,18 @@ class GostCrlBuilderTest {
         RevokedEntry entry =
                 new RevokedEntry(TEST_SERIAL, "20250601120000Z", null, "20250530120000Z", null);
         byte[] crlDer =
-                GostCrlBuilder.create(issuerDn).addRevoked(List.of(entry)).sign(kp.getPrivate());
+                GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .addRevoked(List.of(entry))
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn));
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(TEST_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())));
 
         assertTrue(
                 containsBytes(crlDer, DerCodec.encodeOid(GostOids.EXT_INVALIDITY_DATE)),
@@ -453,11 +640,18 @@ class GostCrlBuilderTest {
         RevokedEntry entry =
                 new RevokedEntry(TEST_SERIAL, "20250601120000Z", null, null, certIssuerGn);
         byte[] crlDer =
-                GostCrlBuilder.create(issuerDn).addRevoked(List.of(entry)).sign(kp.getPrivate());
+                GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .addRevoked(List.of(entry))
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn));
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(TEST_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())));
 
         assertTrue(
                 containsBytes(crlDer, DerCodec.encodeOid(GostOids.EXT_CERTIFICATE_ISSUER)),
@@ -479,11 +673,18 @@ class GostCrlBuilderTest {
                         "20250530120000Z",
                         null);
         byte[] crlDer =
-                GostCrlBuilder.create(issuerDn).addRevoked(List.of(entry)).sign(kp.getPrivate());
+                GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .addRevoked(List.of(entry))
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn));
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(TEST_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())));
 
         assertTrue(
                 containsBytes(crlDer, DerCodec.encodeOid(GostOids.EXT_CRL_REASON)),
@@ -519,13 +720,21 @@ class GostCrlBuilderTest {
                 };
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .addRevoked(Arrays.asList(entries))
                         .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn));
-        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(TEST_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())));
+        CrlVerifier.verify(
+                crlDer,
+                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                CrlTestCerts.issuerOf(kp.getPublic()));
     }
 
     @Test
@@ -535,11 +744,15 @@ class GostCrlBuilderTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
-        byte[] crlDer = GostCrlBuilder.create(issuerDn).sign(kp.getPrivate());
+        byte[] crlDer =
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
 
         assertNotNull(crlDer);
         assertTrue(crlDer.length > 50);
-        CrlVerifier.verify(crlDer, UNUSED_SERIAL, kp.getPublic(), issuerDn);
+        CrlVerifier.verify(
+                crlDer,
+                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                CrlTestCerts.issuerOf(kp.getPublic()));
     }
 
     @Test
@@ -553,11 +766,18 @@ class GostCrlBuilderTest {
                 new RevokedEntry(
                         TEST_SERIAL, "20250601120000Z", ReasonCode.CERTIFICATE_HOLD, null, null);
         byte[] crlDer =
-                GostCrlBuilder.create(issuerDn).addRevoked(List.of(entry)).sign(kp.getPrivate());
+                GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .addRevoked(List.of(entry))
+                        .sign(kp.getPrivate());
 
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crlDer, TEST_SERIAL, kp.getPublic(), issuerDn));
+                () ->
+                        CrlVerifier.verify(
+                                crlDer,
+                                CrlTestCerts.certFor(TEST_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(kp.getPublic())));
     }
 
     @Test
@@ -571,7 +791,10 @@ class GostCrlBuilderTest {
                 new RevokedEntry(
                         TEST_SERIAL, "20250601120000Z", ReasonCode.KEY_COMPROMISE, null, null);
         byte[] crlDer =
-                GostCrlBuilder.create(issuerDn).addRevoked(List.of(entry)).sign(kp.getPrivate());
+                GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .addRevoked(List.of(entry))
+                        .sign(kp.getPrivate());
 
         assertNotNull(crlDer);
         // Проверяем наличие reasonCode в CRL: ищем OID EXT_CRL_REASON
@@ -606,7 +829,11 @@ class GostCrlBuilderTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
-        byte[] crlDer = GostCrlBuilder.create(issuerDn).withCrlNumber(42).sign(kp.getPrivate());
+        byte[] crlDer =
+                GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .withCrlNumber(42)
+                        .sign(kp.getPrivate());
 
         assertNotNull(crlDer);
         assertTrue(
@@ -628,6 +855,7 @@ class GostCrlBuilderTest {
 
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .withCrlNumber(5)
                         .withDeltaCrlIndicator(4)
                         .sign(kp.getPrivate());
@@ -658,6 +886,7 @@ class GostCrlBuilderTest {
                 IllegalStateException.class,
                 () ->
                         GostCrlBuilder.create(issuerDn)
+                                .nextUpdate("20990601120000Z")
                                 .withDeltaCrlIndicator(4)
                                 .sign(kp.getPrivate()),
                 "deltaCRLIndicator без cRLNumber должен бросать IllegalStateException");
@@ -672,6 +901,7 @@ class GostCrlBuilderTest {
 
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .withFreshestCrl("http://ca.example/delta.crl")
                         .sign(kp.getPrivate());
 
@@ -690,6 +920,7 @@ class GostCrlBuilderTest {
 
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .withFreshestCrl("http://ca.example/delta.crl")
                         .sign(kp.getPrivate());
 
@@ -711,7 +942,8 @@ class GostCrlBuilderTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
-        byte[] crlDer = GostCrlBuilder.create(issuerDn).sign(kp.getPrivate());
+        byte[] crlDer =
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
 
         GostCrl crl = new GostCrl(crlDer);
         crl.verify(kp.getPublic());
@@ -732,6 +964,7 @@ class GostCrlBuilderTest {
 
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .withCrlNumber(10)
                         .withDeltaCrlIndicator(9)
                         .withFreshestCrl("http://ca.example/delta.crl")
@@ -754,6 +987,7 @@ class GostCrlBuilderTest {
 
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .withCrlNumber(7)
                         .withDeltaCrlIndicator(6)
                         .addRevoked(new byte[] {0x01}, "20250601120000Z")
@@ -778,6 +1012,7 @@ class GostCrlBuilderTest {
 
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .withCrlNumber(3)
                         .withDeltaCrlIndicator(2)
                         .sign(kp.getPrivate());
@@ -794,7 +1029,8 @@ class GostCrlBuilderTest {
         KeyPair kp = KeyGenerator.generateKeyPair(params);
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
 
-        byte[] crlDer = GostCrlBuilder.create(issuerDn).sign(kp.getPrivate());
+        byte[] crlDer =
+                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
 
         GostCrl crl = new GostCrl(crlDer);
         crl.verify(kp.getPublic());
@@ -813,7 +1049,10 @@ class GostCrlBuilderTest {
         RevokedEntry entry =
                 new RevokedEntry(serial, "20250601120000Z", ReasonCode.KEY_COMPROMISE, null, null);
         byte[] crlDer =
-                GostCrlBuilder.create(issuerDn).addRevoked(List.of(entry)).sign(kp.getPrivate());
+                GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
+                        .addRevoked(List.of(entry))
+                        .sign(kp.getPrivate());
 
         GostCrl crl = new GostCrl(crlDer);
         crl.verify(kp.getPublic());
@@ -830,6 +1069,7 @@ class GostCrlBuilderTest {
 
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .addRevoked(serial, "20250601120000Z")
                         .sign(kp.getPrivate());
 
@@ -847,6 +1087,7 @@ class GostCrlBuilderTest {
 
         byte[] crlDer =
                 GostCrlBuilder.create(issuerDn)
+                        .nextUpdate("20990601120000Z")
                         .withCrlNumber(5)
                         .withDeltaCrlIndicator(4)
                         .sign(kp.getPrivate());
@@ -1006,7 +1247,9 @@ class GostCrlBuilderTest {
     void testGostCrlCustomSizeLimitRejected() {
         byte[] der = new byte[200];
         IllegalArgumentException ex =
-                assertThrows(IllegalArgumentException.class, () -> new GostCrl(der, 100, 10));
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new GostCrl(der, new CrlLimits(100, 10)));
         assertTrue(
                 ex.getMessage().contains("exceeds maximum size"),
                 "должен быть reject по превышению кастомного размера: " + ex.getMessage());
@@ -1035,7 +1278,7 @@ class GostCrlBuilderTest {
                         .addRevoked(entries)
                         .sign(kp.getPrivate());
 
-        GostCrl crl = new GostCrl(crlDer, 10_000_000, 10);
+        GostCrl crl = new GostCrl(crlDer, new CrlLimits(10_000_000, 10));
         PkixException ex =
                 assertThrows(
                         PkixException.class,
@@ -1066,7 +1309,7 @@ class GostCrlBuilderTest {
                         .sign(kp.getPrivate());
 
         // Проверяем конкретный серийный номер из числа добавленных
-        GostCrl crl = new GostCrl(crlDer, 10_000_000, 100);
+        GostCrl crl = new GostCrl(crlDer, new CrlLimits(10_000_000, 100));
         crl.verify(kp.getPublic(), false);
         assertTrue(
                 crl.isRevoked(BigInteger.valueOf(3).toByteArray()),

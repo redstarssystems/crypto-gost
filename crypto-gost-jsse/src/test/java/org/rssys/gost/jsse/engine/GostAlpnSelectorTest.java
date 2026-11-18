@@ -15,34 +15,33 @@ import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsTestHelper;
+import org.rssys.gost.tls13.TlsException;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
 /**
  * Тесты ALPN-селектора фазы 5: JSSE BiFunction -> tls13 Function.
  */
+@DisplayName("GostSSLEngine: выбор протокола ALPN")
 class GostAlpnSelectorTest {
 
-    private static TlsCiphersuite cs;
-    private static TlsTestHelper.CertBundle serverCert;
-    private static TlsTestHelper.CertBundle rootCa;
+    private static PkixCertTestHelper.CertBundle serverCert;
+    private static PkixCertTestHelper.CertBundle rootCa;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        rootCa = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        rootCa = PkixCertTestHelper.createRootCA(ECParameters.tc26a256());
         serverCert =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         ECParameters.tc26a256(),
                         rootCa.priv,
                         rootCa.cert.getPublicKey(),
                         rootCa.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         new byte[] {(byte) 0x80},
                         null,
@@ -71,15 +70,57 @@ class GostAlpnSelectorTest {
     }
 
     @Test
-    @DisplayName("ALPN selector: null от selector -> no ALPN в EE")
-    void testSelectorReturnNull() throws Exception {
+    @DisplayName("ALPN selector: null от selector -> отказ, no_application_protocol (120)")
+    void testSelectorReturnNull() {
         String[] protocols = {"h2", "http/1.1"};
 
-        GostSSLEngine clientEngine = doSelectorLoopback(protocols, (eng, clientList) -> null);
+        Exception ex =
+                assertThrows(
+                        Exception.class,
+                        () -> doSelectorLoopback(protocols, (eng, clientList) -> null));
 
-        assertNull(
+        assertNotNull(
+                findSslException(ex), "В цепочке причин должен быть SSLException. Получено: " + ex);
+        TlsException cause = findTlsException(ex);
+        assertNotNull(cause, "Причиной отказа должен быть TlsException. Получено: " + ex);
+        assertEquals(
+                TlsConstants.ALERT_NO_APPLICATION_PROTOCOL,
+                cause.getAlertCode(),
+                "null от селектора должен давать алерт no_application_protocol (120)");
+    }
+
+    @Test
+    @DisplayName("ALPN selector: пустая строка -> рукопожатие без ALPN, протокол \"\"")
+    void testSelectorReturnEmptyContinuesWithoutAlpn() throws Exception {
+        String[] protocols = {"h2", "http/1.1"};
+
+        GostSSLEngine clientEngine = doSelectorLoopback(protocols, (eng, clientList) -> "");
+
+        assertEquals(
+                "",
                 clientEngine.getApplicationProtocol(),
-                "null от селектора должен дать отсутствие ALPN");
+                "пустая строка от селектора: рукопожатие успешно, протокол не согласован");
+    }
+
+    @Test
+    @DisplayName("ALPN: до рукопожатия null, без ALPN после рукопожатия пустая строка")
+    void testApplicationProtocolNullBeforeAndEmptyAfterWithoutAlpn() throws Exception {
+        GostSSLEngine clientEngine =
+                new GostSSLEngine(
+                        new GostX509KeyManager(),
+                        GostX509TrustManager.insecureTrustAll(),
+                        "client",
+                        0,
+                        true);
+        assertNull(
+                clientEngine.getApplicationProtocol(), "до рукопожатия протокол ещё не определён");
+
+        // Селектор есть, а клиент ALPN не предлагает: рукопожатие проходит без ALPN
+        GostSSLEngine client = doSelectorLoopback(null, (eng, clientList) -> "h2");
+        assertEquals(
+                "",
+                client.getApplicationProtocol(),
+                "ALPN не использовался: после рукопожатия пустая строка, а не null");
     }
 
     @Test
@@ -93,15 +134,9 @@ class GostAlpnSelectorTest {
                         () ->
                                 doSelectorLoopback(
                                         protocols, (eng, clientList) -> "invalid-protocol"));
-        // Exception может быть обёрнут в RuntimeException из потока handshake
-        boolean foundSslEx = false;
-        for (Throwable t = ex; t != null; t = t.getCause()) {
-            if (t instanceof SSLException) {
-                foundSslEx = true;
-                break;
-            }
-        }
-        assertTrue(foundSslEx, "Должен содержать SSLException в цепочке причин. Получено: " + ex);
+        assertNotNull(
+                findSslException(ex),
+                "Должен содержать SSLException в цепочке причин. Получено: " + ex);
     }
 
     @Test
@@ -121,11 +156,11 @@ class GostAlpnSelectorTest {
                 serverCert.priv);
 
         GostSSLEngine serverEngine =
-                new GostSSLEngine(skm, new GostX509TrustManager(null, false), "server", 0, false);
+                new GostSSLEngine(skm, GostX509TrustManager.insecureTrustAll(), "server", 0, false);
         GostSSLEngine clientEngine =
                 new GostSSLEngine(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "client",
                         0,
                         true);
@@ -215,6 +250,49 @@ class GostAlpnSelectorTest {
      * @return clientEngine после handshake (getApplicationProtocol доступен)
      * @throws Exception при любой ошибке handshake
      */
+    @Test
+    @DisplayName("setSSLParameters: плохое имя ALPN отвергается сразу, а не при рукопожатии")
+    void testSetSslParametersRejectsInvalidAlpnNames() {
+        GostSSLEngine engine =
+                new GostSSLEngine(
+                        new GostX509KeyManager(),
+                        GostX509TrustManager.insecureTrustAll(),
+                        "client",
+                        0,
+                        true);
+        // Пустое имя отсекает сам JDK в SSLParameters.setApplicationProtocols, длину и символы
+        // выше U+00FF (не помещаются в один байт) - нет
+        for (String[] invalid : new String[][] {{"x".repeat(256)}, {"h2", "h\u0100"}}) {
+            SSLParameters params = new SSLParameters();
+            params.setApplicationProtocols(invalid);
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> engine.setSSLParameters(params),
+                    "Недопустимое имя ALPN должно отвергаться при установке параметров");
+        }
+        SSLParameters withoutAlpn = new SSLParameters();
+        engine.setSSLParameters(withoutAlpn);
+    }
+
+    private static TlsException findTlsException(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof TlsException) {
+                return (TlsException) t;
+            }
+        }
+        return null;
+    }
+
+    /** Исключение может быть обёрнуто в RuntimeException из потока рукопожатия. */
+    private static SSLException findSslException(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof SSLException) {
+                return (SSLException) t;
+            }
+        }
+        return null;
+    }
+
     private GostSSLEngine doSelectorLoopback(
             String[] protocols,
             java.util.function.BiFunction<SSLEngine, java.util.List<String>, String> selector)
@@ -230,20 +308,22 @@ class GostAlpnSelectorTest {
                 serverCert.priv);
 
         GostSSLEngine serverEngine =
-                new GostSSLEngine(skm, new GostX509TrustManager(null, false), "server", 0, false);
+                new GostSSLEngine(skm, GostX509TrustManager.insecureTrustAll(), "server", 0, false);
         GostSSLEngine clientEngine =
                 new GostSSLEngine(
                         new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
+                        GostX509TrustManager.insecureTrustAll(),
                         "client",
                         0,
                         true);
 
         serverEngine.setHandshakeApplicationProtocolSelector(selector);
 
-        SSLParameters clientParams = new SSLParameters();
-        clientParams.setApplicationProtocols(protocols);
-        clientEngine.setSSLParameters(clientParams);
+        if (protocols != null) {
+            SSLParameters clientParams = new SSLParameters();
+            clientParams.setApplicationProtocols(protocols);
+            clientEngine.setSSLParameters(clientParams);
+        }
 
         clientEngine.beginHandshake();
         serverEngine.beginHandshake();
@@ -338,15 +418,11 @@ class GostAlpnSelectorTest {
                             isClient
                                     ? pair.getClientTransport().receiveRecord()
                                     : pair.getServerTransport().receiveRecord();
-                    if (inData != null) {
-                        netBuf.clear();
-                        netBuf.put(inData);
-                        netBuf.flip();
-                        appBuf.clear();
-                        engine.unwrap(netBuf, appBuf);
-                    } else {
-                        Thread.sleep(10);
-                    }
+                    netBuf.clear();
+                    netBuf.put(inData);
+                    netBuf.flip();
+                    appBuf.clear();
+                    engine.unwrap(netBuf, appBuf);
                     break;
                 case NEED_TASK:
                     Runnable task = engine.getDelegatedTask();

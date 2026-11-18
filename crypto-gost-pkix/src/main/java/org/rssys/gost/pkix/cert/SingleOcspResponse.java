@@ -6,7 +6,8 @@ import java.time.Instant;
  * Один ответ SingleResponse из OCSP-ответа (RFC 6960 §4.1.3).
  *
  * @param certSerialNumber серийный номер сертификата (raw DER INTEGER value)
- * @param certStatusTag    тег статуса: {@code 0xA0} = good, {@code 0xA1} = revoked, {@code 0xA2} = unknown
+ * @param certStatusTag    тег статуса: {@code 0x80} (или {@code 0xA0}) = good, {@code 0xA1} = revoked,
+ *                         {@code 0xA2} (или {@code 0x82}) = unknown
  * @param thisUpdate       дата выпуска данного статуса (Instant, UTC)
  * @param nextUpdate       дата следующего обновления или {@code null} (Instant, UTC)
  * @param issuerNameHash   issuerNameHash из CertID (для defense-in-depth проверки)

@@ -16,3 +16,11 @@ dependency-reduced-pom.xml
 /old-digest/results/
 /signature/results/
 /tls/results/
+
+# Замер стоимости проверки CRL (bench/crl): все выходные файлы пишутся в data/, правила ниже -
+# страховка на случай, если файл окажется в другом месте
+# (настоящие CRL чужих УЦ и сгенерированные на миллионы записей CRL не должны попасть в историю)
+*.crl
+*.hprof
+hs_err_pid*
+/crl/results/

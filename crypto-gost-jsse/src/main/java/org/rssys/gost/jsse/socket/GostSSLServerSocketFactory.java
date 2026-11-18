@@ -20,6 +20,13 @@ public final class GostSSLServerSocketFactory extends SSLServerSocketFactory {
     private final GostX509TrustManager trustManager;
     private final GostSSLSessionContext sessionContext;
 
+    /**
+     * Создаёт фабрику серверных сокетов.
+     *
+     * @param keyManager     менеджер ключей
+     * @param trustManager   менеджер доверия
+     * @param sessionContext контекст сессий
+     */
     public GostSSLServerSocketFactory(
             GostX509KeyManager keyManager,
             GostX509TrustManager trustManager,
@@ -31,12 +38,12 @@ public final class GostSSLServerSocketFactory extends SSLServerSocketFactory {
 
     @Override
     public String[] getDefaultCipherSuites() {
-        return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+        return GostJsseConstants.supportedCipherSuites();
     }
 
     @Override
     public String[] getSupportedCipherSuites() {
-        return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+        return GostJsseConstants.supportedCipherSuites();
     }
 
     @Override

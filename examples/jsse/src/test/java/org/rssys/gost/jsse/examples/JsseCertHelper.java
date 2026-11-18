@@ -5,6 +5,7 @@ import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.testkit.GostTestCerts;
 import org.rssys.gost.jsse.testkit.GostTestContext;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 
 public final class JsseCertHelper {
 
@@ -31,6 +32,6 @@ public final class JsseCertHelper {
     }
 
     public GostX509TrustManager createTrustManager() {
-        return new GostX509TrustManager(certs.caKey(), false);
+        return GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(certs.caCert()));
     }
 }

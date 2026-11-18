@@ -13,9 +13,12 @@ package org.rssys.gost.tls13.record;
  *   <li>{@code NEED_MORE_INPUT} — недостаточно данных во входном буфере.
  *       Позиция record buffer'а не изменилась. hint = минимальное количество
  *       байт, необходимое для полной записи.</li>
- *   <li>{@code OUTPUT_TOO_SMALL} — выходной буфер недостаточен. Позиция
- *       record buffer'а восстановлена (input не потреблён). hint = минимальный
- *       размер plaintext buffer'а. Расшифровка будет выполнена заново при retry.</li>
+ *   <li>{@code OUTPUT_TOO_SMALL} — выходной буфер недостаточен или открытый текст записи
+ *       приложения превышает заданный предел
+ *       ({@link TlsRecord#unprotect(ByteBuffer, ByteBuffer, int)}). Позиция
+ *       record buffer'а восстановлена (input не потреблён), порядковый номер не сдвинут.
+ *       hint = минимальный размер, который нужен открытому тексту. Расшифровка будет
+ *       выполнена заново при retry.</li>
  * </ul>
  */
 public final class UnprotectResult {

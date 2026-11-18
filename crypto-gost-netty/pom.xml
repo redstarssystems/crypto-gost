@@ -26,9 +26,19 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-tls13</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>io.netty</groupId>
             <artifactId>netty-handler</artifactId>
             <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http2</artifactId>
+            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -38,6 +48,13 @@
         <dependency>
             <groupId>org.rssys</groupId>
             <artifactId>crypto-gost-tls13</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-pkix</artifactId>
             <version>${project.version}</version>
             <type>test-jar</type>
             <scope>test</scope>

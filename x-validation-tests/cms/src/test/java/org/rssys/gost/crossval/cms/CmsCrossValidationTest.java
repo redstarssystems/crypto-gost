@@ -1,5 +1,10 @@
 package org.rssys.gost.crossval.cms;
 
+import org.rssys.gost.pkix.cert.TrustAnchors;
+import org.rssys.gost.pkix.cms.VerifyOptions;
+import org.rssys.gost.pkix.cms.SignerSelection;
+import org.rssys.gost.pkix.cms.Revocation;
+import org.rssys.gost.pkix.cms.VerifiedSignedData;
 import java.io.*;
 import java.math.BigInteger;
 import java.nio.file.*;
@@ -8,6 +13,7 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.rssys.gost.api.*;
 import org.rssys.gost.crossval.util.CrossValUtils;
+import org.rssys.gost.crossval.util.CryptoProChecker;
 import org.rssys.gost.crossval.util.OpenSslChecker;
 import org.rssys.gost.crossval.util.TempDirUtils;
 import org.rssys.gost.jca.spec.GostCurves;
@@ -50,7 +56,7 @@ class CmsCrossValidationTest {
                 .data(data).addSigner(privKey, cert).build();
         Files.write(tmp.resolve("s.p7s"), signed);
 
-        VerifiedSignedData vr = CmsSignedDataVerifier.verifyAny(signed, cert);
+        VerifiedSignedData vr = CmsSignedDataVerifier.verify(signed, VerifyOptions.trusting(TrustAnchors.ofCertificates(cert), SignerSelection.ANY, Revocation.none()));
         System.out.println("Self-verify via CmsSignedDataVerifier: passed");
 
         String asn1 = run(opensslBinary(), "asn1parse", "-in", tmp.resolve("s.p7s").toString(), "-inform", "DER");
@@ -63,6 +69,10 @@ class CmsCrossValidationTest {
         }
         System.out.println("=== конец ASN.1 ===");
 
+        // Вывод openssl здесь только диагностический, assert на нём не строим: cms -verify
+        // возвращает exit=4 и на корректной подписи (ossl_cms_DigestAlgorithm_find_ctx:
+        // no matching digest - не находит дайджест Стрибога), и на искажённой (signature
+        // mismatch), то есть код возврата не различает исходы.
         String vout = run(opensslBinary(), "cms", "-verify",
                 "-in", tmp.resolve("s.p7s").toString(),
                 "-inform", "DER", "-noverify", "-nosmimecap",
@@ -71,13 +81,31 @@ class CmsCrossValidationTest {
                 "-out", tmp.resolve("out.txt").toString());
         System.out.println("\nOpenSSL verify: " + vout);
 
-        if (cryptcpAvailable()) {
-            Files.write(tmp.resolve("cp-data.bin"), data);
-            run(cryptcpBinary(), "-instcert", "-f", tmp.resolve("cert.der").toString());
-            String cpOut = run(cryptcpBinary(), "-verify", "-nochain",
-                    "-f", tmp.resolve("s.p7s").toString(),
-                    tmp.resolve("cp-data.bin").toString());
-            System.out.println("cryptcp verify: " + cpOut);
+        if (CryptoProChecker.cryptcpAvailable()) {
+            // сертификат подписанта передаётся через -f, в хранилища КриптоПро ничего не ставим
+            Path cpOut = tmp.resolve("cp-out.bin");
+            CryptoProChecker.Result cpResult = CryptoProChecker.runWithConfirm(
+                    CryptoProChecker.resolveCryptcpBinary(), "-verify", "-nochain",
+                    "-f", tmp.resolve("cert.der").toString(),
+                    tmp.resolve("s.p7s").toString(), cpOut.toString());
+            System.out.println("cryptcp verify: " + cpResult.output());
+            assertEquals(0, cpResult.exitCode(),
+                    "cryptcp должен принять SignedData библиотеки: " + cpResult.output());
+            assertArrayEquals(data, Files.readAllBytes(cpOut),
+                    "cryptcp должен извлечь те же данные, что подписаны");
+
+            // контроль: тот же вызов обязан отклонить SignedData с искажённой подписью,
+            // иначе exit=0 выше ничего не доказывает. Подпись - последние байты SignerInfo.
+            byte[] tampered = signed.clone();
+            tampered[tampered.length - 1] ^= 0x01;
+            Files.write(tmp.resolve("tampered.p7s"), tampered);
+            CryptoProChecker.Result tamperedResult = CryptoProChecker.runWithConfirm(
+                    CryptoProChecker.resolveCryptcpBinary(), "-verify", "-nochain",
+                    "-f", tmp.resolve("cert.der").toString(),
+                    tmp.resolve("tampered.p7s").toString(), tmp.resolve("cp-bad.bin").toString());
+            assertNotEquals(0, tamperedResult.exitCode(),
+                    "cryptcp должен отклонить SignedData с искажённой подписью: "
+                            + tamperedResult.output());
         }
 
         // verify() throws PkixException on failure — no explicit assertion needed
@@ -89,11 +117,11 @@ class CmsCrossValidationTest {
     void envelopedDataDiagnostics() throws Exception {
         byte[] data = "CMS EnvelopedData structural test".getBytes();
 
-        CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
+        // Обычный режим без имитовставки: структура и текстовый разбор OpenSSL проверяются для него
         byte[] encrypted = CmsEnvelopedDataBuilder.create()
                 .data(data)
                 .addRecipient(cert)
-                .keyWrap(keyWrap)
+                .withoutIntegrity()
                 .build();
         Files.write(tmp.resolve("enc_lib.der"), encrypted);
 
@@ -103,6 +131,10 @@ class CmsCrossValidationTest {
         System.out.println(asn1);
         assertTrue(asn1.contains("kuznyechik-ctr-acpkm"),
                 "ASN.1 должен содержать OID kuznyechik-ctr-acpkm");
+        // Имя обычного шифра — префикс имени OMAC-шифра, поэтому подстроки мало: отсутствие
+        // суффикса -omac проверяется отдельно, а точное равенство OID — по разобранному DER ниже.
+        assertFalse(asn1.contains("kuznyechik-ctr-acpkm-omac"),
+                "обычный контейнер не должен нести OID OMAC-шифра");
         assertTrue(asn1.contains("kuznyechik-kexp15"),
                 "ASN.1 должен содержать OID KExp15 key wrap");
 
@@ -110,17 +142,21 @@ class CmsCrossValidationTest {
         byte[][] envParts = DerCodec.parseSequenceContents(ci.content(), 0);
         byte[][] eciParts = DerCodec.parseSequenceContents(envParts[2], 0);
         byte[][] algParts = DerCodec.parseSequenceContents(eciParts[1], 0);
+        assertEquals(GostOids.KUZ_CTR_ACPKM, DerCodec.parseOid(algParts[0], 0),
+                "OID шифра обычного режима должен быть точно kuznyechik-ctr-acpkm");
+        assertEquals(3, envParts.length,
+                "обычный контейнер не должен содержать unprotectedAttrs");
         assertEquals(DerCodec.TAG_SEQUENCE, algParts[1][0] & 0xFF,
                 "Параметры контентного шифра должны быть SEQUENCE (RFC 9337 §7.3)");
 
-        byte[] decrypted = CmsEnvelopedDataDecryptor.decrypt(encrypted, privKey, cert, keyWrap);
+        byte[] decrypted = CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(
+                encrypted, privKey, cert);
         assertArrayEquals(data, decrypted, "Roundtrip шифрование/расшифровка");
 
         System.out.println("EnvelopedData структурная проверка: OK");
         System.out.println("Примечание: openssl cms -decrypt не поддерживает GOST KeyAgreeRecipientInfo");
-        System.out.println("Примечание: КриптоПРО использует KeyTransRecipientInfo (ГОСТ 28147-89, RFC 4490 §5),");
-        System.out.println("библиотека — KeyAgreeRecipientInfo (RFC 5652 §6.2.2, VKO + KExp15):");
-        System.out.println("совместимость на уровне RecipientInfo отсутствует");
+        System.out.println("Примечание: по умолчанию библиотека строит KeyTransRecipientInfo (ТК26 §8.2),");
+        System.out.println("KeyAgreeRecipientInfo (RFC 5652 §6.2.2, VKO + KExp15) — по явному выбору");
     }
 
     @Test
@@ -149,7 +185,7 @@ class CmsCrossValidationTest {
             assertEquals(0, asn1Exit, "openssl asn1parse SignedData должен пройти");
 
             // L2: библиотечная верификация
-            VerifiedSignedData vr = CmsSignedDataVerifier.verifyAny(signedDer, pair.caCert());
+            VerifiedSignedData vr = CmsSignedDataVerifier.verify(signedDer, VerifyOptions.trusting(TrustAnchors.ofCertificates(pair.caCert()), SignerSelection.ANY, Revocation.none()));
             assertNotNull(vr, "Библиотечная верификация SignedData не должна вернуть null");
 
             // Примечание: openssl cms -verify c -CAfile не поддерживает
@@ -186,9 +222,12 @@ class CmsCrossValidationTest {
             int asn1Exit = OpenSslChecker.run(asn1Cmd);
             assertEquals(0, asn1Exit, "openssl asn1parse detached SignedData должен пройти");
 
-            // L2: библиотечная верификация
-            VerifiedSignedData vr = CmsSignedDataVerifier.verifyAny(signedDer, pair.caCert());
+            // L2: библиотечная верификация с явным документом
+            VerifiedSignedData vr =
+                    CmsSignedDataVerifier.verify(signedDer, VerifyOptions.trusting(TrustAnchors.ofCertificates(pair.caCert()), SignerSelection.ANY, Revocation.none()).detached(data));
             assertNotNull(vr, "Библиотечная верификация detached SignedData не должна вернуть null");
+            assertArrayEquals(
+                    data, vr.data(), "detached-метод должен вернуть переданный документ");
 
             return null;
         });
@@ -226,7 +265,7 @@ class CmsCrossValidationTest {
             assertEquals(0, asn1Exit, "openssl asn1parse SignedData с CRL должен пройти");
 
             // L2: библиотечная верификация + проверка извлечения CRL
-            VerifiedSignedData vr = CmsSignedDataVerifier.verifyAny(signedDer, pair.caCert());
+            VerifiedSignedData vr = CmsSignedDataVerifier.verify(signedDer, VerifyOptions.trusting(TrustAnchors.ofCertificates(pair.caCert()), SignerSelection.ANY, Revocation.none()));
             assertNotNull(vr, "Верификация не должна вернуть null");
             assertArrayEquals(data, vr.data(), "Данные должны совпадать");
             assertEquals(1, vr.embeddedCrls().size(), "Ровно один CRL");

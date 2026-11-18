@@ -15,6 +15,7 @@ import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -37,7 +38,8 @@ public final class ExamplesCertHelper {
         Security.addProvider(new RssysGostJsseProvider());
         GostX509KeyManager km = new GostX509KeyManager();
         km.addKeyEntry("default", certs.toJca(), certs.key());
-        GostX509TrustManager tm = new GostX509TrustManager(certs.caKey(), false);
+        GostX509TrustManager tm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(certs.caCert()));
         SSLContext ctx =
                 SSLContext.getInstance(
                         GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
@@ -60,7 +62,7 @@ public final class ExamplesCertHelper {
     }
 
     public GostX509TrustManager createTrustManager() {
-        return new GostX509TrustManager(certs.caKey(), false);
+        return GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(certs.caCert()));
     }
 
     /** DER серверного сертификата. */

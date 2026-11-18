@@ -6,6 +6,7 @@ import java.util.Collections;
 import java.util.concurrent.*;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.*;
@@ -62,7 +63,7 @@ public final class IpSan {
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
+                                new TlsClientConfig(cs, TrustAnchors.ofCertificate(caBundle.cert()))
                                         .withServerHostname("127.0.0.1"),
                                 clientTp)) {
 

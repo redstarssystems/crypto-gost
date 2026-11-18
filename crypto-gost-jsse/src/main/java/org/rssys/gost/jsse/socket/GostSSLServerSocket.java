@@ -3,9 +3,12 @@ package org.rssys.gost.jsse.socket;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.List;
+import java.util.function.BiFunction;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.SslParameterNames;
 import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
@@ -29,21 +32,37 @@ public final class GostSSLServerSocket extends SSLServerSocket {
     private boolean needClientAuth;
     private boolean wantClientAuth;
     private boolean enableSessionCreation = true;
-    private String[] enabledCipherSuites = GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
-    private String[] enabledProtocols = GostJsseConstants.SUPPORTED_PROTOCOLS.clone();
+    private String[] enabledCipherSuites = GostJsseConstants.supportedCipherSuites();
+    private String[] enabledProtocols = GostJsseConstants.supportedProtocols();
 
+    /**
+     * Серверный сокет на указанном порту.
+     *
+     * @param port           порт ({@code 0} - любой свободный)
+     * @param km             менеджер ключей (сертификат сервера)
+     * @param tm             менеджер доверия (проверка клиентских сертификатов)
+     * @param sessionContext контекст сессий (возобновление по PSK)
+     * @throws IOException при ошибке открытия порта
+     */
     public GostSSLServerSocket(
             int port,
             GostX509KeyManager km,
             GostX509TrustManager tm,
             GostSSLSessionContext sessionContext)
             throws IOException {
-        super(port);
-        this.keyManager = km;
-        this.trustManager = tm;
-        this.sessionContext = sessionContext;
+        this(port, 0, null, km, tm, sessionContext);
     }
 
+    /**
+     * Серверный сокет с длиной очереди подключений.
+     *
+     * @param port           порт
+     * @param backlog        максимальная длина очереди входящих подключений
+     * @param km             менеджер ключей
+     * @param tm             менеджер доверия
+     * @param sessionContext контекст сессий
+     * @throws IOException при ошибке открытия порта
+     */
     public GostSSLServerSocket(
             int port,
             int backlog,
@@ -51,12 +70,20 @@ public final class GostSSLServerSocket extends SSLServerSocket {
             GostX509TrustManager tm,
             GostSSLSessionContext sessionContext)
             throws IOException {
-        super(port, backlog);
-        this.keyManager = km;
-        this.trustManager = tm;
-        this.sessionContext = sessionContext;
+        this(port, backlog, null, km, tm, sessionContext);
     }
 
+    /**
+     * Серверный сокет с длиной очереди и локальным адресом.
+     *
+     * @param port           порт
+     * @param backlog        максимальная длина очереди входящих подключений
+     * @param bindAddr       локальный адрес привязки ({@code null} - любой)
+     * @param km             менеджер ключей
+     * @param tm             менеджер доверия
+     * @param sessionContext контекст сессий
+     * @throws IOException при ошибке открытия порта
+     */
     public GostSSLServerSocket(
             int port,
             int backlog,
@@ -76,8 +103,13 @@ public final class GostSSLServerSocket extends SSLServerSocket {
         Socket raw = super.accept();
         GostSSLSocket ssl = new GostSSLSocket(raw, keyManager, trustManager, sessionContext);
 
-        ssl.setNeedClientAuth(needClientAuth);
-        ssl.setWantClientAuth(wantClientAuth);
+        // Применяется только действующий режим: сеттеры сокета и движка заменяют друг друга, и
+        // второй вызов сбросил бы обязательный режим
+        if (needClientAuth) {
+            ssl.setNeedClientAuth(true);
+        } else {
+            ssl.setWantClientAuth(wantClientAuth);
+        }
         ssl.setEnableSessionCreation(enableSessionCreation);
         ssl.setEnabledCipherSuites(enabledCipherSuites);
         ssl.setEnabledProtocols(enabledProtocols);
@@ -90,13 +122,7 @@ public final class GostSSLServerSocket extends SSLServerSocket {
 
     @Override
     public void setEnabledCipherSuites(String[] suites) {
-        if (suites == null) throw new IllegalArgumentException("Cipher suites must not be null");
-        for (String s : suites) {
-            if (org.rssys.gost.tls13.TlsCiphersuite.byIanaName(s) == null) {
-                throw new IllegalArgumentException("Unsupported cipher suite: " + s);
-            }
-        }
-        this.enabledCipherSuites = suites.clone();
+        this.enabledCipherSuites = SslParameterNames.checkedCipherSuites(suites);
     }
 
     @Override
@@ -106,18 +132,12 @@ public final class GostSSLServerSocket extends SSLServerSocket {
 
     @Override
     public String[] getSupportedCipherSuites() {
-        return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+        return GostJsseConstants.supportedCipherSuites();
     }
 
     @Override
     public void setEnabledProtocols(String[] protocols) {
-        if (protocols == null) throw new IllegalArgumentException("Protocols must not be null");
-        for (String p : protocols) {
-            if (!GostJsseConstants.PROTOCOL_TLS_1_3.equals(p)) {
-                throw new IllegalArgumentException("Unsupported protocol: " + p);
-            }
-        }
-        this.enabledProtocols = protocols.clone();
+        this.enabledProtocols = SslParameterNames.checkedProtocols(protocols);
     }
 
     @Override
@@ -127,12 +147,14 @@ public final class GostSSLServerSocket extends SSLServerSocket {
 
     @Override
     public String[] getSupportedProtocols() {
-        return GostJsseConstants.SUPPORTED_PROTOCOLS.clone();
+        return GostJsseConstants.supportedProtocols();
     }
 
     @Override
     public void setNeedClientAuth(boolean need) {
+        // Как в SSLServerSocket: режим один, вызов заменяет предыдущий выбор
         this.needClientAuth = need;
+        this.wantClientAuth = false;
     }
 
     @Override
@@ -143,6 +165,7 @@ public final class GostSSLServerSocket extends SSLServerSocket {
     @Override
     public void setWantClientAuth(boolean want) {
         this.wantClientAuth = want;
+        this.needClientAuth = false;
     }
 
     @Override
@@ -176,16 +199,15 @@ public final class GostSSLServerSocket extends SSLServerSocket {
      * Не override (SSLServerSocket не имеет этого метода).
      * Сохранённый selector применяется к каждому GostSSLSocket при accept().
      */
-    @SuppressWarnings("unused")
     public void setHandshakeApplicationProtocolSelector(
-            java.util.function.BiFunction<SSLSocket, java.util.List<String>, String> selector) {
+            BiFunction<SSLSocket, List<String>, String> selector) {
         this.serverSelector = selector;
     }
 
-    public java.util.function.BiFunction<SSLSocket, java.util.List<String>, String>
-            getHandshakeApplicationProtocolSelector() {
+    /** @return селектор ALPN, применяемый к принятым сокетам, или null */
+    public BiFunction<SSLSocket, List<String>, String> getHandshakeApplicationProtocolSelector() {
         return serverSelector;
     }
 
-    private java.util.function.BiFunction<SSLSocket, java.util.List<String>, String> serverSelector;
+    private BiFunction<SSLSocket, List<String>, String> serverSelector;
 }

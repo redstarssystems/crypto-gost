@@ -3,6 +3,7 @@ package org.rssys.gost.tls13.examples;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.concurrent.*;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
@@ -41,7 +42,7 @@ public final class MinimalServer {
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
+                                new TlsClientConfig(cs, TrustAnchors.ofCertificate(caBundle.cert()))
                                         .withoutHostnameVerification(),
                                 clientTp)) {
 

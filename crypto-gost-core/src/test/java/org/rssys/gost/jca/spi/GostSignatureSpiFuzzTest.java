@@ -7,10 +7,10 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
-import java.security.Security;
 import java.security.Signature;
 import java.security.SignatureException;
 import java.security.spec.ECGenParameterSpec;
+import org.rssys.gost.JcaTestSupport;
 import org.rssys.gost.jca.RssysGostProvider;
 
 /**
@@ -34,9 +34,9 @@ class GostSignatureSpiFuzzTest {
     private static final java.security.PublicKey PUBLIC_KEY;
 
     static {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
+        // Статические поля ниже создаются при загрузке класса, раньше жизненного цикла JUnit и
+        // раньше запуска под Jazzer: провайдер должен быть зарегистрирован уже здесь
+        JcaTestSupport.ensureProvider();
         try {
             KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", PROVIDER);
             kpg.initialize(new ECGenParameterSpec("cryptopro-A"));

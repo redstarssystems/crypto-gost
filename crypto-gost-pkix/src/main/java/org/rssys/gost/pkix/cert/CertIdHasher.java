@@ -10,8 +10,8 @@ import org.rssys.gost.pkix.GostOids;
  * Размер хэша (32 или 64 байта) определяется параметром {@code hlen} —
  * политика данной реализации: hlen = {@link GostOids#STREEBOG_512_HASH_LEN} -> Streebog-512, иначе Streebog-256.
  * <p>
- * issuerKeyHash: хэш от BIT STRING value SubjectPublicKeyInfo
- * (включая unused-bits byte, без tag и length BIT STRING).
+ * issuerKeyHash: хэш от битов subjectPublicKey (RFC 6960 §4.1.1): значение BIT STRING
+ * SubjectPublicKeyInfo без tag, length и октета unused-bits.
  * issuerNameHash: хэш от полного DER subject DN (включая SEQUENCE tag+length).
  */
 public final class CertIdHasher {
@@ -52,7 +52,7 @@ public final class CertIdHasher {
 
     public static byte[] hashIssuerPublicKey(byte[] issuerCertDer, int hlen) {
         try {
-            byte[] bsValue = extractBitStringValue(issuerCertDer);
+            byte[] bsValue = extractKeyBits(issuerCertDer);
             return GostSignatureHelper.doHash(bsValue, hlen);
         } catch (RuntimeException e) {
             throw new IllegalArgumentException("Failed to extract issuerKeyHash from cert DER", e);
@@ -65,7 +65,7 @@ public final class CertIdHasher {
     }
 
     public static byte[] hashIssuerPublicKey(GostCertificate issuer, int hlen) {
-        return GostSignatureHelper.doHash(issuer.getSpkiKeyValue(), hlen);
+        return GostSignatureHelper.doHash(issuer.getSpkiKeyBits(), hlen);
     }
 
     static byte[] extractSubject(byte[] der) {
@@ -86,7 +86,7 @@ public final class CertIdHasher {
         return Arrays.copyOfRange(der, pos, subjectTlv[1]);
     }
 
-    static byte[] extractBitStringValue(byte[] der) {
+    static byte[] extractKeyBits(byte[] der) {
         int pos = findTbsOffset(der);
         if ((der[pos] & 0xFF) == 0xA0) pos = GostDerParser.readTlv(der, pos)[1]; // version [0]
         checkTag(der, pos, GostDerParser.TAG_INTEGER, "serialNumber");
@@ -107,7 +107,12 @@ public final class CertIdHasher {
         spkiPos = algTlv[1];
         checkTag(der, spkiPos, GostDerParser.TAG_BIT_STRING, "subjectPublicKey");
         int[] bsTlv = GostDerParser.readTlv(der, spkiPos);
-        return Arrays.copyOfRange(der, bsTlv[0], bsTlv[1]);
+        // Первый октет значения - число неиспользуемых бит; для ГОСТ-ключа он обязан быть 0.
+        if (bsTlv[1] - bsTlv[0] < 2 || der[bsTlv[0]] != 0) {
+            throw new IllegalArgumentException(
+                    "SubjectPublicKey BIT STRING has non-zero unused bits");
+        }
+        return Arrays.copyOfRange(der, bsTlv[0] + 1, bsTlv[1]);
     }
 
     private static int findTbsOffset(byte[] der) {

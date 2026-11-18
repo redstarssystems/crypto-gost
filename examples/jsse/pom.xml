@@ -55,6 +55,39 @@
             <version>12.0.19</version>
         </dependency>
 
+        <!-- Jetty 12: HTTP/2 нужен только тестам (ALPN-процессор для GostSSLEngine, см. README) -->
+        <dependency>
+            <groupId>org.eclipse.jetty.http2</groupId>
+            <artifactId>jetty-http2-server</artifactId>
+            <version>12.0.19</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-alpn-server</artifactId>
+            <version>12.0.19</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- HTTP/2 на Netty и gRPC. В gost-curl не попадают (исключены правилами shade ниже),
+             как Jetty и Undertow. Версии задаёт netty-bom и grpc-bom родительского pom -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-codec-http2</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-stub</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-api</artifactId>
+        </dependency>
+
         <!-- Undertow 2 -->
         <dependency>
             <groupId>io.undertow</groupId>
@@ -78,6 +111,13 @@
         <dependency>
             <groupId>org.rssys</groupId>
             <artifactId>crypto-gost-tls13</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-pkix</artifactId>
             <type>test-jar</type>
             <scope>test</scope>
             <version>${project.version}</version>
@@ -119,7 +159,18 @@
                                     <exclude>io.undertow:*</exclude>
                                     <exclude>io.xnio:*</exclude>
                                     <exclude>org.eclipse.jetty:*</exclude>
+                                    <exclude>org.eclipse.jetty.http2:*</exclude>
+                                    <exclude>io.grpc:*</exclude>
+                                    <exclude>com.google.code.findbugs:*</exclude>
+                                    <exclude>com.google.guava:*</exclude>
+                                    <exclude>com.google.code.gson:*</exclude>
+                                    <exclude>com.google.android:*</exclude>
+                                    <exclude>com.google.errorprone:*</exclude>
+                                    <exclude>com.google.j2objc:*</exclude>
+                                    <exclude>io.perfmark:*</exclude>
+                                    <exclude>org.codehaus.mojo:animal-sniffer-annotations</exclude>
                                     <exclude>org.apache.tomcat:*</exclude>
+                                    <exclude>org.apache.tomcat.embed:*</exclude>
                                     <exclude>org.wildfly.common:*</exclude>
                                     <exclude>org.wildfly.client:*</exclude>
                                     <exclude>org.jboss.logging:*</exclude>

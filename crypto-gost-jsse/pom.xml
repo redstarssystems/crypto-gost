@@ -37,6 +37,14 @@
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>
+        <!-- общие тестовые серверы для проверки загрузчиков (SlowServers) -->
+        <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-pkix</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

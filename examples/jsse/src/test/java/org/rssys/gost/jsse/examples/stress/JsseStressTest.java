@@ -81,7 +81,7 @@ class JsseStressTest {
         Security.addProvider(new org.rssys.gost.jsse.RssysGostJsseProvider());
         ExamplesCertHelper helper = new ExamplesCertHelper();
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        srvCtx = new GostSSLSessionContext(cs, cs.getHashLen());
+        srvCtx = new GostSSLSessionContext(cs);
         srvCtx.setSessionCacheSize(5000);
         serverSocket =
                 new GostSSLServerSocket(
@@ -116,7 +116,11 @@ class JsseStressTest {
                                                                         out.write(buf, 0, n);
                                                                         out.flush();
                                                                     }
-                                                                } catch (Exception ignored) {
+                                                                } catch (Exception e) {
+                                                                    System.err.println(
+                                                                            "[SERVER_ERR] "
+                                                                                    + causeChain(
+                                                                                            e));
                                                                 }
                                                             });
                                         } catch (Exception e) {
@@ -272,6 +276,7 @@ class JsseStressTest {
                 profileRequests[profileId].incrementAndGet();
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
+                System.err.println("[PROFILE1_ERR] " + causeChain(e));
             } finally {
                 if (s != null)
                     try {
@@ -471,6 +476,17 @@ class JsseStressTest {
             total += gc.getCollectionCount();
         }
         return total;
+    }
+
+    // Цепочка причин в одну строку: по ней ошибки раскладываются по исходным исключениям
+    static String causeChain(Throwable e) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (sb.length() > 0) sb.append(" <- ");
+            sb.append(t.getClass().getName()).append(": ").append(t.getMessage());
+            if (t.getCause() == t) break;
+        }
+        return sb.toString();
     }
 
     private static void log(String msg) {

@@ -4,6 +4,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.math.BigInteger;
+import java.util.Arrays;
 
 /**
  * Элемент поля GF(p) для кривых ГОСТ Р 34.10-2012, представленный в форме Монтгомери.
@@ -33,11 +34,12 @@ import java.math.BigInteger;
  * <p><b>Параметры Монтгомери</b> (класс {@link MontgomeryParams}) вычисляются один раз
  * на набор параметров кривой в {@link ECParameters} и переиспользуются.
  *
- * <p><b>Безопасность:</b> все операции работают за фиксированное число инструкций
- * независимо от значений операндов. Условные ветвления по значениям лимбов отсутствуют.
- * Финальная условная редукция в {@link #addInternal} реализована через маску без ветвления.
+ * <p><b>Безопасность:</b> на уровне алгоритма нет явных ветвлений по значениям лимбов, число
+ * шагов цикла от значений не зависит, а условное вычитание и выбор результата выполняются
+ * масками. Переносы вычисляются условными выражениями вида {@code cond ? 1L : 0L}, поэтому
+ * постоянное время на уровне машинного кода JIT не гарантируется и здесь не заявляется.
  */
-public final class FieldElement {
+final class FieldElement {
 
     // -------------------------------------------------------------------------
     // Параметры Монтгомери
@@ -47,7 +49,7 @@ public final class FieldElement {
      * Предвычисленные параметры для арифметики Монтгомери по данному модулю p.
      * Вычисляются один раз в {@link ECParameters} и передаются в каждый {@link FieldElement}.
      */
-    public static final class MontgomeryParams {
+    static final class MontgomeryParams {
         /**
          * Модуль p в виде массива лимбов (little-endian, 64-бит).
          */
@@ -82,20 +84,12 @@ public final class FieldElement {
         final long[] r2ModP;
 
         /**
-         * Константы 2, 4, 8 в форме Монтгомери — для CT-реализации shiftLeft.
-         */
-        final long[] twoR;
-
-        final long[] fourR;
-        final long[] eightR;
-
-        /**
          * Вычисляет параметры Монтгомери для модуля {@code modulus}.
          * Вызывается один раз при создании {@link ECParameters}.
          *
          * @param modulus простое число p (модуль поля)
          */
-        public MontgomeryParams(BigInteger modulus) {
+        MontgomeryParams(BigInteger modulus) {
             this.n = (modulus.bitLength() + 63) / 64;
             this.p = toLimbs(modulus, n);
 
@@ -116,14 +110,6 @@ public final class FieldElement {
             this.expPMinus2 = modulus.subtract(two);
             // R² mod p = R·R mod p
             this.r2ModP = toLimbs(R.multiply(R).mod(modulus), n);
-
-            // Предвычисляем константы умножения для shiftLeft(1,2,3)
-            long[] twoLimbs = toLimbs(two, n);
-            long[] fourLimbs = toLimbs(BigInteger.valueOf(4L), n);
-            long[] eightLimbs = toLimbs(BigInteger.valueOf(8L), n);
-            this.twoR = montMul(twoLimbs, r2ModP, this);
-            this.fourR = montMul(fourLimbs, r2ModP, this);
-            this.eightR = montMul(eightLimbs, r2ModP, this);
         }
     }
 
@@ -248,7 +234,12 @@ public final class FieldElement {
         long[] one = new long[mp.n];
         one[0] = 1L;
         long[] normal = montMul(limbs, one, mp);
-        return toBigInteger(normal, mp.n);
+        try {
+            return toBigInteger(normal, mp.n);
+        } finally {
+            // координата общей точки ECDH - секрет: промежуточное значение не оставляем в куче
+            Arrays.fill(normal, 0L);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -260,7 +251,9 @@ public final class FieldElement {
      * Константное время: условная редукция через битовую маску.
      */
     public FieldElement add(FieldElement other) {
-        return new FieldElement(addInternal(limbs, other.limbs, mp), mp);
+        long[] sum = new long[mp.n];
+        addInternal(limbs, other.limbs, mp, sum);
+        return new FieldElement(sum, mp);
     }
 
     /**
@@ -269,7 +262,9 @@ public final class FieldElement {
      */
     public FieldElement subtract(FieldElement other) {
         long[] neg = subInternal(other.limbs, mp); // p - b
-        return new FieldElement(addInternal(limbs, neg, mp), mp);
+        // neg - временный буфер, в него же пишем сумму: одна аллокация вместо двух
+        addInternal(limbs, neg, mp, neg);
+        return new FieldElement(neg, mp);
     }
 
     /**
@@ -308,24 +303,22 @@ public final class FieldElement {
     }
 
     /**
-     * Сдвиг влево на {@code bits} позиций с редукцией по p.
-     * Сдвиг влево на 1,2,3 реализован через умножение на предвычисленные константы, для остальных — через повторное сложение.
+     * Сдвиг влево на {@code bits} позиций с редукцией по p, то есть умножение на 2<sup>bits</sup>.
+     * <p>
+     * Реализован как {@code bits} удвоений на одном буфере: сложение с редукцией в разы дешевле
+     * умножения Монтгомери на константу, а буфер выделяется один раз. Для {@code bits <= 0}
+     * возвращает сам элемент.
      */
     public FieldElement shiftLeft(int bits) {
-        switch (bits) {
-            case 1:
-                return new FieldElement(montMul(limbs, mp.twoR, mp), mp);
-            case 2:
-                return new FieldElement(montMul(limbs, mp.fourR, mp), mp);
-            case 3:
-                return new FieldElement(montMul(limbs, mp.eightR, mp), mp);
-            default:
-                {
-                    FieldElement result = this;
-                    for (int i = 0; i < bits; i++) result = result.add(result);
-                    return result;
-                }
+        if (bits <= 0) {
+            return this;
         }
+        long[] doubled = new long[mp.n];
+        addInternal(limbs, limbs, mp, doubled);
+        for (int i = 1; i < bits; i++) {
+            addInternal(doubled, doubled, mp, doubled);
+        }
+        return new FieldElement(doubled, mp);
     }
 
     /**
@@ -338,11 +331,18 @@ public final class FieldElement {
     }
 
     /**
-     * Проверка на равенство.
+     * Проверка на равенство за постоянное время (сравниваются все лимбы без раннего выхода).
+     * Названа не {@code equals}: класс внутренний, элементы поля не кладут в коллекции, и метод с
+     * именем {@code equals} без переопределения {@code equals(Object)} легко принять за него.
+     * Элементы разных полей с одинаковым числом лимбов не равны: модуль открытый, его сравнение не
+     * раскрывает секретов.
      */
-    public boolean equals(FieldElement other) {
+    boolean isEqualTo(FieldElement that) {
+        if (that.mp != mp && !Arrays.equals(that.mp.p, mp.p)) {
+            return false;
+        }
         long diff = 0;
-        for (int i = 0; i < mp.n; i++) diff |= limbs[i] ^ other.limbs[i];
+        for (int i = 0; i < mp.n; i++) diff |= limbs[i] ^ that.limbs[i];
         return diff == 0;
     }
 
@@ -483,12 +483,18 @@ public final class FieldElement {
     }
 
     /**
-     * Сложение с финальной условной редукцией (без ветвления).
-     * Если {@code a + b >= p}, возвращает {@code a + b − p}, иначе {@code a + b}.
+     * Сложение с финальной условной редукцией (без ветвления): записывает в {@code out}
+     * {@code a + b − p}, если {@code a + b >= p}, иначе {@code a + b}.
+     * <p>
+     * {@code out} не должен быть массивом лимбов живого {@link FieldElement}: элементы
+     * неизменяемы и массив может использоваться ещё кем-то. Совпадение {@code out == a} и
+     * {@code out == b} допустимо только для временных массивов, которыми вызывающий больше не
+     * пользуется; после вызова такие операнды считаются испорченными. Само совпадение безопасно:
+     * лимб {@code i} читается из операндов до записи в {@code out[i]}, а лимбы с другими
+     * индексами на него не влияют.
      */
-    static long[] addInternal(long[] a, long[] b, MontgomeryParams mp) {
+    static void addInternal(long[] a, long[] b, MontgomeryParams mp, long[] out) {
         int n = mp.n;
-        long[] sum = new long[n];
         long carry = 0;
         for (int i = 0; i < n; i++) {
             // Двухшаговая формула (Knuth, Hacker's Delight): избегает overflow при a+b+carry.
@@ -500,14 +506,16 @@ public final class FieldElement {
             long s = partial + carry;
             long carryCin = Long.compareUnsigned(s, partial) < 0 ? 1L : 0L;
             carry = carryAb | carryCin;
-            sum[i] = s;
+            out[i] = s;
         }
-        return conditionalSubtract(sum, mp.p, carry);
+        conditionalSubtract(out, mp.p, carry, out);
     }
 
     /**
      * Вычитание: {@code p − a mod p}.
-     * Если a = 0, возвращает 0 (нейтральный элемент).
+     * Если a = 0, возвращает {@code p}, а не 0: результат не приведён по модулю. Это допустимо,
+     * потому что вызывающие ({@link #subtract}, {@link #negate}) либо складывают его через
+     * {@link #addInternal} с условной редукцией, либо обнуляют маской.
      */
     static long[] subInternal(long[] a, MontgomeryParams mp) {
         int n = mp.n;
@@ -528,46 +536,15 @@ public final class FieldElement {
     }
 
     /**
-     * Условное вычитание без ветвления: если {@code overflow != 0} или {@code a >= p},
-     * возвращает {@code a − p}, иначе {@code a}.
+     * Условное вычитание без ветвления: если {@code overflowBit != 0} или {@code a >= p},
+     * записывает в {@code out} значение {@code a − p}, иначе {@code a}.
      * <p>
-     * Используется как финальный шаг в {@link #montMul} и {@link #addInternal}.
-     * mask = 0x000...0 если не вычитать, 0xFFF...F если вычитать.
+     * Используется как финальный шаг в {@link #montMul}, {@link #montMulBuf} и
+     * {@link #addInternal}. {@code out} может совпадать с {@code a}: чтение {@code a[i]}
+     * предшествует записи {@code out[i]}, а лимбы с другими индексами на него не влияют.
+     * Маска вычитания: 0 - не вычитать, все биты 1 - вычитать.
      */
-    static long[] conditionalSubtract(long[] a, long[] p, long overflowBit) {
-        int n = a.length;
-
-        // Всегда сканируем лимбы — без ветвления по overflowBit.
-        long gt = 0, lt = 0;
-        for (int i = n - 1; i >= 0; i--) {
-            long aGtP = Long.compareUnsigned(a[i], p[i]) > 0 ? 1L : 0L;
-            long aLtP = Long.compareUnsigned(a[i], p[i]) < 0 ? 1L : 0L;
-            gt |= aGtP & ~lt & ~gt;
-            lt |= aLtP & ~gt & ~lt;
-        }
-        // ge = 1 если overflow, ИЛИ a > p, ИЛИ a == p
-        long ge = overflowBit | gt | (1L ^ (lt | gt));
-
-        // mask: 0 -> не вычитать, -1L (все биты 1) -> вычитать
-        long mask = -ge;
-        long[] result = new long[n];
-        long borrow = 0;
-        for (int i = 0; i < n; i++) {
-            long sub = p[i] & mask;
-            // Двухшаговая формула: избегает overflow при sub+borrow.
-            long diff = a[i] - sub;
-            long borrowSub = Long.compareUnsigned(a[i], sub) < 0 ? 1L : 0L;
-            long d = diff - borrow;
-            long borrowCin = Long.compareUnsigned(diff, borrow) < 0 ? 1L : 0L;
-            borrow = borrowSub | borrowCin;
-            result[i] = d;
-        }
-        return result;
-    }
-
-    // Версия без аллокации для hot-path: записывает результат в переданный out.
-    // out может совпадать с a — чтение a[i] предшествует записи out[i].
-    private static void conditionalSubtract(long[] a, long[] p, long overflowBit, long[] out) {
+    static void conditionalSubtract(long[] a, long[] p, long overflowBit, long[] out) {
         int n = a.length;
         long gt = 0, lt = 0;
         for (int i = n - 1; i >= 0; i--) {
@@ -595,8 +572,10 @@ public final class FieldElement {
     // -------------------------------------------------------------------------
 
     /**
-     * MethodHandle для {@code Math.unsignedMultiplyHigh(long, long)}, доступного с JDK 18.
-     * {@code null} если метод недоступен (JDK 11–17) — тогда используется {@link #mulHighFallback}.
+     * MethodHandle для {@code Math.unsignedMultiplyHigh(long, long)}, доступного с JDK 18 и
+     * отсутствующего в Android 14 (API 34). {@code null}, если метода нет, - тогда используется
+     * {@link #mulHighFallback}. Замена на {@code Math.multiplyHigh} с поправкой на знак (она есть
+     * везде) на 512-битных кривых замедляла умножение на 14 %, поэтому быстрый путь оставлен.
      */
     private static final MethodHandle MUL_HIGH = resolveMulHigh();
 
@@ -608,20 +587,9 @@ public final class FieldElement {
                             "unsignedMultiplyHigh",
                             MethodType.methodType(long.class, long.class, long.class));
         } catch (NoSuchMethodException | IllegalAccessException e) {
-            return null; // JDK 11–17: метод недоступен, будет использован fallback
+            return null; // Android 14 и JDK до 18: метода нет, используется mulHighFallback
         }
     }
-
-    /*
-     * Беззнаковое умножение 64×64 -> 128 бит. Возвращает {@code [hi, lo]}.
-     * <p>
-     * Стратегия выбирается один раз при загрузке класса через {@link #MUL_HIGH}:
-     * <ul>
-     *   <li>JDK 18+: {@code Math.unsignedMultiplyHigh} — одна инструкция MULQ</li>
-     *   <li>JDK 11–17: разбивка на 32-битные half — ~4 умножения, portable</li>
-     * </ul>
-     * Компилируется на JDK 11, работает оптимально на JDK 18+.
-     */
 
     /**
      * Младшие 64 бита произведения a·b (беззнаковое 64×64).
@@ -632,23 +600,28 @@ public final class FieldElement {
 
     /**
      * Старшие 64 бита произведения a·b (беззнаковое 64×64).
-     * JDK 18+: Math.unsignedMultiplyHigh — одна инструкция MULQ.
-     * JDK 11–17: разбивка на 32-битные half через {@link #mulHighFallback}.
+     * Стратегия выбрана один раз при загрузке класса: {@code Math.unsignedMultiplyHigh} (одна
+     * инструкция MULQ) там, где он есть, иначе {@link #mulHighFallback}.
      */
     private static long mulHi(long a, long b) {
         if (MUL_HIGH != null) {
             try {
                 return (long) MUL_HIGH.invokeExact(a, b);
+            } catch (RuntimeException | Error e) {
+                throw e;
             } catch (Throwable t) {
-                return mulHighFallback(a, b);
+                // invokeExact объявляет Throwable, но чистая арифметика проверяемых исключений не
+                // бросает: молчаливый переход на запасной путь скрыл бы сбой JVM
+                throw new AssertionError("Math.unsignedMultiplyHigh failed", t);
             }
         }
         return mulHighFallback(a, b);
     }
 
     /**
-     * Portable реализация старшего слова 64×64->128 через разбивку на 32-битные half.
-     * Корректна на любой JVM начиная с JDK 8. Используется на JDK 11–17.
+     * Переносимая реализация старшего слова 64×64->128 через разбивку на 32-битные половины
+     * (четыре умножения). Работает на любой JVM, в том числе на Android 14, где нет
+     * {@code Math.unsignedMultiplyHigh}.
      */
     private static long mulHighFallback(long a, long b) {
         long aLo = a & 0xFFFFFFFFL, aHi = a >>> 32;
@@ -687,13 +660,17 @@ public final class FieldElement {
      */
     static BigInteger toBigInteger(long[] limbs, int n) {
         byte[] bytes = new byte[n * 8 + 1]; // +1 для знакового бита
-        for (int i = 0; i < n; i++) {
-            long limb = limbs[i];
-            for (int j = 0; j < 8; j++) {
-                // big-endian порядок байт в массиве, лимбы little-endian
-                bytes[bytes.length - 1 - (i * 8 + j)] = (byte) (limb >> (j * 8));
+        try {
+            for (int i = 0; i < n; i++) {
+                long limb = limbs[i];
+                for (int j = 0; j < 8; j++) {
+                    // big-endian порядок байт в массиве, лимбы little-endian
+                    bytes[bytes.length - 1 - (i * 8 + j)] = (byte) (limb >> (j * 8));
+                }
             }
+            return new BigInteger(1, bytes);
+        } finally {
+            Arrays.fill(bytes, (byte) 0);
         }
-        return new BigInteger(1, bytes);
     }
 }

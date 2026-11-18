@@ -97,27 +97,25 @@ class CAdESAttributesTest {
     }
 
     // ========================================================================
-    // hashAlgorithm с NULL-параметрами (Р 1323565.1.025 §4; эталон openssl gost)
+    // hashAlgorithm без параметров (форма КриптоПро)
     // ========================================================================
 
     @Test
-    @DisplayName("signingCertificateV2 кодирует hashAlgorithm с NULL-параметрами для ГОСТ")
-    void signingCertificateV2HashAlgorithmHasNullParam() throws Exception {
+    @DisplayName("signingCertificateV2 кодирует hashAlgorithm только с OID (форма КриптоПро)")
+    void signingCertificateV2HashAlgorithmHasNoParam() throws Exception {
         byte[] attr = CAdESAttributes.signingCertificateV2(signerCert256);
         // SigningCertificateV2 -> certs -> ESSCertIDv2 -> hashAlgorithm
         byte[][] signingCertV2Parts = DerCodec.parseSequenceContents(attr, 0);
         byte[][] certsParts = DerCodec.parseSequenceContents(signingCertV2Parts[0], 0);
         byte[][] essParts = DerCodec.parseSequenceContents(certsParts[0], 0);
-        // hashAlgorithm: AlgorithmIdentifier = SEQUENCE { OID, NULL }.
-        // NULL присущ OID id-tc26-gost3411-2012-256/512; эталонный openssl
-        // gost-engine кодирует именно так. Регресс-защита: форма не должна
-        // молча вернуться к отсутствию параметров.
+        // КриптоПро кодирует AlgorithmIdentifier без NULL и требует эту форму
+        // для действительного штампа времени. Декодер принимает и старую форму.
         byte[][] hashAlgParts = DerCodec.parseSequenceContents(essParts[0], 0);
-        assertEquals(2, hashAlgParts.length, "hashAlgorithm должен содержать OID и NULL-параметры");
+        assertEquals(1, hashAlgParts.length, "hashAlgorithm должен содержать только OID");
         assertEquals(
-                DerCodec.TAG_NULL,
-                hashAlgParts[1][0] & 0xFF,
-                "второй элемент AlgorithmIdentifier должен быть NULL");
+                DerCodec.TAG_OID,
+                hashAlgParts[0][0] & 0xFF,
+                "единственный элемент AlgorithmIdentifier — OID");
     }
 
     // ========================================================================

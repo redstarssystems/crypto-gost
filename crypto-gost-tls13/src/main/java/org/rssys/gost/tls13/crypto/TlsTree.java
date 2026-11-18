@@ -43,7 +43,8 @@ public final class TlsTree {
     static byte[] expandLevel(
             byte[] inputKey, byte[] label, long mask, long seqNum, byte[] scratch8) {
         be64(seqNum & mask, scratch8, 0);
-        return KdfGostR3411_2012_256.expand(inputKey, label, scratch8, 32);
+        return KdfGostR3411_2012_256.expand(
+                inputKey, label, scratch8, TlsConstants.KUZNYECHIK_KEY_SIZE);
     }
 
     /**

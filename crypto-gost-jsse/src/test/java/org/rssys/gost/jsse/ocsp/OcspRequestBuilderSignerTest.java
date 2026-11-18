@@ -15,7 +15,7 @@ import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Smoke-тест проброса {@link GostSigner} через {@link OcspRequestBuilder}
- * в {@link GostOcspRequestBuilder}. План 231.
+ * в {@link GostOcspRequestBuilder}.
  */
 @DisplayName("OcspRequestBuilder: проброс GostSigner в GostOcspRequestBuilder")
 class OcspRequestBuilderSignerTest {

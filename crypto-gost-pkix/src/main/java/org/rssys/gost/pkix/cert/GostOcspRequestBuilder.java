@@ -151,7 +151,10 @@ public final class GostOcspRequestBuilder {
     /**
      * Nonce, сгенерированный при последнем вызове {@link #build()}.
      *
-     * @return 16-байтовый nonce или {@code null} если {@code build()} ещё не вызывался
+     * <p>Возвращает сырые байты значения {@code Nonce} (RFC 8954) без обёрток OCTET STRING;
+     * длина — 32 байта, как требует RFC 8954 для клиентов.
+     *
+     * @return копия 32-байтового nonce
      * @throws IllegalStateException если {@code build()} ещё не вызывался
      */
     public byte[] getNonce() {
@@ -175,7 +178,7 @@ public final class GostOcspRequestBuilder {
         }
 
         int certIdHashLen = resolveCertIdHashLen();
-        generatedNonce = new byte[16];
+        generatedNonce = new byte[OcspNonceCodec.GENERATED_LENGTH];
         CryptoRandom.INSTANCE.nextBytes(generatedNonce);
 
         try {
@@ -245,22 +248,13 @@ public final class GostOcspRequestBuilder {
             throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
         }
         byte[] requestList = DerCodec.encodeSequence(rlOut.toByteArray());
-        byte[] nonceExt = buildNonceExtension(nonce);
+        byte[] nonceExt = OcspNonceCodec.encodeExtension(nonce);
         byte[] extensions = DerCodec.encodeSequence(nonceExt);
         byte[] requestExtensions = DerCodec.encodeContextConstructed(2, extensions);
 
         byte[] tbsRequestContent = DerCodec.concat(requestList, requestExtensions);
         byte[] tbsRequest = DerCodec.encodeSequence(tbsRequestContent);
         return new TbsRequestData(tbsRequest);
-    }
-
-    /**
-     * Строит Extension с id-pkix-ocsp-nonce.
-     */
-    private static byte[] buildNonceExtension(byte[] nonce) {
-        byte[] oid = DerCodec.encodeOid(GostOids.OCSP_NONCE);
-        byte[] value = DerCodec.encodeOctetString(nonce);
-        return DerCodec.encodeSequence(oid, value);
     }
 
     /**

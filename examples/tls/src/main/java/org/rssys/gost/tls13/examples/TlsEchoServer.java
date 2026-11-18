@@ -6,6 +6,7 @@ import java.net.Socket;
 import java.util.List;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
@@ -29,7 +30,7 @@ import org.rssys.gost.tls13.transport.SocketTlsTransport;
  *}
  * <p>
  * Флаг {@code --mtls} включает запрос клиентского сертификата.
- * Флаг {@code --ca} указывает ключ CA (только для mTLS).
+ * Флаг {@code --ca} указывает PKCS#12 с сертификатом CA (только для mTLS).
  */
 public final class TlsEchoServer {
 
@@ -108,12 +109,12 @@ public final class TlsEchoServer {
             try (FileInputStream fis = new FileInputStream(caPath)) {
                 GostPkcs12Loader.Result caP12 =
                         GostPkcs12Loader.load(fis.readAllBytes(), caPassword.toCharArray(), true);
-                config.withCaPublicKey(
+                GostCertificate caCert =
                         caP12.getCertificateChain().stream()
                                 .filter(GostCertificate::isCA)
                                 .findFirst()
-                                .orElseThrow()
-                                .getPublicKey());
+                                .orElseThrow();
+                config.needClientAuth(TrustAnchors.ofCertificate(caCert));
             }
         }
 
@@ -131,7 +132,7 @@ public final class TlsEchoServer {
                 System.out.println("Accepted: " + socket.getRemoteSocketAddress());
                 TlsServerConfig connConfig = new TlsServerConfig(suite, chain, privKey);
                 if (mtls && caPath != null) {
-                    connConfig.withCaPublicKey(config.getCaPublicKey());
+                    connConfig.needClientAuth(config.getTrustAnchors());
                 }
                 try (SocketTlsTransport transport = new SocketTlsTransport(socket);
                         TlsSession server = TlsSession.createServer(connConfig, transport)) {

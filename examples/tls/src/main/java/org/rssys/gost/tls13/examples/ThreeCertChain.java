@@ -7,6 +7,7 @@ import java.util.concurrent.*;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.*;
@@ -18,7 +19,7 @@ import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
  * Цепочка сертификатов из 3 звеньев: leaf -> intermediate -> root.
  * <p>
  * Сервер отправляет цепочку {serverCert, intermediateCert, rootCert}.
- * Клиент проверяет всю цепочку через CA public key корневого сертификата.
+ * Клиент проверяет всю цепочку по сертификату-якорю корневого CA.
  * Демонстрирует List<GostCertificate> цепочку в TlsServerConfig.
  */
 public final class ThreeCertChain {
@@ -81,7 +82,7 @@ public final class ThreeCertChain {
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs, root.getPublicKey())
+                                new TlsClientConfig(cs, TrustAnchors.ofCertificate(root))
                                         .withServerHostname("localhost"),
                                 clientTp)) {
 

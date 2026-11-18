@@ -1,15 +1,14 @@
 package org.rssys.gost.tls13.engine;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.rssys.gost.tls13.TlsTestHelper.*;
 
 import java.util.List;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.*;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
 
 /**
@@ -25,13 +24,13 @@ class TlsHandshakeEngineOutOfOrderTest {
     private static final int SIG_SCHEME = TlsConstants.SIG_GOST_TC26_A_256;
     private static final int HASH_LEN = 32;
 
-    private static TlsTestHelper.CertBundle serverCert;
-    private static TlsTestHelper.CertBundle clientCert;
+    private static PkixCertTestHelper.CertBundle serverCert;
+    private static PkixCertTestHelper.CertBundle clientCert;
 
     @BeforeAll
     static void setUp() throws Exception {
-        serverCert = TlsTestHelper.createCertWithKey(EC_PARAMS);
-        clientCert = TlsTestHelper.createCertWithKey(EC_PARAMS);
+        serverCert = PkixCertTestHelper.createCertWithKey(EC_PARAMS);
+        clientCert = PkixCertTestHelper.createCertWithKey(EC_PARAMS);
     }
 
     private static TlsCiphersuite cs() {
@@ -88,12 +87,14 @@ class TlsHandshakeEngineOutOfOrderTest {
         byte[] ch = client.start();
         assertNotNull(ch);
         server.receive(ch);
-        byte[] sh = server.poll();
+        server.acknowledgeReadKeyChange();
+        byte[] sh = HandshakeOutputs.nextMessage(server);
         assertNotNull(sh, "Сервер должен сгенерировать ServerHello");
         // Пропускаем остальные сообщения сервера — не нужны для теста
 
         // Клиент получает первый ServerHello
         client.receive(sh);
+        client.acknowledgeReadKeyChange();
         assertEquals(TlsHandshakeEngine.State.CLIENT_WAIT_ENCRYPTED_EXTENSIONS, client.getState());
 
         // Клиент получает второй ServerHello — out-of-order
@@ -155,30 +156,36 @@ class TlsHandshakeEngineOutOfOrderTest {
         byte[] ch = client.start();
         assertNotNull(ch);
         server.receive(ch);
+        server.acknowledgeReadKeyChange();
 
-        byte[] sh = server.poll();
-        byte[] ee = server.poll();
-        byte[] cert = server.poll();
-        byte[] cv = server.poll();
-        byte[] sf = server.poll();
+        byte[] sh = HandshakeOutputs.nextMessage(server);
+        byte[] ee = HandshakeOutputs.nextMessage(server);
+        byte[] cert = HandshakeOutputs.nextMessage(server);
+        byte[] cv = HandshakeOutputs.nextMessage(server);
+        byte[] sf = HandshakeOutputs.nextMessage(server);
         assertNotNull(sf, "Серверный Finished");
-        assertNull(server.poll(), "После Finished очередь сервера пуста");
+        assertNull(HandshakeOutputs.nextMessage(server), "После Finished очередь сервера пуста");
         assertEquals(TlsHandshakeEngine.State.SERVER_WAIT_CLIENT_FINISHED, server.getState());
 
         client.receive(sh);
-        client.acknowledgeKeyChange();
+        client.acknowledgeReadKeyChange();
         client.receive(ee);
+        client.acknowledgeReadKeyChange();
         client.receive(cert);
+        client.acknowledgeReadKeyChange();
         client.acknowledgeCertificateValidation(true);
         client.receive(cv);
+        client.acknowledgeReadKeyChange();
         client.receive(sf);
+        client.acknowledgeReadKeyChange();
 
-        byte[] cf = client.poll();
+        byte[] cf = HandshakeOutputs.nextMessage(client);
         assertNotNull(cf, "Клиентский Finished");
-        assertNull(client.poll(), "После Finished очередь клиента пуста");
+        assertNull(HandshakeOutputs.nextMessage(client), "После Finished очередь клиента пуста");
         assertEquals(TlsHandshakeEngine.State.POST_HANDSHAKE, client.getState());
 
         server.receive(cf);
+        server.acknowledgeReadKeyChange();
         assertTrue(server.isDone());
         assertEquals(TlsHandshakeEngine.State.POST_HANDSHAKE, server.getState());
 

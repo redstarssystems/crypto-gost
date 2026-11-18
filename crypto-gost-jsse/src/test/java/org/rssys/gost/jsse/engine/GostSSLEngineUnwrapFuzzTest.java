@@ -7,15 +7,16 @@ import java.security.Security;
 import java.util.List;
 import javax.net.ssl.SSLException;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 /**
  * Fuzz-тесты для {@link GostSSLEngine#unwrap}.
@@ -31,13 +32,14 @@ import org.rssys.gost.tls13.TlsTestHelper;
  * Ловим {@link SSLException} и {@link IllegalArgumentException}. Всё остальное
  * (NPE, AIOOBE, StackOverflow) — баги.
  */
+@DisplayName("GostSSLEngine: некорректный вход unwrap у сервера")
 class GostSSLEngineUnwrapFuzzTest {
 
     private static final int PLAINTEXT_BUF = TlsConstants.MAX_PLAINTEXT_LENGTH + 64;
 
     private static GostX509KeyManager serverKm;
-    private static TlsTestHelper.CertBundle serverCert;
-    private static TlsTestHelper.CertBundle rootCa;
+    private static PkixCertTestHelper.CertBundle serverCert;
+    private static PkixCertTestHelper.CertBundle rootCa;
 
     // ========================================================================
     // Сертификаты — один раз на весь класс
@@ -50,11 +52,11 @@ class GostSSLEngineUnwrapFuzzTest {
         }
         ECParameters params = ECParameters.tc26a256();
 
-        rootCa = TlsTestHelper.createRootCA(params);
+        rootCa = PkixCertTestHelper.createRootCA(params);
         PublicKeyParameters caPub = rootCa.cert.getPublicKey();
 
         serverCert =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         caPub,
@@ -117,7 +119,7 @@ class GostSSLEngineUnwrapFuzzTest {
 
     // ========================================================================
     // P2: Targeted — oversize plaintext TLS-запись
-    // Фикс 0.6.2: MAX_PLAINTEXT_LENGTH (0x4000) guard в handlePlaintextRecord
+    // Предел MAX_PLAINTEXT_LENGTH (0x4000) в handlePlaintextRecord
     // ========================================================================
 
     /**
@@ -155,6 +157,6 @@ class GostSSLEngineUnwrapFuzzTest {
 
     private static GostSSLEngine createServerEngine() {
         return new GostSSLEngine(
-                serverKm, new GostX509TrustManager(null, false), "localhost", 0, false);
+                serverKm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, false);
     }
 }

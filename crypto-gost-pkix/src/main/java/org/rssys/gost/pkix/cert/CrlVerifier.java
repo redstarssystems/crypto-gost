@@ -5,28 +5,40 @@ import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import org.rssys.gost.pkix.GostOids;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Верификация CRL (Certificate Revocation List, RFC 5280 §5).
  * <p>
  * Поддерживает прямой CRL (issuer CRL == issuer сертификата) и
  * делегированных CRL-подписантов (RFC 5280 §6.3.3(c)) через
- * {@link #verifyDelegated(byte[], byte[], PublicKeyParameters, byte[], GostCertificate, List)}.
- * Indirect CRL (issuingDistributionPoint с indirectCRL) не поддерживается.
- * Partial CRL (issuingDistributionPoint с onlyContains...) не поддерживается.
+ * {@link #verifyDelegated(byte[], GostCertificate, GostCertificate, List)}.
+ * Indirect CRL (issuingDistributionPoint с indirectCRL, certificateIssuer в записях)
+ * не поддерживается.
+ * <p>
+ * Область действия CRL (IssuingDistributionPoint, RFC 5280 §5.2.5) проверяется на всех путях
+ * приёмки: прямом, делегированном, в паре base+delta и для X-Long. Для этого методы принимают
+ * сам {@link GostCertificate}, а не пару «серийный номер + issuer DN»: область зависит от
+ * признака CA и от CDP сертификата. onlyContainsUserCerts допустим только для не-CA,
+ * onlyContainsCACerts только для CA, distributionPoint обязан совпасть с CDP сертификата;
+ * onlySomeReasons, onlyContainsAttributeCerts и nameRelativeToCRLIssuer отклоняются
+ * ({@code IDP_NOT_SUPPORTED}). CRL, не покрывающий сертификат, не доказывает «не отозван».
+ * <p>
  * Delta CRL (deltaCRLIndicator) — изолированно не поддерживается,
- * но поддерживается в паре base+delta через {@link #verify(byte[], byte[], byte[], PublicKeyParameters, byte[])}.
+ * но поддерживается в паре base+delta через
+ * {@link #verify(byte[], byte[], GostCertificate, GostCertificate)}.
  * <p>
  * Порядок проверки (fail-closed):
  * <ol>
  *   <li>Сверка issuer DN CRL с issuer DN сертификата (RFC 5280 §6.3.3(c))</li>
- *   <li>Подпись CRL — до сканирования revoked-списка</li>
+ *   <li>Подпись CRL — до разбора revoked-списка и расширений</li>
  *   <li>Срок действия (thisUpdate/nextUpdate)</li>
- *   <li>Парсинг issuingDistributionPoint (indirectCRL -> reject)</li>
- *   <li>Сканирование revokedCertificates</li>
+ *   <li>Строгий разбор расширений и записей (неизвестное critical-расширение, indirect CRL)</li>
+ *   <li>cRLNumber не ниже минимального (если задан)</li>
+ *   <li>Запись об отзыве сертификата: отзыв в подписанном CRL не зависит от его области</li>
+ *   <li>Область CRL: покрывает ли он этот сертификат</li>
  * </ol>
  * <p>
  * Делегирует парсинг и верификацию подписи в {@link GostCrl}.
@@ -39,134 +51,390 @@ public final class CrlVerifier {
     private CrlVerifier() {}
 
     /**
-     * Проверяет CRL: подпись, срок, issuer DN, отсутствие indirect/partial, и отзыв сертификата.
-     * Использует лимиты по умолчанию ({@link GostCrl#DEFAULT_MAX_CRL_SIZE},
-     * {@link GostCrl#DEFAULT_MAX_REVOKED_ENTRIES}).
+     * Проверяет CRL: подпись, срок, issuer DN, отзыв сертификата и область действия CRL.
+     * Использует пределы по умолчанию ({@link CrlLimits#DEFAULT}).
      *
-     * @param crlDer        DER-encoded CertificateList (RFC 5280 §5.1)
-     * @param certSerial    серийный номер проверяемого сертификата (raw DER INTEGER value)
-     * @param caKey         открытый ключ CA, подписавшего CRL
-     * @param certIssuerDn  DER-encoded issuer DN сертификата (полный SEQUENCE TLV)
-     * @throws PkixException если CRL невалиден или сертификат отозван
+     * @param crlDer DER-encoded CertificateList (RFC 5280 §5.1)
+     * @param cert   проверяемый сертификат: из него берутся серийный номер, issuer DN,
+     *               признак CA и CDP
+     * @param issuerCa сертификат CA, подписавшего CRL: из него берутся ключ проверки подписи и
+     *                 право подписывать CRL (KeyUsage {@code cRLSign}, если KeyUsage задан)
+     * @throws PkixException если CRL невалиден, не покрывает сертификат
+     *         ({@code IDP_NOT_SUPPORTED}), сертификат отозван или у издателя нет права подписывать
+     *         CRL ({@code MISSING_CRL_SIGN})
      */
-    public static void verify(
-            byte[] crlDer, byte[] certSerial, PublicKeyParameters caKey, byte[] certIssuerDn)
+    public static void verify(byte[] crlDer, GostCertificate cert, GostCertificate issuerCa)
             throws PkixException {
-        verify(
-                crlDer,
-                certSerial,
-                caKey,
-                certIssuerDn,
-                null,
-                GostCrl.DEFAULT_MAX_CRL_SIZE,
-                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+        verify(crlDer, cert, issuerCa, null, CrlLimits.DEFAULT);
     }
 
     /**
      * Проверяет CRL с проверкой монотонности cRLNumber (защита от CRL rollback, RFC 5280 §5.2.3).
      * Использует лимиты по умолчанию.
      *
-     * @param crlDer         DER-encoded CertificateList
-     * @param certSerial     серийный номер проверяемого сертификата (raw DER INTEGER value)
-     * @param caKey          открытый ключ CA
-     * @param certIssuerDn   DER-encoded issuer DN сертификата
-     * @param minCrlNumber   минимально допустимый cRLNumber (inclusive) или null — пропустить проверку
-     * @throws PkixException если CRL невалиден, cRLNumber меньше minCrlNumber, или сертификат отозван
+     * @param crlDer       DER-encoded CertificateList
+     * @param cert         проверяемый сертификат
+     * @param issuerCa     сертификат CA, подписавшего CRL
+     * @param minCrlNumber минимально допустимый cRLNumber (inclusive) или null — пропустить проверку
+     * @throws PkixException если CRL невалиден, cRLNumber меньше minCrlNumber, CRL не покрывает
+     *         сертификат, сертификат отозван или у издателя нет права подписывать CRL
      */
     public static void verify(
-            byte[] crlDer,
-            byte[] certSerial,
-            PublicKeyParameters caKey,
-            byte[] certIssuerDn,
-            BigInteger minCrlNumber)
+            byte[] crlDer, GostCertificate cert, GostCertificate issuerCa, BigInteger minCrlNumber)
             throws PkixException {
-        verify(
-                crlDer,
-                certSerial,
-                caKey,
-                certIssuerDn,
-                minCrlNumber,
-                GostCrl.DEFAULT_MAX_CRL_SIZE,
-                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+        verify(crlDer, cert, issuerCa, minCrlNumber, CrlLimits.DEFAULT);
     }
 
     /**
      * Проверяет CRL с настраиваемыми лимитами размера и числа записей.
      *
-     * @param crlDer             DER-encoded CertificateList
-     * @param certSerial         серийный номер проверяемого сертификата (raw DER INTEGER value)
-     * @param caKey              открытый ключ CA
-     * @param certIssuerDn       DER-encoded issuer DN сертификата
-     * @param minCrlNumber       минимально допустимый cRLNumber или null
-     * @param maxCrlSize         максимальный размер CRL в байтах
-     * @param maxRevokedEntries  максимальное число отозванных записей
-     * @throws PkixException если CRL невалиден, cRLNumber меньше minCrlNumber, или сертификат отозван
+     * @param crlDer            DER-encoded CertificateList
+     * @param cert              проверяемый сертификат
+     * @param issuerCa          сертификат CA, подписавшего CRL
+     * @param minCrlNumber      минимально допустимый cRLNumber или null
+     * @param limits            пределы размера и числа записей CRL
+     * @throws PkixException если CRL невалиден, cRLNumber меньше minCrlNumber, CRL не покрывает
+     *         сертификат, сертификат отозван или у издателя нет права подписывать CRL
      */
     public static void verify(
             byte[] crlDer,
-            byte[] certSerial,
-            PublicKeyParameters caKey,
-            byte[] certIssuerDn,
+            GostCertificate cert,
+            GostCertificate issuerCa,
             BigInteger minCrlNumber,
-            int maxCrlSize,
-            int maxRevokedEntries)
+            CrlLimits limits)
+            throws PkixException {
+        requireInputs(crlDer, cert);
+        requireIssuerCa(issuerCa);
+        logVerifying(cert);
+
+        GostCrl crl = parseCrl(crlDer, limits);
+        requireIssuerDnMatch(crl, cert.getIssuerDnBytes());
+        // Право подписывать CRL проверяется до хэша и подписи: отказ дешёвый
+        requireCrlSign(issuerCa);
+
+        // Верификация подписи + строгий разбор (fail-closed порядок внутри GostCrl)
+        crl.verify(issuerCa.getPublicKey());
+
+        requireCrlNumberNotBelow(crl, minCrlNumber);
+        requireNotRevokedInScope(crl, cert);
+
+        LOG.log(
+                Level.DEBUG,
+                "CRL verification passed for certificate serial 0x{0}",
+                serialHex(cert));
+    }
+
+    /**
+     * Проверяет подпись CRL один раз и разбирает записи, не привязывая результат к сертификату.
+     *
+     * <p>Порядок: ограничения размера и числа записей, дешёвая проверка сроков (до хэша большого
+     * CRL), подпись и строгий разбор. Применять результат к сертификату - через
+     * {@link VerifiedCrl#verifyFor}. Делегированные и delta CRL не принимаются.</p>
+     *
+     * @param crlDer            DER-encoded CertificateList
+     * @param issuerCa          сертификат издателя CRL
+     * @param limits            пределы размера и числа записей CRL
+     * @return проверенный CRL, привязанный к ключу издателя
+     * @throws PkixException если CRL невалиден (подпись, срок, структура, неподдерживаемое
+     *                       расширение, delta CRL) или у издателя нет права подписывать CRL
+     *                       ({@code MISSING_CRL_SIGN})
+     */
+    public static VerifiedCrl authenticate(
+            byte[] crlDer, GostCertificate issuerCa, CrlLimits limits) throws PkixException {
+        if (crlDer == null) {
+            throw new PkixException("CRL is null");
+        }
+        requireIssuerCa(issuerCa);
+        // Дешёвые проверки издателя идут до дорогих действий: непригодный ключ или сертификат без
+        // права подписывать CRL не должен стоить хэша CRL
+        byte[] issuerKeySpki = encodeIssuerKey(issuerCa.getPublicKey());
+        requireCrlSign(issuerCa);
+        GostCrl crl = parseCrl(crlDer, limits);
+        crl.verify(issuerCa.getPublicKey());
+        return new VerifiedCrl(crl, issuerKeySpki);
+    }
+
+    /**
+     * Издатель CRL вправе подписывать CRL: если у его сертификата есть KeyUsage, в нём обязан быть
+     * {@code cRLSign}. Отсутствие KeyUsage разрешением считается (RFC 5280 §4.2.1.3, §6.3.3 f), а
+     * KeyUsage без {@code cRLSign} - запретом. Для делегированных подписантов правило строже, см.
+     * {@link GostCertificate#hasCrlSignKeyUsage()}.
+     *
+     * @throws PkixException {@code MISSING_CRL_SIGN}, если KeyUsage задан без {@code cRLSign}
+     */
+    static void requireCrlSign(GostCertificate issuerCa) throws PkixException {
+        if (!issuerCa.isCrlSigner()) {
+            throw new PkixException(
+                    PkixException.Reason.MISSING_CRL_SIGN,
+                    "CRL issuer certificate has KeyUsage without cRLSign");
+        }
+    }
+
+    private static void requireIssuerCa(GostCertificate issuerCa) throws PkixException {
+        if (issuerCa == null) {
+            throw new PkixException("issuerCa must not be null");
+        }
+    }
+
+    /** Канонический вид ключа издателя для сравнения (SubjectPublicKeyInfo). */
+    static byte[] encodeIssuerKey(PublicKeyParameters issuerKey) throws PkixException {
+        try {
+            return VerifiedCrl.encodeKey(issuerKey);
+        } catch (RuntimeException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR, "Cannot encode issuer public key", e);
+        }
+    }
+
+    /**
+     * Проверки сертификата по уже проверенному CRL: issuer DN, монотонность {@code cRLNumber},
+     * отзыв и область. Сроки и подпись проверены раньше.
+     */
+    static void checkAuthenticated(GostCrl crl, GostCertificate cert, BigInteger minCrlNumber)
+            throws PkixException {
+        requireIssuerDnMatch(crl, cert.getIssuerDnBytes());
+        requireCrlNumberNotBelow(crl, minCrlNumber);
+        requireNotRevokedInScope(crl, cert);
+    }
+
+    private static void requireInputs(byte[] crlDer, GostCertificate cert) throws PkixException {
+        if (crlDer == null) {
+            throw new PkixException("CRL is null");
+        }
+        if (cert == null) {
+            throw new PkixException("cert must not be null");
+        }
+    }
+
+    private static void logVerifying(GostCertificate cert) {
+        LOG.log(Level.DEBUG, "Verifying CRL for certificate serial 0x{0}", serialHex(cert));
+    }
+
+    private static String serialHex(GostCertificate cert) {
+        return new BigInteger(1, cert.getSerialNumber()).toString(16);
+    }
+
+    /**
+     * Разбирает CRL с проверкой пределов. Размер проверяется до создания {@link GostCrl}, поэтому
+     * превышение даёт причину {@code CRL_LIMIT_EXCEEDED}, а не ошибку разбора.
+     */
+    private static GostCrl parseCrl(byte[] crlDer, CrlLimits limits) throws PkixException {
+        requireLimits(limits);
+        limits.requireSize(crlDer);
+        try {
+            return new GostCrl(crlDer, limits);
+        } catch (RuntimeException e) {
+            throw new PkixException(PkixException.Reason.PARSE_ERROR, "Failed to parse CRL DER", e);
+        }
+    }
+
+    private static void requireLimits(CrlLimits limits) {
+        if (limits == null) {
+            throw new IllegalArgumentException("limits must not be null");
+        }
+    }
+
+    /** Сверка issuer DN CRL с issuer DN сертификата (RFC 5280 §6.3.3(c)). */
+    private static void requireIssuerDnMatch(GostCrl crl, byte[] certIssuerDn)
+            throws PkixException {
+        byte[] crlIssuerDn = crl.getIssuerDnBytes();
+        if (!GostDerParser.arrayRangeEquals(
+                crlIssuerDn, 0, crlIssuerDn.length, certIssuerDn, 0, certIssuerDn.length)) {
+            throw new PkixException("CRL: issuer DN does not match certificate issuer DN");
+        }
+    }
+
+    /** Проверка cRLNumber монотонности (RFC 5280 §5.2.3). */
+    private static void requireCrlNumberNotBelow(GostCrl crl, BigInteger minCrlNumber)
+            throws PkixException {
+        if (minCrlNumber == null) {
+            return;
+        }
+        BigInteger actual = crl.getCrlNumber();
+        if (actual == null) {
+            throw new PkixException("CRL: no cRLNumber extension, but minCrlNumber was provided");
+        }
+        if (actual.compareTo(minCrlNumber) < 0) {
+            throw new PkixException(
+                    "CRL: cRLNumber downgrade — got " + actual + ", min expected " + minCrlNumber);
+        }
+    }
+
+    /**
+     * Запись об отзыве определяет REVOKED раньше проверки области: отзыв в подписанном CRL не
+     * должен зависеть от того, какие сертификаты CRL «обязан» покрывать. Иначе подлинный CRL
+     * другого сегмента с этим номером превратился бы из REVOKED в «неподдерживаемый», и CMS без
+     * required пропустила бы его. Область проверяется только для вывода «не отозван».
+     */
+    private static void requireNotRevokedInScope(GostCrl crl, GostCertificate cert)
+            throws PkixException {
+        if (crl.isRevoked(cert.getSerialNumber())) {
+            throw new PkixException(PkixException.Reason.REVOKED, "Certificate is revoked per CRL");
+        }
+        requirePartialScope(crl, cert);
+    }
+
+    /**
+     * Проверяет одно CRL-доказательство для CAdES-X Long.
+     *
+     * <p>Порядок: структура и подпись, принадлежность издателю, область CRL, статус,
+     * затем окно выпуска. Область здесь проверяется до статуса (в отличие от
+     * {@link #verify(byte[], GostCertificate, GostCertificate)}): для долгосрочной
+     * проверки не покрывающее доказательство — ошибка, а не «пропустить и взять другое».
+     * {@code revoked} отклоняется до оценки окна, поэтому устаревшее доказательство не может
+     * «не участвовать» и скрыть отзыв.</p>
+     *
+     * @param crlDer DER-кодированный CRL
+     * @param cert   проверяемый сертификат (серийный номер, issuer DN, признак CA и CDP)
+     * @param issuerCa сертификат издателя CRL
+     * @param window окно подписи/сбора
+     * @param policy политика свежести
+     * @param limits пределы размера и числа записей CRL
+     * @return {@link EvidenceFreshness#IN_WINDOW} или
+     *         {@link EvidenceFreshness#OUT_OF_WINDOW} для good-доказательства
+     * @throws PkixException при структурной ошибке, неверной подписи, чужом
+     *         издателе, delta/indirect CRL, не покрывающем сертификат CRL,
+     *         отсутствии nextUpdate или отзыве
+     */
+    static EvidenceFreshness verifyEvidence(
+            byte[] crlDer,
+            GostCertificate cert,
+            GostCertificate issuerCa,
+            RevocationEvidenceWindow window,
+            RevocationFreshnessPolicy policy,
+            CrlLimits limits)
             throws PkixException {
         if (crlDer == null) {
             throw new PkixException("CRL is null");
         }
-        if (certSerial == null) {
-            throw new PkixException("certSerial must not be null");
+        if (cert == null) {
+            throw new PkixException("cert must not be null");
         }
-        if (certIssuerDn == null) {
-            throw new PkixException("certIssuerDn must not be null");
+        requireIssuerCa(issuerCa);
+        if (window == null) {
+            throw new IllegalArgumentException("window must not be null");
         }
-        LOG.log(
-                Level.DEBUG,
-                "Verifying CRL for certificate serial 0x{0}",
-                new BigInteger(1, certSerial).toString(16));
-
-        GostCrl crl;
-        try {
-            crl = new GostCrl(crlDer, maxCrlSize, maxRevokedEntries);
-        } catch (RuntimeException e) {
-            throw new PkixException(PkixException.Reason.PARSE_ERROR, "Failed to parse CRL DER", e);
+        if (policy == null) {
+            throw new IllegalArgumentException("policy must not be null");
         }
 
-        // Сверка issuer DN CRL с issuer DN сертификата (RFC 5280 §6.3.3(c))
+        GostCrl crl = parseCrl(crlDer, limits);
+
+        byte[] certIssuerDn = cert.getIssuerDnBytes();
         byte[] crlIssuerDn = crl.getIssuerDnBytes();
         if (!GostDerParser.arrayRangeEquals(
                 crlIssuerDn, 0, crlIssuerDn.length, certIssuerDn, 0, certIssuerDn.length)) {
             throw new PkixException("CRL: issuer DN does not match certificate issuer DN");
         }
 
-        // Верификация подписи + парсинг revoked-списка (fail-closed порядок внутри GostCrl)
-        crl.verify(caKey);
+        requireCrlSign(issuerCa);
 
-        // Проверка cRLNumber монотонности (RFC 5280 §5.2.3)
-        if (minCrlNumber != null) {
-            BigInteger actual = crl.getCrlNumber();
-            if (actual == null) {
-                throw new PkixException(
-                        "CRL: no cRLNumber extension, but minCrlNumber was provided");
-            }
-            if (actual.compareTo(minCrlNumber) < 0) {
-                throw new PkixException(
-                        "CRL: cRLNumber downgrade — got "
-                                + actual
-                                + ", min expected "
-                                + minCrlNumber);
-            }
-        }
+        // Signature-first: structural parse/extensions happen here; delta/indirect reject.
+        crl.verifySignatureAndParse(issuerCa.getPublicKey(), false);
 
-        // Проверка отзыва конкретного сертификата
-        if (crl.isRevoked(certSerial)) {
+        // Область проверяем до статуса: неподходящая область не даёт "good".
+        requirePartialScope(crl, cert);
+
+        // Статус проверяем до окна: revoked в устаревшем доказательстве всё равно отклоняет.
+        if (crl.isRevoked(cert.getSerialNumber())) {
             throw new PkixException(PkixException.Reason.REVOKED, "Certificate is revoked per CRL");
         }
 
-        LOG.log(
-                Level.DEBUG,
-                "CRL verification passed for certificate serial 0x{0}",
-                new BigInteger(1, certSerial).toString(16));
+        Instant thisUpdate = crl.getThisUpdate();
+        Instant nextUpdate = crl.getNextUpdate();
+        if (nextUpdate == null) {
+            throw new PkixException(
+                    PkixException.Reason.NEXT_UPDATE_MISSING,
+                    "CRL without nextUpdate is not accepted for long-term validation");
+        }
+        if (nextUpdate.isBefore(thisUpdate)) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "CRL: nextUpdate is before thisUpdate");
+        }
+
+        Instant collection = window.collectionTime();
+        Instant signing = window.signingTime();
+
+        boolean issuedNotAfterCollection =
+                !thisUpdate.isAfter(collection.plusMillis(GostOids.CLOCK_SKEW_MS));
+        boolean freshAtCollection =
+                !collection.isAfter(nextUpdate.plusMillis(GostOids.CLOCK_SKEW_MS));
+        boolean issuedNotBeforeSigning =
+                policy != RevocationFreshnessPolicy.STRICT
+                        || !thisUpdate.isBefore(signing.minusMillis(GostOids.CLOCK_SKEW_MS));
+
+        boolean inWindow = issuedNotAfterCollection && freshAtCollection && issuedNotBeforeSigning;
+        return inWindow ? EvidenceFreshness.IN_WINDOW : EvidenceFreshness.OUT_OF_WINDOW;
+    }
+
+    /**
+     * Нарушение области CRL для сертификата: текст нарушения или {@code null}, если CRL
+     * покрывает сертификат.
+     *
+     * <p>onlyContainsUserCerts допустим только для не-CA, onlyContainsCACerts —
+     * только для CA. onlySomeReasons, onlyContainsAttributeCerts,
+     * nameRelativeToCRLIssuer и несовпадающий distributionPoint отклоняются:
+     * библиотека не умеет безопасно комбинировать partial-покрытие.</p>
+     *
+     * <p>Единственный источник условий: на нём построены и предикат
+     * {@link #isPartialScopeCovered}, и {@link #requirePartialScope}, поэтому тексты и
+     * условия не расходятся.</p>
+     */
+    static String partialScopeViolation(GostCrl crl, GostCertificate cert) {
+        if (!crl.isIdp()) {
+            return null;
+        }
+        if (crl.isOnlySomeReasons()) {
+            return "CRL: onlySomeReasons is not supported";
+        }
+        if (crl.isOnlyContainsAttributeCerts()) {
+            return "CRL: onlyContainsAttributeCerts is not applicable to X.509 certificates";
+        }
+        if (crl.isOnlyContainsUserCerts() && crl.isOnlyContainsCACerts()) {
+            return "CRL: onlyContainsUserCerts and onlyContainsCACerts are both set";
+        }
+        if (crl.isOnlyContainsUserCerts() && cert.isCA()) {
+            return "CRL: onlyContainsUserCerts does not cover a CA certificate";
+        }
+        if (crl.isOnlyContainsCACerts() && !cert.isCA()) {
+            return "CRL: onlyContainsCACerts does not cover an end-entity certificate";
+        }
+        if (crl.isIdpNameRelativeToCrlIssuer()) {
+            return "CRL: nameRelativeToCRLIssuer cannot be matched to certificate CDP";
+        }
+        if (crl.isIdpDistributionPointPresent()) {
+            String[] idpUris = crl.getIdpDistributionPointUris();
+            String[] cdpUris = cert.getCdpUris();
+            if (idpUris == null || cdpUris == null || !intersects(idpUris, cdpUris)) {
+                return "CRL: distributionPoint does not match certificate CDP";
+            }
+        }
+        return null;
+    }
+
+    /** Покрывает ли CRL сертификат; без исключений, для логики, где область не прерывает проверку. */
+    private static boolean isPartialScopeCovered(GostCrl crl, GostCertificate cert) {
+        return partialScopeViolation(crl, cert) == null;
+    }
+
+    /** Применяет область CRL к сертификату; нарушение — {@code IDP_NOT_SUPPORTED}. */
+    private static void requirePartialScope(GostCrl crl, GostCertificate cert)
+            throws PkixException {
+        String violation = partialScopeViolation(crl, cert);
+        if (violation != null) {
+            throw new PkixException(PkixException.Reason.IDP_NOT_SUPPORTED, violation);
+        }
+    }
+
+    private static boolean intersects(String[] left, String[] right) {
+        for (String a : left) {
+            for (String b : right) {
+                if (a != null && a.equals(b)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -176,87 +444,68 @@ public final class CrlVerifier {
      * <p>Порядок (fail-closed):
      * <ol>
      *   <li>Верификация обоих CRL по отдельности</li>
-     *   <li>delta.isDelta()</li>
-     *   <li>delta.baseCrlNumber == base.crlNumber</li>
-     *   <li>delta.thisUpdate >= base.thisUpdate</li>
-     *   <li>Сверка issuer DN (base == certIssuerDn)</li>
-     *   <li>Сверка issuer DN (base == delta)</li>
-     *   <li>Merge: delta перекрывает base; REMOVE_FROM_CRL в delta удаляет из base</li>
-     *   <li>Проверка certSerial в merged-наборе</li>
+     *   <li>Сверка issuer DN (base == сертификат, base == delta)</li>
+     *   <li>delta.isDelta(), delta.baseCrlNumber == base.crlNumber, delta.thisUpdate >= base.thisUpdate</li>
+     *   <li>Область: base и delta покрывают сертификат, IDP base и delta совпадают, AKI не
+     *       противоречат (RFC 5280 §6.3.3(c))</li>
+     *   <li>Отзыв: запись в delta или base определяет REVOKED независимо от области;
+     *       {@code REMOVE_FROM_CRL} в delta снимает отзыв только если область согласована</li>
+     *   <li>Область не согласована -> {@code IDP_NOT_SUPPORTED}</li>
      * </ol>
      *
-     * @param baseCrlDer   DER-encoded base CRL
-     * @param deltaCrlDer  DER-encoded delta CRL
-     * @param certSerial   серийный номер проверяемого сертификата (raw DER INTEGER)
-     * @param caKey        открытый ключ CA
-     * @param certIssuerDn DER-encoded issuer DN сертификата (полный SEQUENCE TLV)
-     * @throws PkixException если любой CRL невалиден, несовместим или сертификат отозван
+     * @param baseCrlDer  DER-encoded base CRL
+     * @param deltaCrlDer DER-encoded delta CRL
+     * @param cert        проверяемый сертификат
+     * @param issuerCa    сертификат CA, подписавшего оба CRL
+     * @throws PkixException если любой CRL невалиден, несовместим, не покрывает сертификат,
+     *         сертификат отозван или у издателя нет права подписывать CRL
      */
     public static void verify(
-            byte[] baseCrlDer,
-            byte[] deltaCrlDer,
-            byte[] certSerial,
-            PublicKeyParameters caKey,
-            byte[] certIssuerDn)
+            byte[] baseCrlDer, byte[] deltaCrlDer, GostCertificate cert, GostCertificate issuerCa)
             throws PkixException {
-        verify(
-                baseCrlDer,
-                deltaCrlDer,
-                certSerial,
-                caKey,
-                certIssuerDn,
-                GostCrl.DEFAULT_MAX_CRL_SIZE,
-                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+        verify(baseCrlDer, deltaCrlDer, cert, issuerCa, CrlLimits.DEFAULT);
     }
 
     /**
      * Проверяет пару base CRL + delta CRL с настраиваемыми лимитами.
      *
-     * @param baseCrlDer         DER-encoded base CRL
-     * @param deltaCrlDer        DER-encoded delta CRL
-     * @param certSerial         серийный номер проверяемого сертификата (raw DER INTEGER)
-     * @param caKey              открытый ключ CA
-     * @param certIssuerDn       DER-encoded issuer DN сертификата
-     * @param maxCrlSize         максимальный размер CRL в байтах
-     * @param maxRevokedEntries  максимальное число отозванных записей
-     * @throws PkixException если любой CRL невалиден, несовместим или сертификат отозван
+     * @param baseCrlDer        DER-encoded base CRL
+     * @param deltaCrlDer       DER-encoded delta CRL
+     * @param cert              проверяемый сертификат
+     * @param issuerCa          сертификат CA, подписавшего оба CRL
+     * @param limits            пределы размера и числа записей CRL
+     * @throws PkixException если любой CRL невалиден, несовместим, не покрывает сертификат,
+     *         сертификат отозван или у издателя нет права подписывать CRL
      */
     public static void verify(
             byte[] baseCrlDer,
             byte[] deltaCrlDer,
-            byte[] certSerial,
-            PublicKeyParameters caKey,
-            byte[] certIssuerDn,
-            int maxCrlSize,
-            int maxRevokedEntries)
+            GostCertificate cert,
+            GostCertificate issuerCa,
+            CrlLimits limits)
             throws PkixException {
         if (baseCrlDer == null || deltaCrlDer == null) {
             throw new PkixException("CRL must not be null");
         }
-        if (certSerial == null) {
-            throw new PkixException("certSerial must not be null");
+        if (cert == null) {
+            throw new PkixException("cert must not be null");
         }
-        if (certIssuerDn == null) {
-            throw new PkixException("certIssuerDn must not be null");
-        }
+        requireIssuerCa(issuerCa);
+        requireCrlSign(issuerCa);
+        byte[] certSerial = cert.getSerialNumber();
+        byte[] certIssuerDn = cert.getIssuerDnBytes();
 
         LOG.log(
                 Level.DEBUG,
                 "Verifying base+delta CRL for certificate serial 0x{0}",
-                new BigInteger(1, certSerial).toString(16));
+                serialHex(cert));
 
-        GostCrl base;
-        GostCrl delta;
-        try {
-            base = new GostCrl(baseCrlDer, maxCrlSize, maxRevokedEntries);
-            delta = new GostCrl(deltaCrlDer, maxCrlSize, maxRevokedEntries);
-        } catch (RuntimeException e) {
-            throw new PkixException(PkixException.Reason.PARSE_ERROR, "Failed to parse CRL DER", e);
-        }
+        GostCrl base = parseCrl(baseCrlDer, limits);
+        GostCrl delta = parseCrl(deltaCrlDer, limits);
 
         // Верификация: base без delta-допуска, delta с допуском
-        base.verify(caKey, false);
-        delta.verify(caKey, true);
+        base.verify(issuerCa.getPublicKey(), false);
+        delta.verify(issuerCa.getPublicKey(), true);
 
         // Сверка issuer DN base CRL с issuer DN сертификата (RFC 5280 §6.3.3(c))
         byte[] baseIssuerDn = base.getIssuerDnBytes();
@@ -297,32 +546,94 @@ public final class CrlVerifier {
             throw new PkixException("CRL: delta issuer DN does not match base issuer DN");
         }
 
-        // Merge и проверка отзыва
+        // Область (RFC 5280 §6.3.3(c)): предикаты без исключений, иначе чужой CRL с номером дал бы
+        // IDP_NOT_SUPPORTED вместо REVOKED. AKI: оба keyIdentifier есть и различаются -> конфликт;
+        // у одного нет -> предупреждение (оба CRL проверены ключом одного издателя, подпись уже
+        // связывает их).
+        boolean akiConflict = akiConflict(base, delta);
+        boolean covered =
+                isPartialScopeCovered(base, cert)
+                        && isPartialScopeCovered(delta, cert)
+                        && idpMatches(base, delta)
+                        && !akiConflict;
+
+        // Запись в delta (кроме REMOVE_FROM_CRL) определяет отзыв независимо от области
+        boolean removedByDelta = false;
         if (delta.isRevoked(certSerial)) {
-            ReasonCode reason = delta.getReason(certSerial);
-            if (reason == ReasonCode.REMOVE_FROM_CRL) {
-                LOG.log(Level.DEBUG, "Certificate removed from CRL via delta (REMOVE_FROM_CRL)");
-                return;
+            if (delta.getReason(certSerial) != ReasonCode.REMOVE_FROM_CRL) {
+                throw new PkixException(
+                        PkixException.Reason.REVOKED, "Certificate is revoked per delta CRL");
             }
-            throw new PkixException(
-                    PkixException.Reason.REVOKED, "Certificate is revoked per delta CRL");
+            // REMOVE_FROM_CRL снимает отзыв только при согласованной области: иначе чужой delta
+            // снял бы отзыв, записанный в base
+            removedByDelta = covered;
         }
 
-        if (base.isRevoked(certSerial)) {
+        if (base.isRevoked(certSerial) && !removedByDelta) {
             throw new PkixException(
                     PkixException.Reason.REVOKED, "Certificate is revoked per base CRL");
+        }
+
+        if (!covered) {
+            if (akiConflict) {
+                throw new PkixException("CRL: delta AKI does not match base AKI");
+            }
+            String violation = partialScopeViolation(base, cert);
+            if (violation == null) {
+                violation = partialScopeViolation(delta, cert);
+            }
+            throw new PkixException(
+                    PkixException.Reason.IDP_NOT_SUPPORTED,
+                    violation != null
+                            ? violation
+                            : "CRL: base and delta IssuingDistributionPoint differ");
+        }
+
+        if (removedByDelta) {
+            LOG.log(Level.DEBUG, "Certificate removed from CRL via delta (REMOVE_FROM_CRL)");
+            return;
         }
 
         LOG.log(
                 Level.DEBUG,
                 "CRL verification passed for certificate serial 0x{0}",
-                new BigInteger(1, certSerial).toString(16));
+                serialHex(cert));
+    }
+
+    /**
+     * IDP base и delta совпадают побайтно по extnValue (RFC 5280 §6.3.3(c)): отдельные поля не
+     * дают полного сравнения, например для onlySomeReasons хранится лишь признак. Флаг critical в
+     * сравнении не участвует (библиотека принимает оба варианта). Оба без IDP тоже совпадают.
+     * Разный порядок URI даёт расхождение, это допустимо.
+     */
+    private static boolean idpMatches(GostCrl base, GostCrl delta) {
+        return Arrays.equals(base.getIdpExtnValue(), delta.getIdpExtnValue());
+    }
+
+    /**
+     * Конфликт AKI base и delta: оба keyIdentifier есть и различаются. Если у одного его нет,
+     * это предупреждение, а не конфликт: оба CRL проверены одним ключом, и подпись уже связывает
+     * их с ним. Оба без keyIdentifier совпадают.
+     */
+    private static boolean akiConflict(GostCrl base, GostCrl delta) {
+        byte[] baseAki = base.getAuthorityKeyIdentifier();
+        byte[] deltaAki = delta.getAuthorityKeyIdentifier();
+        if (baseAki == null || deltaAki == null) {
+            if (baseAki != deltaAki) {
+                // Данные издателя CRL, отказа нет: оператору нечего исправить, на DEBUG
+                LOG.log(
+                        Level.DEBUG,
+                        "CRL: AKI keyIdentifier is present in only one of base/delta CRL");
+            }
+            return false;
+        }
+        return !Arrays.equals(baseAki, deltaAki);
     }
 
     /**
      * Парсит nextUpdate из CRL без полной верификации (для кэша).
      * <p>
-     * В отличие от {@link #verify(byte[], byte[], PublicKeyParameters)}, этот метод
+     * В отличие от {@link #verify(byte[], GostCertificate, GostCertificate)}, этот метод
      * не проверяет подпись и не сканирует revoked-список — только извлекает дату
      * истечения срока действия CRL. Нужен {@code org.rssys.gost.jsse.crl.CrlCache}
      * чтобы определить момент инвалидации кэша.
@@ -332,7 +643,7 @@ public final class CrlVerifier {
      * <b>Security:</b> результат получен из <b>неверифицированных</b> байт. Использовать
      * только для метаданных кэша (TTL/инвалидация), никогда — для acceptance-решения.
      * Решение об отзыве всегда проходит через полный
-     * {@link #verify(byte[], byte[], PublicKeyParameters)} с проверкой подписи, поэтому
+     * {@link #verify(byte[], GostCertificate, GostCertificate)} с проверкой подписи, поэтому
      * подделка nextUpdate влияет лишь на эффективность кэша, не на корректность проверки.
      *
      * @param crlDer DER-encoded CertificateList
@@ -394,7 +705,7 @@ public final class CrlVerifier {
      * <b>Security:</b> результат получен из <b>неверифицированных</b> байт. Использовать
      * только для метаданных кэша (rollback-baseline), никогда — для acceptance-решения.
      * Подделка cRLNumber влияет лишь на rollback-трекинг кэша, не на корректность проверки
-     * отзыва, которая всегда идёт через полный {@link #verify(byte[], byte[], PublicKeyParameters)}.
+     * отзыва, которая всегда идёт через полный {@link #verify(byte[], GostCertificate, GostCertificate)}.
      *
      * @param crlDer DER-encoded CertificateList
      * @return cRLNumber или null
@@ -458,6 +769,12 @@ public final class CrlVerifier {
                             oidTlv[1] - oidTlv[0],
                             GostDerParser.CRL_NUMBER_OID_BYTES)) {
                         int afterOid = oidTlv[1];
+                        // critical разбор cRLNumber принимает: без пропуска BOOLEAN метаданные
+                        // кэша (baseline защиты от отката) для такого CRL терялись бы
+                        if (afterOid < oce
+                                && (crlDer[afterOid] & 0xFF) == GostDerParser.TAG_BOOLEAN) {
+                            afterOid = GostDerParser.readTlv(crlDer, afterOid)[1];
+                        }
                         if (afterOid < oce
                                 && (crlDer[afterOid] & 0xFF) == GostDerParser.TAG_OCTET_STRING) {
                             int[] octTlv = GostDerParser.readTlv(crlDer, afterOid);
@@ -488,34 +805,31 @@ public final class CrlVerifier {
      * Использует лимиты по умолчанию.
      *
      * <p>Порядок: issuer DN match -> попытка ключом CA -> перебор CRL-подписантов.
-     * Сертификаты подписантов валидируются: expiry, cRLSign KeyUsage, цепочка к CA.
+     * Сертификаты подписантов валидируются: срок действия, обязательный KeyUsage с cRLSign
+     * (отсутствие KeyUsage не принимается), отсутствие неизвестных critical-расширений,
+     * подпись УЦ на сертификате подписанта.
+     *
+     * <p>Список подписантов должен быть доверенным: метод не связывает subject подписанта с
+     * издателем CRL и не проверяет отзыв самого подписанта (для этого нужен CRL того же УЦ,
+     * то есть рекурсия), это остаётся на вызывающем. Модель «подписант под другим DN» не
+     * совпадает с indirect CRL по RFC 5280 §5.1.2.3, соответствие RFC вынесено отдельно.
      *
      * @param crlDer            DER-encoded CertificateList
-     * @param certSerial        серийный номер сертификата (raw DER INTEGER)
-     * @param caKey             открытый ключ CA
-     * @param certIssuerDn      DER-encoded issuer DN сертификата
-     * @param caCert            сертификат CA для defence-in-depth проверки cRLSign (может быть null)
+     * @param cert              проверяемый сертификат (не путать с {@code issuerCa})
+     * @param issuerCa          сертификат CA: его ключ проверяет подпись CRL и сертификаты
+     *                          подписантов; если CRL подписан самим CA, у CA должен быть
+     *                          {@code cRLSign} (при заданном KeyUsage)
      * @param crlSignerCertDers DER-encoded сертификаты CRL-подписантов (может быть null или пустой)
-     * @throws PkixException если CRL невалиден или сертификат отозван
+     * @throws PkixException если CRL невалиден, не покрывает сертификат, сертификат отозван или
+     *         CRL подписан самим CA без права подписывать CRL ({@code MISSING_CRL_SIGN})
      */
     public static void verifyDelegated(
             byte[] crlDer,
-            byte[] certSerial,
-            PublicKeyParameters caKey,
-            byte[] certIssuerDn,
-            GostCertificate caCert,
+            GostCertificate cert,
+            GostCertificate issuerCa,
             List<byte[]> crlSignerCertDers)
             throws PkixException {
-        verifyDelegated(
-                crlDer,
-                certSerial,
-                caKey,
-                certIssuerDn,
-                caCert,
-                crlSignerCertDers,
-                null,
-                GostCrl.DEFAULT_MAX_CRL_SIZE,
-                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+        verifyDelegated(crlDer, cert, issuerCa, crlSignerCertDers, null, CrlLimits.DEFAULT);
     }
 
     /**
@@ -526,23 +840,12 @@ public final class CrlVerifier {
      */
     public static void verifyDelegated(
             byte[] crlDer,
-            byte[] certSerial,
-            PublicKeyParameters caKey,
-            byte[] certIssuerDn,
-            GostCertificate caCert,
+            GostCertificate cert,
+            GostCertificate issuerCa,
             List<byte[]> crlSignerCertDers,
             BigInteger minCrlNumber)
             throws PkixException {
-        verifyDelegated(
-                crlDer,
-                certSerial,
-                caKey,
-                certIssuerDn,
-                caCert,
-                crlSignerCertDers,
-                minCrlNumber,
-                GostCrl.DEFAULT_MAX_CRL_SIZE,
-                GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+        verifyDelegated(crlDer, cert, issuerCa, crlSignerCertDers, minCrlNumber, CrlLimits.DEFAULT);
     }
 
     /**
@@ -552,83 +855,59 @@ public final class CrlVerifier {
      * <p>Порядок проверки (fail-closed):
      * <ol>
      *   <li>Парсинг CRL</li>
-     *   <li>Сверка issuer DN CRL == certIssuerDn (прямой CRL)</li>
-     *   <li>Попытка верификации ключом CA ({@code crl.verify(caKey)}).
-     *       Внутри {@code verify()} — парсинг IDP; indirectCRL -> IDP_NOT_SUPPORTED.
-     *       При успехе — defence-in-depth проверка cRLSign у CA (LOG warning если нет)</li>
+     *   <li>Сверка issuer DN CRL == issuer DN сертификата (прямой CRL)</li>
+     *   <li>Попытка верификации ключом CA ({@code crl.verify(issuerCa ключ)}).
+     *       indirectCRL -> IDP_NOT_SUPPORTED. При успехе у CA обязан быть cRLSign (если задан
+     *       KeyUsage), иначе {@code MISSING_CRL_SIGN}</li>
      *   <li>Если CA-ключ не подошёл (SIGNATURE_INVALID) — перебор crlSignerCertDers:
-     *       expiry -> isCrlSigner() -> verifySignature(caKey) (цепочка) -> crl.verify(signerKey)</li>
+     *       срок -> hasCrlSignKeyUsage() -> без неизвестных critical -> verifySignature(ключ CA)
+     *       (цепочка) -> crl.verify(signerKey)</li>
      *   <li>cRLNumber монотонность (если задан minCrlNumber)</li>
-     *   <li>Проверка отзыва сертификата</li>
+     *   <li>Запись об отзыве сертификата, затем область CRL</li>
      * </ol>
      *
      * @param crlDer             DER-encoded CertificateList
-     * @param certSerial         серийный номер сертификата (raw DER INTEGER)
-     * @param caKey              открытый ключ CA
-     * @param certIssuerDn       DER-encoded issuer DN сертификата
-     * @param caCert             сертификат CA (может быть null)
+     * @param cert               проверяемый сертификат (не путать с {@code issuerCa})
+     * @param issuerCa           сертификат CA
      * @param crlSignerCertDers  DER-encoded сертификаты CRL-подписантов (может быть null или пустой)
      * @param minCrlNumber       минимально допустимый cRLNumber или null
-     * @param maxCrlSize         максимальный размер CRL в байтах
-     * @param maxRevokedEntries  максимальное число отозванных записей
-     * @throws PkixException если CRL невалиден или сертификат отозван
+     * @param limits             пределы размера и числа записей CRL
+     * @throws PkixException если CRL невалиден, не покрывает сертификат или сертификат отозван
      */
     public static void verifyDelegated(
             byte[] crlDer,
-            byte[] certSerial,
-            PublicKeyParameters caKey,
-            byte[] certIssuerDn,
-            GostCertificate caCert,
+            GostCertificate cert,
+            GostCertificate issuerCa,
             List<byte[]> crlSignerCertDers,
             BigInteger minCrlNumber,
-            int maxCrlSize,
-            int maxRevokedEntries)
+            CrlLimits limits)
             throws PkixException {
-        if (crlDer == null) {
-            throw new PkixException("CRL is null");
-        }
-        if (certSerial == null) {
-            throw new PkixException("certSerial must not be null");
-        }
-        if (certIssuerDn == null) {
-            throw new PkixException("certIssuerDn must not be null");
-        }
+        requireInputs(crlDer, cert);
+        requireIssuerCa(issuerCa);
         LOG.log(
                 Level.DEBUG,
                 "Verifying CRL (delegated) for certificate serial 0x{0}",
-                new BigInteger(1, certSerial).toString(16));
+                serialHex(cert));
 
-        GostCrl crl;
-        try {
-            crl = new GostCrl(crlDer, maxCrlSize, maxRevokedEntries);
-        } catch (RuntimeException e) {
-            throw new PkixException(PkixException.Reason.PARSE_ERROR, "Failed to parse CRL DER", e);
-        }
-
-        // Сверка issuer DN CRL с issuer DN сертификата (RFC 5280 §6.3.3(c))
-        byte[] crlIssuerDn = crl.getIssuerDnBytes();
-        if (!GostDerParser.arrayRangeEquals(
-                crlIssuerDn, 0, crlIssuerDn.length, certIssuerDn, 0, certIssuerDn.length)) {
-            throw new PkixException("CRL: issuer DN does not match certificate issuer DN");
-        }
+        GostCrl crl = parseCrl(crlDer, limits);
+        requireIssuerDnMatch(crl, cert.getIssuerDnBytes());
 
         // Попытка 1: ключ CA
         boolean verified = false;
         try {
-            crl.verify(caKey);
+            crl.verify(issuerCa.getPublicKey());
             verified = true;
-            // Defence-in-depth: проверка cRLSign у CA-сертификата
-            if (caCert != null && !caCert.isCrlSigner()) {
-                LOG.log(
-                        Level.WARNING,
-                        "CA certificate does not have cRLSign KeyUsage bit,"
-                                + " but CRL was accepted for backward compatibility");
-            }
         } catch (PkixException e) {
             if (e.reason() != PkixException.Reason.SIGNATURE_INVALID) {
                 throw e;
             }
             LOG.log(Level.DEBUG, "CA key verification failed, trying delegated signers");
+        }
+        // CRL подписан ключом самого CA: право подписывать CRL у CA обязано быть. Проверка стоит
+        // после подписи, а не до неё: при чужой подписи CA без cRLSign не должен закрывать путь
+        // делегированных подписантов
+        if (verified) {
+            requireCrlSign(issuerCa);
         }
 
         // Попытка 2: делегированные подписанты
@@ -643,10 +922,15 @@ public final class CrlVerifier {
                 }
 
                 if (signer.isExpired()) continue;
-                if (!signer.isCrlSigner()) continue;
+                // Строгий cRLSign: у делегированного подписанта нет иной границы полномочий
+                // (связи с издателем CRL по имени нет), поэтому отсутствие KeyUsage не разрешение.
+                if (!signer.hasCrlSignKeyUsage()) continue;
+                // Подписант с непонятым critical-расширением не вправе подписывать CRL
+                // (RFC 5280 §4.2: такой сертификат использовать нельзя).
+                if (signer.hasUnknownCriticalExtension()) continue;
 
                 // Цепочка: сертификат подписанта должен быть подписан CA
-                if (!signer.verifySignature(caKey)) continue;
+                if (!signer.verifySignature(issuerCa.getPublicKey())) continue;
 
                 try {
                     crl.verify(signer.getPublicKey());
@@ -654,7 +938,7 @@ public final class CrlVerifier {
                     LOG.log(
                             Level.DEBUG,
                             "CRL verified with delegated signer: {0}",
-                            signer.getSubjectDnForLog(128));
+                            signer.getSubjectDnForLog(GostCertificate.DN_LOG_MAX_CHARS));
                     break;
                 } catch (PkixException e) {
                     if (e.reason() != PkixException.Reason.SIGNATURE_INVALID) {
@@ -674,30 +958,12 @@ public final class CrlVerifier {
                             + ")");
         }
 
-        // Проверка cRLNumber монотонности
-        if (minCrlNumber != null) {
-            BigInteger actual = crl.getCrlNumber();
-            if (actual == null) {
-                throw new PkixException(
-                        "CRL: no cRLNumber extension, but minCrlNumber was provided");
-            }
-            if (actual.compareTo(minCrlNumber) < 0) {
-                throw new PkixException(
-                        "CRL: cRLNumber downgrade — got "
-                                + actual
-                                + ", min expected "
-                                + minCrlNumber);
-            }
-        }
-
-        // Проверка отзыва конкретного сертификата
-        if (crl.isRevoked(certSerial)) {
-            throw new PkixException(PkixException.Reason.REVOKED, "Certificate is revoked per CRL");
-        }
+        requireCrlNumberNotBelow(crl, minCrlNumber);
+        requireNotRevokedInScope(crl, cert);
 
         LOG.log(
                 Level.DEBUG,
                 "CRL verification (delegated) passed for certificate serial 0x{0}",
-                new BigInteger(1, certSerial).toString(16));
+                serialHex(cert));
     }
 }

@@ -28,9 +28,9 @@ public final class TlsEncoding {
      * @return закодированная точка (X || Y, little-endian)
      */
     public static byte[] encodePoint(PublicKeyParameters pub) {
-        ECPoint q = pub.getQ().normalize();
-        byte[] x = Pack.reverseBytes(toFixedLengthBytes(q.getX(), pub.getParams().hlen));
-        byte[] y = Pack.reverseBytes(toFixedLengthBytes(q.getY(), pub.getParams().hlen));
+        ECPoint q = pub.getQ();
+        byte[] x = Pack.reverseBytes(Pack.toFixedLengthBigEndian(q.getX(), pub.getParams().hlen));
+        byte[] y = Pack.reverseBytes(Pack.toFixedLengthBigEndian(q.getY(), pub.getParams().hlen));
         byte[] result = new byte[x.length + y.length];
         System.arraycopy(x, 0, result, 0, x.length);
         System.arraycopy(y, 0, result, x.length, y.length);
@@ -39,22 +39,26 @@ public final class TlsEncoding {
 
     /**
      * Декодирует публичный ключ из TLS wire format.
-     * RFC 9367 §3.4: X||Y, обе координаты в little-endian.
+     * RFC 9367 §6.1.1.3: ровно {@code X[coordinate_length] || Y[coordinate_length]}, обе
+     * координаты в little-endian. Лишние байты и координаты вне {@code [0, p)} отвергаются:
+     * иначе один ключ имел бы несколько кодировок.
      *
      * @param encoded закодированная точка (X || Y, little-endian)
      * @param params  параметры эллиптической кривой
      * @return публичный ключ
-     * @throws TlsException если точка не на кривой
+     * @throws TlsException decode_error, если длина не равна {@code 2·hlen}; handshake_failure,
+     *                      если координата не меньше модуля поля, точка не на кривой или не
+     *                      принадлежит подгруппе порядка n
      */
     public static PublicKeyParameters decodePoint(byte[] encoded, ECParameters params)
             throws TlsException {
         int hlen = params.hlen;
-        if (encoded.length < 2 * hlen) {
+        if (encoded.length != 2 * hlen) {
             throw new TlsException(
                     TlsConstants.ALERT_DECODE_ERROR,
-                    "ECDHE key too short: "
+                    "ECDHE key has invalid length: "
                             + encoded.length
-                            + " bytes, expected at least "
+                            + " bytes, expected "
                             + (2 * hlen));
         }
         byte[] xLe = new byte[hlen];
@@ -65,34 +69,24 @@ public final class TlsEncoding {
         byte[] yBe = Pack.reverseBytes(yLe);
         BigInteger x = new BigInteger(1, xBe);
         BigInteger y = new BigInteger(1, yBe);
-        ECPoint q = ECPoint.affine(x, y, params);
-        if (!q.isValidPublicKey()) {
+        ECPoint q;
+        try {
+            q = ECPoint.affine(x, y, params);
+        } catch (IllegalArgumentException e) {
+            // тот же алерт, что и для точки не на кривой: это недопустимый ключ, а не
+            // нарушение формата сообщения
             throw new TlsException(
                     TlsConstants.ALERT_HANDSHAKE_FAILURE,
-                    "ECDHE public key point is not on the curve");
+                    "ECDHE public key coordinate is not less than the field modulus");
         }
-        return new PublicKeyParameters(q, params);
-    }
-
-    /**
-     * Преобразует BigInteger в big-endian массив фиксированной длины.
-     * Если исходный массив короче — дополняет нулями слева.
-     * Если длиннее — обрезает слева (например, знаковый байт BigInteger).
-     *
-     * @param n   значение BigInteger
-     * @param len требуемая длина массива
-     * @return массив байт фиксированной длины
-     */
-    static byte[] toFixedLengthBytes(BigInteger n, int len) {
-        byte[] raw = n.toByteArray();
-        if (raw.length == len) return raw;
-        byte[] result = new byte[len];
-        if (raw.length < len) {
-            System.arraycopy(raw, 0, result, len - raw.length, raw.length);
-        } else {
-            System.arraycopy(raw, raw.length - len, result, 0, len);
+        try {
+            // принадлежность кривой и подгруппе проверяет конструктор PublicKeyParameters
+            return new PublicKeyParameters(q, params);
+        } catch (IllegalArgumentException e) {
+            throw new TlsException(
+                    TlsConstants.ALERT_HANDSHAKE_FAILURE,
+                    "ECDHE public key point is not on the curve or not in the prime-order subgroup");
         }
-        return result;
     }
 
     /**

@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import org.rssys.gost.api.KeyAgreement;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.cipher.SymmetricKey;
@@ -11,13 +12,13 @@ import org.rssys.gost.cipher.mode.AcpkmSectionSize;
 import org.rssys.gost.cipher.mode.CtrAcpkmMode;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Построитель EnvelopedData (RFC 5652 §6) с ГОСТ-шифрованием.
@@ -28,6 +29,10 @@ import org.rssys.gost.util.DerCodec;
  *
  * <p>Использует VKO ГОСТ Р 34.10-2012 для согласования ключа,
  * KExp15 для обёртывания CEK и Кузнечик CTR-ACPKM для шифрования данных.
+ *
+ * <p>По умолчанию содержимое защищено имитовставкой (OMAC, ТК26 §8.3.1): режим CTR сам по себе
+ * не обнаруживает подмену шифртекста. Отказ от имитовставки возможен только явно, через
+ * {@link #withoutIntegrity()}.
  */
 public final class CmsEnvelopedDataBuilder {
 
@@ -35,17 +40,15 @@ public final class CmsEnvelopedDataBuilder {
             GostLogger.getLogger("org.rssys.gost.pkix.cms.CmsEnvelopedDataBuilder");
 
     private static final int CEK_LENGTH = 32;
-    private static final int CONTENT_UKM_LENGTH = 16;
-    private static final int IV_LENGTH = 8;
     private static final int UKM_LENGTH = 32;
 
     private byte[] data;
     private final List<RecipientEntry> recipients = new ArrayList<>();
-    private String contentEncryptionOid = GostOids.KUZ_CTR_ACPKM;
     private String encryptedContentTypeOid = GostOids.PKCS7_DATA;
-    private CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
+    // Обёртка CEK одна и без состояния; сменная реализация дала бы чужому коду открытые KEK и CEK.
+    private static final CmsKeyWrap KEY_WRAP = new Kexp15CmsKeyWrap();
     private final boolean useKari;
-    private boolean useOmac;
+    private boolean useOmac = true;
 
     private CmsEnvelopedDataBuilder(boolean useKari) {
         this.useKari = useKari;
@@ -71,32 +74,61 @@ public final class CmsEnvelopedDataBuilder {
         return this;
     }
 
-    /** Добавляет получателя (сертификат). */
+    /**
+     * Добавляет получателя (сертификат).
+     *
+     * <p>Если у сертификата есть KeyUsage, в нём должен быть {@code keyEncipherment},
+     * {@code keyAgreement} или {@code dataEncipherment}; для ktri и kari правило одинаково, см.
+     * {@link GostCertificate#isKeyUsageValidForEncryption()}, где описано и отступление
+     * от RFC 5652 §6.2. Сертификат только для подписи не принимается: шифрование на него
+     * выдало бы контейнер для ключа, не предназначенного для управления ключами. Сертификат
+     * без KeyUsage допускается.
+     *
+     * <p>Проверка здесь, а не в {@link CmsEnvelopedDataDecryptor}: расшифровывает владелец
+     * ключа, и отказ ему ничего не защищает.
+     *
+     * @param cert сертификат получателя
+     * @return этот построитель
+     * @throws NullPointerException если {@code cert == null}
+     * @throws IllegalArgumentException если KeyUsage сертификата не допускает управление ключами
+     */
     public CmsEnvelopedDataBuilder addRecipient(GostCertificate cert) {
+        Objects.requireNonNull(cert, "cert");
+        // В тексте только серийный номер: DN (и subject, и issuer, у самоподписанного
+        // сертификата они совпадают) содержит персональные данные, а сообщения попадают в журналы
+        if (!cert.isKeyUsageValidForEncryption()) {
+            // Знак выносим перед «0x»: у неаккуратных УЦ встречается отрицательный серийный номер,
+            // и «0x-1f» читалось бы как ошибка форматирования
+            BigInteger serial = cert.getSerialNumberBigInt();
+            throw new IllegalArgumentException(
+                    "Recipient certificate (serial "
+                            + (serial.signum() < 0 ? "-" : "")
+                            + "0x"
+                            + serial.abs().toString(16)
+                            + ") KeyUsage permits none of keyEncipherment, keyAgreement,"
+                            + " dataEncipherment");
+        }
         recipients.add(new RecipientEntry(cert));
         return this;
     }
 
-    /** OID алгоритма шифрования содержимого (по умолчанию Кузнечик CTR-ACPKM). */
-    public CmsEnvelopedDataBuilder contentEncryptionOid(String oid) {
-        this.contentEncryptionOid = oid;
-        return this;
-    }
-
     /**
-     * Включает имитовставку (OMAC) для контентного шифрования по ТК26 §8.3.1.
+     * Отключает имитовставку (OMAC): содержимое шифруется Кузнечиком CTR-ACPKM без защиты
+     * целостности ({@code id-gostr3412-2015-kuznyechik-ctracpkm}).
      *
-     * <p>Устанавливает OID {@code id-gostr3412-2015-kuznyechik-ctracpkm-omac}
-     * и CMS-профильный Mac-and-Encrypt согласно Р 1323565.1.025-2019 §8.3.2:
-     * CMAC вычисляется по открытому тексту, шифруется и выносится в
-     * {@code unprotectedAttrs} как атрибут {@code content-mac}.
+     * <p><b>Предупреждение.</b> Режим CTR допускает целенаправленную подмену шифртекста, и
+     * получатель не обнаружит её, если целостность не обеспечена иначе (например, подписью поверх
+     * контейнера). Используйте только для обмена с узлами, которые не принимают OMAC.
+     * Такой контейнер читает {@link CmsEnvelopedDataDecryptor#decryptAllowingNoIntegrity}.
      *
-     * <p><b>ACPKM-рекейинг.</b> Секционная смена ключа выполняется каждые 256 КБ
-     * (ГОСТ Р 34.13-2015 §6.2).
+     * <p>Без этого вызова применяется OMAC по ТК26 §8.3.1: OID
+     * {@code id-gostr3412-2015-kuznyechik-ctracpkm-omac} и CMS-профильный Mac-and-Encrypt согласно
+     * Р 1323565.1.025-2019 §8.3.2: CMAC вычисляется по открытому тексту, шифруется и выносится в
+     * {@code unprotectedAttrs} как атрибут {@code content-mac}. Секционная смена ключа (ACPKM)
+     * выполняется каждые 256 КБ (Р 1323565.1.017-2018, RFC 8645).
      */
-    public CmsEnvelopedDataBuilder withOmac() {
-        this.useOmac = true;
-        this.contentEncryptionOid = GostOids.KUZ_CTR_ACPKM_OMAC;
+    public CmsEnvelopedDataBuilder withoutIntegrity() {
+        this.useOmac = false;
         return this;
     }
 
@@ -111,12 +143,6 @@ public final class CmsEnvelopedDataBuilder {
         return this;
     }
 
-    /** Алгоритм обёртывания ключа (по умолчанию Kexp15CmsKeyWrap). */
-    public CmsEnvelopedDataBuilder keyWrap(CmsKeyWrap keyWrap) {
-        this.keyWrap = keyWrap;
-        return this;
-    }
-
     /**
      * Собирает EnvelopedData в DER.
      *
@@ -127,7 +153,7 @@ public final class CmsEnvelopedDataBuilder {
         if (recipients.isEmpty()) throw new IllegalStateException("no recipients");
 
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "Building EnvelopedData ({0}{1}) for {2} recipient(s), {3} byte(s) of data",
                 useKari ? "kari" : "ktri",
                 useOmac ? "+omac" : "",
@@ -139,9 +165,8 @@ public final class CmsEnvelopedDataBuilder {
         CryptoRandom.INSTANCE.nextBytes(cek);
 
         // 2. Генерируем UKM/IV для контентного шифра
-        byte[] contentUkm = new byte[CONTENT_UKM_LENGTH];
+        byte[] contentUkm = new byte[GostOids.CMS_CONTENT_UKM_LEN];
         CryptoRandom.INSTANCE.nextBytes(contentUkm);
-        byte[] contentIv = Arrays.copyOf(contentUkm, IV_LENGTH);
 
         try {
             // 3. Шифруем данные
@@ -158,7 +183,7 @@ public final class CmsEnvelopedDataBuilder {
                         DerCodec.encodeContextConstructed(
                                 1, omacResult.macAttribute().derEncoded());
             } else {
-                encryptedContent = encryptContent(cek, contentIv);
+                encryptedContent = encryptContent(cek, contentUkm);
             }
 
             // 4. Строим RecipientInfos
@@ -182,13 +207,12 @@ public final class CmsEnvelopedDataBuilder {
             // 7. Оборачиваем в ContentInfo
             byte[] result = CmsContentInfo.encode(GostOids.CMS_ENVELOPED_DATA, envelopedData);
             LOG.log(
-                    Level.INFO,
+                    Level.DEBUG,
                     "EnvelopedData built successfully ({0} byte(s) encrypted)",
                     data.length);
             return result;
         } finally {
             Arrays.fill(cek, (byte) 0);
-            Arrays.fill(contentIv, (byte) 0);
             Arrays.fill(contentUkm, (byte) 0);
         }
     }
@@ -197,10 +221,10 @@ public final class CmsEnvelopedDataBuilder {
     // Приватные методы
     // ========================================================================
 
-    private byte[] encryptContent(byte[] cek, byte[] iv) {
+    private byte[] encryptContent(byte[] cek, byte[] contentUkm) {
         SymmetricKey key = new SymmetricKey(cek);
         try {
-            return CtrAcpkmMode.encryptOnly(key, iv, data, AcpkmSectionSize.CMS);
+            return CtrAcpkmMode.encryptOnly(key, contentUkm, data, AcpkmSectionSize.CMS);
         } finally {
             key.destroy();
         }
@@ -247,7 +271,7 @@ public final class CmsEnvelopedDataBuilder {
 
         byte[] wrappedCek;
         try {
-            wrappedCek = keyWrap.wrap(cek, kek, ukmBytes, iv);
+            wrappedCek = KEY_WRAP.wrap(cek, kek, ukmBytes, iv);
         } finally {
             Arrays.fill(kek, (byte) 0);
             Arrays.fill(iv, (byte) 0);
@@ -314,7 +338,7 @@ public final class CmsEnvelopedDataBuilder {
 
         byte[] wrappedCek;
         try {
-            wrappedCek = keyWrap.wrap(cek, kek, ukmBytes, iv);
+            wrappedCek = KEY_WRAP.wrap(cek, kek, ukmBytes, iv);
         } finally {
             Arrays.fill(kek, (byte) 0);
             Arrays.fill(iv, (byte) 0);
@@ -338,7 +362,7 @@ public final class CmsEnvelopedDataBuilder {
         // SEQUENCE { agreement-OID } (ТК26/gost-engine: id-tc26-agreement-...). Именно такую
         // вложенность продуцируют и принимают эталонные реализации.
         byte[] keyWrapParam = DerCodec.encodeSequence(DerCodec.encodeOid(agreementOid));
-        byte[] keyEncryptAlg = CmsAlgorithmIdentifier.encode(keyWrap.algorithmOid(), keyWrapParam);
+        byte[] keyEncryptAlg = CmsAlgorithmIdentifier.encode(KEY_WRAP.algorithmOid(), keyWrapParam);
 
         // recipientEncryptedKeys: SEQUENCE OF RecipientEncryptedKey
         byte[] rid = buildRecipientIdentifier(entry.certificate);
@@ -390,11 +414,15 @@ public final class CmsEnvelopedDataBuilder {
         byte[] contentTypeOid = DerCodec.encodeOid(encryptedContentTypeOid);
 
         byte[] cipherParams = buildCipherParams(contentUkm);
-        byte[] cipherAlg = CmsAlgorithmIdentifier.encode(contentEncryptionOid, cipherParams);
+        byte[] cipherAlg = CmsAlgorithmIdentifier.encode(contentEncryptionOid(), cipherParams);
 
         byte[] encContent = DerCodec.encodeTlv(DerCodec.TAG_CTX_PRIMITIVE_0, encryptedContent);
 
         return DerCodec.encodeSequence(contentTypeOid, cipherAlg, encContent);
+    }
+
+    private String contentEncryptionOid() {
+        return useOmac ? GostOids.KUZ_CTR_ACPKM_OMAC : GostOids.KUZ_CTR_ACPKM;
     }
 
     private byte[] buildCipherParams(byte[] ukm) {

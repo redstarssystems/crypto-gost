@@ -3,6 +3,7 @@ package org.rssys.gost.util;
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 
 /**
@@ -17,6 +18,9 @@ public final class DerCodec {
     // ========================================================================
     // ASN.1 теги
     // ========================================================================
+
+    /** Размер тега в байтах: многобайтная форма тега не поддерживается. */
+    private static final int TAG_LENGTH = 1;
 
     public static final int TAG_BOOLEAN = 0x01;
     public static final int TAG_INTEGER = 0x02;
@@ -131,12 +135,27 @@ public final class DerCodec {
         return encodeTlv(TAG_OCTET_STRING, data);
     }
 
-    /** Кодирует OID (tag 0x06) из строки вида {@code "1.2.643.7.1.1.1.1"}. */
+    /**
+     * Кодирует OID (tag 0x06) из строки вида {@code "1.2.643.7.1.1.1.1"}.
+     *
+     * @throws IllegalArgumentException если дуг меньше двух, дуга отрицательна или не число,
+     *                                  первая дуга больше 2, либо вторая не меньше 40 при первой 0 или 1
+     *                                  (X.690 §8.19.4: иначе первый subidentifier неоднозначен)
+     */
     public static byte[] encodeOid(String oidStr) {
         String[] parts = oidStr.split("\\.");
+        if (parts.length < 2) {
+            throw new IllegalArgumentException("OID must have at least two arcs: " + oidStr);
+        }
         int[] arcs = new int[parts.length];
         for (int i = 0; i < parts.length; i++) {
             arcs[i] = Integer.parseInt(parts[i]);
+            if (arcs[i] < 0) {
+                throw new IllegalArgumentException("OID arc must not be negative: " + oidStr);
+            }
+        }
+        if (arcs[0] > 2 || (arcs[0] < 2 && arcs[1] >= OID_FIRST_ARC_SPAN)) {
+            throw new IllegalArgumentException("Invalid first OID arcs: " + oidStr);
         }
         return encodeTlv(TAG_OID, encodeOidBody(arcs));
     }
@@ -226,7 +245,6 @@ public final class DerCodec {
 
     /**
      * Склеивает несколько байтовых массивов в один (без добавления тегов).
-     * Аналог {@code concat} из OcspRequestBuilder.
      */
     public static byte[] concat(byte[]... parts) {
         int total = 0;
@@ -252,9 +270,9 @@ public final class DerCodec {
      *
      * @param data   данные
      * @param offset смещение первого байта тега
-     * @return {@code int[2]}: [значение_тега, количество_байт_под_тег]
+     * @return значение тега (занимает ровно один байт)
      */
-    public static int[] decodeTag(byte[] data, int offset) {
+    public static int decodeTag(byte[] data, int offset) {
         if (offset >= data.length) {
             throw new IllegalArgumentException(
                     "Tag offset " + offset + " out of bounds (data length " + data.length + ")");
@@ -266,7 +284,7 @@ public final class DerCodec {
                             + offset
                             + " is not supported. All tags in CMS/X.509 fit single-byte form (≤ 30).");
         }
-        return new int[] {tag, 1};
+        return tag;
     }
 
     // ========================================================================
@@ -381,6 +399,38 @@ public final class DerCodec {
         return lenInfo;
     }
 
+    /**
+     * Возвращает конец содержимого примитивного элемента, проверяя границы без переполнения.
+     * <p>
+     * Сумма {@code contentOff + len} при длине около {@code Integer.MAX_VALUE} переходит в
+     * отрицательное число и проходит проверку «не больше data.length»; сравнение остатка
+     * буфера с длиной такого переполнения лишено.
+     *
+     * @param data       исходный массив
+     * @param contentOff смещение начала содержимого
+     * @param len        заявленная длина содержимого (после {@link #decodeDefiniteLength})
+     * @param limit      верхняя граница (не включая), не больше {@code data.length}
+     * @param typeName   имя типа для диагностики
+     * @param offset     смещение тега элемента для диагностики
+     * @return смещение конца содержимого
+     * @throws IllegalArgumentException если содержимое выходит за границу
+     */
+    private static int contentEndWithin(
+            byte[] data, int contentOff, int len, int limit, String typeName, int offset) {
+        if (contentOff > limit || len < 0 || len > limit - contentOff) {
+            throw new IllegalArgumentException(
+                    typeName
+                            + " at offset "
+                            + offset
+                            + ": content length "
+                            + len
+                            + " out of bounds (data length "
+                            + data.length
+                            + ")");
+        }
+        return contentOff + len;
+    }
+
     // ========================================================================
     // Парсинг (возвращают копии содержимого)
     // ========================================================================
@@ -392,7 +442,16 @@ public final class DerCodec {
      * @param offset смещение тега SEQUENCE (0x30)
      */
     public static byte[][] parseSequenceContents(byte[] data, int offset) {
-        checkTag(data, offset, TAG_SEQUENCE, "SEQUENCE");
+        return parseConstructedContents(data, offset, TAG_SEQUENCE, "SEQUENCE");
+    }
+
+    /**
+     * Общий разбор SEQUENCE и SET: различаются только тег и название в сообщениях об ошибках,
+     * а правила длины, indefinite-length и границ дочерних элементов одни.
+     */
+    private static byte[][] parseConstructedContents(
+            byte[] data, int offset, int expectedTag, String name) {
+        checkTag(data, offset, expectedTag, name);
         int[] lenInfo = decodeLength(data, offset + 1);
         int contentOff = offset + 1 + lenInfo[1];
         int contentEnd;
@@ -403,7 +462,8 @@ public final class DerCodec {
             int remaining = data.length - contentOff;
             if (lenInfo[0] < 0 || lenInfo[0] > remaining) {
                 throw new IllegalArgumentException(
-                        "SEQUENCE at offset "
+                        name
+                                + " at offset "
                                 + offset
                                 + ": content length "
                                 + lenInfo[0]
@@ -416,7 +476,8 @@ public final class DerCodec {
 
         if (contentEnd > data.length) {
             throw new IllegalArgumentException(
-                    "SEQUENCE at offset "
+                    name
+                            + " at offset "
                             + offset
                             + ": content end "
                             + contentEnd
@@ -425,7 +486,7 @@ public final class DerCodec {
                             + ")");
         }
 
-        java.util.ArrayList<byte[]> elements = new java.util.ArrayList<>();
+        ArrayList<byte[]> elements = new ArrayList<>();
         int pos = contentOff;
         while (pos < contentEnd) {
             int[] childLen = decodeLength(data, pos + 1);
@@ -439,7 +500,8 @@ public final class DerCodec {
                 int childRemaining = contentEnd - pos - 1 - childLen[1];
                 if (childLen[0] < 0 || childLen[0] > childRemaining) {
                     throw new IllegalArgumentException(
-                            "SEQUENCE at offset "
+                            name
+                                    + " at offset "
                                     + offset
                                     + ": child content length "
                                     + childLen[0]
@@ -453,11 +515,14 @@ public final class DerCodec {
             }
             if (pos + childTotal > contentEnd) {
                 throw new IllegalArgumentException(
-                        "SEQUENCE at offset "
+                        name
+                                + " at offset "
                                 + offset
                                 + ": child at position "
                                 + pos
-                                + " exceeds SEQUENCE bounds (contentEnd "
+                                + " exceeds "
+                                + name
+                                + " bounds (contentEnd "
                                 + contentEnd
                                 + ")");
             }
@@ -467,14 +532,177 @@ public final class DerCodec {
         return elements.toArray(new byte[0][]);
     }
 
-    /** Разбирает BIT STRING и возвращает содержимое без ведущего байта. */
+    /**
+     * Строго разбирает SEQUENCE по DER и возвращает копии вложенных элементов.
+     * <p>
+     * В отличие от {@link #parseSequenceContents}: принимает только определённую длину
+     * (indefinite-length отвергается на всех уровнях, {@link #findEoc} не вызывается), требует,
+     * чтобы SEQUENCE занимала весь вход ({@code data} — точный TLV, без хвоста), и не допускает
+     * потомка с тегом {@code 0x00} (EOC) или многобайтным тегом. Метод самостоятельный, а не
+     * обёртка над {@code parseSequenceContents}: иначе indefinite-length легко протащить во
+     * вложенный элемент. Возвращает копии, поэтому вызов на элементе результата снова получает
+     * точный TLV-срез.
+     *
+     * @param data DER-кодирование SEQUENCE целиком
+     * @throws IllegalArgumentException при BER-форме, хвосте, выходе потомка за границу родителя
+     */
+    public static byte[][] parseStrictSequence(byte[] data) {
+        checkTag(data, 0, TAG_SEQUENCE, "SEQUENCE");
+        int[] lenInfo = decodeDefiniteLength(data, 1, "SEQUENCE");
+        int contentOff = 1 + lenInfo[1];
+        int contentEnd = contentEndWithin(data, contentOff, lenInfo[0], data.length, "SEQUENCE", 0);
+        if (contentEnd != data.length) {
+            throw new IllegalArgumentException(
+                    "SEQUENCE: "
+                            + (data.length - contentEnd)
+                            + " trailing byte(s) after the element (data length "
+                            + data.length
+                            + ")");
+        }
+
+        ArrayList<byte[]> elements = new ArrayList<>();
+        int pos = contentOff;
+        while (pos < contentEnd) {
+            if (data[pos] == 0x00) {
+                // 0x00 в позиции тега — маркер EOC, а не элемент: так выглядит BER indefinite
+                throw new IllegalArgumentException(
+                        "SEQUENCE: unexpected end-of-contents marker at position " + pos);
+            }
+            decodeTag(data, pos); // отвергает многобайтные теги
+            int[] childLen = decodeDefiniteLength(data, pos + 1, "SEQUENCE child");
+            int childContentOff = pos + 1 + childLen[1];
+            int childEnd =
+                    contentEndWithin(
+                            data, childContentOff, childLen[0], contentEnd, "SEQUENCE child", pos);
+            elements.add(Arrays.copyOfRange(data, pos, childEnd));
+            pos = childEnd;
+        }
+        return elements.toArray(new byte[0][]);
+    }
+
+    /**
+     * Приводит BER-кодирование SEQUENCE, допускающее indefinite-length, к DER с определённой длиной.
+     * <p>
+     * Предназначено для AlgorithmIdentifier и подобных структур из SEQUENCE и примитивов,
+     * которые КриптоПро в CMS иногда кодирует с indefinite-length. Определённая длина сама
+     * по себе не делает элемент DER, поэтому метод намеренно узкий: вход — ровно один элемент
+     * SEQUENCE без байт после него (после EOC тоже); вложенные SEQUENCE переписываются
+     * рекурсивно (глубина ограничена); примитивные элементы копируются без изменений и обязаны
+     * иметь определённую длину; любой иной constructed-тег (constructed OCTET STRING/BIT STRING,
+     * SET и т.п.) отвергается — для них нужны склейка или сортировка. Результат идемпотентен.
+     *
+     * @param element BER- или DER-кодирование SEQUENCE
+     * @return DER-кодирование того же значения
+     * @throws IllegalArgumentException при любом нарушении перечисленного
+     */
+    public static byte[] normalizeBerSequenceToDer(byte[] element) {
+        int[] elementEnd = new int[1];
+        byte[] normalized = normalizeSequence(element, 0, element.length, 0, elementEnd);
+        if (elementEnd[0] != element.length) {
+            throw new IllegalArgumentException(
+                    "SEQUENCE: "
+                            + (element.length - elementEnd[0])
+                            + " trailing byte(s) after the element (data length "
+                            + element.length
+                            + ")");
+        }
+        return normalized;
+    }
+
+    private static byte[] normalizeSequence(
+            byte[] data, int offset, int limit, int depth, int[] elementEnd) {
+        if (depth > MAX_BER_NORMALIZE_NESTING) {
+            throw new IllegalArgumentException(
+                    "SEQUENCE nesting exceeds "
+                            + MAX_BER_NORMALIZE_NESTING
+                            + " at offset "
+                            + offset);
+        }
+        if (offset < 0 || offset >= limit) {
+            throw new IllegalArgumentException(
+                    "Offset " + offset + " out of bounds (data length " + limit + ")");
+        }
+        checkTag(data, offset, TAG_SEQUENCE, "SEQUENCE");
+        int[] lenInfo = decodeLength(data, offset + 1);
+        int contentOff = offset + 1 + lenInfo[1];
+        int contentEnd;
+        if (lenInfo[0] == INDEFINITE_LENGTH) {
+            contentEnd = findEoc(data, contentOff, limit);
+            elementEnd[0] = contentEnd + EOC_LENGTH;
+        } else {
+            contentEnd = contentEndWithin(data, contentOff, lenInfo[0], limit, "SEQUENCE", offset);
+            elementEnd[0] = contentEnd;
+        }
+
+        ArrayList<byte[]> children = new ArrayList<>();
+        int pos = contentOff;
+        while (pos < contentEnd) {
+            int tag = decodeTag(data, pos);
+            if (tag == 0x00) {
+                throw new IllegalArgumentException(
+                        "SEQUENCE: unexpected end-of-contents marker at position " + pos);
+            }
+            if (tag == TAG_SEQUENCE) {
+                int[] childEnd = new int[1];
+                children.add(normalizeSequence(data, pos, contentEnd, depth + 1, childEnd));
+                pos = childEnd[0];
+            } else if ((tag & CONSTRUCTED_BIT) != 0) {
+                throw new IllegalArgumentException(
+                        "Unsupported constructed tag 0x"
+                                + Integer.toHexString(tag)
+                                + " at offset "
+                                + pos
+                                + ": only SEQUENCE and primitive elements can be normalized");
+            } else {
+                int[] childLen = decodeDefiniteLength(data, pos + 1, "primitive element");
+                int childContentOff = pos + 1 + childLen[1];
+                int childEnd =
+                        contentEndWithin(
+                                data,
+                                childContentOff,
+                                childLen[0],
+                                contentEnd,
+                                "primitive element",
+                                pos);
+                children.add(Arrays.copyOfRange(data, pos, childEnd));
+                pos = childEnd;
+            }
+        }
+        return encodeSequence(children.toArray(new byte[0][]));
+    }
+
+    /**
+     * Значение BIT STRING: число неиспользуемых бит последнего байта и сами данные.
+     *
+     * @param unusedBits число неиспользуемых бит последнего байта (0..7)
+     * @param data       содержимое без ведущего байта {@code unusedBits}
+     */
+    public record BitStringValue(int unusedBits, byte[] data) {}
+
+    /**
+     * Разбирает BIT STRING и возвращает содержимое без ведущего байта.
+     * <p>
+     * Число неиспользуемых бит проверяется так же, как в {@link #parseBitStringWithUnused}
+     * (не больше 7, неиспользуемые биты нулевые), но не возвращается: подходит для полей,
+     * где допустимы неиспользуемые биты (например, KeyUsage). Для ключей и подписей, где они
+     * недопустимы, используйте {@link #parseBitStringWithUnused}.
+     */
     public static byte[] parseBitString(byte[] data, int offset) {
+        return parseBitStringWithUnused(data, offset).data();
+    }
+
+    /**
+     * Разбирает BIT STRING по DER (X.690 §11.2) и возвращает число неиспользуемых бит вместе с данными.
+     * <p>
+     * Отвергает: пустое содержимое (без байта {@code unusedBits}); {@code unusedBits > 7};
+     * ненулевые неиспользуемые биты последнего байта; {@code unusedBits != 0} при отсутствии данных.
+     * Единственное место проверки, чтобы путь SPKI не получил невалидированный {@code unusedBits}.
+     */
+    public static BitStringValue parseBitStringWithUnused(byte[] data, int offset) {
         checkTag(data, offset, TAG_BIT_STRING, "BIT STRING");
         int[] lenInfo = decodeDefiniteLength(data, offset + 1, "BIT STRING");
         int contentOff = offset + 1 + lenInfo[1];
-        if (lenInfo[0] < 1
-                || lenInfo[0] > MAX_BIT_STRING_LENGTH
-                || contentOff + lenInfo[0] > data.length) {
+        if (lenInfo[0] < 1 || lenInfo[0] > MAX_BIT_STRING_LENGTH) {
             throw new IllegalArgumentException(
                     "BIT STRING at offset "
                             + offset
@@ -484,7 +712,28 @@ public final class DerCodec {
                             + data.length
                             + ")");
         }
-        return Arrays.copyOfRange(data, contentOff + 1, contentOff + lenInfo[0]);
+        int contentEnd =
+                contentEndWithin(data, contentOff, lenInfo[0], data.length, "BIT STRING", offset);
+        int unusedBits = data[contentOff] & 0xFF;
+        if (unusedBits > 7) {
+            throw new IllegalArgumentException(
+                    "BIT STRING at offset "
+                            + offset
+                            + ": unused bits count "
+                            + unusedBits
+                            + " > 7");
+        }
+        if (unusedBits != 0) {
+            // Без данных неиспользуемых бит быть не может; иначе младшие биты последнего байта
+            // обязаны быть нулевыми, иначе одно значение имеет разные кодировки (X.690 §11.2.1)
+            if (lenInfo[0] == 1 || (data[contentEnd - 1] & ((1 << unusedBits) - 1)) != 0) {
+                throw new IllegalArgumentException(
+                        "BIT STRING at offset "
+                                + offset
+                                + ": non-zero unused bits (DER requires zero padding)");
+            }
+        }
+        return new BitStringValue(unusedBits, Arrays.copyOfRange(data, contentOff + 1, contentEnd));
     }
 
     /** Разбирает OCTET STRING и возвращает содержимое. */
@@ -492,21 +741,22 @@ public final class DerCodec {
         checkTag(data, offset, TAG_OCTET_STRING, "OCTET STRING");
         int[] lenInfo = decodeDefiniteLength(data, offset + 1, "OCTET STRING");
         int contentOff = offset + 1 + lenInfo[1];
-        if (contentOff + lenInfo[0] > data.length) {
-            throw new IllegalArgumentException(
-                    "OCTET STRING at offset "
-                            + offset
-                            + ": content length "
-                            + lenInfo[0]
-                            + " out of bounds (data length "
-                            + data.length
-                            + ")");
-        }
-        return Arrays.copyOfRange(data, contentOff, contentOff + lenInfo[0]);
+        int contentEnd =
+                contentEndWithin(data, contentOff, lenInfo[0], data.length, "OCTET STRING", offset);
+        return Arrays.copyOfRange(data, contentOff, contentEnd);
     }
 
     /** Предел вложенности constructed OCTET STRING — защита от переполнения стека на злонамеренном BER. */
     private static final int MAX_OCTET_STRING_NESTING = 32;
+
+    /** Предел вложенности SEQUENCE при нормализации BER в DER; AlgorithmIdentifier вкладывается на 2–3 уровня. */
+    private static final int MAX_BER_NORMALIZE_NESTING = 16;
+
+    /** Длина маркера конца BER indefinite-length (0x00 0x00). */
+    private static final int EOC_LENGTH = 2;
+
+    /** Бит constructed в октете тега (X.690 §8.1.2.5). */
+    private static final int CONSTRUCTED_BIT = 0x20;
 
     /**
      * Собирает содержимое OCTET STRING, допуская BER-кодирования, которые
@@ -526,12 +776,22 @@ public final class DerCodec {
      */
     public static byte[] collectImplicitOctets(byte[] data, int offset) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        collectImplicitOctets(data, offset, out, 0);
+        collectImplicitOctets(data, offset, data.length, out, 0);
         return out.toByteArray();
     }
 
-    private static void collectImplicitOctets(
-            byte[] data, int offset, ByteArrayOutputStream out, int depth) {
+    /**
+     * Рекурсивно собирает содержимое сегмента OCTET STRING.
+     * <p>
+     * Каждый элемент обязан целиком лежать внутри {@code limit} (конец содержимого родителя):
+     * без этого потомок с заявленной длиной за границей родителя читал бы байты соседних полей,
+     * а переполнение сумм давало пустой результат вместо ошибки. BER indefinite-length
+     * допустим только у constructed-сегментов.
+     *
+     * @return смещение первого байта после разобранного элемента (с учётом EOC)
+     */
+    private static int collectImplicitOctets(
+            byte[] data, int offset, int limit, ByteArrayOutputStream out, int depth) {
         if (depth > MAX_OCTET_STRING_NESTING) {
             throw new IllegalArgumentException(
                     "OCTET STRING nesting exceeds "
@@ -539,9 +799,9 @@ public final class DerCodec {
                             + " at offset "
                             + offset);
         }
-        if (offset < 0 || offset >= data.length) {
+        if (offset < 0 || offset >= limit) {
             throw new IllegalArgumentException(
-                    "Offset " + offset + " out of bounds (data length " + data.length + ")");
+                    "Offset " + offset + " out of bounds (data length " + limit + ")");
         }
         int tag = data[offset] & 0xFF;
 
@@ -549,53 +809,37 @@ public final class DerCodec {
             // primitive: indefinite-length по X.690 недопустима -> decodeDefiniteLength отвергнет
             int[] lenInfo = decodeDefiniteLength(data, offset + 1, "OCTET STRING");
             int contentOff = offset + 1 + lenInfo[1];
-            if (contentOff + lenInfo[0] > data.length) {
-                throw new IllegalArgumentException(
-                        "OCTET STRING at offset "
-                                + offset
-                                + ": content length "
-                                + lenInfo[0]
-                                + " out of bounds (data length "
-                                + data.length
-                                + ")");
-            }
+            int contentEnd =
+                    contentEndWithin(data, contentOff, lenInfo[0], limit, "OCTET STRING", offset);
             out.write(data, contentOff, lenInfo[0]);
-            return;
+            return contentEnd;
         }
 
         if (tag == TAG_OCTET_STRING_CONSTRUCTED || tag == TAG_CTX_CONSTRUCTED_0) {
             int[] lenInfo = decodeLength(data, offset + 1);
             int contentOff = offset + 1 + lenInfo[1];
             int contentEnd;
+            int elementEnd;
             if (lenInfo[0] == INDEFINITE_LENGTH) {
-                contentEnd = findEoc(data, contentOff);
+                contentEnd = findEoc(data, contentOff, limit);
+                elementEnd = contentEnd + EOC_LENGTH;
             } else {
-                contentEnd = contentOff + lenInfo[0];
-                if (contentEnd > data.length) {
-                    throw new IllegalArgumentException(
-                            "Constructed OCTET STRING at offset "
-                                    + offset
-                                    + ": content length "
-                                    + lenInfo[0]
-                                    + " out of bounds (data length "
-                                    + data.length
-                                    + ")");
-                }
+                contentEnd =
+                        contentEndWithin(
+                                data,
+                                contentOff,
+                                lenInfo[0],
+                                limit,
+                                "Constructed OCTET STRING",
+                                offset);
+                elementEnd = contentEnd;
             }
             int pos = contentOff;
             while (pos < contentEnd) {
-                int[] childLen = decodeLength(data, pos + 1);
-                int childTotal;
-                if (childLen[0] == INDEFINITE_LENGTH) {
-                    int childEoc = findEoc(data, pos + 1 + childLen[1]);
-                    childTotal = childEoc + 2 - pos; // включая пару байт EOC
-                } else {
-                    childTotal = 1 + childLen[1] + childLen[0];
-                }
-                collectImplicitOctets(data, pos, out, depth + 1);
-                pos += childTotal;
+                // Потомок ограничен contentEnd: рекурсия возвращает конец не дальше него
+                pos = collectImplicitOctets(data, pos, contentEnd, out, depth + 1);
             }
-            return;
+            return elementEnd;
         }
 
         throw new IllegalArgumentException(
@@ -606,42 +850,81 @@ public final class DerCodec {
                         + ": expected OCTET STRING (0x04/0x24) or constructed context [0] (0xA0)");
     }
 
-    /** Разбирает OID и возвращает строку вида {@code "1.2.643.7.1.1.1.1"}. */
+    /**
+     * Разбирает OID по DER (X.690 §8.19) и возвращает строку вида {@code "1.2.643.7.1.1.1.1"}.
+     * <p>
+     * Отвергает: пустое содержимое; обрезанную последнюю дугу (бит продолжения в последнем байте);
+     * неминимальную дугу (ведущий {@code 0x80}); дугу, не помещающуюся в 63 бита. Первый subidentifier
+     * (X.690 §8.19.4) может занимать несколько байт и раскладывается на первые две дуги:
+     * значение &lt; 40 -> {@code 0.x}, &lt; 80 -> {@code 1.(x-40)}, иначе {@code 2.(x-80)}.
+     */
     public static String parseOid(byte[] data, int offset) {
         checkTag(data, offset, TAG_OID, "OID");
         int[] lenInfo = decodeDefiniteLength(data, offset + 1, "OID");
         int contentOff = offset + 1 + lenInfo[1];
-        int contentEnd = contentOff + lenInfo[0];
-
-        if (contentOff >= data.length) {
-            throw new IllegalArgumentException(
-                    "OID at offset "
-                            + offset
-                            + ": content offset "
-                            + contentOff
-                            + " out of bounds (data length "
-                            + data.length
-                            + ")");
+        int contentEnd = contentEndWithin(data, contentOff, lenInfo[0], data.length, "OID", offset);
+        if (lenInfo[0] == 0) {
+            throw new IllegalArgumentException("OID at offset " + offset + ": empty content");
         }
-        StringBuilder sb = new StringBuilder();
-        int first = data[contentOff] & 0xFF;
-        sb.append(first / 40).append('.').append(first % 40);
 
+        StringBuilder sb = new StringBuilder();
+        boolean firstSubidentifier = true;
+        boolean arcStarted = false;
         long value = 0;
-        for (int i = contentOff + 1; i < contentEnd; i++) {
+        for (int i = contentOff; i < contentEnd; i++) {
             int b = data[i] & 0xFF;
-            // Защита от переполнения: биты 57–63 long заняты — value << 7 переполнит
-            if ((value & 0xFE00_0000_0000_0000L) != 0) {
+            if (!arcStarted && b == 0x80) {
+                // Ведущий 0x80 — нулевые старшие разряды: одно значение имело бы несколько
+                // кодировок
+                throw new IllegalArgumentException(
+                        "Non-minimal OID arc encoding at position "
+                                + i
+                                + " in OID at offset "
+                                + offset);
+            }
+            arcStarted = true;
+            // Защита от переполнения: после сдвига value должно остаться < 2^63
+            if ((value >>> OID_ARC_OVERFLOW_SHIFT) != 0) {
                 throw new IllegalArgumentException(
                         "OID arc value overflow at position " + i + " in OID at offset " + offset);
             }
             value = (value << 7) | (b & 0x7F);
             if ((b & 0x80) == 0) {
-                sb.append('.').append(value);
+                if (firstSubidentifier) {
+                    appendFirstTwoArcs(sb, value);
+                    firstSubidentifier = false;
+                } else {
+                    sb.append('.').append(value);
+                }
                 value = 0;
+                arcStarted = false;
             }
         }
+        if (arcStarted) {
+            throw new IllegalArgumentException(
+                    "Truncated OID arc (continuation bit set in last byte) in OID at offset "
+                            + offset);
+        }
         return sb.toString();
+    }
+
+    /** Сдвиг для проверки переполнения дуги: {@code value >>> 56 != 0} означает, что {@code value << 7} выйдет за 2^63. */
+    private static final int OID_ARC_OVERFLOW_SHIFT = 56;
+
+    /** Первая дуга 0 или 1 покрывает по 40 значений первого subidentifier. */
+    private static final int OID_FIRST_ARC_SPAN = 40;
+
+    /** Значения первого subidentifier от 80 принадлежат дуге 2 (joint-iso-itu-t). */
+    private static final int OID_FIRST_ARC_JOINT = 80;
+
+    private static void appendFirstTwoArcs(StringBuilder sb, long firstSubidentifier) {
+        if (firstSubidentifier < OID_FIRST_ARC_SPAN) {
+            sb.append("0.").append(firstSubidentifier);
+        } else if (firstSubidentifier < OID_FIRST_ARC_JOINT) {
+            sb.append("1.").append(firstSubidentifier - OID_FIRST_ARC_SPAN);
+        } else {
+            sb.append("2.").append(firstSubidentifier - OID_FIRST_ARC_JOINT);
+        }
     }
 
     /** Разбирает INTEGER и возвращает BigInteger. */
@@ -649,35 +932,46 @@ public final class DerCodec {
         checkTag(data, offset, TAG_INTEGER, "INTEGER");
         int[] lenInfo = decodeDefiniteLength(data, offset + 1, "INTEGER");
         int contentOff = offset + 1 + lenInfo[1];
-        if (lenInfo[0] > MAX_INTEGER_LENGTH || contentOff + lenInfo[0] > data.length) {
+        if (lenInfo[0] > MAX_INTEGER_LENGTH) {
             throw new IllegalArgumentException(
                     "INTEGER at offset "
                             + offset
                             + ": content length "
                             + lenInfo[0]
-                            + " out of bounds (data length "
-                            + data.length
-                            + ")");
+                            + " exceeds "
+                            + MAX_INTEGER_LENGTH);
         }
-        return new BigInteger(Arrays.copyOfRange(data, contentOff, contentOff + lenInfo[0]));
+        int contentEnd =
+                contentEndWithin(data, contentOff, lenInfo[0], data.length, "INTEGER", offset);
+        return new BigInteger(Arrays.copyOfRange(data, contentOff, contentEnd));
     }
 
-    /** Разбирает BOOLEAN (tag 0x01). DER: 0x00 = FALSE, иначе TRUE. */
+    /**
+     * Разбирает BOOLEAN (tag 0x01) строго по DER (X.690 §11.1): ровно один октет,
+     * {@code 0x00} = FALSE, {@code 0xFF} = TRUE. Любое другое значение и длина отвергаются:
+     * BER-вариант «любой ненулевой октет = TRUE» не принимается.
+     */
     public static boolean parseBoolean(byte[] data, int offset) {
         checkTag(data, offset, TAG_BOOLEAN, "BOOLEAN");
         int[] lenInfo = decodeDefiniteLength(data, offset + 1, "BOOLEAN");
         int contentOff = offset + 1 + lenInfo[1];
-        if (contentOff >= data.length) {
+        contentEndWithin(data, contentOff, lenInfo[0], data.length, "BOOLEAN", offset);
+        if (lenInfo[0] != 1) {
             throw new IllegalArgumentException(
-                    "BOOLEAN at offset "
-                            + offset
-                            + ": content offset "
-                            + contentOff
-                            + " out of bounds (data length "
-                            + data.length
-                            + ")");
+                    "BOOLEAN at offset " + offset + ": length must be 1, got " + lenInfo[0]);
         }
-        return data[contentOff] != 0x00;
+        int value = data[contentOff] & 0xFF;
+        if (value == 0x00) {
+            return false;
+        }
+        if (value == 0xFF) {
+            return true;
+        }
+        throw new IllegalArgumentException(
+                "BOOLEAN at offset "
+                        + offset
+                        + ": DER value must be 0x00 or 0xFF, got 0x"
+                        + Integer.toHexString(value));
     }
 
     /** Разбирает GeneralizedTime (tag 0x18) и возвращает строку YYYYMMDDHHmmssZ. */
@@ -685,18 +979,7 @@ public final class DerCodec {
         checkTag(data, offset, TAG_GENERALIZED_TIME, "GeneralizedTime");
         int[] lenInfo = decodeDefiniteLength(data, offset + 1, "GeneralizedTime");
         int contentOff = offset + 1 + lenInfo[1];
-        if (contentOff + lenInfo[0] > data.length) {
-            throw new IllegalArgumentException(
-                    "GeneralizedTime at offset "
-                            + offset
-                            + ": content range ["
-                            + contentOff
-                            + ", "
-                            + (contentOff + lenInfo[0])
-                            + ") out of bounds (data length "
-                            + data.length
-                            + ")");
-        }
+        contentEndWithin(data, contentOff, lenInfo[0], data.length, "GeneralizedTime", offset);
         return new String(data, contentOff, lenInfo[0], StandardCharsets.US_ASCII);
     }
 
@@ -705,18 +988,7 @@ public final class DerCodec {
         checkTag(data, offset, TAG_UTF8_STRING, "UTF8String");
         int[] lenInfo = decodeDefiniteLength(data, offset + 1, "UTF8String");
         int contentOff = offset + 1 + lenInfo[1];
-        if (contentOff + lenInfo[0] > data.length) {
-            throw new IllegalArgumentException(
-                    "UTF8String at offset "
-                            + offset
-                            + ": content range ["
-                            + contentOff
-                            + ", "
-                            + (contentOff + lenInfo[0])
-                            + ") out of bounds (data length "
-                            + data.length
-                            + ")");
-        }
+        contentEndWithin(data, contentOff, lenInfo[0], data.length, "UTF8String", offset);
         return new String(data, contentOff, lenInfo[0], StandardCharsets.UTF_8);
     }
 
@@ -725,76 +997,7 @@ public final class DerCodec {
      * Поддерживает BER indefinite-length.
      */
     public static byte[][] parseSetContents(byte[] data, int offset) {
-        checkTag(data, offset, TAG_SET, "SET");
-        int[] lenInfo = decodeLength(data, offset + 1);
-        int contentOff = offset + 1 + lenInfo[1];
-        int contentEnd;
-        if (lenInfo[0] == INDEFINITE_LENGTH) {
-            contentEnd = findEoc(data, contentOff);
-        } else {
-            int remaining = data.length - contentOff;
-            if (lenInfo[0] < 0 || lenInfo[0] > remaining) {
-                throw new IllegalArgumentException(
-                        "SET at offset "
-                                + offset
-                                + ": content length "
-                                + lenInfo[0]
-                                + " exceeds remaining data ("
-                                + remaining
-                                + " bytes)");
-            }
-            contentEnd = contentOff + lenInfo[0];
-        }
-
-        if (contentEnd > data.length) {
-            throw new IllegalArgumentException(
-                    "SET at offset "
-                            + offset
-                            + ": content end "
-                            + contentEnd
-                            + " out of bounds (data length "
-                            + data.length
-                            + ")");
-        }
-
-        java.util.ArrayList<byte[]> elements = new java.util.ArrayList<>();
-        int pos = contentOff;
-        while (pos < contentEnd) {
-            int[] childLen = decodeLength(data, pos + 1);
-            int childTotal;
-            if (childLen[0] == INDEFINITE_LENGTH) {
-                int eoc = findEoc(data, pos + 1 + childLen[1]);
-                childTotal = eoc + 2 - pos;
-            } else {
-                int childRemaining = contentEnd - pos - 1 - childLen[1];
-                if (childLen[0] < 0 || childLen[0] > childRemaining) {
-                    throw new IllegalArgumentException(
-                            "SET at offset "
-                                    + offset
-                                    + ": child content length "
-                                    + childLen[0]
-                                    + " exceeds remaining data ("
-                                    + childRemaining
-                                    + " bytes)"
-                                    + " at position "
-                                    + pos);
-                }
-                childTotal = 1 + childLen[1] + childLen[0];
-            }
-            if (pos + childTotal > contentEnd) {
-                throw new IllegalArgumentException(
-                        "SET at offset "
-                                + offset
-                                + ": child at position "
-                                + pos
-                                + " exceeds SET bounds (contentEnd "
-                                + contentEnd
-                                + ")");
-            }
-            elements.add(Arrays.copyOfRange(data, pos, pos + childTotal));
-            pos += childTotal;
-        }
-        return elements.toArray(new byte[0][]);
+        return parseConstructedContents(data, offset, TAG_SET, "SET");
     }
 
     // ========================================================================
@@ -817,23 +1020,29 @@ public final class DerCodec {
     /** Кодирует тело OID (без тега и длины) из массива компонентов. */
     private static byte[] encodeOidBody(int[] arcs) {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
-        buf.write(40 * arcs[0] + arcs[1]);
+        // Первый subidentifier 40*a0 + a1 при a0 = 2 может не поместиться в байт (2.999 -> 1079)
+        // и кодируется тем же base-128, что остальные дуги; считаем в long, чтобы не переполнить
+        // int
+        writeBase128(buf, (long) OID_FIRST_ARC_SPAN * arcs[0] + arcs[1]);
         for (int i = 2; i < arcs.length; i++) {
-            long val = Integer.toUnsignedLong(arcs[i]);
-            int bits = 64 - Long.numberOfLeadingZeros(val);
-            int groups = Math.max(1, (bits + 6) / 7);
-            for (int g = groups - 1; g >= 0; g--) {
-                int shift = g * 7;
-                int b = (int) ((val >>> shift) & 0x7F);
-                if (g > 0) b |= 0x80;
-                buf.write(b);
-            }
+            writeBase128(buf, arcs[i]);
         }
         return buf.toByteArray();
     }
 
+    /** Записывает неотрицательное значение в base-128: старшие группы с битом продолжения. */
+    private static void writeBase128(ByteArrayOutputStream buf, long val) {
+        int bits = 64 - Long.numberOfLeadingZeros(val);
+        int groups = Math.max(1, (bits + 6) / 7);
+        for (int g = groups - 1; g >= 0; g--) {
+            int b = (int) ((val >>> (g * 7)) & 0x7F);
+            if (g > 0) b |= 0x80;
+            buf.write(b);
+        }
+    }
+
     /** Лексикографическое сравнение двух DER-кодированных элементов для сортировки SET OF. */
-    public static int compareDer(byte[] a, byte[] b) {
+    private static int compareDer(byte[] a, byte[] b) {
         int minLen = Math.min(a.length, b.length);
         for (int i = 0; i < minLen; i++) {
             int cmp = (a[i] & 0xFF) - (b[i] & 0xFF);
@@ -857,9 +1066,26 @@ public final class DerCodec {
      * @param start начало содержимого (после тега и байта длины 0x80)
      */
     public static int findEoc(byte[] data, int start) {
+        return findEoc(data, start, data.length);
+    }
+
+    /**
+     * То же, что {@link #findEoc(byte[], int)}, но поиск ограничен {@code end} (не включая):
+     * indefinite-потомок не может «убежать» за границу содержимого родителя и занять байты
+     * соседних полей.
+     *
+     * @param data  данные
+     * @param start начало содержимого (после тега и байта длины 0x80)
+     * @param end   верхняя граница поиска (не больше {@code data.length})
+     */
+    public static int findEoc(byte[] data, int start, int end) {
+        if (start < 0 || end > data.length || start > end) {
+            throw new IllegalArgumentException(
+                    "EOC search range [" + start + ", " + end + ") out of bounds");
+        }
         int depth = 1; // текущий indefinite-элемент
         int i = start;
-        while (i < data.length - 1) {
+        while (i < end - 1) {
             // 1. EOC-проверка — строго до decodeTag, иначе 0x00 тихо распознался бы как тег 0
             if (data[i] == 0x00 && data[i + 1] == 0x00) {
                 depth--;
@@ -870,12 +1096,10 @@ public final class DerCodec {
                 continue;
             }
             // 2. Декодируем тег (однобайтовый)
-            int[] tagInfo = decodeTag(data, i);
-            int tag = tagInfo[0];
-            int tagBytes = tagInfo[1];
+            int tag = decodeTag(data, i);
 
             // 3. Декодируем длину
-            int[] lenInfo = decodeLength(data, i + tagBytes);
+            int[] lenInfo = decodeLength(data, i + TAG_LENGTH);
             int lenValue = lenInfo[0];
             int lenBytes = lenInfo[1];
 
@@ -884,10 +1108,10 @@ public final class DerCodec {
                 if ((tag & 0x20) != 0 || (tag >= 0xA0 && tag <= 0xBF)) {
                     depth++;
                 }
-                i += tagBytes + lenBytes;
+                i += TAG_LENGTH + lenBytes;
             } else {
                 // 5. definite-length: пропускаем элемент целиком (тег + длина + контент)
-                int remaining = data.length - i - tagBytes - lenBytes;
+                int remaining = end - i - TAG_LENGTH - lenBytes;
                 if (lenValue < 0 || lenValue > remaining) {
                     throw new IllegalArgumentException(
                             "Length "
@@ -895,9 +1119,9 @@ public final class DerCodec {
                                     + " exceeds remaining data ("
                                     + remaining
                                     + " bytes) at offset "
-                                    + (i + tagBytes));
+                                    + (i + TAG_LENGTH));
                 }
-                i += tagBytes + lenBytes + lenValue;
+                i += TAG_LENGTH + lenBytes + lenValue;
             }
         }
         throw new IllegalArgumentException("EOC marker (0x00 0x00) not found");

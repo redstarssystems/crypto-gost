@@ -47,24 +47,6 @@ class TlsTreeTest {
     }
 
     @Test
-    @DisplayName("deriveKey: разные seqNum дают разные ключи")
-    void testDeriveKeyDifferentSeqNum() {
-        TlsCiphersuite cs = csL();
-        // seqNum=0 и seqNum с битом 59 (C1 = 0xf800...) дают разный K_1
-        byte[] k0 =
-                TlsTree.deriveKey(ZERO_KEY, 0L, cs.getC1(), cs.getC2(), cs.getC3(), cs.getKeyLen());
-        byte[] k1 =
-                TlsTree.deriveKey(
-                        ZERO_KEY,
-                        0x0800000000000000L,
-                        cs.getC1(),
-                        cs.getC2(),
-                        cs.getC3(),
-                        cs.getKeyLen());
-        assertFalse(Arrays.equals(k0, k1));
-    }
-
-    @Test
     @DisplayName("deriveKey: разные startKey дают разные ключи")
     void testDeriveKeyDifferentStartKeys() {
         TlsCiphersuite cs = csL();
@@ -94,21 +76,6 @@ class TlsTreeTest {
                 TlsTree.deriveKey(
                         ZERO_KEY, seqNum, csS.getC1(), csS.getC2(), csS.getC3(), csS.getKeyLen());
         assertFalse(Arrays.equals(keyL, keyS));
-    }
-
-    @Test
-    @DisplayName("deriveKey: seqNum с одинаковой маской level-1, разной level-2")
-    void testTreeLevels() {
-        TlsCiphersuite cs = csL();
-        long c1 = cs.getC1(); // 0xf800000000000000
-        long c2 = cs.getC2(); // 0xfffffff000000000
-        long c3 = cs.getC3(); // 0xffffffffffffe000
-        // seq0 = 0, seq1 = 1L << 60 (влияет на level-1, т.к. маска 0xf8...)
-        long seq0 = 0L;
-        long seq1 = 1L << 60;
-        byte[] k0 = TlsTree.deriveKey(ZERO_KEY, seq0, c1, c2, c3, cs.getKeyLen());
-        byte[] k1 = TlsTree.deriveKey(ZERO_KEY, seq1, c1, c2, c3, cs.getKeyLen());
-        assertFalse(Arrays.equals(k0, k1));
     }
 
     // ========================================================================

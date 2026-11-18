@@ -1,5 +1,6 @@
 package org.rssys.gost.jsse.engine;
 
+import java.security.KeyManagementException;
 import java.security.SecureRandom;
 import javax.net.ssl.KeyManager;
 import javax.net.ssl.SSLContextSpi;
@@ -14,8 +15,6 @@ import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.jsse.socket.GostSSLServerSocketFactory;
 import org.rssys.gost.jsse.socket.GostSSLSocketFactory;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.tls13.TlsCiphersuite;
 
 /**
@@ -26,8 +25,6 @@ import org.rssys.gost.tls13.TlsCiphersuite;
  */
 public final class GostSSLContextSpi extends SSLContextSpi {
 
-    private static GostLogger LOG = GostLogger.getLogger("org.rssys.gost.jsse.GostSSLContextSpi");
-
     private GostX509KeyManager keyManager;
     private GostX509TrustManager trustManager;
     private boolean initialized;
@@ -35,15 +32,27 @@ public final class GostSSLContextSpi extends SSLContextSpi {
     private GostSSLSessionContext serverSessionContext;
 
     @Override
-    protected void engineInit(KeyManager[] km, TrustManager[] tm, SecureRandom sr) {
+    protected void engineInit(KeyManager[] km, TrustManager[] tm, SecureRandom sr)
+            throws KeyManagementException {
         this.keyManager = null;
         this.trustManager = null;
 
+        // Пустой менеджер (km == null или пустой массив) - клиент без mTLS: подмена пустым
+        // менеджером нужна, чтобы фабрики сокетов и конструкторы движка не получали null.
+        // Сторонний менеджер молча подменять нельзя: сервер с ним упал бы на рукопожатии
+        // без внятной причины, как и выбор «первого из двух» потерял бы ключи остальных
         if (km != null) {
             for (KeyManager k : km) {
-                if (k instanceof GostX509KeyManager) {
+                if (!(k instanceof GostX509KeyManager)) {
+                    throw new KeyManagementException(
+                            "Only GostX509KeyManager is supported; got "
+                                    + (k == null ? "null" : k.getClass().getName()));
+                }
+                if (this.keyManager == null) {
                     this.keyManager = (GostX509KeyManager) k;
-                    break;
+                } else if (this.keyManager != k) {
+                    throw new KeyManagementException(
+                            "Only one GostX509KeyManager instance is supported");
                 }
             }
         }
@@ -53,24 +62,27 @@ public final class GostSSLContextSpi extends SSLContextSpi {
 
         if (tm != null) {
             for (TrustManager t : tm) {
-                if (t instanceof GostX509TrustManager) {
+                if (!(t instanceof GostX509TrustManager)) {
+                    throw new KeyManagementException(
+                            "Only GostX509TrustManager is supported; got "
+                                    + (t == null ? "null" : t.getClass().getName()));
+                }
+                if (this.trustManager == null) {
                     this.trustManager = (GostX509TrustManager) t;
-                    break;
+                } else if (this.trustManager != t) {
+                    // Молчаливый выбор первого менеджера потерял бы якоря остальных;
+                    // объединение «любой из» требует составного менеджера, его здесь нет.
+                    throw new KeyManagementException(
+                            "Only one GostX509TrustManager instance is supported");
                 }
             }
         }
-        if (this.trustManager == null) {
-            LOG.log(
-                    Level.WARNING,
-                    "GostX509TrustManager created without CA key - certificate chain validation disabled. "
-                            + "For production use, pass caPublicKey to GostX509TrustManager.");
-            this.trustManager = new GostX509TrustManager(null, false);
-        }
 
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        this.clientSessionContext = new GostSSLSessionContext(cs, cs.getHashLen());
-        this.clientSessionContext.setSessionCacheSize(20_480);
-        this.serverSessionContext = new GostSSLSessionContext(cs, cs.getHashLen());
+        // Оба контекста получают предел кэша по умолчанию (GostSSLSessionContext): PSK-тикеты
+        // возобновления лежат в отдельном хранилище контекста со своим пределом
+        this.clientSessionContext = new GostSSLSessionContext(cs);
+        this.serverSessionContext = new GostSSLSessionContext(cs);
 
         this.initialized = true;
     }
@@ -82,8 +94,10 @@ public final class GostSSLContextSpi extends SSLContextSpi {
     @Override
     protected SSLEngine engineCreateSSLEngine() {
         checkInitialized();
-        return new GostSSLEngine(
-                keyManager, trustManager, "", -1, true, clientSessionContext, serverSessionContext);
+        // Через общую фабрику, чтобы умолчания режима проверки имени не расходились с путём
+        // createSSLEngine(host, port); без узла HTTPS включается только в строгом режиме
+        return GostSSLEngine.createForContextClient(
+                keyManager, trustManager, "", -1, clientSessionContext, serverSessionContext);
     }
 
     @Override
@@ -107,18 +121,11 @@ public final class GostSSLContextSpi extends SSLContextSpi {
         return new GostSSLServerSocketFactory(keyManager, trustManager, serverSessionContext);
     }
 
-    // Создаёт серверный GostSSLEngine с serverSessionContext.
-    // Используется GostSSLServerSocket и будет полезен для Netty-адаптера в фазе 5.
-    GostSSLEngine createServerEngine(String host, int port) {
-        return GostSSLEngine.createForServer(
-                keyManager, trustManager, host, port, serverSessionContext);
-    }
-
     @Override
     protected SSLParameters engineGetDefaultSSLParameters() {
         SSLParameters params = new SSLParameters();
-        params.setCipherSuites(GostJsseConstants.SUPPORTED_CIPHER_SUITES);
-        params.setProtocols(GostJsseConstants.SUPPORTED_PROTOCOLS);
+        params.setCipherSuites(GostJsseConstants.supportedCipherSuites());
+        params.setProtocols(GostJsseConstants.supportedProtocols());
         return params;
     }
 

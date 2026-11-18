@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostPkcs12Loader;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
@@ -118,12 +119,12 @@ public final class TlsHttpProxy {
             try (FileInputStream fis = new FileInputStream(caPath)) {
                 GostPkcs12Loader.Result caP12 =
                         GostPkcs12Loader.load(fis.readAllBytes(), caPassword.toCharArray(), true);
-                config.withCaPublicKey(
+                GostCertificate caCert =
                         caP12.getCertificateChain().stream()
                                 .filter(GostCertificate::isCA)
                                 .findFirst()
-                                .orElseThrow()
-                                .getPublicKey());
+                                .orElseThrow();
+                config.needClientAuth(TrustAnchors.ofCertificate(caCert));
             }
         }
 

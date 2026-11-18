@@ -1,5 +1,6 @@
 package org.rssys.gost.tls13.crypto;
 
+import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
 
 /**
@@ -76,7 +77,7 @@ public final class TlsTreeCache {
             k3 = TlsTree.expandLevel(k2, TlsTree.LABEL_LEVEL3, c3, seqNum, be64Buf);
             m3 = nm3;
         }
-        System.arraycopy(k3, 0, dest, off, 32);
+        System.arraycopy(k3, 0, dest, off, TlsConstants.KUZNYECHIK_KEY_SIZE);
         return ch3;
     }
 

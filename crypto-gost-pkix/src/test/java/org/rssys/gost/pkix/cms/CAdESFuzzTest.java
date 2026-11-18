@@ -7,6 +7,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 import org.rssys.gost.signature.ECParameters;
 
 /**
@@ -16,7 +18,7 @@ import org.rssys.gost.signature.ECParameters;
  * с инъекцией unsignedAttrs: decodeLength → contentOff = 1 + lenInfo[1] →
  * copyOfRange. При некорректной длине в DER contentOff выходит за границу.
  *
- * <p>{@code CAdESExtender.verify()} — полный пайплайн верификации CAdES-T:
+ * <p>{@code CAdESVerifier.verifyT()} — полный пайплайн верификации CAdES-T:
  * CMS-верификация + разбор unsignedAttrs + парсинг TimeStampToken +
  * проверка signingCertificateV2.
  *
@@ -60,7 +62,7 @@ class CAdESFuzzTest {
         byte[] der = data.consumeRemainingAsBytes();
         if (der.length == 0) return;
         try {
-            CAdESExtender.verifyCAdEST(der, cert);
+            CAdESVerifier.verifyT(der, TrustAnchors.ofCertificates(cert));
         } catch (PkixException e) {
             // ожидаемо: битый DER, неверная подпись, нет timestamp
         } catch (RuntimeException e) {

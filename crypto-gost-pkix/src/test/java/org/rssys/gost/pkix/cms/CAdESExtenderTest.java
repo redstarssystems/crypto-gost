@@ -1,5 +1,6 @@
 package org.rssys.gost.pkix.cms;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -21,6 +22,7 @@ import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.tsp.TspTransport;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.util.CryptoRandom;
@@ -63,7 +65,7 @@ class CAdESExtenderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCAdEST(cadesBes, signerCert),
+                () -> CAdESVerifier.verifyT(cadesBes, TrustAnchors.ofCertificates(signerCert)),
                 "CAdES без signingCertificateV2 должен быть отклонён");
     }
 
@@ -137,7 +139,7 @@ class CAdESExtenderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCAdEST(cadesBes, signerCert),
+                () -> CAdESVerifier.verifyT(cadesBes, TrustAnchors.ofCertificates(signerCert)),
                 "CAdES без метки времени должен быть отклонён");
     }
 
@@ -158,7 +160,9 @@ class CAdESExtenderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCAdEST(cadesT, signerCert, tsaCert),
+                () ->
+                        CAdESVerifier.verifyT(
+                                cadesT, TrustAnchors.ofCertificates(signerCert, tsaCert)),
                 "messageImprint не совпадает с подписью — должен быть отклонён");
     }
 
@@ -181,7 +185,9 @@ class CAdESExtenderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCAdEST(cadesT, signerCert, tsaCert),
+                () ->
+                        CAdESVerifier.verifyT(
+                                cadesT, TrustAnchors.ofCertificates(signerCert, tsaCert)),
                 "Сертификат истёк до genTime — должен быть отклонён");
     }
 
@@ -204,7 +210,9 @@ class CAdESExtenderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCAdEST(cadesT, signerCert, tsaCert),
+                () ->
+                        CAdESVerifier.verifyT(
+                                cadesT, TrustAnchors.ofCertificates(signerCert, tsaCert)),
                 "Сертификат ещё не действовал на genTime — должен быть отклонён");
     }
 
@@ -283,7 +291,8 @@ class CAdESExtenderTest {
                 CAdESExtender.addTimestamp(
                         cadesBes, "http://test.tsa", mockTransport, tsaCert, signerCert);
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdEST(cadesT, tsaCert, signerCert);
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyT(cadesT, TrustAnchors.ofCertificates(tsaCert, signerCert));
         assertNotNull(result);
         assertNotNull(result.signers().get(0).signerCertificate());
         assertNotNull(result.data());
@@ -335,7 +344,8 @@ class CAdESExtenderTest {
         byte[] cadesT = CAdESExtender.embedTimestamps(cadesBes, List.of(token1, token2));
 
         VerifiedCAdESData result =
-                CAdESExtender.verifyCAdEST(cadesT, tsaCert, signerCert, signer2Cert);
+                CAdESVerifier.verifyT(
+                        cadesT, TrustAnchors.ofCertificates(tsaCert, signerCert, signer2Cert));
         assertEquals(2, result.signers().size(), "Должно быть 2 подписанта");
         for (CAdESSignerResult sr : result.signers()) {
             assertTrue(
@@ -375,7 +385,8 @@ class CAdESExtenderTest {
                 CAdESExtender.addTimestamp(cadesBes, "http://test.tsa", mockTransport, tsaCert);
 
         VerifiedCAdESData result =
-                CAdESExtender.verifyCAdEST(cadesT, tsaCert, signerCert, signer2Cert);
+                CAdESVerifier.verifyT(
+                        cadesT, TrustAnchors.ofCertificates(tsaCert, signerCert, signer2Cert));
         assertEquals(2, result.signers().size(), "Должно быть 2 подписанта");
         for (CAdESSignerResult sr : result.signers()) {
             assertTrue(
@@ -405,7 +416,8 @@ class CAdESExtenderTest {
         byte[] cadesT1 = CAdESExtender.embedTimestamp(cadesBes, token1);
         byte[] cadesT2 = CAdESExtender.embedTimestamp(cadesT1, token2);
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdEST(cadesT2, tsaCert, signerCert);
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyT(cadesT2, TrustAnchors.ofCertificates(tsaCert, signerCert));
         assertEquals(
                 2,
                 result.signers().get(0).timestamps().size(),
@@ -447,14 +459,16 @@ class CAdESExtenderTest {
     // ========================================================================
 
     @Test
-    @DisplayName("verifyCAdEST бросает PkixException при пустых signerInfos")
-    void verifyCAdESTThrowsOnEmptySignerInfos() {
+    @DisplayName("verifyT бросает PkixException при пустых signerInfos")
+    void verifyTThrowsOnEmptySignerInfos() {
         byte[] emptySignedData = buildSignedDataWithNoSigners();
 
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCAdEST(emptySignedData, signerCert),
-                "Пустые signerInfos должны вызывать PkixException в verifyCAdEST");
+                () ->
+                        CAdESVerifier.verifyT(
+                                emptySignedData, TrustAnchors.ofCertificates(signerCert)),
+                "Пустые signerInfos должны вызывать PkixException в verifyT");
     }
 
     /** SignedData с версией, дайджестами, encapContentInfo, но без подписантов. */
@@ -486,8 +500,8 @@ class CAdESExtenderTest {
     // ========================================================================
 
     @Test
-    @DisplayName("verifyCAdESBES: валидный CAdES-BES проходит верификацию")
-    void verifyCAdESBESValid() throws Exception {
+    @DisplayName("verifyBES: валидный CAdES-BES проходит верификацию")
+    void verifyBESValid() throws Exception {
         byte[] cadesBes =
                 CmsSignedDataBuilder.create()
                         .data("bes verify".getBytes())
@@ -495,7 +509,8 @@ class CAdESExtenderTest {
                         .withCAdES()
                         .build();
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdESBES(cadesBes, signerCert);
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyBES(cadesBes, TrustAnchors.ofCertificates(signerCert));
         assertNotNull(result);
         assertNotNull(result.signers().get(0).signerCertificate());
         assertTrue(
@@ -504,8 +519,71 @@ class CAdESExtenderTest {
     }
 
     @Test
-    @DisplayName("verifyCAdESBES бросает PkixException без signingCertificateV2")
-    void verifyCAdESBESFailsWithoutScv2() throws Exception {
+    @DisplayName("verifyBESDetached: привязывает подпись к документу")
+    void verifyBESDetachedValid() throws Exception {
+        byte[] data = "bes detached".getBytes();
+        byte[] cadesBes =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(signerKp.getPrivate(), signerCert)
+                        .withCAdES()
+                        .detached(true)
+                        .build();
+
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyBESDetached(
+                        cadesBes, data, TrustAnchors.ofCertificates(signerCert));
+        assertArrayEquals(data, result.data(), "detached-метод должен вернуть документ");
+        assertThrows(
+                PkixException.class,
+                () -> CAdESVerifier.verifyBES(cadesBes, TrustAnchors.ofCertificates(signerCert)),
+                "verifyBES без документа не должен принимать detached-подпись");
+    }
+
+    @Test
+    @DisplayName("verifyTDetached: привязывает T-подпись к документу")
+    void verifyTDetachedValid() throws Exception {
+        byte[] data = "cades-t detached".getBytes();
+        byte[] cadesBes =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(signerKp.getPrivate(), signerCert)
+                        .withCAdES()
+                        .detached(true)
+                        .build();
+
+        byte[] sigHash = extractAndHashSignature(cadesBes);
+        TspTransport mockTransport =
+                (req, url) -> {
+                    try {
+                        BigInteger reqNonce = parseNonceFromRequest(req);
+                        byte[] token = buildTimeStampToken(sigHash, reqNonce);
+                        return buildTspResponse(sigHash, token, reqNonce);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                };
+        byte[] cadesT =
+                CAdESExtender.addTimestamp(
+                        cadesBes, "http://test.tsa", mockTransport, tsaCert, signerCert);
+
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyTDetached(
+                        cadesT, data, TrustAnchors.ofCertificates(tsaCert, signerCert));
+        assertArrayEquals(data, result.data(), "detached-метод должен вернуть документ");
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CAdESVerifier.verifyTDetached(
+                                cadesT,
+                                "tampered".getBytes(),
+                                TrustAnchors.ofCertificates(tsaCert, signerCert)),
+                "подменённый документ должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("verifyBES бросает PkixException без signingCertificateV2")
+    void verifyBESFailsWithoutScv2() throws Exception {
         byte[] cadesBes =
                 CmsSignedDataBuilder.create()
                         .data("bes no scv2".getBytes())
@@ -514,7 +592,7 @@ class CAdESExtenderTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCAdESBES(cadesBes, signerCert),
+                () -> CAdESVerifier.verifyBES(cadesBes, TrustAnchors.ofCertificates(signerCert)),
                 "CAdES-BES без signingCertificateV2 должен быть отклонён");
     }
 
@@ -649,6 +727,42 @@ class CAdESExtenderTest {
         byte[][] miParts = DerCodec.parseSequenceContents(parts[1], 0);
         if (miParts.length < 2) return null;
         return DerCodec.parseOctetString(miParts[1], 0);
+    }
+
+    @Test
+    @DisplayName("detached-методы требуют content и бросают IllegalArgumentException")
+    void detachedMethodsRequireContent() {
+        byte[] der = new byte[0];
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CAdESVerifier.verifyBESDetached(
+                                der, null, TrustAnchors.ofCertificates(signerCert)),
+                "CAdES-BES detached должен требовать content");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CAdESVerifier.verifyTDetached(
+                                der, null, TrustAnchors.ofCertificates(signerCert)),
+                "CAdES-T detached должен требовать content");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CAdESVerifier.verifyCDetached(
+                                der, null, TrustAnchors.ofCertificates(signerCert)),
+                "CAdES-C detached должен требовать content");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CAdESVerifier.verifyXLongDetached(
+                                der, null, TrustAnchors.ofCertificates(signerCert)),
+                "CAdES-X Long detached должен требовать content");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CAdESVerifier.verifyCountersignatureDetached(
+                                der, null, TrustAnchors.ofCertificates(signerCert)),
+                "countersignature detached должна требовать content");
     }
 
     /**

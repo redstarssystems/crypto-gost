@@ -19,7 +19,6 @@ public final class GostPkcs12Parser {
     private GostPkcs12Parser() {}
 
     private static final int MAX_SAFE_BAGS = 10_000;
-    private static final int MIN_PBKDF2_SALT_SIZE = 8;
 
     /** Результат разбора PFX. */
     public static final class PfxData {
@@ -309,6 +308,28 @@ public final class GostPkcs12Parser {
         return new ContentInfoData(oid, content);
     }
 
+    /** Проверяет, что элемент - DER NULL (05 00). */
+    private static boolean isDerNull(byte[] element) {
+        return element.length == 2 && element[0] == 0x05 && element[1] == 0x00;
+    }
+
+    /**
+     * Длина соли PBKDF2 должна лежать в диапазоне RFC 9337 / RFC 9548 §7 (8..32 октета):
+     * слишком короткая соль ослабляет защиту пароля, слишком длинная - признак нестандартного файла.
+     */
+    private static void checkPbkdf2SaltLength(int length, String structure) {
+        if (length < GostOids.MIN_PBKDF2_SALT_LEN || length > GostOids.MAX_PBKDF2_SALT_LEN) {
+            throw new IllegalArgumentException(
+                    structure
+                            + " salt length "
+                            + length
+                            + " is outside "
+                            + GostOids.MIN_PBKDF2_SALT_LEN
+                            + ".."
+                            + GostOids.MAX_PBKDF2_SALT_LEN);
+        }
+    }
+
     // ========================================================================
     // Разбор MacData
     // ========================================================================
@@ -316,29 +337,32 @@ public final class GostPkcs12Parser {
     private static MacData parseMacData(byte[] data, int minPbkdf2Iterations) {
         int[] pos = new int[] {0};
         byte[][] seq = parseSequence(data, pos);
-        if (seq.length < 2) {
-            throw new IllegalArgumentException("MacData: expected at least 2 elements");
+        // RFC 7292: MacData ::= SEQUENCE { mac, macSalt, iterations INTEGER DEFAULT 1 }
+        if (seq.length < 2 || seq.length > 3) {
+            throw new IllegalArgumentException(
+                    "MacData: expected 2 or 3 elements, got " + seq.length);
         }
 
-        // DigestInfo: SEQUENCE { AlgorithmIdentifier, OCTET STRING }
+        // DigestInfo: SEQUENCE { AlgorithmIdentifier, OCTET STRING } - ровно два элемента,
+        // иначе лишний элемент прошёл бы незамеченным
         byte[][] di = parseSequence(seq[0], new int[] {0});
-        if (di.length < 2) {
+        if (di.length != 2) {
             throw new IllegalArgumentException(
-                    "MacData: DigestInfo must contain AlgorithmIdentifier and digest value");
+                    "MacData: DigestInfo must contain exactly AlgorithmIdentifier and digest value");
         }
         byte[][] diAlgId = parseSequence(di[0], new int[] {0});
-        if (diAlgId.length < 1) {
+        // RFC 9548 §7: параметры опускаются; OpenSSL пишет NULL, поэтому допускаются оба варианта.
+        // Любые другие параметры - отказ: иначе формат становится двусмысленным
+        boolean hasNullParams = diAlgId.length == 2 && isDerNull(diAlgId[1]);
+        if (diAlgId.length < 1 || diAlgId.length > 2 || (diAlgId.length == 2 && !hasNullParams)) {
             throw new IllegalArgumentException(
-                    "MacData: missing AlgorithmIdentifier in DigestInfo");
+                    "MacData: AlgorithmIdentifier must be an OID with absent or NULL parameters");
         }
         String digestAlgorithm = parseOid(diAlgId[0], new int[] {0});
         byte[] digestValue = parseOctetString(di[1], new int[] {0});
 
         byte[] salt = parseOctetString(seq[1], new int[] {0});
-        if (salt.length < MIN_PBKDF2_SALT_SIZE) {
-            throw new IllegalArgumentException(
-                    "MacData salt too short: " + salt.length + ", minimum " + MIN_PBKDF2_SALT_SIZE);
-        }
+        checkPbkdf2SaltLength(salt.length, "MacData");
 
         int iterations = 1;
         if (seq.length > 2) {
@@ -551,12 +575,22 @@ public final class GostPkcs12Parser {
             }
         }
 
-        if (salt == null || salt.length < MIN_PBKDF2_SALT_SIZE) {
+        if (salt == null) {
+            throw new IllegalArgumentException("PBES2: PBKDF2 salt is missing");
+        }
+        checkPbkdf2SaltLength(salt.length, "PBES2");
+
+        // Magma и любой неизвестный OID не должны молча обрабатываться как Кузнечик.
+        if (!GostOids.KUZ_CTR_ACPKM.equals(encOid) && !GostOids.KUZ_CTR_ACPKM_OMAC.equals(encOid)) {
+            throw new IllegalArgumentException("PBES2: unsupported encryption scheme " + encOid);
+        }
+        // RFC 9337 §7.3: ukm обязателен и имеет длину ровно n октетов (16 для Кузнечика).
+        if (ukm == null || ukm.length != GostOids.PBES2_UKM_LEN) {
             throw new IllegalArgumentException(
-                    "PBES2 salt too short: "
-                            + (salt == null ? 0 : salt.length)
-                            + ", minimum "
-                            + MIN_PBKDF2_SALT_SIZE);
+                    "PBES2: ukm must be present and "
+                            + GostOids.PBES2_UKM_LEN
+                            + " bytes, got "
+                            + (ukm == null ? "none" : String.valueOf(ukm.length)));
         }
 
         return new Pbes2Params(salt, iterationCount, prfOid, encOid, ukm);

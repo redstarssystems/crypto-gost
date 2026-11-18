@@ -16,11 +16,17 @@ public interface TspTransport {
     /**
      * Отправляет TimeStampReq DER на TSA и возвращает TimeStampResp DER.
      *
-     * @param tspRequestDer DER-байты TimeStampReq
-     * @param tsaUrl        URL службы штампов времени
+     * <p>Ошибки вызывающего ({@link IllegalArgumentException}) отличаются от ошибок удалённой
+     * стороны ({@link IOException}): всё, что пришло от сервера, включая заголовок
+     * {@code Location} перенаправления и тип содержимого ответа, даёт {@link IOException}, а не
+     * непроверяемое исключение.
+     *
+     * @param tspRequestDer DER-байты TimeStampReq, не {@code null} и не пустые
+     * @param tsaUrl        URL службы штампов времени, не {@code null} и не пустой
      * @return DER-байты TimeStampResp
-     * @throws IOException              при сетевой ошибке
-     * @throws IllegalArgumentException при некорректном URL
+     * @throws IOException              при сетевой ошибке, истечении срока, отказе сервера,
+     *                                  неподдерживаемой схеме или внутреннем адресе
+     * @throws IllegalArgumentException если аргумент пуст или адрес синтаксически некорректен
      */
     byte[] send(byte[] tspRequestDer, String tsaUrl) throws IOException;
 }

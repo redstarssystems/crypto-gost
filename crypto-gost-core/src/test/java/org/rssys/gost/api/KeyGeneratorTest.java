@@ -11,7 +11,7 @@ import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.util.CryptoRandom;
 
-@DisplayName("KeyGenerator Tests")
+@DisplayName("KeyGenerator: тесты")
 class KeyGeneratorTest {
 
     // -----------------------------------------------------------------------
@@ -50,7 +50,7 @@ class KeyGeneratorTest {
     @DisplayName("generateKeyPair: базовая точка Q лежит на кривой — cryptoProA")
     void testKeyPairCryptoProA() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.cryptoProA());
-        ECPoint q = pair.getPublic().getQ().normalize();
+        ECPoint q = pair.getPublic().getQ();
         assertTrue(q.isOnCurve(), "Q должна лежать на кривой CryptoPro-A");
         assertFalse(q.isInfinity(), "Q не должна быть точкой в бесконечности");
     }
@@ -68,7 +68,7 @@ class KeyGeneratorTest {
     @DisplayName("generateKeyPair: базовая точка Q лежит на кривой — tc26a512")
     void testKeyPairTc26a512() {
         KeyPair pair = KeyGenerator.generateKeyPair(ECParameters.tc26a512());
-        ECPoint q = pair.getPublic().getQ().normalize();
+        ECPoint q = pair.getPublic().getQ();
         assertTrue(q.isOnCurve(), "Q должна лежать на кривой tc26a512");
     }
 
@@ -92,7 +92,7 @@ class KeyGeneratorTest {
 
         ECPoint g = ECPoint.affine(params.gx, params.gy, params);
         ECPoint expectedQ = g.multiply(pair.getPrivate().getD()).normalize();
-        ECPoint actualQ = pair.getPublic().getQ().normalize();
+        ECPoint actualQ = pair.getPublic().getQ();
 
         assertEquals(expectedQ.getX(), actualQ.getX(), "Qx должен совпадать");
         assertEquals(expectedQ.getY(), actualQ.getY(), "Qy должен совпадать");
@@ -144,7 +144,7 @@ class KeyGeneratorTest {
     }
 
     // -----------------------------------------------------------------------
-    // isValidPublicKey — защита от invalid-curve атаки
+    // isValidPublicKey — защита от точек вне кривой (invalid-curve)
     // -----------------------------------------------------------------------
 
     @Test
@@ -168,7 +168,7 @@ class KeyGeneratorTest {
     void testIsValidPublicKeyOffCurve() {
         ECParameters params = ECParameters.cryptoProA();
         KeyPair pair = KeyGenerator.generateKeyPair(params);
-        ECPoint q = pair.getPublic().getQ().normalize();
+        ECPoint q = pair.getPublic().getQ();
         BigInteger badY = q.getY().add(BigInteger.ONE).mod(params.p);
         ECPoint offCurve = ECPoint.affine(q.getX(), badY, params);
         assertFalse(offCurve.isValidPublicKey(), "Точка не на кривой должна возвращать false");

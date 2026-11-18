@@ -1,4 +1,4 @@
-SUB_DIRS := jsse keys kuznyechik mac signature old-digest tls
+SUB_DIRS := core crl jsse keys kuznyechik mac signature old-digest tls
 
 .PHONY: clean
 

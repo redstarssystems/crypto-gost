@@ -259,7 +259,7 @@ class GostDerParserTest {
     @Test
     @DisplayName("oidBytesToDottedString: 129 арок (сверх лимита) -> исключение")
     void testOidArcsExceedLimit() {
-        // Первый байт (2 арки) + 127 однобайтовых арок => 129 > MAX_OID_SUBIDENTIFIERS.
+        // Первый байт (2 арки) + 127 однобайтовых арок => 129 > MAX_OID_ARCS.
         byte[] oid = new byte[128];
         oid[0] = 0x2A;
         for (int i = 1; i < oid.length; i++) {
@@ -269,6 +269,83 @@ class GostDerParserTest {
                 IllegalArgumentException.class,
                 () -> GostDerParser.oidBytesToDottedString(oid, 0, oid.length),
                 "OID из 129 арок должен отклоняться (защита от раздувания)");
+    }
+
+    @Test
+    @DisplayName("oidBytesToDottedString: однобайтовый OID 0x2A -> 1.2")
+    void testOidSingleByte() {
+        assertEquals(
+                "1.2",
+                GostDerParser.oidBytesToDottedString(new byte[] {0x2A}, 0, 1),
+                "один байт кодирует две первые арки");
+    }
+
+    @Test
+    @DisplayName("oidBytesToDottedString: однобайтовый OID с битом продолжения -> исключение")
+    void testOidSingleByteWithContinuation() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(new byte[] {(byte) 0x81}, 0, 1));
+    }
+
+    @Test
+    @DisplayName("oidBytesToDottedString: выход за границы массива и переполнение -> исключение")
+    void testOidRangeValidation() {
+        byte[] der = {0x2A, 0x03, 0x04};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(der, -1, 2),
+                "отрицательный start");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(der, 0, -1),
+                "отрицательная длина");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(der, 2, 2),
+                "start + len выходит за массив");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(der, 4, 1),
+                "start за концом массива");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(der, 1, Integer.MAX_VALUE),
+                "start + len переполняет int");
+        assertThrows(
+                NullPointerException.class,
+                () -> GostDerParser.oidBytesToDottedString(null, 0, 1),
+                "null-массив");
+    }
+
+    @Test
+    @DisplayName("oidBytesToDottedString: неминимальный subidentifier -> исключение")
+    void testOidNonMinimalSubidentifier() {
+        byte[] oid = {(byte) 0x80, 0x55, 0x04, 0x03};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(oid, 0, oid.length),
+                "ведущий 0x80 в subidentifier должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("oidBytesToDottedString: multi-byte первый subidentifier (2.999)")
+    void testOidMultiByteFirstSubidentifier() {
+        byte[] oid = {(byte) 0x88, 0x37, 0x03};
+        assertEquals(
+                "2.999.3",
+                GostDerParser.oidBytesToDottedString(oid, 0, oid.length),
+                "первый subidentifier тоже может быть multi-byte");
+    }
+
+    @Test
+    @DisplayName("oidBytesToDottedString: незавершённый subidentifier -> исключение")
+    void testOidUnterminatedSubidentifier() {
+        byte[] oid = {0x2A, (byte) 0x81};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostDerParser.oidBytesToDottedString(oid, 0, oid.length),
+                "OID с continuation-битом в конце должен отклоняться");
     }
 
     // ========================================================================
@@ -322,5 +399,114 @@ class GostDerParserTest {
                 IllegalArgumentException.class,
                 () -> parseLength(der, 0),
                 "indefinite-length (0x80) должен отклоняться");
+    }
+
+    // ========================================================================
+    // readTlv(der, offset, limit)
+    // ========================================================================
+
+    @Test
+    @DisplayName("readTlv с limit: TLV целиком внутри limit -> границы значения")
+    void testReadTlvWithinLimit() {
+        byte[] der = new byte[] {0x04, 0x02, 0x0A, 0x0B, 0x7F};
+        int[] tlv = readTlv(der, 0, 4);
+        assertEquals(2, tlv[0], "значение начинается после заголовка");
+        assertEquals(4, tlv[1], "значение заканчивается на границе TLV");
+    }
+
+    @Test
+    @DisplayName("readTlv с limit: TLV выходит за limit, но помещается в массив -> исключение")
+    void testReadTlvExceedsLimit() {
+        byte[] der = new byte[] {0x04, 0x02, 0x0A, 0x0B, 0x7F};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> readTlv(der, 0, 3),
+                "TLV за пределами родителя должен отклоняться, даже если байты в массиве есть");
+    }
+
+    @Test
+    @DisplayName("readTlv с limit: заголовок на границе limit -> исключение")
+    void testReadTlvHeaderAtLimit() {
+        byte[] der = new byte[] {0x04, 0x00, 0x04, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> readTlv(der, 2, 2),
+                "offset == limit означает отсутствие TLV");
+    }
+
+    @Test
+    @DisplayName("readTlv с limit: limit больше длины массива -> исключение")
+    void testReadTlvLimitBeyondArray() {
+        byte[] der = new byte[] {0x04, 0x00};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> readTlv(der, 0, 10),
+                "limit не может превышать длину массива");
+    }
+
+    @Test
+    @DisplayName("readTlv(der, offset) совпадает с readTlv(der, offset, der.length)")
+    void testReadTlvDelegatesToLimitVariant() {
+        byte[] der = new byte[] {0x30, 0x03, 0x02, 0x01, 0x05};
+        assertArrayEquals(
+                readTlv(der, 0, der.length),
+                readTlv(der, 0),
+                "двухаргументный вариант должен быть частным случаем limit=der.length");
+    }
+
+    // ========================================================================
+    // readBoolean
+    // ========================================================================
+
+    @Test
+    @DisplayName("readBoolean: 0xFF -> true, 0x00 -> false")
+    void testReadBooleanValid() {
+        assertTrue(readBoolean(new byte[] {0x01, 0x01, (byte) 0xFF}, 0, 3), "0xFF — TRUE");
+        assertFalse(readBoolean(new byte[] {0x01, 0x01, 0x00}, 0, 3), "0x00 — FALSE");
+    }
+
+    @Test
+    @DisplayName("readBoolean: 0x01 (не DER) -> исключение")
+    void testReadBooleanNonDerValue() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> readBoolean(new byte[] {0x01, 0x01, 0x01}, 0, 3),
+                "значение, отличное от 0x00/0xFF, не является DER");
+    }
+
+    @Test
+    @DisplayName("readBoolean: пустое значение -> исключение")
+    void testReadBooleanEmpty() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> readBoolean(new byte[] {0x01, 0x00}, 0, 2),
+                "пустой BOOLEAN нельзя трактовать как FALSE");
+    }
+
+    @Test
+    @DisplayName("readBoolean: длина 2 -> исключение")
+    void testReadBooleanTwoOctets() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> readBoolean(new byte[] {0x01, 0x02, 0x00, 0x00}, 0, 4),
+                "BOOLEAN длиной 2 октета недопустим");
+    }
+
+    @Test
+    @DisplayName("readBoolean: тег не BOOLEAN -> исключение")
+    void testReadBooleanWrongTag() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> readBoolean(new byte[] {0x02, 0x01, 0x00}, 0, 3),
+                "INTEGER не должен читаться как BOOLEAN");
+    }
+
+    @Test
+    @DisplayName("readBoolean: значение за limit -> исключение")
+    void testReadBooleanBeyondLimit() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> readBoolean(new byte[] {0x01, 0x01, (byte) 0xFF}, 0, 2),
+                "BOOLEAN не должен читаться за границей родителя");
     }
 }

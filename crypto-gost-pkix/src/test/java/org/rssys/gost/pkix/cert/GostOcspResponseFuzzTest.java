@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 
 /**
  * Fuzz-тест для {@link GostOcspResponse#GostOcspResponse(byte[])}.
@@ -14,7 +15,7 @@ import com.code_intelligence.jazzer.junit.FuzzTest;
  * <p>Проверяет DoS-фиксы 0.6.2:
  * <ul>
  *   <li>{@code MAX_OCSP_RESPONSE_SIZE} = 256 КБ — размер DER до парсинга</li>
- *   <li>ENUMERATED responseStatus &le; 1 байт — CPU DoS через побитовый сдвиг</li>
+ *   <li>ENUMERATED responseStatus ровно 1 байт (длиннее и пустой отвергаются); прежде длинное значение сдвигалось побитово — CPU DoS</li>
  *   <li>{@code MAX_SINGLE_RESPONSES} = 256 — DoS через неограниченные SingleResponse</li>
  *   <li>Non-canonical constructed тег good-статуса {@code 0xA0} — DER malleability</li>
  * </ul>
@@ -36,7 +37,7 @@ class GostOcspResponseFuzzTest {
         } catch (IllegalArgumentException e) {
             // Ожидаемо: неверный тег, выход за границы структуры
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -54,22 +55,13 @@ class GostOcspResponseFuzzTest {
         } catch (PkixException | IllegalArgumentException e) {
             return;
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
             return;
         }
         try {
             resp.getNonce();
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

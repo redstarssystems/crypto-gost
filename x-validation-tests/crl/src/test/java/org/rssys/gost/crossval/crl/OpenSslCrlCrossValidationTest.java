@@ -493,13 +493,7 @@ class OpenSslCrlCrossValidationTest {
 
             // L2: verifyDelegated — библиотека должна верифицировать
             assertDoesNotThrow(
-                    () -> CrlVerifier.verifyDelegated(
-                            crlDer,
-                            ca.getSerialNumber(),
-                            caKp.getPublic(),
-                            issuerDn,
-                            ca,
-                            java.util.List.of(signer.getEncoded())),
+                    () -> CrlVerifier.verifyDelegated(crlDer, ca, ca, java.util.List.of(signer.getEncoded())),
                     "Делегированный CRL с AKI должен верифицироваться");
 
             return null;

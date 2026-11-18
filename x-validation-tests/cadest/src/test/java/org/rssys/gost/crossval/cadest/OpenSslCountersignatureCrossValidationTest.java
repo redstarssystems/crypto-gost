@@ -21,9 +21,10 @@ import org.rssys.gost.crossval.util.TempDirUtils;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.cms.CAdESExtender;
+import org.rssys.gost.pkix.cms.CAdESVerifier;
 import org.rssys.gost.pkix.cms.CmsContentInfo;
-import org.rssys.gost.pkix.cms.CmsSignedDataBuilder;
 import org.rssys.gost.pkix.cms.CmsTestUtils;
 import org.rssys.gost.util.DerCodec;
 
@@ -49,8 +50,7 @@ class OpenSslCountersignatureCrossValidationTest {
         Security.addProvider(new BouncyCastleProvider());
         pair256 = TestData.generateCaAndLeaf(TestData.PARAMS_256);
         csKp256 = KeyGenerator.generateKeyPair(TestData.PARAMS_256);
-        csCert256 = CmsTestUtils.createSelfSignedCert(
-                csKp256.getPrivate(), csKp256.getPublic());
+        csCert256 = CmsTestUtils.createSelfSignedCert(csKp256.getPrivate(), csKp256.getPublic());
     }
 
     // ========================================================================
@@ -62,25 +62,28 @@ class OpenSslCountersignatureCrossValidationTest {
     @DisplayName("OpenSSL asn1parse: countersignature в unsignedAttrs")
     void countersignatureInUnsignedAttrsAsn1parse() throws Exception {
         byte[] data = "countersignature asn1 test".getBytes();
-        byte[] cadesBes = TestData.buildCAdESBES(
-                data, pair256.leafKey(), pair256.leafCert());
-        byte[] countersigned = CAdESExtender.embedCountersignature(
-                cadesBes, csKp256.getPrivate(), csCert256);
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
+        byte[] countersigned =
+                CAdESExtender.embedCountersignature(cadesBes, csKp256.getPrivate(), csCert256);
 
-        TempDirUtils.withTempDir("cs-asn1-", dir -> {
-            Path derPath = TestData.writeDer(dir, "countersigned.der", countersigned);
-            String out = runAsn1Parse(derPath);
+        TempDirUtils.withTempDir(
+                "cs-asn1-",
+                dir -> {
+                    Path derPath = TestData.writeDer(dir, "countersigned.der", countersigned);
+                    String out = runAsn1Parse(derPath);
 
-            // unsignedAttrs [1] IMPLICIT внутри SignerInfo
-            assertTrue(out.contains("cont [ 1 ]") || out.contains("A1"),
-                    "unsignedAttrs [1] IMPLICIT должен быть в SignerInfo для countersignature");
+                    // unsignedAttrs [1] IMPLICIT внутри SignerInfo
+                    assertTrue(
+                            out.contains("cont [ 1 ]") || out.contains("A1"),
+                            "unsignedAttrs [1] IMPLICIT должен быть в SignerInfo для countersignature");
 
-            // id-countersignature OID (OpenSSL показывает "countersignature" без id-)
-            assertTrue(out.contains("countersignature")
-                            || out.contains("1.2.840.113549.1.9.6"),
-                    "Должен быть OID countersignature в unsignedAttrs");
-            return null;
-        });
+                    // id-countersignature OID (OpenSSL показывает "countersignature" без id-)
+                    assertTrue(
+                            out.contains("countersignature")
+                                    || out.contains("1.2.840.113549.1.9.6"),
+                            "Должен быть OID countersignature в unsignedAttrs");
+                    return null;
+                });
     }
 
     @Test
@@ -88,20 +91,22 @@ class OpenSslCountersignatureCrossValidationTest {
     @DisplayName("OpenSSL asn1parse: countersignature без TSP-меток")
     void countersignatureWithoutTimestampAsn1parse() throws Exception {
         byte[] data = "cs no tst asn1".getBytes();
-        byte[] cadesBes = TestData.buildCAdESBES(
-                data, pair256.leafKey(), pair256.leafCert());
-        byte[] countersigned = CAdESExtender.embedCountersignature(
-                cadesBes, csKp256.getPrivate(), csCert256);
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
+        byte[] countersigned =
+                CAdESExtender.embedCountersignature(cadesBes, csKp256.getPrivate(), csCert256);
 
-        TempDirUtils.withTempDir("cs-notst-", dir -> {
-            Path derPath = TestData.writeDer(dir, "countersigned-notst.der", countersigned);
-            String out = runAsn1Parse(derPath);
+        TempDirUtils.withTempDir(
+                "cs-notst-",
+                dir -> {
+                    Path derPath = TestData.writeDer(dir, "countersigned-notst.der", countersigned);
+                    String out = runAsn1Parse(derPath);
 
-            assertTrue(out.contains("countersignature")
-                            || out.contains("1.2.840.113549.1.9.6"),
-                    "Должен быть OID countersignature");
-            return null;
-        });
+                    assertTrue(
+                            out.contains("countersignature")
+                                    || out.contains("1.2.840.113549.1.9.6"),
+                            "Должен быть OID countersignature");
+                    return null;
+                });
     }
 
     @Test
@@ -109,10 +114,9 @@ class OpenSslCountersignatureCrossValidationTest {
     @DisplayName("OpenSSL dgst -verify: countersignature подписывает signatureValue родителя")
     void countersignatureRawDgstVerify() throws Exception {
         byte[] data = "cs dgst test".getBytes();
-        byte[] cadesBes = TestData.buildCAdESBES(
-                data, pair256.leafKey(), pair256.leafCert());
-        byte[] countersigned = CAdESExtender.embedCountersignature(
-                cadesBes, csKp256.getPrivate(), csCert256);
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
+        byte[] countersigned =
+                CAdESExtender.embedCountersignature(cadesBes, csKp256.getPrivate(), csCert256);
 
         // Извлекаем countersignature SignerInfo из unsignedAttrs
         CmsContentInfo ci = CmsContentInfo.decode(countersigned);
@@ -156,8 +160,8 @@ class OpenSslCountersignatureCrossValidationTest {
                     int setContentOff = 1 + setLen[1];
                     int[] siLen = DerCodec.decodeLength(setField, setContentOff + 1);
                     int siTotal = 1 + siLen[1] + siLen[0];
-                    countersigSiDer = Arrays.copyOfRange(
-                            setField, setContentOff, setContentOff + siTotal);
+                    countersigSiDer =
+                            Arrays.copyOfRange(setField, setContentOff, setContentOff + siTotal);
                     break;
                 }
             }
@@ -179,8 +183,8 @@ class OpenSslCountersignatureCrossValidationTest {
         byte[] csSignedField = csSiParts[csSignedIdx];
         int[] csSignedLen = DerCodec.decodeLength(csSignedField, 1);
         int csSignedContentOff = 1 + csSignedLen[1];
-        byte[] csSignedContent = Arrays.copyOfRange(
-                csSignedField, csSignedContentOff, csSignedField.length);
+        byte[] csSignedContent =
+                Arrays.copyOfRange(csSignedField, csSignedContentOff, csSignedField.length);
 
         // Перекодируем signedAttrs как SET (для хэширования)
         java.util.List<byte[]> csAttrs = new java.util.ArrayList<>();
@@ -208,42 +212,50 @@ class OpenSslCountersignatureCrossValidationTest {
         byte[] spki = GostDerCodec.encodePublicKey(csKp256.getPublic());
         String pem = toPem(spki, "PUBLIC KEY");
 
-        TempDirUtils.withTempDir("cs-dgst-", dir -> {
-            Path pubPath = dir.resolve("cs-pub.pem");
-            Path sigPath = dir.resolve("cs-sig.bin");
-            Path hashPath = dir.resolve("cs-hash.bin");
-            Files.write(pubPath, pem.getBytes());
-            Files.write(sigPath, csRawSig);
-            Files.write(hashPath, csSignedAttrsSet);
+        TempDirUtils.withTempDir(
+                "cs-dgst-",
+                dir -> {
+                    Path pubPath = dir.resolve("cs-pub.pem");
+                    Path sigPath = dir.resolve("cs-sig.bin");
+                    Path hashPath = dir.resolve("cs-hash.bin");
+                    Files.write(pubPath, pem.getBytes());
+                    Files.write(sigPath, csRawSig);
+                    Files.write(hashPath, csSignedAttrsSet);
 
-            String[] cmd = new String[]{
-                    opensslBinary(), "dgst", "-md_gost12_256",
-                    "-verify", pubPath.toAbsolutePath().toString(),
-                    "-signature", sigPath.toAbsolutePath().toString(),
-                    hashPath.toAbsolutePath().toString()
-            };
-            ProcessBuilder pb = new ProcessBuilder(cmd);
-            pb.redirectErrorStream(true);
-            pb.environment().putAll(OpenSslChecker.getOpenSslEnv());
-            Process p = pb.start();
-            String outText = new String(p.getInputStream().readAllBytes()).trim();
-            int exit = p.waitFor();
+                    String[] cmd =
+                            new String[] {
+                                opensslBinary(),
+                                "dgst",
+                                "-md_gost12_256",
+                                "-verify",
+                                pubPath.toAbsolutePath().toString(),
+                                "-signature",
+                                sigPath.toAbsolutePath().toString(),
+                                hashPath.toAbsolutePath().toString()
+                            };
+                    ProcessBuilder pb = new ProcessBuilder(cmd);
+                    pb.redirectErrorStream(true);
+                    pb.environment().putAll(OpenSslChecker.getOpenSslEnv());
+                    Process p = pb.start();
+                    String outText = new String(p.getInputStream().readAllBytes()).trim();
+                    int exit = p.waitFor();
 
-            assertTrue(outText.contains("Verified OK"),
-                    "openssl dgst должен подтвердить countersignature: " + outText);
-            return null;
-        });
+                    assertTrue(
+                            outText.contains("Verified OK"),
+                            "openssl dgst должен подтвердить countersignature: " + outText);
+                    return null;
+                });
     }
 
     @Test
     @EnabledIf("opensslAvailable")
-    @DisplayName("OpenSSL dgst -verify: countersignature messageDigest = hash(parent signatureValue)")
+    @DisplayName(
+            "OpenSSL dgst -verify: countersignature messageDigest = hash(parent signatureValue)")
     void countersignatureMessageDigestCoversSignatureValue() throws Exception {
         byte[] data = "cs msgdigest test".getBytes();
-        byte[] cadesBes = TestData.buildCAdESBES(
-                data, pair256.leafKey(), pair256.leafCert());
-        byte[] countersigned = CAdESExtender.embedCountersignature(
-                cadesBes, csKp256.getPrivate(), csCert256);
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
+        byte[] countersigned =
+                CAdESExtender.embedCountersignature(cadesBes, csKp256.getPrivate(), csCert256);
 
         // Извлекаем signatureValue родительского подписанта
         CmsContentInfo ci = CmsContentInfo.decode(countersigned);
@@ -269,7 +281,8 @@ class OpenSslCountersignatureCrossValidationTest {
         byte[] expectedHash = extractMessageDigestFromCountersignature(countersigned);
         assertNotNull(expectedHash, "messageDigest должен быть в countersignature signedAttrs");
 
-        assertTrue(java.security.MessageDigest.isEqual(computedHash, expectedHash),
+        assertTrue(
+                java.security.MessageDigest.isEqual(computedHash, expectedHash),
                 "messageDigest countersignature должен быть hash(parentSignatureValue)");
     }
 
@@ -282,17 +295,18 @@ class OpenSslCountersignatureCrossValidationTest {
     @DisplayName("Round-trip: библиотека CAdES-BES → countersignature → verifyCountersignature")
     void roundTripCountersignatureVerify() throws Exception {
         byte[] data = "round-trip cs".getBytes();
-        byte[] cadesBes = TestData.buildCAdESBES(
-                data, pair256.leafKey(), pair256.leafCert());
-        byte[] countersigned = CAdESExtender.embedCountersignature(
-                cadesBes, csKp256.getPrivate(), csCert256);
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
+        byte[] countersigned =
+                CAdESExtender.embedCountersignature(cadesBes, csKp256.getPrivate(), csCert256);
 
         // Проверяем: countersignature корректно добавляется и не ломает CAdES-BES verify
-        var result = CAdESExtender.verifyCountersignature(countersigned, pair256.caCert(), csCert256);
+        var result =
+                CAdESVerifier.verifyCountersignature(
+                        countersigned, TrustAnchors.ofCertificates(pair256.caCert(), csCert256));
         assertNotNull(result, "verifyCountersignature должен вернуть результат");
         assertEquals(1, result.signers().size(), "Один подписант");
-        assertEquals(1, result.signers().get(0).countersignatures().size(),
-                "Одна countersignature");
+        assertEquals(
+                1, result.signers().get(0).countersignatures().size(), "Одна countersignature");
     }
 
     @Test
@@ -300,26 +314,29 @@ class OpenSslCountersignatureCrossValidationTest {
     @DisplayName("OpenSSL: countersignature не ломает CMS-структуру")
     void countersignedDoesNotBreakCmsStructure() throws Exception {
         byte[] data = "cms structure test".getBytes();
-        byte[] cadesBes = TestData.buildCAdESBES(
-                data, pair256.leafKey(), pair256.leafCert());
-        byte[] countersigned = CAdESExtender.embedCountersignature(
-                cadesBes, csKp256.getPrivate(), csCert256);
+        byte[] cadesBes = TestData.buildCAdESBES(data, pair256.leafKey(), pair256.leafCert());
+        byte[] countersigned =
+                CAdESExtender.embedCountersignature(cadesBes, csKp256.getPrivate(), csCert256);
 
-        TempDirUtils.withTempDir("cs-struct-", dir -> {
-            Path derPath = TestData.writeDer(dir, "countersigned.der", countersigned);
-            String out = runAsn1Parse(derPath);
+        TempDirUtils.withTempDir(
+                "cs-struct-",
+                dir -> {
+                    Path derPath = TestData.writeDer(dir, "countersigned.der", countersigned);
+                    String out = runAsn1Parse(derPath);
 
-            // ContentInfo → pkcs7-signedData
-            assertTrue(out.contains("pkcs7-signedData")
-                            || out.contains("1.2.840.113549.1.7.2"),
-                    "Структура должна содержать OID SignedData");
+                    // ContentInfo → pkcs7-signedData
+                    assertTrue(
+                            out.contains("pkcs7-signedData")
+                                    || out.contains("1.2.840.113549.1.7.2"),
+                            "Структура должна содержать OID SignedData");
 
-            // encapContentInfo с eContentType
-            assertTrue(out.contains("contentType") || out.contains("id-data"),
-                    "encapContentInfo должен присутствовать");
+                    // encapContentInfo с eContentType
+                    assertTrue(
+                            out.contains("contentType") || out.contains("id-data"),
+                            "encapContentInfo должен присутствовать");
 
-            return null;
-        });
+                    return null;
+                });
     }
 
     // ========================================================================
@@ -338,15 +355,19 @@ class OpenSslCountersignatureCrossValidationTest {
     }
 
     static String opensslBinary() {
-        return System.getProperty("openssl.binary",
-                "/opt/openssl-3.6.0-gost/bin/openssl");
+        return System.getProperty("openssl.binary", "/opt/openssl-3.6.0-gost/bin/openssl");
     }
 
     static String runAsn1Parse(Path derPath) throws Exception {
-        String[] cmd = new String[]{
-                opensslBinary(), "asn1parse", "-inform", "DER",
-                "-in", derPath.toAbsolutePath().toString()
-        };
+        String[] cmd =
+                new String[] {
+                    opensslBinary(),
+                    "asn1parse",
+                    "-inform",
+                    "DER",
+                    "-in",
+                    derPath.toAbsolutePath().toString()
+                };
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
         Process p = pb.start();
@@ -362,7 +383,8 @@ class OpenSslCountersignatureCrossValidationTest {
                 count++;
             } else if (line.contains("SEQUENCE")
                     && (line.contains("IssuerAndSerialNumber")
-                            || line.contains("se implicit") || line.contains("cons implicit"))) {
+                            || line.contains("se implicit")
+                            || line.contains("cons implicit"))) {
                 // Эвристика: вложенный SEQUENCE внутри SET OF SignerInfo
                 count++;
             }
@@ -374,15 +396,15 @@ class OpenSslCountersignatureCrossValidationTest {
     }
 
     static String toPem(byte[] der, String label) {
-        String base64 = java.util.Base64.getMimeEncoder(64, "\n".getBytes())
-                .encodeToString(der);
+        String base64 = java.util.Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(der);
         return "-----BEGIN " + label + "-----\n" + base64 + "\n-----END " + label + "-----\n";
     }
 
     /**
      * Извлекает messageDigest из signedAttrs countersignature.
      */
-    static byte[] extractMessageDigestFromCountersignature(byte[] countersignedDer) throws Exception {
+    static byte[] extractMessageDigestFromCountersignature(byte[] countersignedDer)
+            throws Exception {
         CmsContentInfo ci = CmsContentInfo.decode(countersignedDer);
         byte[][] sdParts = DerCodec.parseSequenceContents(ci.content(), 0);
         byte[] sif = sdParts[sdParts.length - 1];

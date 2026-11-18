@@ -3,14 +3,18 @@ package org.rssys.gost.jsse.socket;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiFunction;
 import javax.net.ssl.HandshakeCompletedEvent;
 import javax.net.ssl.HandshakeCompletedListener;
 import javax.net.ssl.SSLEngine;
@@ -26,6 +30,8 @@ import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * SSLSocket для ГОСТ TLS 1.3 (RFC 8446 + RFC 9367).
@@ -42,13 +48,12 @@ import org.rssys.gost.tls13.TlsUtils;
 public final class GostSSLSocket extends SSLSocket {
 
     private static final int MAX_PLAINTEXT = TlsConstants.MAX_PLAINTEXT_LENGTH;
-    private static final int MAX_PACKET =
-            TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM;
     private static final int RECORD_HEADER = TlsConstants.RECORD_HEADER_SIZE;
+    private static final GostLogger LOG =
+            GostLogger.getLogger("org.rssys.gost.jsse.socket.GostSSLSocket");
+    private static final String MSG_TLS_BUFFER_OVERFLOW = "TLS buffer overflow";
+    private static final String MSG_STREAM_CLOSED = "Stream closed";
     private static final ByteBuffer EMPTY = ByteBuffer.allocate(0);
-
-    // max_fragment_length (RFC 6066 §4): negotiated limit для приёма
-    private volatile int maxFragmentLength;
 
     // ========================================================================
     // Transport
@@ -64,9 +69,6 @@ public final class GostSSLSocket extends SSLSocket {
     // ========================================================================
 
     private final GostSSLEngine engine;
-    private final GostX509KeyManager keyManager;
-    private final GostX509TrustManager trustManager;
-    private final GostSSLSessionContext sessionContext;
     private final boolean clientMode;
 
     // ========================================================================
@@ -94,6 +96,9 @@ public final class GostSSLSocket extends SSLSocket {
     // Locks
     // ========================================================================
 
+    // Замки вкладываются: read()/write() берут readLock/writeLock и, если рукопожатие ещё не
+    // завершено, внутри startHandshake() берут handshakeLock (порядок всегда такой, поэтому
+    // взаимной блокировки нет; handshakeLock реентрабелен).
     private final ReentrantLock handshakeLock = new ReentrantLock();
     private final ReentrantLock readLock = new ReentrantLock();
     private final ReentrantLock writeLock = new ReentrantLock();
@@ -104,13 +109,34 @@ public final class GostSSLSocket extends SSLSocket {
 
     private final ByteBuffer readDst =
             ByteBuffer.allocate(MAX_PLAINTEXT + TlsConstants.RECORD_BUFFER_HEADROOM);
-    private final ByteBuffer writeDst = ByteBuffer.allocate(MAX_PACKET);
+    // Заголовок читаемой записи; чтение сокета сериализовано замками, поэтому массив общий
+    private final byte[] recordHeader = new byte[TlsConstants.RECORD_HEADER_SIZE];
+    // Частично прочитанная запись: SocketTimeoutException посреди записи не должен терять уже
+    // прочитанные байты, иначе следующее чтение приняло бы середину записи за заголовок. Доступ
+    // под тем же замком, что и чтение сокета (handshakeLock или readLock).
+    private int recordHeaderRead;
+    // Движок начал рукопожатие (под handshakeLock): тайм-аут не должен приводить к повторному
+    // beginHandshake()
+    private boolean handshakeBegun;
+    private byte[] partialRecord;
+    private int partialRecordRead;
+    private final ByteBuffer writeDst =
+            ByteBuffer.allocate(GostJsseConstants.DEFAULT_PACKET_BUFFER_SIZE);
 
     // ========================================================================
     // Конструкторы
     // ========================================================================
 
-    // (1) Client: новый TCP-сокет + connect
+    /**
+     * Клиентский сокет: новое TCP-соединение к {@code host:port}.
+     *
+     * @param host           имя сервера (используется для SNI и проверки имени в сертификате)
+     * @param port           порт сервера
+     * @param km             менеджер ключей (собственный сертификат для mTLS), может быть пустым
+     * @param tm             менеджер доверия
+     * @param sessionContext контекст сессий (возобновление по PSK), может быть null
+     * @throws IOException при ошибке соединения
+     */
     public GostSSLSocket(
             String host,
             int port,
@@ -121,7 +147,18 @@ public final class GostSSLSocket extends SSLSocket {
         this(new Socket(host, port), host, port, true, km, tm, sessionContext, true);
     }
 
-    // (2) Client: с локальным адресом
+    /**
+     * Клиентский сокет: новое TCP-соединение с привязкой к локальному адресу.
+     *
+     * @param host           имя сервера
+     * @param port           порт сервера
+     * @param localAddr      локальный адрес привязки
+     * @param localPort      локальный порт привязки
+     * @param km             менеджер ключей
+     * @param tm             менеджер доверия
+     * @param sessionContext контекст сессий, может быть null
+     * @throws IOException при ошибке соединения
+     */
     public GostSSLSocket(
             String host,
             int port,
@@ -142,7 +179,17 @@ public final class GostSSLSocket extends SSLSocket {
                 true);
     }
 
-    // (3) Client: InetAddress
+    /**
+     * Клиентский сокет: новое TCP-соединение по адресу. Имя для проверки сертификата берётся из
+     * адреса без обратного DNS-запроса: исходное имя, если адрес создан по имени, иначе литерал.
+     *
+     * @param addr           адрес сервера
+     * @param port           порт сервера
+     * @param km             менеджер ключей
+     * @param tm             менеджер доверия
+     * @param sessionContext контекст сессий, может быть null
+     * @throws IOException при ошибке соединения
+     */
     public GostSSLSocket(
             InetAddress addr,
             int port,
@@ -150,10 +197,29 @@ public final class GostSSLSocket extends SSLSocket {
             GostX509TrustManager tm,
             GostSSLSessionContext sessionContext)
             throws IOException {
-        this(new Socket(addr, port), addr.getHostName(), port, true, km, tm, sessionContext, true);
+        this(
+                new Socket(addr, port),
+                hostWithoutLookup(addr, port),
+                port,
+                true,
+                km,
+                tm,
+                sessionContext,
+                true);
     }
 
-    // (4) Client: InetAddress + local
+    /**
+     * Клиентский сокет: новое TCP-соединение по адресу с привязкой к локальному адресу.
+     *
+     * @param addr           адрес сервера
+     * @param port           порт сервера
+     * @param localAddr      локальный адрес привязки
+     * @param localPort      локальный порт привязки
+     * @param km             менеджер ключей
+     * @param tm             менеджер доверия
+     * @param sessionContext контекст сессий, может быть null
+     * @throws IOException при ошибке соединения
+     */
     public GostSSLSocket(
             InetAddress addr,
             int port,
@@ -165,7 +231,7 @@ public final class GostSSLSocket extends SSLSocket {
             throws IOException {
         this(
                 new Socket(addr, port, localAddr, localPort),
-                addr.getHostName(),
+                hostWithoutLookup(addr, port),
                 port,
                 true,
                 km,
@@ -174,7 +240,9 @@ public final class GostSSLSocket extends SSLSocket {
                 true);
     }
 
-    // (5) Server: wrap accepted socket (package-private, вызывается из GostSSLServerSocket)
+    // Серверный сокет поверх принятого соединения; вызывается из GostSSLServerSocket.accept().
+    // Имя пира берётся без обратного DNS-запроса: на сервере оно нужно только журналу и привязке
+    // возобновления, а запрос блокировал бы accept().
     GostSSLSocket(
             Socket socket,
             GostX509KeyManager km,
@@ -183,7 +251,7 @@ public final class GostSSLSocket extends SSLSocket {
             throws IOException {
         this(
                 socket,
-                socket.getInetAddress().getHostName(),
+                hostWithoutLookup(socket.getInetAddress(), socket.getPort()),
                 socket.getPort(),
                 true,
                 km,
@@ -192,7 +260,19 @@ public final class GostSSLSocket extends SSLSocket {
                 false);
     }
 
-    // (6) Layered (HttpsURLConnection прокси) — публичный
+    /**
+     * Клиентский сокет поверх существующего соединения (например, туннель прокси для
+     * {@code HttpsURLConnection}).
+     *
+     * @param underlying     готовое TCP-соединение
+     * @param host           имя сервера
+     * @param port           порт сервера
+     * @param autoClose      закрывать ли нижележащий сокет при закрытии этого
+     * @param km             менеджер ключей
+     * @param tm             менеджер доверия
+     * @param sessionContext контекст сессий, может быть null
+     * @throws IOException при ошибке ввода-вывода
+     */
     public GostSSLSocket(
             Socket underlying,
             String host,
@@ -203,6 +283,15 @@ public final class GostSSLSocket extends SSLSocket {
             GostSSLSessionContext sessionContext)
             throws IOException {
         this(underlying, host, port, autoClose, km, tm, sessionContext, true);
+    }
+
+    /**
+     * Имя пира без обратного DNS-запроса: исходное имя, если адрес создан по имени, иначе литерал
+     * адреса. {@code InetAddress.getHostName()} при литерале ходит в PTR-запись, а по этому имени
+     * потом сверяется сертификат.
+     */
+    private static String hostWithoutLookup(InetAddress address, int port) {
+        return new InetSocketAddress(address, port).getHostString();
     }
 
     // Единый private конструктор
@@ -218,9 +307,6 @@ public final class GostSSLSocket extends SSLSocket {
             throws IOException {
         this.socket = socket;
         this.autoCloseUnderlying = autoClose;
-        this.keyManager = km;
-        this.trustManager = tm;
-        this.sessionContext = sessionContext;
         this.clientMode = clientMode;
 
         this.engine =
@@ -228,9 +314,6 @@ public final class GostSSLSocket extends SSLSocket {
                         ? GostSSLEngine.createForClient(km, tm, host, port, sessionContext)
                         : GostSSLEngine.createForServer(km, tm, host, port, sessionContext);
 
-        // handshakeLock реентрабельный: когда read()/write() триггерят startHandshake()
-        // до его завершения, вызывающий тред уже держит readLock/writeLock, затем
-        // захватывает handshakeLock — это design decision.
         this.socketIn = socket.getInputStream();
         this.socketOut = socket.getOutputStream();
 
@@ -239,7 +322,9 @@ public final class GostSSLSocket extends SSLSocket {
     }
 
     // ========================================================================
-    // startHandshake
+    // max_fragment_length
+    // ========================================================================
+
     /**
      * Запрашивает уменьшение максимального размера фрагмента (RFC 6066 §4).
      * Должно быть вызвано ДО startHandshake().
@@ -251,6 +336,8 @@ public final class GostSSLSocket extends SSLSocket {
     }
 
     // ========================================================================
+    // startHandshake
+    // ========================================================================
 
     @Override
     public void startHandshake() throws IOException {
@@ -259,7 +346,12 @@ public final class GostSSLSocket extends SSLSocket {
         try {
             if (handshakeDone) return;
 
-            engine.beginHandshake();
+            // Рукопожатие, прерванное тайм-аутом чтения, продолжается с того же места: движок уже
+            // начат, повторный beginHandshake() отверг бы вызов
+            if (!handshakeBegun) {
+                engine.beginHandshake();
+                handshakeBegun = true;
+            }
 
             while (true) {
                 switch (engine.getHandshakeStatus()) {
@@ -267,11 +359,7 @@ public final class GostSSLSocket extends SSLSocket {
                         writeDst.clear();
                         engine.wrap(EMPTY, writeDst);
                         writeDst.flip();
-                        // прямой write из backing array (HeapByteBuffer) — zero-alloc
-                        socketOut.write(
-                                writeDst.array(),
-                                writeDst.arrayOffset() + writeDst.position(),
-                                writeDst.remaining());
+                        writeDstToSocket();
                         socketOut.flush();
                         break;
                     case NEED_UNWRAP:
@@ -294,13 +382,40 @@ public final class GostSSLSocket extends SSLSocket {
                     case FINISHED:
                     case NOT_HANDSHAKING:
                         handshakeDone = true;
-                        maxFragmentLength = engine.getMaxFragmentLength();
                         fireHandshakeCompleted();
                         return;
                 }
             }
+        } catch (SSLException e) {
+            sendPendingFatalAlert();
+            // Контракт SSLSocket: при отказе рукопожатия сокет закрывается, дальнейший обмен
+            // невозможен. Ключи и буферы затираются сразу, а не при закрытии приложением
+            closeQuietly();
+            throw e;
+        } catch (InterruptedIOException e) {
+            // Тайм-аут чтения (setSoTimeout) не роковой, как в JDK: недочитанная запись сохранена,
+            // и повторный вызов продолжает рукопожатие
+            throw e;
+        } catch (IOException e) {
+            // Обрыв или иная ошибка ввода-вывода: рукопожатие продолжить нельзя
+            closeQuietly();
+            throw e;
+        } catch (RuntimeException e) {
+            // Как в JDK (SSLSocketImpl.handleException): непредвиденный сбой рукопожатия роковой и
+            // отдаётся как SSLException, поэтому getSession() не выпускает его в приложение
+            sendPendingFatalAlert();
+            closeQuietly();
+            throw new SSLException("Handshake failed", e);
         } finally {
             handshakeLock.unlock();
+        }
+    }
+
+    private void closeQuietly() {
+        try {
+            close();
+        } catch (IOException ignored) {
+            // закрытие после отказа best-effort: причину отказа приложение получает исключением
         }
     }
 
@@ -323,7 +438,8 @@ public final class GostSSLSocket extends SSLSocket {
     // ========================================================================
 
     private class AppInputStream extends InputStream {
-        private boolean closed;
+        // volatile: close() вызывают из другого потока, чтобы разбудить читателя
+        private volatile boolean closed;
         private byte[] leftover;
         private int leftoverOff;
         private final byte[] one = new byte[1];
@@ -336,9 +452,11 @@ public final class GostSSLSocket extends SSLSocket {
 
         @Override
         public int read(byte[] b, int off, int len) throws IOException {
-            if (closed) throw new IOException("Stream closed");
+            if (closed) throw new IOException(MSG_STREAM_CLOSED);
             readLock.lock();
             try {
+                // Поток закрыли, пока читатель ждал замок
+                if (closed) throw new IOException(MSG_STREAM_CLOSED);
                 if (len == 0) return 0;
                 if (!handshakeDone) startHandshake();
 
@@ -368,7 +486,7 @@ public final class GostSSLSocket extends SSLSocket {
                         case BUFFER_UNDERFLOW:
                             throw new IOException("TLS buffer underflow");
                         case BUFFER_OVERFLOW:
-                            throw new IOException("TLS buffer overflow");
+                            throw new IOException(MSG_TLS_BUFFER_OVERFLOW);
                     }
 
                     if (readDst.hasRemaining()) {
@@ -386,24 +504,51 @@ public final class GostSSLSocket extends SSLSocket {
                     // Post-handshake (NST, KU) — engine обработал, данных нет
                     if (engine.isInboundDone()) return -1;
                 }
+            } catch (SSLException e) {
+                sendPendingFatalAlert();
+                throw e;
             } finally {
                 readLock.unlock();
+                // close() мог не получить замок и оставил затирание читателю. Проверка после
+                // unlock: флаг записан до неудачного tryLock закрывающего потока, поэтому здесь
+                // он виден, а затирание под замком не пересекается с чужим чтением.
+                if (closed) {
+                    wipeBuffersIfIdle();
+                }
             }
         }
 
         @Override
         public int available() {
-            if (leftover != null) return leftover.length - leftoverOff;
-            return 0;
+            byte[] pending = leftover;
+            return pending != null ? pending.length - leftoverOff : 0;
         }
 
         @Override
         public void close() {
             closed = true;
-            TlsUtils.wipeArray(leftover);
-            leftover = null;
-            leftoverOff = 0;
-            TlsUtils.wipeArray(readDst.array());
+            wipeBuffersIfIdle();
+        }
+
+        /**
+         * Затирает буфер расшифровки и остаток открытого текста, только если читатель не работает
+         * с ними: затирание под чужим чтением отдало бы приложению нули, обнулило бы остаток между
+         * проверкой и копированием либо оставило бы новый остаток в памяти. Занятый замок значит,
+         * что затрёт сам читатель по завершении чтения.
+         */
+        private void wipeBuffersIfIdle() {
+            if (!readLock.tryLock()) {
+                return;
+            }
+            try {
+                TlsUtils.wipeArray(leftover);
+                leftover = null;
+                leftoverOff = 0;
+                TlsUtils.wipeArray(readDst.array());
+                discardPartialRecordIfIdle();
+            } finally {
+                readLock.unlock();
+            }
         }
     }
 
@@ -412,7 +557,7 @@ public final class GostSSLSocket extends SSLSocket {
     // ========================================================================
 
     private class AppOutputStream extends OutputStream {
-        private boolean closed;
+        private volatile boolean closed;
         private final byte[] one = new byte[1];
 
         @Override
@@ -423,7 +568,7 @@ public final class GostSSLSocket extends SSLSocket {
 
         @Override
         public void write(byte[] b, int off, int len) throws IOException {
-            if (closed) throw new IOException("Stream closed");
+            if (closed) throw new IOException(MSG_STREAM_CLOSED);
             writeLock.lock();
             try {
                 if (len == 0) return;
@@ -435,15 +580,10 @@ public final class GostSSLSocket extends SSLSocket {
                     writeDst.clear();
                     SSLEngineResult result = engine.wrap(src, writeDst);
                     if (result.getStatus() == SSLEngineResult.Status.BUFFER_OVERFLOW) {
-                        throw new IOException("TLS buffer overflow");
+                        throw new IOException(MSG_TLS_BUFFER_OVERFLOW);
                     }
                     writeDst.flip();
-                    int toWrite = writeDst.remaining();
-                    // прямой write из backing array (HeapByteBuffer) — zero-alloc
-                    socketOut.write(
-                            writeDst.array(),
-                            writeDst.arrayOffset() + writeDst.position(),
-                            writeDst.remaining());
+                    writeDstToSocket();
 
                     // Дренирование outgoing queue (auto-KeyUpdate):
                     // после wrap мог появиться KU-фрейм — вычитываем все
@@ -451,17 +591,17 @@ public final class GostSSLSocket extends SSLSocket {
                         writeDst.clear();
                         SSLEngineResult drainResult = engine.wrap(EMPTY, writeDst);
                         if (drainResult.getStatus() == SSLEngineResult.Status.BUFFER_OVERFLOW) {
-                            throw new IOException("TLS buffer overflow during drain");
+                            throw new IOException(MSG_TLS_BUFFER_OVERFLOW + " during drain");
                         }
                         if (writeDst.position() == 0) break;
                         writeDst.flip();
-                        socketOut.write(
-                                writeDst.array(),
-                                writeDst.arrayOffset() + writeDst.position(),
-                                writeDst.remaining());
+                        writeDstToSocket();
                     }
                 }
                 socketOut.flush();
+            } catch (SSLException e) {
+                sendPendingFatalAlert();
+                throw e;
             } finally {
                 writeLock.unlock();
             }
@@ -496,23 +636,43 @@ public final class GostSSLSocket extends SSLSocket {
                     socketOut.flush();
                 }
             } catch (IOException ignored) {
+                // close_notify best-effort: закрытие продолжается и при обрыве соединения
             }
         }
 
         // Закрываем inbound после отправки close_notify — единая точка
-        // destroyHandshakeEngine() зачищает record-ключи во всех сценариях close
+        // destroyAll() зачищает record-ключи во всех сценариях close
         // (штатная ветка closeOutbound() не разрушает engine до получения close_notify пира).
         // Порядок строгий: pollOutboundRecord() выше уже забрал pendingCloseRecord,
-        // иначе destroyHandshakeEngine() обнулил бы его и close_notify потерялся.
+        // иначе destroyAll() обнулил бы его и close_notify потерялся.
         try {
             engine.closeInbound();
         } catch (SSLException ignored) {
             // closeInbound без close_notify пира легален (RFC 8446 §6.1)
         }
 
-        if (autoCloseUnderlying) {
-            socket.close();
+        try {
+            if (autoCloseUnderlying) {
+                socket.close();
+            }
+        } finally {
+            // Закрытие сокета, а не только потока чтения, обязано затереть открытый текст
+            // приложения (буфер расшифровки и непрочитанный остаток). Затирание после закрытия
+            // нижележащего сокета: заблокированный читатель уже разбужен и не пишет в буфер.
+            appIn.close();
+            appOut.close();
         }
+    }
+
+    /**
+     * Сообщает, завершилось ли рукопожатие возобновлением по PSK (без обмена сертификатами).
+     * <p>Значение фиксируется при завершении рукопожатия и не меняется после закрытия сокета.</p>
+     *
+     * @return true, если рукопожатие возобновлено; false, если оно было полным
+     * @throws IllegalStateException если рукопожатие ещё не завершено
+     */
+    public boolean wasResumed() {
+        return engine.wasResumed();
     }
 
     /** Только для тестов пакета: доступ к engine без рефлексии. Не часть публичного API SSLSocket. */
@@ -540,6 +700,7 @@ public final class GostSSLSocket extends SSLSocket {
             try {
                 l.handshakeCompleted(event);
             } catch (RuntimeException ignored) {
+                // ошибка слушателя не должна сорвать остальных слушателей и соединение
             }
         }
     }
@@ -550,7 +711,7 @@ public final class GostSSLSocket extends SSLSocket {
 
     @Override
     public String[] getSupportedCipherSuites() {
-        return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+        return GostJsseConstants.supportedCipherSuites();
     }
 
     @Override
@@ -565,7 +726,7 @@ public final class GostSSLSocket extends SSLSocket {
 
     @Override
     public String[] getSupportedProtocols() {
-        return GostJsseConstants.SUPPORTED_PROTOCOLS.clone();
+        return GostJsseConstants.supportedProtocols();
     }
 
     @Override
@@ -578,8 +739,36 @@ public final class GostSSLSocket extends SSLSocket {
         engine.setEnabledProtocols(protocols);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * По контракту {@code SSLSocket} запускает рукопожатие, если оно не завершено, и ждёт его. Если
+     * рукопожатие уже идёт в текущем потоке (вызов из обратного вызова рукопожатия, например
+     * селектора ALPN), возвращается текущая сессия без повторного запуска: замок рукопожатия
+     * реентерабельный, и повторный запуск ушёл бы в рекурсию. У неподключённого сокета и при отказе
+     * рукопожатия возвращается пустая сессия ({@code SSL_NULL_WITH_NULL_NULL}), исключения нет;
+     * после отказа сокет закрыт.
+     */
     @Override
     public SSLSession getSession() {
+        if (!handshakeDone
+                && isConnected()
+                && !isClosed()
+                && !handshakeLock.isHeldByCurrentThread()) {
+            try {
+                startHandshake();
+            } catch (IOException e) {
+                // Причину приложение узнаёт из startHandshake()/чтения; здесь контракт — пустая
+                // сессия без исключения. Исключение смешанного происхождения (движок, сокет JDK),
+                // поэтому текст не пишется, только тип
+                String label = engine.getConnectionLabel();
+                GostLogger logger = label != null ? LOG.withContext(label) : LOG;
+                logger.log(
+                        Level.DEBUG,
+                        "Handshake for getSession() failed: {0}",
+                        e.getClass().getSimpleName());
+            }
+        }
         return engine.getSession();
     }
 
@@ -639,18 +828,23 @@ public final class GostSSLSocket extends SSLSocket {
     }
 
     @Override
-    public String getHandshakeApplicationProtocol() {
+    public String getApplicationProtocol() {
         return engine.getApplicationProtocol();
     }
 
-    private java.util.function.BiFunction<SSLSocket, java.util.List<String>, String> socketSelector;
+    @Override
+    public String getHandshakeApplicationProtocol() {
+        return engine.getHandshakeApplicationProtocol();
+    }
+
+    private BiFunction<SSLSocket, List<String>, String> socketSelector;
 
     @Override
     public void setHandshakeApplicationProtocolSelector(
-            java.util.function.BiFunction<SSLSocket, java.util.List<String>, String> selector) {
+            BiFunction<SSLSocket, List<String>, String> selector) {
         this.socketSelector = selector;
         if (selector != null) {
-            java.util.function.BiFunction<SSLEngine, java.util.List<String>, String> wrapped =
+            BiFunction<SSLEngine, List<String>, String> wrapped =
                     (eng, list) -> selector.apply(this, list);
             engine.setHandshakeApplicationProtocolSelector(wrapped);
         } else {
@@ -659,13 +853,10 @@ public final class GostSSLSocket extends SSLSocket {
     }
 
     @Override
-    public java.util.function.BiFunction<SSLSocket, java.util.List<String>, String>
-            getHandshakeApplicationProtocolSelector() {
+    public BiFunction<SSLSocket, List<String>, String> getHandshakeApplicationProtocolSelector() {
         return socketSelector;
     }
 
-    // ========================================================================
-    // String representation
     // ========================================================================
     // Socket methods — делегирование в this.socket
     // ========================================================================
@@ -835,10 +1026,51 @@ public final class GostSSLSocket extends SSLSocket {
     // ========================================================================
 
     /**
+     * Отправляет пиру fatal alert, который движок поставил при сбое рукопожатия, приёма или записи.
+     * <p>
+     * Пир должен узнать о причине обрыва сразу (RFC 8446 §6), а не при закрытии сокета: приложение
+     * вправе поймать исключение и не закрывать сокет, тогда пир висел бы до таймаута. Запись в сокет
+     * идёт под {@code writeLock}, чтобы не перемешаться с данными другого потока. Блокировку берём
+     * без ожидания: читающий поток может держать {@code readLock} и {@code handshakeLock}, а писатель
+     * в это время ждать их под {@code writeLock}, и ожидание привело бы к взаимной блокировке. Если
+     * писатель занят, alert остаётся в движке и уходит при {@link #close()}. Повторной отправки нет:
+     * {@code pollOutboundRecord} отдаёт запись один раз и закрывает выходную сторону движка.
+     * Сбой отправки не скрывает исходную ошибку (best-effort).
+     */
+    private void sendPendingFatalAlert() {
+        if (!writeLock.tryLock()) {
+            return;
+        }
+        try {
+            byte[] alertRecord = engine.pollOutboundRecord();
+            if (alertRecord != null) {
+                socketOut.write(alertRecord);
+                socketOut.flush();
+            }
+        } catch (IOException ignored) {
+            // alert best-effort: пир увидит обрыв соединения
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    /**
+     * Пишет в сокет готовую запись из {@code writeDst} (после {@code flip()}). Запись идёт прямо
+     * из массива HeapByteBuffer без промежуточной копии.
+     */
+    private void writeDstToSocket() throws IOException {
+        socketOut.write(
+                writeDst.array(),
+                writeDst.arrayOffset() + writeDst.position(),
+                writeDst.remaining());
+    }
+
+    /**
      * Читает полную TLS-запись из socketIn.
      * <p>
      * Предусловие: socketIn доступен под handshakeLock (handshake) или readLock (app data).
-     * Эти локи никогда не пересекаются на одном thread — нет конкурентного доступа.
+     * Замки вкладываются (read() берёт readLock, а неявный startHandshake() внутри — ещё и
+     * handshakeLock), поэтому два потока не читают сокет одновременно.
      * <p>
      * EOF между записями (clean close): возвращает null.
      * EOF внутри записи (truncation): IOException.
@@ -847,55 +1079,71 @@ public final class GostSSLSocket extends SSLSocket {
      * @throws IOException при ошибке ввода-вывода или truncation
      */
     private ByteBuffer readTlsRecord() throws IOException {
-        byte[] hdr = new byte[RECORD_HEADER];
-        int off = 0;
-        while (off < RECORD_HEADER) {
-            int n = socketIn.read(hdr, off, RECORD_HEADER - off);
+        // Состояние чтения живёт в полях: тайм-аут сокета (SocketTimeoutException) прерывает
+        // чтение в любой точке, и повторный вызов продолжает с того же байта
+        while (recordHeaderRead < RECORD_HEADER) {
+            int n = socketIn.read(recordHeader, recordHeaderRead, RECORD_HEADER - recordHeaderRead);
             if (n == -1) {
-                if (off == 0) return null;
+                if (recordHeaderRead == 0) return null;
                 throw new EOFException(
-                        "Truncated TLS record header: " + off + " of " + RECORD_HEADER + " bytes");
+                        "Truncated TLS record header: "
+                                + recordHeaderRead
+                                + " of "
+                                + RECORD_HEADER
+                                + " bytes");
             }
-            off += n;
+            recordHeaderRead += n;
         }
-        int bodyLen = ((hdr[3] & 0xFF) << 8) | (hdr[4] & 0xFF);
-        if (bodyLen > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
-            throw new IOException("TLS record too large: " + bodyLen);
-        }
-        if (maxFragmentLength > 0) {
-            int maxCipher =
-                    TlsConstants.MAX_FRAG_LEN_VALUES[maxFragmentLength]
-                            + 1
-                            + 255
-                            + TlsConstants
-                                    .MGM_TAG_SIZE; // plaintext + inner_type + max_padding(255) +
-            // tag
-            if (bodyLen > maxCipher) {
-                throw new IOException(
-                        "TLS record exceeds max_fragment_length negotiated limit: "
-                                + bodyLen
-                                + " > "
-                                + maxCipher);
+        if (partialRecord == null) {
+            int bodyLen = ((recordHeader[3] & 0xFF) << 8) | (recordHeader[4] & 0xFF);
+            if (bodyLen > TlsConstants.MAX_CIPHERTEXT_LENGTH) {
+                throw new IOException("TLS record too large: " + bodyLen);
             }
+            // Размер по согласованному max_fragment_length здесь не проверяется: дополнение
+            // TLSInnerPlaintext не ограничено сверху ничем, кроме общего предела записи (RFC 8446
+            // §5.4), а длину открытого текста после расшифровки сверяет TlsRecord (record_overflow)
+            partialRecord = new byte[RECORD_HEADER + bodyLen];
+            System.arraycopy(recordHeader, 0, partialRecord, 0, RECORD_HEADER);
+            partialRecordRead = RECORD_HEADER;
         }
-        byte[] record = new byte[RECORD_HEADER + bodyLen];
-        System.arraycopy(hdr, 0, record, 0, RECORD_HEADER);
-        readFully(socketIn, record, RECORD_HEADER, bodyLen);
-        return ByteBuffer.wrap(record, 0, RECORD_HEADER + bodyLen);
+        while (partialRecordRead < partialRecord.length) {
+            int n =
+                    socketIn.read(
+                            partialRecord,
+                            partialRecordRead,
+                            partialRecord.length - partialRecordRead);
+            if (n == -1) throw new EOFException("Unexpected EOF");
+            partialRecordRead += n;
+        }
+        byte[] record = partialRecord;
+        partialRecord = null;
+        partialRecordRead = 0;
+        recordHeaderRead = 0;
+        return ByteBuffer.wrap(record);
     }
 
     /**
-     * Читает ровно {@code len} байт из {@code in} в {@code buf}.
-     * EOF до чтения всех байт: {@link EOFException}.
+     * Затирает недочитанную запись, если сокет сейчас никто не читает (оба замка чтения свободны):
+     * затирание под чужим чтением испортило бы его. Иначе затрёт сам читатель при закрытии.
      */
-    private static void readFully(InputStream in, byte[] buf, int off, int len) throws IOException {
-        while (len > 0) {
-            int n = in.read(buf, off, len);
-            if (n == -1) throw new EOFException("Unexpected EOF");
-            off += n;
-            len -= n;
+    private void discardPartialRecordIfIdle() {
+        if (!handshakeLock.tryLock()) {
+            return;
+        }
+        try {
+            TlsUtils.wipeArray(partialRecord);
+            partialRecord = null;
+            partialRecordRead = 0;
+            TlsUtils.wipeArray(recordHeader);
+            recordHeaderRead = 0;
+        } finally {
+            handshakeLock.unlock();
         }
     }
+
+    // ========================================================================
+    // String representation
+    // ========================================================================
 
     @Override
     public String toString() {

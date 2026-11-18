@@ -1,7 +1,6 @@
 package org.rssys.gost.crossval.pkcs12;
 
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -9,10 +8,10 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.crossval.pkcs12.OpenSslPkcs12Helper.PfxBundle;
-import org.rssys.gost.crossval.util.CrossValUtils;
 import org.rssys.gost.crossval.util.OpenSslChecker;
-import org.rssys.gost.crossval.util.TempDirUtils;
+import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.crossval.util.TempDirUtils;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.GostPkcs12Builder;
@@ -26,9 +25,15 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 /**
  * Кросс-валидация PKCS12: GostPkcs12Loader <-> OpenSSL gost-engine.
@@ -39,10 +44,17 @@ import static org.junit.jupiter.api.Assertions.*;
  * — верифицируется соответствие ключа, подпись, реакция на повреждённые данные.
  * <p>
  * Тест пропускается, если OpenSSL или gost-engine недоступны.
+ * <p>
+ * Важно: PFX, который {@code openssl pkcs12 -export} создаёт без {@code -keypbe}/{@code -macalg},
+ * не ГОСТ (AES-256-CBC, SHA-256), и читается загрузчиком через откат на JDK KeyStore. Такие тесты
+ * названы «откат на JDK» и проверяют именно его; ГОСТ MAC и шифрование ключа проверяют
+ * {@link OpenSslPkcs12GostMacCrossValidationTest} и сценарий 7.
  */
 @DisplayName("PKCS12: кросс-валидация GostPkcs12Loader <-> OpenSSL gost-engine")
 class OpenSslPkcs12CrossValidationTest {
 
+    private static final Pattern PEM_KEY =
+            Pattern.compile("-----BEGIN PRIVATE KEY-----([^-]+)-----END PRIVATE KEY-----");
     private static final char[] PASSWORD       = "crossval-test".toCharArray();
     private static final char[] WRONG_PASSWORD = "wrong".toCharArray();
     private static final char[] EMPTY_PASSWORD = new char[0];
@@ -86,7 +98,7 @@ class OpenSslPkcs12CrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curves")
-    @DisplayName("roundtrip: OpenSSL -> PFX -> load -> ключ и сертификат")
+    @DisplayName("откат на JDK: OpenSSL -> PFX (не ГОСТ) -> load -> ключ и сертификат")
     void testRoundtrip(PkcsSpec spec) throws Exception {
         TempDirUtils.withTempDir("pkcs12-rt-", tmpDir -> {
             PfxBundle b = OpenSslPkcs12Helper.buildPfxWithKey(
@@ -102,7 +114,7 @@ class OpenSslPkcs12CrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curves")
-    @DisplayName("ключи совпадают: загруженный ключ даёт ту же точку Q, что и исходный DER")
+    @DisplayName("откат на JDK: ключи совпадают, загруженный ключ даёт ту же точку Q, что и исходный DER")
     void testKeyCorrespondence(PkcsSpec spec) throws Exception {
         TempDirUtils.withTempDir("pkcs12-key-", tmpDir -> {
             PfxBundle b = OpenSslPkcs12Helper.buildPfxWithKey(
@@ -115,7 +127,7 @@ class OpenSslPkcs12CrossValidationTest {
 
             // Валидация против сертификата: Q_cert == d_loaded * G
             PublicKeyParameters pub = r.getCertificateChain().get(0).getPublicKey();
-            ECPoint qCert = pub.getQ().normalize();
+            ECPoint qCert = pub.getQ();
             ECPoint qFromD = g.multiply(loaded.getD()).normalize();
             assertEquals(qCert.getX(), qFromD.getX(),
                 spec + ": X координата Q из сертификата не совпадает с d*G");
@@ -129,7 +141,7 @@ class OpenSslPkcs12CrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curves")
-    @DisplayName("подпись/проверка: загруженный ключ подписывает, публичный из PFX верифицирует")
+    @DisplayName("откат на JDK: загруженный ключ подписывает, публичный из PFX верифицирует")
     void testSignVerify(PkcsSpec spec) throws Exception {
         TempDirUtils.withTempDir("pkcs12-sig-", tmpDir -> {
             PfxBundle b = OpenSslPkcs12Helper.buildPfxWithKey(
@@ -149,7 +161,7 @@ class OpenSslPkcs12CrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curves")
-    @DisplayName("повреждённые данные -> IllegalArgumentException")
+    @DisplayName("откат на JDK: повреждённые данные -> IllegalArgumentException")
     void testCorruptedData(PkcsSpec spec) throws Exception {
         TempDirUtils.withTempDir("pkcs12-cor-", tmpDir -> {
             PfxBundle b = OpenSslPkcs12Helper.buildPfxWithKey(
@@ -166,7 +178,7 @@ class OpenSslPkcs12CrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curves")
-    @DisplayName("неверный пароль -> IllegalArgumentException")
+    @DisplayName("откат на JDK: неверный пароль -> IllegalArgumentException")
     void testWrongPassword(PkcsSpec spec) throws Exception {
         TempDirUtils.withTempDir("pkcs12-wp-", tmpDir -> {
             PfxBundle b = OpenSslPkcs12Helper.buildPfxWithKey(
@@ -180,7 +192,7 @@ class OpenSslPkcs12CrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curves")
-    @DisplayName("пустой пароль: OpenSSL создаёт PFX, loader загружает успешно")
+    @DisplayName("откат на JDK: пустой пароль, OpenSSL создаёт PFX, loader загружает успешно")
     void testEmptyPassword(PkcsSpec spec) throws Exception {
         TempDirUtils.withTempDir("pkcs12-ep-", tmpDir -> {
             PfxBundle b = OpenSslPkcs12Helper.buildPfxWithKey(
@@ -197,7 +209,7 @@ class OpenSslPkcs12CrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("curves")
-    @DisplayName("reverse: GostPkcs12Builder -> PFX -> OpenSSL читает")
+    @DisplayName("структура нашего PFX: GostPkcs12Builder -> OpenSSL разбирает (MAC проверяют отдельные тесты)")
     void testBuilderToOpenSsl(PkcsSpec spec) throws Exception {
         TempDirUtils.withTempDir("pkcs12-rev-", tmpDir -> {
             // Генерируем ключ + сертификат через OpenSSL
@@ -236,11 +248,20 @@ class OpenSslPkcs12CrossValidationTest {
         });
     }
 
-    @Disabled("OpenSSL 3.6.0-gost не поддерживает HMAC-Streebog для проверки MAC в PKCS12 (существующие тесты используют -nomacver). Ограничение OpenSSL, не баг библиотеки.")
+    /**
+     * Наш PFX (Streebog-512, Кузнечик CTR-ACPKM) читают сборки OpenSSL, умеющие проверять ГОСТ MAC:
+     * MAC проверяется без {@code -nomacver}, ключ извлекается и совпадает с исходным. Сборки,
+     * которые ГОСТ MAC не проверяют, пропускаются по пробе на эталонном PFX из RFC 9548.
+     */
     @ParameterizedTest
     @MethodSource("curves")
-    @DisplayName("Сценарий 7: библиотека генерирует ключ+сертификат → PFX (Streebog-256) → OpenSSL читает")
+    @DisplayName("Сценарий 7: библиотека генерирует ключ+сертификат -> PFX (Streebog-512) -> сборки OpenSSL с ГОСТ MAC читают")
     void testLibraryKeyPfxToOpenSsl(PkcsSpec spec) throws Exception {
+        List<OpenSslToolchain> capable = OpenSslToolchain.available().stream()
+                .filter(OpenSslToolchain::canVerifyGostMac)
+                .toList();
+        assumeFalse(capable.isEmpty(),
+                "ни одна сборка OpenSSL не проверяет ГОСТ MAC в PKCS#12: " + OpenSslToolchain.available());
         TempDirUtils.withTempDir("pkcs12-lib-", tmpDir -> {
             ECParameters params = specToParams(spec);
 
@@ -260,23 +281,36 @@ class OpenSslPkcs12CrossValidationTest {
                     .key(privKey)
                     .certificate(cert)
                     .password(PASSWORD)
-                    .macHashLen(GostOids.STREEBOG_256_HASH_LEN)
+                    .encScheme(GostOids.KUZ_CTR_ACPKM)
                     .friendlyName("crossval-library")
                     .build();
 
             Path pfxFile = tmpDir.resolve("library.pfx");
             Files.write(pfxFile, pfx);
+            Path passwordFile = OpenSslToolchain.passwordFile(tmpDir, PASSWORD_STR);
 
-            String openssl = OpenSslChecker.resolveOpenSslBinary();
-            String[] engineFlags = OpenSslChecker.resolveEngineFlag();
-            String[] cmd = CrossValUtils.concat(
-                    new String[]{openssl, "pkcs12", "-noout", "-in", pfxFile.toString(),
-                                 "-passin", "pass:" + PASSWORD_STR},
-                    engineFlags);
-            int exit = OpenSslChecker.run(cmd);
-            assertEquals(0, exit, spec + ": OpenSSL не смог прочитать PFX, созданный библиотекой");
-
-            privKey.destroy();
+            try {
+                for (OpenSslToolchain toolchain : capable) {
+                    OpenSslToolchain.Result result =
+                            toolchain.pkcs12(pfxFile, passwordFile, "-nocerts", "-nodes");
+                    assertTrue(result.ok(),
+                            spec + ", " + toolchain + ": OpenSSL не прочитал PFX, созданный библиотекой: "
+                                    + result.output());
+                    Matcher matcher = PEM_KEY.matcher(result.output());
+                    assertTrue(matcher.find(), spec + ", " + toolchain + ": в выводе OpenSSL нет ключа");
+                    byte[] der = Base64.getMimeDecoder().decode(matcher.group(1));
+                    PrivateKeyParameters extracted = GostDerCodec.decodePrivateKey(der);
+                    try {
+                        assertArrayEquals(privKey.getDBytes(), extracted.getDBytes(),
+                                spec + ", " + toolchain + ": ключ, извлечённый OpenSSL, не совпал с исходным");
+                    } finally {
+                        extracted.destroy();
+                        Arrays.fill(der, (byte) 0);
+                    }
+                }
+            } finally {
+                privKey.destroy();
+            }
             return null;
         });
     }

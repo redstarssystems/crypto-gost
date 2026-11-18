@@ -31,7 +31,6 @@ public final class SocketTlsTransport implements TlsTransport {
     private final InputStream in;
     private final OutputStream out;
     private volatile boolean closed;
-    private final byte[] headerBuf = new byte[TlsConstants.RECORD_HEADER_SIZE];
     private final byte[] recordBuf =
             new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
 

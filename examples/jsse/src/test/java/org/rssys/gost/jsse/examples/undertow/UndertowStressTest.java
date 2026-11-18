@@ -266,7 +266,7 @@ class UndertowStressTest {
                 profileRequests[profileId].incrementAndGet();
             } catch (Exception e) {
                 profileErrors[profileId].incrementAndGet();
-                System.err.println("[PROFILE1_ERR] " + e);
+                System.err.println("[PROFILE1_ERR] " + causeChain(e));
             } finally {
                 if (s != null)
                     try {
@@ -439,6 +439,17 @@ class UndertowStressTest {
             total += gc.getCollectionCount();
         }
         return total;
+    }
+
+    // Цепочка причин в одну строку: по ней ошибки раскладываются по исходным исключениям
+    private static String causeChain(Throwable e) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (sb.length() > 0) sb.append(" <- ");
+            sb.append(t.getClass().getName()).append(": ").append(t.getMessage());
+            if (t.getCause() == t) break;
+        }
+        return sb.toString();
     }
 
     private static void log(String msg) {

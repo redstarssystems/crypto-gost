@@ -17,9 +17,17 @@ import org.rssys.gost.pkix.tsp.TstInfo;
  *                           пустой список для CAdES-BES/T
  * @param completeRevocRefs  complete-revocation-references (CAdES-C, RFC 5126 §6.2.2);
  *                           пустой список для CAdES-BES/T
- * @param certificateValues  certificate-values (CAdES-X Long, RFC 5126 §6.3.3);
- *                           пустой список для BES/T/C
- * @param revocationValues   revocation-values со встроенными CRL и OCSP-ответами (CAdES-X Long);
+ * @param certificateValues  для CAdES-X Long — канонизированная первичная проверенная
+ *                           цепочка leaf-first, а не сырой атрибут certificate-values;
+ *                           порядок атрибута произвольный, посторонние сертификаты
+ *                           отклоняются. Пустой список для BES/T/C
+ * @param revocationValues   для CAdES-X Long - CRL и OCSP-ответы из revocation-values, прошедшие
+ *                           проверку: подпись проверена, статус не "отозван". Значения, не вошедшие
+ *                           в доказательства сертификатов ниже якоря (например, относящиеся к
+ *                           самому якорю), в результат не попадают, хотя
+ *                           {@code completeRevocRefs} может на них ссылаться. Свежесть
+ *                           гарантируется на уровне сертификата (хотя бы одно значение в окне),
+ *                           остальные значения могут лежать вне окна.
  *                           {@link CAdESXLongData.RevocationValuesDecoded#EMPTY} для BES/T/C
  * @param contentTimestamp   content-time-stamp (ES-C, RFC 5126 §5.11.1); null для BES/T/C
  */

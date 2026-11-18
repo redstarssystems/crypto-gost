@@ -31,10 +31,12 @@ import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.examples.EchoSocketClient;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper.CertBundle;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.tls13.TlsTestHelper.CertBundle;
 
 /**
  * Интеграционный тест mTLS: Jetty 12 + ГОСТ TLS 1.3.
@@ -43,7 +45,7 @@ import org.rssys.gost.tls13.TlsTestHelper.CertBundle;
  * (mutual TLS) через Jetty pipeline: сервер запрашивает клиентский сертификат,
  * клиент с сертификатом получает HTTP 200, клиент без сертификата — rejected.
  * <p>
- * Использует {@link TlsTestHelper} для создания серверного и клиентского сертификатов,
+ * Использует {@link PkixCertTestHelper} для создания серверного и клиентского сертификатов,
  * подписанных одним CA — это приближает тест к реальному mTLS-сценарию, где
  * у сервера и клиента разные сертификаты (в отличие от {@code GostTestCerts},
  * который создаёт только серверный сертификат).
@@ -55,6 +57,7 @@ class JettyMtlsTest {
     private static ECParameters params;
     private static CertBundle rootCa;
     private static PublicKeyParameters caPub;
+    private static GostCertificate caCert;
     private static CertBundle serverCert;
     private static CertBundle clientCert;
 
@@ -64,11 +67,12 @@ class JettyMtlsTest {
     @BeforeAll
     static void createCertificates() throws Exception {
         params = ECParameters.tc26a256();
-        rootCa = TlsTestHelper.createRootCA(params);
+        rootCa = PkixCertTestHelper.createRootCA(params);
         caPub = rootCa.cert.getPublicKey();
+        caCert = rootCa.cert;
 
         serverCert =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         caPub,
@@ -82,7 +86,7 @@ class JettyMtlsTest {
                         null);
 
         clientCert =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         caPub,
@@ -105,7 +109,8 @@ class JettyMtlsTest {
                 "server",
                 new X509Certificate[] {CertificateBridge.toJca(serverCert.cert)},
                 serverCert.priv);
-        GostX509TrustManager serverTm = new GostX509TrustManager(caPub, false);
+        GostX509TrustManager serverTm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert));
         SSLContext serverCtx =
                 SSLContext.getInstance(
                         GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
@@ -169,7 +174,8 @@ class JettyMtlsTest {
                 "client",
                 new X509Certificate[] {CertificateBridge.toJca(clientCert.cert)},
                 clientCert.priv);
-        GostX509TrustManager clientTm = new GostX509TrustManager(caPub, false);
+        GostX509TrustManager clientTm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert));
         SSLContext clientCtx =
                 SSLContext.getInstance(
                         GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
@@ -181,7 +187,8 @@ class JettyMtlsTest {
     @Test
     @DisplayName("Клиент без сертификата — TLS handshake failure")
     void mtlsWithoutClientCert() throws Exception {
-        GostX509TrustManager clientTm = new GostX509TrustManager(caPub, false);
+        GostX509TrustManager clientTm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert));
         SSLContext clientCtx =
                 SSLContext.getInstance(
                         GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);

@@ -2,13 +2,20 @@ package org.rssys.gost.pkix.cert;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.Security;
 import java.security.cert.Certificate;
+import java.security.cert.CertificateEncodingException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Enumeration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.RssysGostProvider;
 import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jca.spec.GostDerCodec;
@@ -18,9 +25,11 @@ import org.rssys.gost.pkix.cert.GostPkcs12Parser.EncryptedPrivateKeyInfo;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.MacData;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.PfxData;
 import org.rssys.gost.pkix.cert.GostPkcs12Parser.SafeBagData;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
+import org.rssys.gost.util.PasswordUtf8;
 
 /**
  * Загрузчик PKCS12 (PFX) с нативной поддержкой ГОСТ.
@@ -42,21 +51,73 @@ public final class GostPkcs12Loader {
 
     private GostPkcs12Loader() {}
 
+    /**
+     * Политика проверки MAC контейнера PKCS#12.
+     */
+    public enum MacPolicy {
+        /** MAC обязателен; отсутствие MacData — ошибка. */
+        REQUIRED,
+        /**
+         * Разрешить контейнер без MacData для legacy-файлов из доверенного источника.
+         * <p>
+         * Целостность контейнера в этом режиме не гарантируется. Проверка связности
+         * отсекает лишь несвязанные и склеенные сертификаты; полностью самосогласованную
+         * подмену (свой конечный сертификат на открытый ключ жертвы плюс свой CA) она
+         * не ловит, потому что связность не равна доверию. Аутентичность в этом режиме
+         * возможна только через внешний якорь или пиннинг сертификата.
+         */
+        ALLOW_MISSING
+    }
+
     public static final class Result {
         private final PrivateKeyParameters privateKey;
         private final List<GostCertificate> certificateChain;
+        private final List<GostCertificate> allCertificates;
 
-        Result(PrivateKeyParameters privateKey, List<GostCertificate> certificateChain) {
+        Result(
+                PrivateKeyParameters privateKey,
+                List<GostCertificate> certificateChain,
+                List<GostCertificate> allCertificates) {
             this.privateKey = privateKey;
             this.certificateChain = certificateChain;
+            this.allCertificates = allCertificates;
         }
 
         public PrivateKeyParameters getPrivateKey() {
             return privateKey;
         }
 
+        /**
+         * @return связанная цепочка от сертификата закрытого ключа до последнего доступного
+         *     в контейнере CA (корня в контейнере может не быть); если сертификат ключа —
+         *     CA, цепочка строится от него; несвязанные сертификаты в неё не включаются
+         */
         public List<GostCertificate> getCertificateChain() {
             return certificateChain;
+        }
+
+        /**
+         * Кандидаты в цепочку: сертификаты контейнера, прошедшие фильтр по localKeyId,
+         * без проверки связности. Нужен для trust-бандлов, где контейнер хранит
+         * несколько независимых корней.
+         * <p>
+         * На пути JDK-fallback это цепочка из {@code KeyStore} плюс видимые через него
+         * доверенные записи, а не обязательно все SafeBag контейнера; сертификаты
+         * не-ГОСТ алгоритмов из этих записей не включаются.
+         *
+         * @return неизменяемый список сертификатов
+         */
+        public List<GostCertificate> getAllCertificates() {
+            return allCertificates;
+        }
+
+        /**
+         * @return число кандидатов (см. {@link #getAllCertificates()}), не вошедших в цепочку;
+         *     на пути JDK-fallback считается только по сертификатам, видимым через
+         *     {@code KeyStore}, без не-ГОСТ записей
+         */
+        public int getDroppedCertificateCount() {
+            return allCertificates.size() - certificateChain.size();
         }
     }
 
@@ -68,9 +129,16 @@ public final class GostPkcs12Loader {
      * @param password          пароль
      * @param allowJdkFallback  {@code true} — разрешить fallback на JDK KeyStore для не-ГОСТ контейнеров
      * @return Result с ключом и цепочкой
+     * @throws IllegalArgumentException если контейнер повреждён, не проходит проверку или пароль
+     *     содержит непарный суррогат (его нельзя закодировать в UTF-8)
      */
     public static Result load(byte[] pfxData, char[] password, boolean allowJdkFallback) {
-        return load(pfxData, password, allowJdkFallback, GostOids.MIN_PBKDF2_ITERATIONS_PFX);
+        return load(
+                pfxData,
+                password,
+                allowJdkFallback,
+                GostOids.MIN_PBKDF2_ITERATIONS_PFX,
+                MacPolicy.REQUIRED);
     }
 
     /**
@@ -82,17 +150,60 @@ public final class GostPkcs12Loader {
      * @param allowJdkFallback       {@code true} — разрешить fallback на JDK KeyStore
      * @param minPbkdf2Iterations    минимально допустимое число итераций PBKDF2
      * @return Result с ключом и цепочкой
+     * @throws IllegalArgumentException если контейнер повреждён, не проходит проверку или пароль
+     *     содержит непарный суррогат (его нельзя закодировать в UTF-8)
      */
     public static Result load(
             byte[] pfxData, char[] password, boolean allowJdkFallback, int minPbkdf2Iterations) {
-        LOG.log(Level.INFO, "Loading PKCS12 container");
+        return load(pfxData, password, allowJdkFallback, minPbkdf2Iterations, MacPolicy.REQUIRED);
+    }
+
+    /**
+     * Загружает PFX с явной политикой проверки MAC.
+     * <p>
+     * По умолчанию (в перегрузках без {@link MacPolicy}) MAC обязателен:
+     * без него открытый SafeContents с сертификатами можно подменить, не зная
+     * пароль. {@link MacPolicy#ALLOW_MISSING} разрешает только legacy-файлы
+     * из доверенного источника. Связность цепочки проверяется и в этом режиме,
+     * но это не защита от подмены: самосогласованную пару «свой сертификат на
+     * открытый ключ жертвы плюс свой CA» она пропускает (см. {@link MacPolicy#ALLOW_MISSING}).
+     *
+     * @param pfxData                DER-байты PFX
+     * @param password               пароль
+     * @param allowJdkFallback       {@code true} — разрешить fallback на JDK KeyStore
+     * @param minPbkdf2Iterations    минимально допустимое число итераций PBKDF2
+     * @param macPolicy              политика проверки MAC
+     * @return Result с ключом и цепочкой
+     * @throws IllegalArgumentException если контейнер повреждён, не проходит проверку или пароль
+     *     содержит непарный суррогат (его нельзя закодировать в UTF-8)
+     */
+    public static Result load(
+            byte[] pfxData,
+            char[] password,
+            boolean allowJdkFallback,
+            int minPbkdf2Iterations,
+            MacPolicy macPolicy) {
+        if (macPolicy == null) {
+            throw new IllegalArgumentException("macPolicy must not be null");
+        }
+        LOG.log(Level.DEBUG, "Loading PKCS12 container");
         PfxData pfx = GostPkcs12Parser.parsePfx(pfxData, minPbkdf2Iterations);
         char[] pwd = password.clone();
-        byte[] passwordBytes = toUtf8Bytes(pwd);
+        // Объявлен до try, чтобы finally затирал его и копию пароля при любой ошибке,
+        // в том числе при отказе кодирования (непарный суррогат)
+        byte[] passwordBytes = null;
 
         try {
+            passwordBytes = PasswordUtf8.encode(pwd);
+            MacData md = pfx.getMacData();
+            if (md == null) {
+                if (macPolicy == MacPolicy.REQUIRED) {
+                    throw new IllegalArgumentException(
+                            "PKCS12: MacData is missing; integrity cannot be verified");
+                }
+                LOG.log(Level.WARNING, "PKCS12 without MAC: integrity not verified");
+            }
             if (hasGostPbes2Key(pfx)) {
-                MacData md = pfx.getMacData();
                 if (md != null) {
                     GostPkcs12Mac.verify(md, passwordBytes, pfx.getAuthSafeRawContent());
                 }
@@ -104,7 +215,9 @@ public final class GostPkcs12Loader {
             }
             return loadJdkFallback(pfxData, pwd);
         } finally {
-            Arrays.fill(passwordBytes, (byte) 0);
+            if (passwordBytes != null) {
+                Arrays.fill(passwordBytes, (byte) 0);
+            }
             Arrays.fill(pwd, '\0');
         }
     }
@@ -122,6 +235,8 @@ public final class GostPkcs12Loader {
      * @param encryptedDer DER EncryptedPrivateKeyInfo
      * @param password     пароль
      * @return расшифрованный закрытый ключ
+     * @throws IllegalArgumentException если данные повреждены, схема не поддерживается или пароль
+     *     содержит непарный суррогат (его нельзя закодировать в UTF-8)
      */
     public static PrivateKeyParameters decryptPrivateKey(byte[] encryptedDer, char[] password) {
         return decryptPrivateKey(encryptedDer, password, GostOids.MIN_PBKDF2_ITERATIONS_PFX);
@@ -129,17 +244,23 @@ public final class GostPkcs12Loader {
 
     /**
      * Расшифровывает standalone EncryptedPrivateKeyInfo с настраиваемым порогом.
+     *
+     * @throws IllegalArgumentException если данные повреждены, схема не поддерживается или пароль
+     *     содержит непарный суррогат (его нельзя закодировать в UTF-8)
      */
     public static PrivateKeyParameters decryptPrivateKey(
             byte[] encryptedDer, char[] password, int minPbkdf2Iterations) {
         GostPkcs12Parser.EncryptedPrivateKeyInfo epki =
                 GostPkcs12Parser.parseEncryptedPrivateKeyInfo(encryptedDer);
         char[] pwd = password.clone();
-        byte[] passwordBytes = toUtf8Bytes(pwd);
+        byte[] passwordBytes = null;
         try {
+            passwordBytes = PasswordUtf8.encode(pwd);
             return GostPbes2.decryptKey(epki, passwordBytes, minPbkdf2Iterations);
         } finally {
-            Arrays.fill(passwordBytes, (byte) 0);
+            if (passwordBytes != null) {
+                Arrays.fill(passwordBytes, (byte) 0);
+            }
             Arrays.fill(pwd, '\0');
         }
     }
@@ -186,9 +307,11 @@ public final class GostPkcs12Loader {
      * отбрасываются. Сертификаты без localKeyId (CA) всегда включаются.
      * Если ключ не имеет localKeyId, все сертификаты проходят без фильтрации.
      * <p>
-     * Цепочка: leaf (isCA == false) на chain[0], CA упорядочены по
-     * issuer->subject DER-совпадению. Не сортируется только если цепочка
-     * не содержит non-CA сертификатов.
+     * Цепочка начинается с сертификата, чей ключ совпал с закрытым (сначала ищется
+     * конечный, и только если ни один не-CA не совпал — CA), далее звенья по
+     * issuer->subject и подписи.
+     * Остальные сертификаты в цепочку не входят, но доступны через
+     * {@link Result#getAllCertificates()}.
      */
     private static Result loadGost(PfxData pfx, byte[] passwordBytes, int minPbkdf2Iterations) {
         PrivateKeyParameters privateKey = null;
@@ -220,10 +343,11 @@ public final class GostPkcs12Loader {
             throw new IllegalArgumentException("PKCS12: no private key found");
         }
 
-        List<GostCertificate> chain = filterCerts(rawCerts, keyLocalKeyId);
-        chain = orderChain(chain);
-        LOG.log(Level.INFO, "PKCS12 loaded via GOST: {0} certificate(s) in chain", chain.size());
-        return new Result(privateKey, chain);
+        List<GostCertificate> filtered = filterCerts(rawCerts, keyLocalKeyId);
+        List<GostCertificate> chain =
+                buildVerifiedChain(filtered, Signature.derivePublicKey(privateKey));
+        LOG.log(Level.DEBUG, "PKCS12 loaded via GOST: {0} certificate(s) in chain", chain.size());
+        return new Result(privateKey, chain, List.copyOf(filtered));
     }
 
     private static List<GostCertificate> filterCerts(List<RawCert> rawCerts, byte[] keyLocalKeyId) {
@@ -242,18 +366,70 @@ public final class GostPkcs12Loader {
         return chain;
     }
 
-    private static List<GostCertificate> orderChain(List<GostCertificate> chain) {
+    /**
+     * Строит связанную цепочку от сертификата закрытого ключа, проверяет, что ключ
+     * принадлежит её первому звену, и сообщает на DEBUG об отброшенных сертификатах.
+     * <p>
+     * Общая точка для ГОСТ-пути и JDK-fallback: цепочка, собранная самим
+     * {@code KeyStore}, сопоставляет сертификаты только по DN и подписи не проверяет.
+     *
+     * @param candidates сертификаты контейнера после фильтра по localKeyId
+     * @param keyPublic  открытый ключ, выведенный из закрытого
+     * @return связанная цепочка, первое звено которой соответствует ключу
+     */
+    private static List<GostCertificate> buildVerifiedChain(
+            List<GostCertificate> candidates, PublicKeyParameters keyPublic) {
+        List<GostCertificate> chain = orderChain(candidates, keyPublic);
+        requireKeyMatchesCertificate(keyPublic, chain);
+        int dropped = candidates.size() - chain.size();
+        if (dropped > 0) {
+            // Лишние сертификаты в контейнере обычны (выгрузка из браузера или хранилища ОС);
+            // на ключ и цепочку они не влияют, поэтому на DEBUG
+            LOG.log(
+                    Level.DEBUG,
+                    "PKCS12: {0} unrelated certificate(s) dropped from chain",
+                    dropped);
+        }
+        return chain;
+    }
+
+    /**
+     * Строит связанную цепочку: сертификат ключа -> CA.
+     * <p>
+     * Связь подтверждается совпадением issuer/subject DN и проверкой подписи
+     * следующего сертификата. Несвязанные сертификаты не включаются в результат.
+     * Это отсекает склеенные и посторонние сертификаты, но не доказывает
+     * подлинность: самосогласованную подмену при отсутствии MAC такая проверка
+     * пропустит (см. {@link MacPolicy#ALLOW_MISSING}).
+     */
+    private static List<GostCertificate> orderChain(
+            List<GostCertificate> chain, PublicKeyParameters keyPublic) {
         int n = chain.size();
         if (n <= 1) return chain;
 
-        int leafIdx = -1;
-        for (int i = 0; i < n; i++) {
-            if (!chain.get(i).isCA()) {
-                leafIdx = i;
-                break;
+        // Порядок SafeBag в RFC 7292 не задан. Начало цепочки выбираем по
+        // совпадению ключа, а не по позиции: иначе при наличии старого
+        // сертификата без localKeyId загрузка зависела бы от порядка bags.
+        // Сначала конечный (не-CA) сертификат, затем CA: контейнер УЦ хранит
+        // ключ самого УЦ, и цепочка у него строится от этого CA.
+        int leafIdx = indexOfKeyHolder(chain, keyPublic, false);
+        if (leafIdx < 0) {
+            leafIdx = indexOfKeyHolder(chain, keyPublic, true);
+        }
+        if (leafIdx < 0) {
+            // Ключ не совпал ни с одним сертификатом: оставляем первый не-CA,
+            // чтобы requireKeyMatchesCertificate дал явную ошибку.
+            for (int i = 0; i < n; i++) {
+                if (!chain.get(i).isCA()) {
+                    leafIdx = i;
+                    break;
+                }
             }
         }
-        if (leafIdx < 0) return chain;
+        if (leafIdx < 0) {
+            // Нет совпадения и нет не-CA: requireKeyMatchesCertificate отклонит набор.
+            return chain;
+        }
 
         List<GostCertificate> result = new ArrayList<>(n);
         boolean[] used = new boolean[n];
@@ -262,25 +438,57 @@ public final class GostPkcs12Loader {
 
         int current = leafIdx;
         while (result.size() < n) {
-            byte[] issuerDn = chain.get(current).getIssuerDnBytes();
+            GostCertificate currentCert = chain.get(current);
+            byte[] issuerDn = currentCert.getIssuerDnBytes();
             boolean found = false;
             for (int i = 0; i < n; i++) {
                 if (used[i]) continue;
-                if (Arrays.equals(issuerDn, chain.get(i).getSubjectDnBytes())) {
-                    result.add(chain.get(i));
-                    used[i] = true;
-                    current = i;
-                    found = true;
-                    break;
+                GostCertificate candidate = chain.get(i);
+                if (!Arrays.equals(issuerDn, candidate.getSubjectDnBytes())) {
+                    continue;
                 }
+                // Подпись обязательна: одного совпадения DN недостаточно,
+                // иначе чужой сертификат с тем же subject попадёт в цепочку.
+                if (!currentCert.verifySignature(candidate.getPublicKey())) {
+                    continue;
+                }
+                result.add(candidate);
+                used[i] = true;
+                current = i;
+                found = true;
+                break;
             }
             if (!found) break;
         }
 
-        for (int i = 0; i < n; i++) {
-            if (!used[i]) result.add(chain.get(i));
-        }
         return result;
+    }
+
+    private static int indexOfKeyHolder(
+            List<GostCertificate> certs, PublicKeyParameters keyPublic, boolean wantCa) {
+        for (int i = 0; i < certs.size(); i++) {
+            GostCertificate cert = certs.get(i);
+            if (cert.isCA() == wantCa && Objects.equals(keyPublic, cert.getPublicKey())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Требует, чтобы закрытый ключ соответствовал первому звену цепочки.
+     * <p>
+     * Без этой проверки контейнер мог вернуть ключ от одного субъекта вместе
+     * с сертификатом другого; приложение считало бы сертификат своим. Проверяется
+     * именно начало цепочки, а не любое звено: иначе произвольный CA с тем же
+     * открытым ключом удовлетворил бы проверку, а настоящий сертификат ключа
+     * остался бы незамеченным.
+     */
+    private static void requireKeyMatchesCertificate(
+            PublicKeyParameters keyPublic, List<GostCertificate> chain) {
+        if (chain.isEmpty() || !Objects.equals(keyPublic, chain.get(0).getPublicKey())) {
+            throw new IllegalArgumentException("PKCS12: private key does not match certificate");
+        }
     }
 
     private static final class RawCert {
@@ -299,7 +507,7 @@ public final class GostPkcs12Loader {
             ks.load(new ByteArrayInputStream(pfxData), password);
 
             String alias = null;
-            java.util.Enumeration<String> aliases = ks.aliases();
+            Enumeration<String> aliases = ks.aliases();
             while (aliases.hasMoreElements()) {
                 String a = aliases.nextElement();
                 if (ks.isKeyEntry(a)) {
@@ -315,15 +523,37 @@ public final class GostPkcs12Loader {
             PrivateKeyParameters ourKey = adaptPrivateKey(jdkKey);
 
             Certificate[] jdkChain = ks.getCertificateChain(alias);
-            List<GostCertificate> ourChain = new ArrayList<>();
-            for (Certificate cert : jdkChain) {
-                ourChain.add(new GostCertificate(cert.getEncoded()));
+            if (jdkChain == null || jdkChain.length == 0) {
+                throw new IllegalArgumentException("PKCS12: no certificate chain found");
             }
+
+            // KeyStore сопоставляет сертификаты только по DN и не проверяет подписи,
+            // поэтому его цепочка лишь поставляет кандидатов: порядок и связность
+            // устанавливаем сами, как на ГОСТ-пути.
+            Map<ByteBuffer, GostCertificate> candidates = new LinkedHashMap<>();
+            for (Certificate cert : jdkChain) {
+                addCandidate(candidates, cert);
+            }
+            // Прочие записи KeyStore не относятся к ключу: контейнер может хранить
+            // и доверенные сертификаты других алгоритмов (RSA, ECDSA), которые
+            // ГОСТ-разбор не принимает. Их пропуск не должен ронять загрузку ключа,
+            // в отличие от собственной цепочки ключа, где ошибка обязана быть фатальной.
+            Enumeration<String> otherAliases = ks.aliases();
+            while (otherAliases.hasMoreElements()) {
+                String other = otherAliases.nextElement();
+                if (!other.equals(alias)) {
+                    addForeignCandidate(candidates, ks.getCertificate(other));
+                }
+            }
+
+            List<GostCertificate> allCertificates = List.copyOf(candidates.values());
+            List<GostCertificate> ourChain =
+                    buildVerifiedChain(allCertificates, Signature.derivePublicKey(ourKey));
             LOG.log(
-                    Level.INFO,
+                    Level.DEBUG,
                     "PKCS12 loaded via JDK fallback: {0} certificate(s) in chain",
                     ourChain.size());
-            return new Result(ourKey, ourChain);
+            return new Result(ourKey, ourChain, allCertificates);
 
         } catch (IOException e) {
             String msg = e.getMessage();
@@ -336,6 +566,25 @@ public final class GostPkcs12Loader {
         }
     }
 
+    /** Добавляет сертификат, не разбираемый как ГОСТ, в набор кандидатов, пропуская его. */
+    private static void addForeignCandidate(
+            Map<ByteBuffer, GostCertificate> candidates, Certificate cert)
+            throws CertificateEncodingException {
+        try {
+            addCandidate(candidates, cert);
+        } catch (RuntimeException e) {
+            LOG.log(Level.DEBUG, "PKCS12: non-GOST certificate skipped");
+        }
+    }
+
+    /** Добавляет сертификат в набор кандидатов; повтор по DER-байтам игнорируется. */
+    private static void addCandidate(Map<ByteBuffer, GostCertificate> candidates, Certificate cert)
+            throws CertificateEncodingException {
+        if (cert == null) return;
+        byte[] der = cert.getEncoded();
+        candidates.computeIfAbsent(ByteBuffer.wrap(der), key -> new GostCertificate(der));
+    }
+
     public static PrivateKeyParameters adaptPrivateKey(PrivateKey jdkKey) {
         if (jdkKey instanceof GostECPrivateKey) {
             return ((GostECPrivateKey) jdkKey).toPrivateKeyParameters();
@@ -346,14 +595,5 @@ public final class GostPkcs12Loader {
         } finally {
             Arrays.fill(encoded, (byte) 0);
         }
-    }
-
-    static byte[] toUtf8Bytes(char[] password) {
-        if (password == null || password.length == 0) return new byte[0];
-        java.nio.ByteBuffer buf =
-                java.nio.charset.StandardCharsets.UTF_8.encode(java.nio.CharBuffer.wrap(password));
-        byte[] result = new byte[buf.remaining()];
-        buf.get(result);
-        return result;
     }
 }

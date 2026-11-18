@@ -12,33 +12,34 @@ import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsException;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 /**
  * Проверяет проброс {@code maxOcspAgeMs} в mTLS-пути (проверка клиентского
  * сертификата), симметрично серверному пути. Раньше клиентский путь жёстко шёл
  * по дефолтной политике свежести — конфигурируемый порог до него не доходил.
  */
-@DisplayName("checkClientCertificateChain: настраиваемый maxOcspAgeMs для stapled-OCSP клиента")
+@DisplayName("checkClientCertificateLeafOnly: настраиваемый maxOcspAgeMs для stapled-OCSP клиента")
 class TlsClientCertOcspAgeTest {
 
     private static final ECParameters PARAMS = ECParameters.tc26a256();
     private static final String EKU_CLIENT_AUTH = "1.3.6.1.5.5.7.3.2";
 
-    private static TlsTestHelper.CertBundle root;
+    private static PkixCertTestHelper.CertBundle root;
 
     @BeforeAll
     static void setUp() throws Exception {
-        root = TlsTestHelper.createRootCA(PARAMS);
+        root = PkixCertTestHelper.createRootCA(PARAMS);
     }
 
     /** Клиентский leaf с KU digitalSignature + EKU clientAuth и приложенным OCSP-staple. */
     private static List<GostCertificate> clientChainWithStaple(Instant ocspThisUpdate)
             throws Exception {
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         PARAMS,
                         root.priv,
                         root.cert.getPublicKey(),
@@ -76,12 +77,43 @@ class TlsClientCertOcspAgeTest {
                 assertThrows(
                         TlsException.class,
                         () ->
-                                TlsCertificateValidator.checkClientCertificateChain(
-                                        chain, null, ChronoUnit.HOURS.getDuration().toMillis()),
+                                TlsCertificateValidator.validateLeafOnly(
+                                        chain,
+                                        TlsPeerPolicy.clientLeafOnly()
+                                                .maxOcspAge(
+                                                        ChronoUnit.HOURS.getDuration().toMillis())),
                         "2-часовой staple при пороге 1ч должен отвергаться на mTLS-пути");
         assertTrue(
                 ex.getMessage().contains("too old"),
                 "Ожидалось 'response too old', получено: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("Политика с цепочкой требует явные якоря доверия")
+    void chainMethodsRequireAnchors() throws Exception {
+        List<GostCertificate> chain = clientChainWithStaple(Instant.now());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> TlsPeerPolicy.client(null),
+                "null-якоря должны отвергаться");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> TlsPeerPolicy.client(TrustAnchors.empty()),
+                "пустые якоря должны отвергаться");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> TlsPeerPolicy.server("host", null),
+                "null-якоря серверного пути должны отвергаться");
+        assertThrows(
+                IllegalStateException.class,
+                () ->
+                        TlsCertificateValidator.validateStructure(
+                                chain, TlsPeerPolicy.clientLeafOnly()),
+                "политика без якорей не должна проверять цепочку");
+        assertThrows(
+                IllegalStateException.class,
+                () -> TlsCertificateValidator.validate(chain, TlsPeerPolicy.serverLeafOnly("host")),
+                "политика без якорей не должна проверять цепочку");
     }
 
     @Test
@@ -92,7 +124,9 @@ class TlsClientCertOcspAgeTest {
 
         // Дефолтная 2-арг перегрузка = GostOids.MAX_OCSP_AGE_MS (24ч) — 2ч свежести проходят.
         assertDoesNotThrow(
-                () -> TlsCertificateValidator.checkClientCertificateChain(chain, null),
+                () ->
+                        TlsCertificateValidator.validateLeafOnly(
+                                chain, TlsPeerPolicy.clientLeafOnly()),
                 "2-часовой staple при дефолтном пороге 24ч не должен отвергаться");
         assertEquals(
                 24 * 60 * 60 * 1000L,

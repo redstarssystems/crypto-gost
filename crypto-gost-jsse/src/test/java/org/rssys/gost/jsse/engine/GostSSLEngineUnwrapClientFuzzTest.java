@@ -4,6 +4,7 @@ import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import java.nio.ByteBuffer;
 import javax.net.ssl.SSLException;
+import org.junit.jupiter.api.DisplayName;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.tls13.TlsConstants;
@@ -15,6 +16,7 @@ import org.rssys.gost.tls13.TlsConstants;
  * Покрывает приём ServerHello, EncryptedExtensions, Certificate,
  * CertificateVerify, Finished на стороне клиента.
  */
+@DisplayName("GostSSLEngine: некорректный вход unwrap у клиента")
 class GostSSLEngineUnwrapClientFuzzTest {
 
     private static final int PLAINTEXT_BUF = TlsConstants.MAX_PLAINTEXT_LENGTH + 64;
@@ -36,7 +38,7 @@ class GostSSLEngineUnwrapClientFuzzTest {
     private static GostSSLEngine createClientEngine() {
         return new GostSSLEngine(
                 new GostX509KeyManager(),
-                new GostX509TrustManager(null, false),
+                GostX509TrustManager.insecureTrustAll(),
                 "localhost",
                 0,
                 true);

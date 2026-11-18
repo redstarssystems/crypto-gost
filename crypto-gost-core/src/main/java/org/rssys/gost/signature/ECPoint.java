@@ -4,7 +4,7 @@ import java.math.BigInteger;
 
 /**
  * Точка на эллиптической кривой в проективных координатах Якоби.
- * Координаты хранятся как {@link FieldElement} в форме Монтгомери.
+ * Координаты хранятся как {@code FieldElement} в форме Монтгомери.
  * BigInteger используется только на входе (affine/infinity) и на выходе (getX/getY).
  */
 public final class ECPoint {
@@ -20,12 +20,34 @@ public final class ECPoint {
         this.params = params;
     }
 
+    /** Кривая, на которой построена точка; нужна для сверки с объявленными параметрами ключа. */
+    ECParameters getParams() {
+        return params;
+    }
+
     public static ECPoint infinity(ECParameters params) {
         FieldElement zero = FieldElement.zero(params.montParams);
         return new ECPoint(zero, zero, zero, params);
     }
 
+    /**
+     * Создаёт точку по аффинным координатам.
+     *
+     * <p>Координаты обязаны быть каноническими: {@code 0 <= x, y < p}. Приведение по модулю
+     * {@code p} молча принимало бы {@code (x + p, y)} и отрицательные значения как ту же точку,
+     * то есть один ключ имел бы несколько кодировок. Принадлежность кривой и подгруппе здесь не
+     * проверяется, для этого есть {@link #isValidPublicKey()}.
+     *
+     * @throws IllegalArgumentException если {@code x} или {@code y} вне диапазона {@code [0, p)}
+     */
     public static ECPoint affine(BigInteger bx, BigInteger by, ECParameters params) {
+        if (bx.signum() < 0
+                || by.signum() < 0
+                || bx.compareTo(params.p) >= 0
+                || by.compareTo(params.p) >= 0) {
+            throw new IllegalArgumentException(
+                    "Point coordinate is outside the canonical range [0, p)");
+        }
         FieldElement.MontgomeryParams mp = params.montParams;
         return new ECPoint(
                 FieldElement.of(bx, mp), FieldElement.of(by, mp), FieldElement.one(mp), params);
@@ -38,7 +60,7 @@ public final class ECPoint {
     public ECPoint normalize() {
         if (isInfinity()) return this;
         FieldElement one = FieldElement.one(params.montParams);
-        if (z.equals(one)) return this;
+        if (z.isEqualTo(one)) return this;
         FieldElement zInv = z.invert(); // <- constant-time через Ферма
         FieldElement zInvSq = zInv.square();
         FieldElement zInvCu = zInvSq.multiply(zInv);
@@ -87,9 +109,22 @@ public final class ECPoint {
         return new ECPoint(rx, ry, rz, params);
     }
 
+    /**
+     * Полное сложение: корректно для любых пар точек, в том числе равных, противоположных и
+     * бесконечности.
+     *
+     * <p>Полевая формула - EFD add-1998-cmo-2 (12M + 4S), коэффициент {@code a} в ней не
+     * участвует, поэтому метод один для всех кривых. Случай {@code P == Q} формула не
+     * покрывает, его закрывает удвоение: {@link #twice()} всегда вычисляется заранее, а
+     * результат выбирается масками без ветвлений по значениям точек (9 вызовов
+     * {@code selectFE}, каждый с аллокацией). Там, где {@code P != Q} гарантировано структурой
+     * алгоритма, дешевле {@link #addDistinct}.
+     *
+     * <p>Если результат - бесконечность, об этом говорит только {@link #isInfinity()}:
+     * значения {@code X} и {@code Y} при {@code Z = 0} произвольны.
+     */
     public ECPoint add(ECPoint other) {
-        if (params.aIsMinusThree) return addComplete(other);
-        return addCompleteGeneral(other);
+        return addJacobian(other, twice());
     }
 
     private static ECPoint negatePoint(ECPoint pt) {
@@ -137,104 +172,51 @@ public final class ECPoint {
         return result.normalize();
     }
 
-    /**
-     * Complete addition для произвольного a (Renes, Costello, Renes 2016, Algorithm 1).
-     * Корректен для всех пар точек: различных, равных, противоположных, ∞.
-     * Применяется для кривых где a ≠ −3 (TC26-A-256, TC26-C-512).
-     * Стоимость: 12M + 2S.
-     *
-     * <p>Все ветвления по значениям точек отсутствуют — результат выбирается
-     * через CT-select аналогично {@link #addComplete}.
-     *
-     * <p>Ссылка: https://eprint.iacr.org/2015/1060, Algorithm 1.
-     */
-    /**
-     * Complete addition в координатах Якоби для произвольного a.
-     * <p>
-     * Базовая формула — стандартная Якоби add (EFD add-2007-bl, 11M + 5S),
-     * корректная для P≠Q и P≠O.
-     * Для corner cases (P=Q, P=-Q, P=O, Q=O) результат выбирается через CT-select
-     * без ветвлений, аналогично {@link #addComplete} для a=−3.
-     * <p>
-     * Стоимость: ~11M + 5S + overhead CT-select.
-     */
-    private ECPoint addCompleteGeneral(ECPoint other) {
-        // CT-маски для граничных случаев (без ветвлений по значению)
-        long zAcc1 = 0, zAcc2 = 0;
-        for (long limb : z.limbs()) zAcc1 |= limb;
-        for (long limb : other.z.limbs()) zAcc2 |= limb;
-        // m1 = 1 если this == infinity, m2 = 1 если other == infinity
-        long m1 = (~(zAcc1 | -zAcc1)) >>> 63;
-        long m2 = (~(zAcc2 | -zAcc2)) >>> 63;
-
-        // Стандартная Якоби add (EFD add-2007-bl)
-        // (X1:Y1:Z1) + (X2:Y2:Z2) -> (X3:Y3:Z3)
-        // x_aff = X/Z², y_aff = Y/Z³
-        FieldElement z1z1 = z.square(); // Z1Z1 = Z1²
-        FieldElement z2z2 = other.z.square(); // Z2Z2 = Z2²
-        FieldElement u1 = x.multiply(z2z2); // U1 = X1·Z2Z2
-        FieldElement u2 = other.x.multiply(z1z1); // U2 = X2·Z1Z1
-        FieldElement s1 = y.multiply(z2z2).multiply(other.z); // S1 = Y1·Z2Z2·Z2
-        FieldElement s2 = other.y.multiply(z1z1).multiply(z); // S2 = Y2·Z1Z1·Z1
-        FieldElement h = u2.subtract(u1); // H = U2-U1
-        FieldElement r = s2.subtract(s1); // R = S2-S1
-
-        // CT-определение corner cases (вычисляем маски без ветвлений)
-        long hAcc = 0, rAcc = 0;
-        for (long limb : h.limbs()) hAcc |= limb;
-        for (long limb : r.limbs()) rAcc |= limb;
-        long hIsZero = ((hAcc | -hAcc) >>> 63) ^ 1L; // 1 если H==0
-        long rIsZero = ((rAcc | -rAcc) >>> 63) ^ 1L; // 1 если R==0
-        long mEq = hIsZero & rIsZero; // 1 если P==Q (удвоение)
-
-        // Предвычисляем удвоение (нужно если P==Q)
-        ECPoint dbl = this.twice();
-
-        // Основная формула Якоби add
-        FieldElement hh = h.square(); // HH = H²
-        FieldElement hhh = hh.multiply(h); // HHH = H³
-        FieldElement u1hh = u1.multiply(hh); // U1HH = U1·HH
-        FieldElement nx = r.square().subtract(hhh).subtract(u1hh.shiftLeft(1));
-        FieldElement ny = r.multiply(u1hh.subtract(nx)).subtract(s1.multiply(hhh));
-        FieldElement nz = z.multiply(other.z).multiply(h); // Z3 = Z1·Z2·H
-
-        // CT-select: P==Q -> удвоение; P==-Q (H==0, R≠0) -> infinity
-        FieldElement rx = selectFE(nx, dbl.x, mEq);
-        FieldElement ry = selectFE(ny, dbl.y, mEq);
-        FieldElement rz = selectFE(nz, dbl.z, mEq);
-        // H==0, R≠0 -> P==-Q -> результат infinity (Z=0)
-        long mNeg = hIsZero & (rIsZero ^ 1L);
-        FieldElement zero = FieldElement.zero(params.montParams);
-        rx = selectFE(rx, zero, mNeg);
-        ry = selectFE(ry, zero, mNeg);
-        rz = selectFE(rz, zero, mNeg);
-        // other == infinity -> результат this
-        rx = selectFE(rx, x, m2);
-        ry = selectFE(ry, y, m2);
-        rz = selectFE(rz, z, m2);
-        // this == infinity -> результат other
-        rx = selectFE(rx, other.x, m1);
-        ry = selectFE(ry, other.y, m1);
-        rz = selectFE(rz, other.z, m1);
-
-        return new ECPoint(rx, ry, rz, params);
+    private static FieldElement selectFE(FieldElement a, FieldElement b, long cond) {
+        long mask = -cond;
+        long[] al = a.limbs(), bl = b.limbs();
+        long[] rl = new long[al.length];
+        for (int i = 0; i < al.length; i++) rl[i] = al[i] ^ ((al[i] ^ bl[i]) & mask);
+        return a.withLimbs(rl);
     }
 
     /**
-     * Complete addition (Costello & Longa 2016, Alg. 4) для a = −3.
-     * Корректен для всех пар точек: различных, равных, противоположных, ∞.
-     * Стоимость: 12M + 4S.
+     * Сложение двух разных точек без вложенного удвоения. Годится только там, где
+     * {@code this != other} гарантировано структурой алгоритма, например в лестнице
+     * {@link #multiply}: разность её регистров всегда равна {@code ±P}, а не нулю. В отличие от
+     * {@link #add} не вычисляет {@link #twice()} и не выбирает между суммой и удвоением, что
+     * экономит около трети стоимости сложения.
+     *
+     * <p>Предусловие: точки равны только если обе - бесконечность. При {@code this == other}
+     * (и не бесконечность) формула вырождается и возвращает бесконечность, а не {@code 2P};
+     * вызывающий обязан сам исключить этот случай.
+     *
+     * <p>Остальные граничные случаи корректны: {@code P + (−P)} даёт бесконечность
+     * (координата {@code Z3 = H·Z1·Z2} обнуляется сама), {@code O + Q = Q}, {@code P + O = P},
+     * {@code O + O = O}. Бесконечность в результате распознаётся только по {@code Z = 0},
+     * значения {@code X} и {@code Y} при этом произвольны.
      */
-    private ECPoint addComplete(ECPoint other) {
-        // вычисляем маску без тернарного оператора через OR лимбов
-        // isZero() уже constnt-time, но тернарный ?: -> условный переход в JIT.
-        // Используем арифметическое приведение: (acc | -acc) >>> 63 даёт 1 если acc != 0.
+    ECPoint addDistinct(ECPoint other) {
+        return addJacobian(other, null);
+    }
+
+    /**
+     * Общая реализация сложения в координатах Якоби (EFD add-1998-cmo-2, 12M + 4S).
+     *
+     * <p>Без ветвлений по значениям точек: бесконечность определяется масками по {@code Z},
+     * итог выбирается масками. Маски {@code H == 0} и {@code R == 0} нужны только для случая
+     * {@code P == Q}, поэтому при {@code doubled == null} они не вычисляются. Само наличие
+     * {@code doubled} определяется вызывающим методом, а не данными, так что на постоянство
+     * времени это не влияет.
+     *
+     * @param doubled результат {@code this.twice()} для полного сложения или {@code null}, если
+     *     {@code this != other} гарантировано вызывающим
+     */
+    private ECPoint addJacobian(ECPoint other, ECPoint doubled) {
         long zAcc1 = 0, zAcc2 = 0;
         for (long limb : z.limbs()) zAcc1 |= limb;
         for (long limb : other.z.limbs()) zAcc2 |= limb;
-        // m = 1 если точка — бесконечность (z == 0), 0 иначе.
-        // Если zAcc == 0: (0 | -0) >>> 63 = 0 -> NOT -> 1. Если zAcc != 0: старший бит >>> 63 = 1
-        // -> NOT -> 0.
+        // m = 1 если точка - бесконечность (Z == 0): (acc | -acc) >>> 63 даёт 1 при acc != 0
         long m1 = (~(zAcc1 | -zAcc1)) >>> 63;
         long m2 = (~(zAcc2 | -zAcc2)) >>> 63;
 
@@ -247,22 +229,6 @@ public final class ECPoint {
         FieldElement h = u2.subtract(u1);
         FieldElement r = s2.subtract(s1);
 
-        // оба isZero() вызываются всегда, результат комбинируется без ветвлений
-        // isZero() возвращает boolean через OR лимбов — сам CT, но boolean -> long требует
-        // CT-конверсии.
-        // Формула: если acc == 0, то (acc | -acc) имеет старший бит 0, >>> 63 = 0, XOR 1 = 1
-        // (zero).
-        //          если acc != 0, то (acc | -acc) имеет старший бит 1, >>> 63 = 1, XOR 1 = 0 (not
-        // zero).
-        long hAcc = 0, rAcc = 0;
-        for (long limb : h.limbs()) hAcc |= limb;
-        for (long limb : r.limbs()) rAcc |= limb;
-        long hIsZero = ((hAcc | -hAcc) >>> 63) ^ 1L; // 1 если h == 0, иначе 0
-        long rIsZero = ((rAcc | -rAcc) >>> 63) ^ 1L; // 1 если r == 0, иначе 0
-        long mEq = hIsZero & rIsZero; // 1 только если оба == 0, без &&
-
-        ECPoint dbl = this.twice();
-
         FieldElement hh = h.square();
         FieldElement hhh = hh.multiply(h);
         FieldElement u1hh = u1.multiply(hh);
@@ -270,44 +236,76 @@ public final class ECPoint {
         FieldElement ny = r.multiply(u1hh.subtract(nx)).subtract(s1.multiply(hhh));
         FieldElement nz = h.multiply(z).multiply(other.z);
 
-        FieldElement rx = selectFE(nx, dbl.x, mEq);
-        FieldElement ry = selectFE(ny, dbl.y, mEq);
-        FieldElement rz = selectFE(nz, dbl.z, mEq);
+        FieldElement rx = nx, ry = ny, rz = nz;
+        if (doubled != null) {
+            // P == Q <=> H == 0 и R == 0; при H == 0, R != 0 (P == −Q) Z3 = 0 сам даёт
+            // бесконечность
+            long hAcc = 0, rAcc = 0;
+            for (long limb : h.limbs()) hAcc |= limb;
+            for (long limb : r.limbs()) rAcc |= limb;
+            long hIsZero = ((hAcc | -hAcc) >>> 63) ^ 1L;
+            long rIsZero = ((rAcc | -rAcc) >>> 63) ^ 1L;
+            long mEq = hIsZero & rIsZero;
+            rx = selectFE(rx, doubled.x, mEq);
+            ry = selectFE(ry, doubled.y, mEq);
+            rz = selectFE(rz, doubled.z, mEq);
+        }
+        // other == O -> this; затем this == O -> other (при обеих O результат тоже O)
         rx = selectFE(rx, x, m2);
         ry = selectFE(ry, y, m2);
         rz = selectFE(rz, z, m2);
         rx = selectFE(rx, other.x, m1);
         ry = selectFE(ry, other.y, m1);
         rz = selectFE(rz, other.z, m1);
-
         return new ECPoint(rx, ry, rz, params);
     }
 
-    private static FieldElement selectFE(FieldElement a, FieldElement b, long cond) {
-        long mask = -cond;
-        long[] al = a.limbs(), bl = b.limbs();
-        long[] rl = new long[al.length];
-        for (int i = 0; i < al.length; i++) rl[i] = al[i] ^ ((al[i] ^ bl[i]) & mask);
-        return a.withLimbs(rl);
-    }
-
+    /**
+     * Скалярное умножение {@code k·P} лестницей Монтгомери с обменом регистров через маску.
+     *
+     * <p>Допустимый скаляр: {@code 0 <= k} и {@code k.bitLength() <= n.bitLength()}, где
+     * {@code n} - порядок базовой точки кривой. Приведение по модулю {@code n} не выполняется:
+     * {@code k = n} и {@code k = n + 1} допустимы (для точки подгруппы дают бесконечность и
+     * {@code P}, для точки вне подгруппы {@code nP} и {@code nP + P}), {@code k = 0} даёт
+     * бесконечность. Лестница читает только {@code n.bitLength()} младших бит, поэтому более
+     * длинный скаляр молча усекался бы и давал неверный результат; такой скаляр отвергается.
+     *
+     * <p>Результат определяется только групповым законом: для точки вне кривой он не
+     * определён. Если результат - бесконечность, использовать нужно только
+     * {@link #isInfinity()}, значения {@link #getX()} и {@link #getY()} при этом не имеют смысла.
+     * Чтение бит через {@link BigInteger#testBit(int)} не гарантирует постоянное время: путь
+     * зависит от длины числа.
+     *
+     * @param k скаляр
+     * @return {@code k·P}
+     * @throws IllegalArgumentException если {@code k} равен {@code null}, отрицателен или
+     *     длиннее порядка кривой
+     */
     public ECPoint multiply(BigInteger k) {
-        int bitLen = params.n.bitLength();
-        int[] bits = new int[bitLen];
-        for (int i = 0; i < bitLen; i++) bits[i] = k.testBit(i) ? 1 : 0;
-        ECPoint r0 = infinity(params), r1 = this;
-        for (int i = bitLen - 1; i >= 0; i--) {
-            int bit = bits[i];
-            ECPoint[] sw = cswap(r0, r1, bit);
-            r0 = sw[0];
-            r1 = sw[1];
-            r1 = r0.add(r1);
-            r0 = r0.twice();
-            sw = cswap(r0, r1, bit);
-            r0 = sw[0];
-            r1 = sw[1];
+        if (k == null) {
+            throw new IllegalArgumentException("k must not be null");
         }
-        return r0.normalize();
+        int bitLen = params.n.bitLength();
+        if (k.signum() < 0 || k.bitLength() > bitLen) {
+            throw new IllegalArgumentException("Scalar k is outside the range [0, 2^bitLength(n))");
+        }
+        ECPoint r0 = infinity(params), r1 = this;
+        int previousBit = 0;
+        for (int i = bitLen - 1; i >= 0; i--) {
+            int bit = k.testBit(i) ? 1 : 0;
+            // Второй обмен предыдущей итерации и первый обмен текущей идут подряд, поэтому
+            // сливаются в один по условию bit ^ previousBit: один обмен на итерацию вместо двух
+            ECPoint[] sw = cswap(r0, r1, bit ^ previousBit);
+            r0 = sw[0];
+            r1 = sw[1];
+            previousBit = bit;
+            // инвариант: r1 - r0 = ±P, поэтому при P != O точки различны и полное сложение
+            // с вычислением twice() ради случая P == Q здесь не нужно
+            r1 = r0.addDistinct(r1);
+            r0 = r0.twice();
+        }
+        // последний обмен возвращает регистры в положение, в котором результат лежит в r0
+        return cswap(r0, r1, previousBit)[0].normalize();
     }
 
     private static ECPoint[] cswap(ECPoint a, ECPoint b, int swap) {
@@ -363,10 +361,10 @@ public final class ECPoint {
      * Проверяет, что точка является корректным открытым ключом:
      * лежит на кривой и принадлежит подгруппе простого порядка n.
      * <p>
-     * Для кривых с кофактором 1 (все стандартные ГОСТ-кривые, кроме TC26_C_512)
+     * Для кривых с кофактором 1 (все стандартные ГОСТ-кривые, кроме TC26-A-256 и TC26-C-512)
      * проверка ограничивается {@link #isOnCurve()}, поскольку все точки на кривой
      * автоматически принадлежат подгруппе. Для кривых с кофактором &gt; 1
-     * (TC26_C_512, h = 4) дополнительно проверяется {@code multiply(n).isInfinity()}.
+     * (TC26-A-256 и TC26-C-512, h = 4) дополнительно проверяется {@code multiply(n).isInfinity()}.
      *
      * @return {@code true} если точка является валидным открытым ключом
      */

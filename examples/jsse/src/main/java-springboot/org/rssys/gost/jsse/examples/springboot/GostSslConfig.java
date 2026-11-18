@@ -119,12 +119,12 @@ public class GostSslConfig {
 
         @Override
         public String[] getEnabledProtocols() {
-            return GostJsseConstants.SUPPORTED_PROTOCOLS.clone();
+            return GostJsseConstants.supportedProtocols();
         }
 
         @Override
         public String[] getEnabledCiphers() {
-            return GostJsseConstants.SUPPORTED_CIPHER_SUITES.clone();
+            return GostJsseConstants.supportedCipherSuites();
         }
     }
 }

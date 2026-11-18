@@ -35,15 +35,21 @@ public final class Pbkdf2Streebog {
      */
     public static byte[] generate(byte[] password, byte[] salt, int c, int dkLen) {
         Hmac hmac = new Hmac(new Streebog512());
-        hmac.init(password);
-        return pbkdf2(hmac, salt, c, dkLen);
+        // HMAC создан здесь, поэтому и уничтожаем его здесь: ipad/opad выведены из пароля
+        try {
+            hmac.init(password);
+            return pbkdf2(hmac, salt, c, dkLen);
+        } finally {
+            hmac.destroy();
+        }
     }
 
     /**
      * Вырабатывает ключ с заданной HMAC-функцией (Streebog-256 или -512).
      * Нужен для декодирования PFX, где PRF OID может быть 256-битным.
      *
-     * @param hmac   инициализированный HMAC (PRF)
+     * @param hmac   инициализированный HMAC (PRF); метод его не уничтожает - вызывающий обязан
+     *               сам вызвать {@code destroy()}, так как ipad/opad выведены из пароля
      * @param salt   соль
      * @param c      количество итераций (≥ 1)
      * @param dkLen  требуемая длина ключа в байтах
@@ -54,7 +60,9 @@ public final class Pbkdf2Streebog {
     }
 
     private static byte[] pbkdf2(Mac prf, byte[] salt, int c, int dkLen) {
-        if (c < 1) throw new IllegalArgumentException("iteration count must be >= 1");
+        if (c < MIN_ITERATIONS) {
+            throw new IllegalArgumentException("iteration count must be >= " + MIN_ITERATIONS);
+        }
         if (c > MAX_ITERATIONS)
             throw new IllegalArgumentException(
                     "iteration count exceeds maximum " + MAX_ITERATIONS + ", got " + c);

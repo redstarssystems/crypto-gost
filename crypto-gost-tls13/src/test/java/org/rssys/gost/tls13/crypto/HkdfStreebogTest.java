@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
@@ -58,30 +60,12 @@ class HkdfStreebogTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("extract: null salt -> детерминированный вывод")
-    void testextractNullSaltProducesConsistentOutput() {
-        byte[] ikm = "test input key material".getBytes(StandardCharsets.US_ASCII);
-        byte[] prk1 = HkdfStreebog.extract(null, ikm, 32);
-        byte[] prk2 = HkdfStreebog.extract(null, ikm, 32);
-        assertArrayEquals(prk1, prk2);
-        assertEquals(32, prk1.length);
-    }
-
-    @Test
     @DisplayName("extract: пустая соль равна null соли")
     void testextractEmptySaltEqualsNullSalt() {
         byte[] ikm = "test ikm".getBytes(StandardCharsets.US_ASCII);
         byte[] prkNull = HkdfStreebog.extract(null, ikm, 32);
         byte[] prkEmpty = HkdfStreebog.extract(new byte[0], ikm, 32);
         assertArrayEquals(prkNull, prkEmpty);
-    }
-
-    @Test
-    @DisplayName("извлечение: нулевая соль, hashLen=64")
-    void testextractNullSalt512() {
-        byte[] ikm = "test input key material for 512".getBytes(StandardCharsets.US_ASCII);
-        byte[] prk = HkdfStreebog.extract(null, ikm, 64);
-        assertEquals(64, prk.length);
     }
 
     @Test
@@ -112,15 +96,6 @@ class HkdfStreebogTest {
         byte[] expected = hmac256(salt, ikm);
         byte[] actual = HkdfStreebog.extract(salt, ikm, 32);
         assertArrayEquals(expected, actual);
-    }
-
-    @Test
-    @DisplayName("extract: разные соли -> разные PRK")
-    void testextractDifferentSaltGivesDifferentPrk() {
-        byte[] ikm = "same ikm".getBytes(StandardCharsets.US_ASCII);
-        byte[] prk1 = HkdfStreebog.extract("salt1".getBytes(StandardCharsets.US_ASCII), ikm, 32);
-        byte[] prk2 = HkdfStreebog.extract("salt2".getBytes(StandardCharsets.US_ASCII), ikm, 32);
-        assertFalse(Arrays.equals(prk1, prk2));
     }
 
     // -----------------------------------------------------------------------
@@ -210,109 +185,28 @@ class HkdfStreebogTest {
         assertArrayEquals(expected, result);
     }
 
-    @Test
-    @DisplayName("expand: детерминированность")
-    void testexpandDeterministic() {
-        byte[] prk = new byte[32];
-        Arrays.fill(prk, (byte) 0x42);
-        byte[] info = "deterministic".getBytes(StandardCharsets.US_ASCII);
-        byte[] r1 = HkdfStreebog.expand(prk, info, 48, 32);
-        byte[] r2 = HkdfStreebog.expand(prk, info, 48, 32);
-        assertArrayEquals(r1, r2);
-    }
-
-    @Test
-    @DisplayName("expand: разные PRK -> разные выводы")
-    void testexpandDifferentPrkGivesDifferentOutput() {
-        byte[] prk1 = new byte[32];
-        Arrays.fill(prk1, (byte) 0x01);
-        byte[] prk2 = new byte[32];
-        Arrays.fill(prk2, (byte) 0x02);
-        byte[] info = "diff".getBytes(StandardCharsets.US_ASCII);
-        byte[] r1 = HkdfStreebog.expand(prk1, info, 32, 32);
-        byte[] r2 = HkdfStreebog.expand(prk2, info, 32, 32);
-        assertFalse(Arrays.equals(r1, r2));
-    }
-
-    @Test
-    @DisplayName("expand: разный info -> разные выводы")
-    void testexpandDifferentInfoGivesDifferentOutput() {
-        byte[] prk = new byte[32];
-        Arrays.fill(prk, (byte) 0x55);
-        byte[] r1 = HkdfStreebog.expand(prk, "info1".getBytes(StandardCharsets.US_ASCII), 32, 32);
-        byte[] r2 = HkdfStreebog.expand(prk, "info2".getBytes(StandardCharsets.US_ASCII), 32, 32);
-        assertFalse(Arrays.equals(r1, r2));
-    }
-
     // -----------------------------------------------------------------------
     // Extract-затем-Expand: сквозной тест
     // -----------------------------------------------------------------------
-
-    @Test
-    @DisplayName("обратимость извлечение-расширение, hashLen=32")
-    void testextractThenExpandRoundtrip256() {
-        byte[] ikm = "roundtrip test ikm".getBytes(StandardCharsets.US_ASCII);
-        byte[] salt = "roundtrip salt".getBytes(StandardCharsets.US_ASCII);
-        byte[] info = "roundtrip info".getBytes(StandardCharsets.US_ASCII);
-
-        byte[] prk = HkdfStreebog.extract(salt, ikm, 32);
-        assertEquals(32, prk.length);
-
-        byte[] okm = HkdfStreebog.expand(prk, info, 48, 32);
-        assertEquals(48, okm.length);
-
-        // детерминированность
-        byte[] prk2 = HkdfStreebog.extract(salt, ikm, 32);
-        byte[] okm2 = HkdfStreebog.expand(prk2, info, 48, 32);
-        assertArrayEquals(okm, okm2);
-    }
-
-    @Test
-    @DisplayName("обратимость извлечение-расширение, hashLen=64")
-    void testextractThenExpandRoundtrip512() {
-        byte[] ikm =
-                "roundtrip 512 ikm with more data for 512-bit hash"
-                        .getBytes(StandardCharsets.US_ASCII);
-        byte[] salt = "roundtrip salt 512".getBytes(StandardCharsets.US_ASCII);
-        byte[] info = "roundtrip info 512".getBytes(StandardCharsets.US_ASCII);
-
-        byte[] prk = HkdfStreebog.extract(salt, ikm, 64);
-        assertEquals(64, prk.length);
-
-        byte[] okm = HkdfStreebog.expand(prk, info, 96, 64);
-        assertEquals(96, okm.length);
-
-        byte[] prk2 = HkdfStreebog.extract(salt, ikm, 64);
-        byte[] okm2 = HkdfStreebog.expand(prk2, info, 96, 64);
-        assertArrayEquals(okm, okm2);
-    }
 
     // -----------------------------------------------------------------------
     // HKDF-Expand-Label (RFC 8446 §7.1)
     // -----------------------------------------------------------------------
 
-    @Test
-    @DisplayName("expandLabel: базовая работа")
-    void testexpandLabelBasic() {
-        byte[] secret = new byte[32];
-        Arrays.fill(secret, (byte) 0xAA);
-        byte[] result = HkdfStreebog.expandLabel(secret, "test label", new byte[0], 32, 32);
-        assertEquals(32, result.length);
-    }
-
     /**
      * Проверка кодирования HkdfLabel:
      * длина(2) + длина_метки(1) + "tls13 label" + длина_контекста(1) + контекст
      */
-    @Test
+    @ParameterizedTest(name = "hashLen={0}")
+    @ValueSource(ints = {32, 64})
     @DisplayName("expandLabel: структура HkdfLabel корректна")
-    void testexpandLabelStructure() {
-        byte[] secret = new byte[32];
+    void testexpandLabelStructure(int hashLen) {
+        byte[] secret = new byte[hashLen];
         Arrays.fill(secret, (byte) 0xBB);
         byte[] ctx = "context".getBytes(StandardCharsets.US_ASCII);
         int length = 16;
 
-        byte[] result = HkdfStreebog.expandLabel(secret, "label", ctx, length, 32);
+        byte[] result = HkdfStreebog.expandLabel(secret, "label", ctx, length, hashLen);
 
         // ожидаемый HkdfLabel: 0x0010 + 0x0B + "tls13 label" + 0x07 + "context"
         // "tls13 label" = 11 байт
@@ -327,20 +221,8 @@ class HkdfStreebogTest {
         hkdfLabel[14] = 0x07;
         System.arraycopy(ctx, 0, hkdfLabel, 15, 7);
 
-        byte[] expected = HkdfStreebog.expand(secret, hkdfLabel, length, 32);
+        byte[] expected = HkdfStreebog.expand(secret, hkdfLabel, length, hashLen);
         assertArrayEquals(expected, result);
-    }
-
-    @Test
-    @DisplayName("expandLabel: разные метки -> разные выводы")
-    void testexpandLabelDifferentLabelsProduceDifferentOutput() {
-        byte[] secret = new byte[32];
-        Arrays.fill(secret, (byte) 0xCC);
-        byte[] ctx = new byte[0];
-
-        byte[] r1 = HkdfStreebog.expandLabel(secret, "first label", ctx, 32, 32);
-        byte[] r2 = HkdfStreebog.expandLabel(secret, "second label", ctx, 32, 32);
-        assertFalse(Arrays.equals(r1, r2));
     }
 
     @Test
@@ -351,15 +233,6 @@ class HkdfStreebogTest {
         byte[] withNull = HkdfStreebog.expandLabel(secret, "test", null, 32, 32);
         byte[] withEmpty = HkdfStreebog.expandLabel(secret, "test", new byte[0], 32, 32);
         assertArrayEquals(withNull, withEmpty);
-    }
-
-    @Test
-    @DisplayName("метка расширения: hashLen=64")
-    void testexpandLabel512() {
-        byte[] secret = new byte[64];
-        Arrays.fill(secret, (byte) 0xEE);
-        byte[] result = HkdfStreebog.expandLabel(secret, "label512", new byte[0], 64, 64);
-        assertEquals(64, result.length);
     }
 
     // -----------------------------------------------------------------------
@@ -379,47 +252,6 @@ class HkdfStreebogTest {
         // Derive-Secret должен равняться expandLabel с transcript в качестве контекста
         byte[] expected = HkdfStreebog.expandLabel(secret, "derived", transcript, 32, 32);
         assertArrayEquals(expected, derived);
-    }
-
-    @Test
-    @DisplayName("deriveSecret: разные метки -> разные выводы")
-    void testderiveSecretDifferentLabels() {
-        byte[] secret = new byte[32];
-        Arrays.fill(secret, (byte) 0x01);
-        byte[] transcript = new byte[32];
-
-        byte[] cHsTraffic = HkdfStreebog.deriveSecret(secret, "c hs traffic", transcript, 32);
-        byte[] sHsTraffic = HkdfStreebog.deriveSecret(secret, "s hs traffic", transcript, 32);
-        assertFalse(
-                Arrays.equals(cHsTraffic, sHsTraffic),
-                "Разные метки deriveSecret должны давать разные выводы");
-    }
-
-    @Test
-    @DisplayName("deriveSecret: детерминированность")
-    void testderiveSecretDeterministic() {
-        byte[] secret = new byte[32];
-        Arrays.fill(secret, (byte) 0x02);
-        byte[] transcript = "transcript".getBytes(StandardCharsets.US_ASCII);
-
-        byte[] d1 = HkdfStreebog.deriveSecret(secret, "test derive", transcript, 32);
-        byte[] d2 = HkdfStreebog.deriveSecret(secret, "test derive", transcript, 32);
-        assertArrayEquals(d1, d2);
-    }
-
-    @Test
-    @DisplayName("deriveSecret: разный transcript -> разные выводы")
-    void testderiveSecretDifferentTranscript() {
-        byte[] secret = new byte[32];
-        Arrays.fill(secret, (byte) 0x03);
-
-        byte[] d1 =
-                HkdfStreebog.deriveSecret(
-                        secret, "label", "transcript A".getBytes(StandardCharsets.US_ASCII), 32);
-        byte[] d2 =
-                HkdfStreebog.deriveSecret(
-                        secret, "label", "transcript B".getBytes(StandardCharsets.US_ASCII), 32);
-        assertFalse(Arrays.equals(d1, d2));
     }
 
     // -----------------------------------------------------------------------

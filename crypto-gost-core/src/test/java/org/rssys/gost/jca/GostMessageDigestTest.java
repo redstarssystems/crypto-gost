@@ -3,15 +3,16 @@ package org.rssys.gost.jca;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.security.MessageDigest;
-import java.security.Security;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.rssys.gost.JcaTestSupport;
 import org.rssys.gost.api.Digest;
 
 @DisplayName("GostMessageDigestSpi — Стрибог через JCA MessageDigest")
+@ExtendWith(JcaTestSupport.class)
 class GostMessageDigestTest {
 
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
@@ -22,13 +23,6 @@ class GostMessageDigestTest {
     // Тестовые данные
     private static final byte[] DATA =
             "Тест ГОСТ Р 34.11-2012".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
-    @BeforeAll
-    static void registerProvider() {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Стрибог-256 и Стрибог-512 — параметризованные тесты

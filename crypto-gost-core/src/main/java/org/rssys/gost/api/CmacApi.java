@@ -1,9 +1,9 @@
 package org.rssys.gost.api;
 
-import java.security.MessageDigest;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.mac.Cmac;
+import org.rssys.gost.util.ConstantTime;
 
 /**
  * API для имитовставки CMAC на шифре Кузнечик (ГОСТ Р 34.13-2015 §4.6).
@@ -38,14 +38,18 @@ import org.rssys.gost.mac.Cmac;
  *     cmac.update(buf, 0, n);
  * }
  * byte[] tag = cmac.digest();
+ * cmac.destroy();
  * }</pre>
+ *
+ * <p>Экземпляр хранит расписание ключа: после использования вызовите {@link #destroy()} или
+ * используйте его в try-with-resources.
  *
  * <h3>Thread-safety:</h3>
  * Статические методы потокобезопасны.
  * Инстанс {@code CmacApi} <b>не является</b> потокобезопасным —
  * создавайте отдельный экземпляр на каждый поток.
  */
-public final class CmacApi {
+public final class CmacApi implements AutoCloseable {
 
     /**
      * Размер полного тега CMAC для Кузнечика в байтах (ГОСТ Р 34.13-2015).
@@ -57,8 +61,11 @@ public final class CmacApi {
     // Состояние инстанса (для инкрементального режима)
     // -----------------------------------------------------------------------
 
-    /** Низкоуровневый делегат. {@code null} для статических методов. */
+    /** Низкоуровневый делегат. */
     private final Cmac cmac;
+
+    /** Экземпляр уничтожен: {@code update}, {@code digest} и {@code reset} бросают исключение. */
+    private boolean destroyed;
 
     // -----------------------------------------------------------------------
     // Конструктор (инкрементальный режим)
@@ -97,6 +104,7 @@ public final class CmacApi {
      * @return this
      */
     public CmacApi update(byte[] data, int off, int len) {
+        checkNotDestroyed();
         cmac.update(data, off, len);
         return this;
     }
@@ -109,6 +117,7 @@ public final class CmacApi {
      * @return тег, {@value #CMAC_TAG_SIZE} байт
      */
     public byte[] digest() {
+        checkNotDestroyed();
         byte[] out = new byte[cmac.getMacSize()];
         cmac.doFinal(out, 0); // doFinal вызывает reset() внутри
         return out;
@@ -119,6 +128,7 @@ public final class CmacApi {
      * Ключ сохраняется — экземпляр готов к повторному использованию.
      */
     public void reset() {
+        checkNotDestroyed();
         cmac.reset();
     }
 
@@ -148,27 +158,66 @@ public final class CmacApi {
                     "CMAC tagBytes must be between 1 and " + CMAC_TAG_SIZE + ", got " + tagBytes);
         }
         Cmac c = new Cmac(new Kuznyechik(), tagBytes * 8);
-        c.init(key);
-        c.update(data, 0, data.length);
-        byte[] out = new byte[tagBytes];
-        c.doFinal(out, 0);
-        return out;
+        try {
+            c.init(key);
+            c.update(data, 0, data.length);
+            byte[] out = new byte[tagBytes];
+            c.doFinal(out, 0);
+            return out;
+        } finally {
+            // расписание ключа и подключи не должны пережить вызов
+            c.destroy();
+        }
+    }
+
+    /**
+     * Затирает расписание ключа и подключи. Идемпотентен. После вызова экземпляр непригоден:
+     * {@code update}, {@code digest} и {@code reset} бросают {@link IllegalStateException}.
+     * Вызывать, когда экземпляр больше не нужен: он хранит выведенные из ключа подключи.
+     */
+    public void destroy() {
+        if (destroyed) return;
+        destroyed = true;
+        cmac.destroy();
+    }
+
+    /** То же, что {@link #destroy()}: позволяет использовать экземпляр в try-with-resources. */
+    @Override
+    public void close() {
+        destroy();
     }
 
     /**
      * Сравнивает два MAC-тега за constant-time.
      *
-     * <p>Использует {@link MessageDigest#isEqual} для защиты от timing-атак.
-     * Всегда используйте этот метод для сравнения MAC — не {@code Arrays.equals}.
-     * Применим для CMAC и HMAC.
+     * <p>Сравнивает за постоянное время через {@link ConstantTime#equals}, чтобы время ответа не
+     * раскрывало, сколько байт совпало. Всегда используйте этот метод для сравнения MAC — не
+     * {@code Arrays.equals}. Применим для CMAC и HMAC.
      *
-     * <p>Возвращает {@code false} если любой из аргументов {@code null}.
+     * <p>Возвращает {@code false}, если любой из аргументов {@code null} или пуст:
+     * пустой тег не бывает валидным для CMAC и HMAC. Теги разной длины не равны: более длинный
+     * тег, начинающийся с ожидаемого, не принимается.
      *
      * @param expected ожидаемый тег
      * @param actual   вычисленный тег
      * @return {@code true} если теги равны по значению
      */
     public static boolean verifyMac(byte[] expected, byte[] actual) {
-        return MessageDigest.isEqual(expected, actual);
+        // Длины сверяются до сравнения: иначе более длинный тег совпал бы по префиксу, а более
+        // короткий дал бы исключение вместо false
+        if (expected == null
+                || actual == null
+                || expected.length == 0
+                || actual.length == 0
+                || expected.length != actual.length) {
+            return false;
+        }
+        return ConstantTime.equals(expected, 0, actual, 0, expected.length);
+    }
+
+    private void checkNotDestroyed() {
+        if (destroyed) {
+            throw new IllegalStateException("CmacApi has been destroyed");
+        }
     }
 }

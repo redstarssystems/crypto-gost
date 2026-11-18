@@ -29,9 +29,9 @@ public final class CertificateTextFormatter {
 
     private static final String INDENT = "    ";
 
-    // Однобайтовые биты KeyUsage берём из единого источника — enum KeyUsage.mask
-    // (GostCertificateBuilder). decipherOnly (бит 8, RFC 5280 §4.2.1.3) в enum
-    // отсутствует намеренно: keyUsageFlags() кодирует маску в один байт, и 0x8000
+    // Однобайтовые биты KeyUsage берём из enum KeyUsage.mask (GostCertificateBuilder);
+    // значения зарегистрированы в GostDerParser. decipherOnly (бит 8, RFC 5280 §4.2.1.3)
+    // в enum отсутствует намеренно: keyUsageFlags() кодирует маску в один байт, и 0x8000
     // там потерялся бы. В упакованном keyUsageBits второй октет BIT STRING сдвинут
     // на 8 -> decipherOnly == 0x8000.
     private static final int KU_DECIPHER_ONLY = 0x8000;
@@ -311,7 +311,7 @@ public final class CertificateTextFormatter {
         appendConstraint(sb, "excluded URI", nc.excludedUris);
         appendConstraintDirNames(sb, "excluded DIRNAME", nc.excludedDirectoryNames);
         if (nc.hasUnsupportedNameType) {
-            appendCsv(sb, "есть неподдерживаемые типы имён (otherName)");
+            appendCsv(sb, "есть неподдерживаемые типы имён " + nc.unsupportedNameForms);
         }
         if (nc.hasUnsupportedRfc822Form) {
             appendCsv(sb, "есть неподдерживаемая форма rfc822Name (mailbox)");

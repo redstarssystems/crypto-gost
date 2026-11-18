@@ -12,10 +12,10 @@ import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.pkix.tsp.TspRequestBuilder;
 import org.rssys.gost.pkix.tsp.TspResponse;
 import org.rssys.gost.pkix.tsp.TspTransport;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Построитель SignedData (RFC 5652 §5.1—§5.3) с ГОСТ подписью.
@@ -126,6 +126,10 @@ public final class CmsSignedDataBuilder {
     /**
      * Добавляет CRL для встраивания в SignedData (RFC 5652 §5.1, поле crls [1] IMPLICIT).
      * Используется выбор crl (CertificateList), other-ветка (OCSP-ответы и т.п.) не поддерживается.
+     *
+     * <p>Пределы CRL ({@link org.rssys.gost.pkix.cert.CrlLimits}) проверяет тот, кто разбирал CRL;
+     * построитель их не применяет. Встроенные CRL при проверке ограничены суммой
+     * {@link CmsConstants#MAX_EMBEDDED_CRLS_TOTAL_SIZE} байт.</p>
      */
     public CmsSignedDataBuilder addCrl(GostCrl crl) {
         crls.add(crl);
@@ -138,6 +142,11 @@ public final class CmsSignedDataBuilder {
      * <p>Байты проходят структурный парсинг через конструктор {@link GostCrl} — невалидный DER
      * отбрасывается сразу. Верификация подписи CRL (verify) не выполняется — это ответственность
      * получателя CMS-сообщения.</p>
+     *
+     * <p>Конструктор {@link GostCrl} разбирает только структуру, а список отозванных читается
+     * позже, при проверке; поэтому предел числа записей здесь не применяется, а размер проверяется
+     * по значению по умолчанию. Пределы проверяет тот, кто разбирал CRL; встроенные CRL при
+     * проверке ограничены суммой {@link CmsConstants#MAX_EMBEDDED_CRLS_TOTAL_SIZE} байт.</p>
      *
      * @param crlDer DER-кодированный CertificateList (результат {@link GostCrlBuilder#sign})
      * @return this
@@ -223,7 +232,7 @@ public final class CmsSignedDataBuilder {
             byte[] signedData =
                     buildSignedData(List.of(), encapContentInfo, certsField, crlsField, List.of());
             LOG.log(
-                    Level.INFO,
+                    Level.DEBUG,
                     "Building certs-only SignedData with {0} certificate(s), {1} CRL(s)",
                     certificates.size(),
                     crls.size());
@@ -234,7 +243,7 @@ public final class CmsSignedDataBuilder {
         if (signers.isEmpty()) throw new IllegalStateException("no signers");
 
         LOG.log(
-                Level.INFO,
+                Level.DEBUG,
                 "Building SignedData with {0} signer(s), {1} byte(s) of data",
                 signers.size(),
                 data.length);
@@ -294,7 +303,7 @@ public final class CmsSignedDataBuilder {
 
         // 6. Оборачиваем в ContentInfo
         byte[] result = CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, signedData);
-        LOG.log(Level.INFO, "SignedData built successfully ({0} byte(s) data)", data.length);
+        LOG.log(Level.DEBUG, "SignedData built successfully ({0} byte(s) data)", data.length);
         return result;
     }
 
@@ -423,7 +432,7 @@ public final class CmsSignedDataBuilder {
         }
         // [0] IMPLICIT SET OF Certificate — тег 0xA0 заменяет SET (X.690 §8.14)
         byte[][] sorted = certList.toArray(new byte[0][]);
-        java.util.Arrays.sort(sorted, DerCodec::compareDer);
+        DerCodec.sortDer(sorted);
         return DerCodec.encodeContextConstructed(0, DerCodec.concat(sorted));
     }
 
@@ -436,7 +445,7 @@ public final class CmsSignedDataBuilder {
             derCrls[i] = crls.get(i).getEncoded();
         }
         // [1] IMPLICIT SET OF CertificateList — тег 0xA1 заменяет SET (X.690 §8.14)
-        java.util.Arrays.sort(derCrls, DerCodec::compareDer);
+        DerCodec.sortDer(derCrls);
         return DerCodec.encodeContextConstructed(1, DerCodec.concat(derCrls));
     }
 

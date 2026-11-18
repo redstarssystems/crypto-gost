@@ -191,11 +191,7 @@ public final class CertificateStatusCheck {
             if (crlDer != null) {
                 System.out.println("CRL загружен с " + usedCdp + " (" + crlDer.length + " байт)");
                 try {
-                    CrlVerifier.verify(
-                            crlDer,
-                            cert.getSerialNumber(),
-                            caCert.getPublicKey(),
-                            caCert.getSubjectDnBytes());
+                    CrlVerifier.verify(crlDer, cert, caCert);
                     System.out.println("CRL: сертификат не отозван");
                 } catch (Exception e) {
                     System.out.println("CRL: " + e.getMessage());

@@ -9,6 +9,7 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.KeySpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
+import java.util.Arrays;
 import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jca.key.GostECPrivateKeySpec;
 import org.rssys.gost.jca.key.GostECPublicKey;
@@ -49,7 +50,7 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
             try {
                 PublicKeyParameters params = GostDerCodec.decodePublicKey(encoded);
                 return new GostECPublicKey(params);
-            } catch (Exception e) {
+            } catch (IllegalArgumentException e) {
                 throw new InvalidKeySpecException(
                         "Cannot decode X.509 SubjectPublicKeyInfo: " + e.getMessage(), e);
             }
@@ -58,10 +59,9 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
             GostECPublicKeySpec spec = (GostECPublicKeySpec) keySpec;
             try {
                 ECParameters curve = GostCurves.byName(spec.getCurveName());
+                // диапазон координат проверяет affine, принадлежность кривой и подгруппе —
+                // конструктор PublicKeyParameters
                 ECPoint q = ECPoint.affine(spec.getX(), spec.getY(), curve);
-                if (!q.isValidPublicKey()) {
-                    throw new IllegalArgumentException("public key point is not on the curve");
-                }
                 return new GostECPublicKey(new PublicKeyParameters(q, curve));
             } catch (IllegalArgumentException e) {
                 throw new InvalidKeySpecException(
@@ -88,9 +88,13 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
             try {
                 PrivateKeyParameters params = GostDerCodec.decodePrivateKey(encoded);
                 return new GostECPrivateKey(params);
-            } catch (Exception e) {
+            } catch (IllegalArgumentException | UnsupportedOperationException e) {
+                // разбор DER (IAE) или маскированный ключ RFC 9548 (UOE); прочие сбои не скрываются
                 throw new InvalidKeySpecException(
                         "Cannot decode PKCS#8 PrivateKeyInfo: " + e.getMessage(), e);
+            } finally {
+                // getEncoded() отдаёт копию: она содержит закрытый ключ и не должна остаться в куче
+                Arrays.fill(encoded, (byte) 0);
             }
         }
         if (keySpec instanceof GostECPrivateKeySpec) {
@@ -144,7 +148,7 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
         }
         if (GostECPublicKeySpec.class.isAssignableFrom(keyClass)) {
             PublicKeyParameters params = key.toPublicKeyParameters();
-            ECPoint q = params.getQ().normalize();
+            ECPoint q = params.getQ();
             String oid = GostCurves.oidOf(params.getParams());
             return (T) new GostECPublicKeySpec(q.getX(), q.getY(), oid);
         }
@@ -154,15 +158,31 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
                         + ". Supported: X509EncodedKeySpec, GostECPublicKeySpec");
     }
 
-    @SuppressWarnings("unchecked")
     private <T extends KeySpec> T getPrivateKeySpec(GostECPrivateKey key, Class<T> keyClass)
+            throws InvalidKeySpecException {
+        try {
+            return privateKeySpecOf(key, keyClass);
+        } catch (IllegalStateException e) {
+            // Уничтожение ключа между проверкой и чтением не выделяется отдельной проверкой:
+            // граница JCA получает проверяемое исключение в любом случае
+            throw new InvalidKeySpecException("Private key has been destroyed", e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T extends KeySpec> T privateKeySpecOf(GostECPrivateKey key, Class<T> keyClass)
             throws InvalidKeySpecException {
         if (PKCS8EncodedKeySpec.class.isAssignableFrom(keyClass)) {
             byte[] encoded = key.getEncoded();
             if (encoded == null) {
-                throw new InvalidKeySpecException("Cannot encode private key (possibly destroyed)");
+                throw new InvalidKeySpecException("Cannot encode private key");
             }
-            return (T) new PKCS8EncodedKeySpec(encoded);
+            try {
+                return (T) new PKCS8EncodedKeySpec(encoded);
+            } finally {
+                // PKCS8EncodedKeySpec хранит собственную копию; эта иначе остаётся в куче
+                Arrays.fill(encoded, (byte) 0);
+            }
         }
         if (GostECPrivateKeySpec.class.isAssignableFrom(keyClass)) {
             PrivateKeyParameters params = key.toPrivateKeyParameters();
@@ -185,6 +205,13 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
      */
     @Override
     protected Key engineTranslateKey(Key key) throws InvalidKeyException {
+        if (key instanceof GostECPrivateKey gostPrivate) {
+            try {
+                gostPrivate.toPrivateKeyParameters();
+            } catch (IllegalStateException e) {
+                throw new InvalidKeyException("Private key has been destroyed", e);
+            }
+        }
         if (key instanceof GostECPublicKey || key instanceof GostECPrivateKey) {
             return key;
         }
@@ -200,12 +227,23 @@ public final class GostKeyFactorySpi extends KeyFactorySpi {
             }
         }
         if (key instanceof PrivateKey) {
-            byte[] encoded = key.getEncoded();
+            byte[] encoded;
+            try {
+                encoded = key.getEncoded();
+            } catch (IllegalStateException e) {
+                // Чужой уничтоженный ключ: проверяемое исключение вместо непроверяемого из
+                // JCA-метода
+                throw new InvalidKeyException("Private key has been destroyed", e);
+            }
             if (encoded != null && "PKCS#8".equals(key.getFormat())) {
                 try {
-                    return engineGeneratePrivate(new PKCS8EncodedKeySpec(encoded));
-                } catch (InvalidKeySpecException e) {
+                    // Без промежуточного PKCS8EncodedKeySpec: он сделал бы ещё одну копию ключа
+                    return new GostECPrivateKey(GostDerCodec.decodePrivateKey(encoded));
+                } catch (IllegalArgumentException | UnsupportedOperationException e) {
+                    // decodePrivateKey: разбор DER (IAE) или маскированный ключ RFC 9548 (UOE)
                     throw new InvalidKeyException("Cannot translate private key", e);
+                } finally {
+                    Arrays.fill(encoded, (byte) 0);
                 }
             }
         }

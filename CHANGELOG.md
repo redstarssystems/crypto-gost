@@ -1,3 +1,7366 @@
+# Как читать этот документ
+
+Записи сгруппированы по модулям и по характеру изменения. В начале
+каждой записи стоит тег в квадратных скобках: он отвечает на вопрос «что
+это значит для меня». Восклицательный знак после тега (`[CHANGE!]`,
+`[SECURITY:P1!]`) означает несовместимое изменение: без правки кода,
+перевыпуска данных или обновления собеседника обновление не пройдёт.
+
+<table>
+<colgroup>
+<col style="width: 14%" />
+<col style="width: 42%" />
+<col style="width: 42%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Тег</th>
+<th style="text-align: left;">Когда ставится</th>
+<th style="text-align: left;">Что делать читателю</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><p><code>[FEATURE]</code></p></td>
+<td style="text-align: left;"><p>Новый класс, метод, параметр,
+константа, расширение протокола</p></td>
+<td style="text-align: left;"><p>Можно начать использовать; существующий
+код не меняется</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>[ENHANCEMENT]</code></p></td>
+<td style="text-align: left;"><p>Существующая возможность стала удобнее,
+совместимее или полнее без смены семантики</p></td>
+<td style="text-align: left;"><p>Обычно ничего делать не нужно;
+проверить, если полагались на прежние детали</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>[BUGFIX]</code></p></td>
+<td style="text-align: left;"><p>Устранён дефект: неверный результат,
+исключение, расхождение с RFC или Javadoc</p></td>
+<td style="text-align: left;"><p>Проверить, не полагался ли ваш код на
+прежнее (неверное) поведение</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>[CHANGE]</code></p></td>
+<td style="text-align: left;"><p>Изменилось поведение, API или формат;
+без <code>!</code> — совместимо</p></td>
+<td style="text-align: left;"><p>Прочитать; при <code>!</code> —
+пересобрать код или перевыпустить данные</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>[SECURITY:P0…P3]</code></p></td>
+<td style="text-align: left;"><p>Закрыт обход проверки, утечка ключевого
+материала, подмена данных, ужесточение</p></td>
+<td style="text-align: left;"><p>Обновиться обязательно; класс
+<code>P0…P3</code> показывает срочность</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>[PERF]</code></p></td>
+<td style="text-align: left;"><p>Меньше времени, памяти или аллокаций на
+горячем пути</p></td>
+<td style="text-align: left;"><p>Необязательно; API и формат не
+меняются</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>[OPS]</code></p></td>
+<td style="text-align: left;"><p>Журналирование, сборка, зависимости,
+Android</p></td>
+<td style="text-align: left;"><p>Проверить
+<code>logging.properties</code>, сборку и версии зависимостей</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>[TESTS]</code></p></td>
+<td style="text-align: left;"><p>Новые тесты, кросс-валидация,
+эталоны</p></td>
+<td style="text-align: left;"><p>Для сопровождения; на API не
+влияет</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>[DOCS]</code></p></td>
+<td style="text-align: left;"><p>README, Javadoc, ADR</p></td>
+<td style="text-align: left;"><p>Прочитать при миграции</p></td>
+</tr>
+</tbody>
+</table>
+
+Класс критичности есть только у `[SECURITY]` и отвечает на вопрос
+«насколько срочно обновляться». Это приоритет, а не оценка CVSS: при
+выпуске advisory балл считается отдельно.
+
+<table style="width:100%;">
+<colgroup>
+<col style="width: 12%" />
+<col style="width: 12%" />
+<col style="width: 37%" />
+<col style="width: 37%" />
+</colgroup>
+<thead>
+<tr>
+<th style="text-align: left;">Класс</th>
+<th style="text-align: left;">Аналог</th>
+<th style="text-align: left;">Критерий</th>
+<th style="text-align: left;">Действие</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><p><code>P0</code></p></td>
+<td style="text-align: left;"><p>Critical</p></td>
+<td style="text-align: left;"><p>Компрометация ключей или полный обход
+аутентификации в обычной конфигурации, удалённо</p></td>
+<td style="text-align: left;"><p>Выпуск блокируется, advisory и
+CVE</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>P1</code></p></td>
+<td style="text-align: left;"><p>High</p></td>
+<td style="text-align: left;"><p>Практический обход доверия, отзыва или
+целостности; восстановление ключа; удалённый отказ в обслуживании при
+реалистичных условиях</p></td>
+<td style="text-align: left;"><p>Исправить до выпуска, advisory</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>P2</code></p></td>
+<td style="text-align: left;"><p>Medium</p></td>
+<td style="text-align: left;"><p>Обход требует особой конфигурации,
+цепочки сертификатов или прямого вызова API; отказ ограничен; утечка
+частичная</p></td>
+<td style="text-align: left;"><p>Исправить в ближайшем выпуске</p></td>
+</tr>
+<tr>
+<td style="text-align: left;"><p><code>P3</code></p></td>
+<td style="text-align: left;"><p>Low</p></td>
+<td style="text-align: left;"><p>Защита в глубину, гигиена журнала,
+затирание памяти без известного пути атаки</p></td>
+<td style="text-align: left;"><p>По возможности</p></td>
+</tr>
+</tbody>
+</table>
+
+Порядок чтения при обновлении: `[SECURITY:P0]`, `[SECURITY:P1]`, записи
+с `!`, затем `[SECURITY:P2]`, `[CHANGE]`, `[BUGFIX]`, `[FEATURE]`,
+`[ENHANCEMENT]`; `[PERF]`, `[OPS]`, `[TESTS]`, `[DOCS]` — в конце.
+
+# \[0.8.0\] - 18-11-2026
+
+## Модуль crypto-gost-pkix
+
+### Исправлено
+
+- **\[SECURITY:P3\] Управляющие символы в SAN и других IA5String
+  отвергаются: они могли подделать строку журнала.**
+
+  Было: `GostExtensionParser` декодировал `dNSName`, `rfc822Name` и URI
+  как есть, поэтому CR/LF из сертификата собеседника попадали в
+  сообщение `TlsCertificateValidator`/`ChainValidator` и выводились в
+  журнал (WARNING включён по умолчанию).
+
+  Стало: общий `decodeIa5` отвергает 0x00-0x1F и 0x7F в SAN, AIA/CDP,
+  CPS URI и NameConstraints; такой сертификат считается некорректным.
+  `GostDnParser.truncateForLog` открыт tls13 и jsse для усечения DN.
+
+- **\[BUGFIX!\] Несовместимое изменение:
+  `CmsEnvelopedDataBuilder.addRecipient` отвергает сертификат, не
+  предназначенный для шифрования.**
+
+  Было: получателем принимался любой сертификат, в том числе выпущенный
+  только для подписи (`digitalSignature`, `nonRepudiation`) или для УЦ
+  (`keyCertSign`, `cRLSign`).
+  `CmsSignedAndEnvelopedData.signThenEncrypt` сначала подписывал, а
+  потом добавлял получателей, поэтому отказ из-за плохого получателя
+  приходил уже после обращения к ключу подписанта; `null` и пустой
+  список получателей давали `NullPointerException` либо
+  `IllegalStateException` из `build()` тоже после подписи.
+
+  Стало: если у сертификата есть KeyUsage, нужен хотя бы один из битов
+  `keyEncipherment`, `keyAgreement`, `dataEncipherment`, одинаково для
+  `KeyTransRecipientInfo` и `KeyAgreeRecipientInfo`; критичность
+  расширения не влияет, сертификат без KeyUsage допускается. Иначе
+  `IllegalArgumentException`, в тексте только серийный номер, без DN.
+  Проверить заранее можно через
+  `GostCertificate.isKeyUsageValidForEncryption()`. Правило совпадает с
+  КриптоПро CSP 5.0: она отвергает сертификаты только для подписи и для
+  УЦ и принимает сертификат с любым из трёх битов, в том числе с одним
+  `dataEncipherment`. Это сознательно мягче RFC 5652 §6.2.1 и §6.2.2
+  (бит привязан к типу `RecipientInfo`) и RFC 9215 §4.4: в ГОСТ оба
+  режима строятся на VKO, а часть выпускаемых сертификатов несёт
+  `keyEncipherment` без `keyAgreement`. В `signThenEncrypt` и
+  `encryptThenSign` получатели проверяются до подписи: `null` вместо
+  массива даёт `NullPointerException`, пустой
+  список — `IllegalArgumentException` (раньше `IllegalStateException` из
+  `build()`). В `GostDerParser` зарегистрированы все биты KeyUsage,
+  кроме `decipherOnly`, `GostCertificateBuilder.KeyUsage` ссылается на
+  них.
+
+- **\[BUGFIX\] OID алгоритма в MacData PFX приведён к RFC 9548 §7.**
+
+  Было: в `MacData` писался и принимался OID HMAC `1.2.643.7.1.1.4.2`;
+  такие PFX не читали КриптоПро и OpenSSL (`0x80091003`,
+  `unknown digest algorithm`), а PFX по стандарту, в том числе примеры
+  A.2 и A.3 из RFC, не читал `GostPkcs12Loader`
+  (`Unsupported MAC digest algorithm`).
+
+  Стало: пишется и принимается OID хэш-функции `id-tc26-gost3411-12-512`
+  (`1.2.643.7.1.1.2.3`); параметры `AlgorithmIdentifier` отсутствуют или
+  NULL (так пишет OpenSSL), иное отвергается. Состав `MacData`,
+  `DigestInfo` и `AlgorithmIdentifier` проверяется строго, OID и длина
+  MAC (64 байта) проверяются до PBKDF2. Старые OID HMAC и OID
+  Стрибог-256 дают понятную ошибку с предложением перевыпустить PFX.
+  Эталонные PFX из RFC 9548 (A.2, A.3) проходят проверку MAC, а
+  `GostPkcs12Mac.compute` воспроизводит их `MacData` побайтово.
+
+- **\[BUGFIX\] `GostPbes2.deriveKey` затирает PRF.**
+
+  Было: HMAC-функция PBKDF2, созданная из пароля, не уничтожалась, и
+  ipad/opad, выведенные из пароля, оставались в памяти до сборки мусора
+  (`Pbkdf2Streebog.generate(Mac, ...)` переданную функцию не затирает).
+
+  Стало: PRF уничтожается сразу после выработки ключа; в javadoc
+  `Pbkdf2Streebog.generate(Mac, ...)` указано, что уничтожение за
+  вызывающим.
+
+- **\[BUGFIX\] CMS: битый `eContent` даёт `PkixException(PARSE_ERROR)`,
+  составной `OCTET STRING` читается целиком.**
+
+  Было: из проверки CMS SignedData и CAdES-BES на недоверенном
+  контейнере выходили `ArrayIndexOutOfBoundsException` (пустой `[0]`) и
+  `IllegalArgumentException` (битая длина, `A0 80` без маркера конца);
+  составной `OCTET STRING` из нескольких сегментов (так КриптоПро режет
+  большие данные) хэшировался только по первому сегменту, поэтому
+  подпись такого контейнера не сходилась.
+
+  Стало: `eContent` собирается из всех сегментов в границах элемента
+  (неопределённая длина допустима у `[0]` и составного `OCTET STRING`,
+  нужен маркер конца), пустой или усечённый элемент, хвост и чужой тег
+  дают `PkixException(PARSE_ERROR)`; перехват узкий
+  (`IllegalArgumentException`), ошибки программы не маскируются.
+
+- **\[BUGFIX\] Сертификат: тег подписи сверяется целиком, хвост внутри
+  внешней `SEQUENCE` отвергается; `getNameConstraints()` отдаёт копию.**
+
+  Было: тег `SignatureValue` сверялся по маске `0x1F`, и `0x23`, `0x43`,
+  `0x83` проходили; элемент после подписи внутри внешней `SEQUENCE`
+  принимался (подпись считается по TBS, и такой сертификат отличался
+  только отпечатком); `getNameConstraints()` отдавал внутренний объект с
+  изменяемыми массивами, на которых строится проверка цепочки.
+
+  Стало: допустим только тег `0x03`, байты после подписи отвергаются;
+  `getNameConstraints()` возвращает копию, а проверка цепочки читает
+  ограничения без копирования.
+
+- **\[SECURITY:P2\] Право издателя CRL подписывать CRL проверяется по
+  `KeyUsage` `cRLSign`.**
+
+  Было: `CrlVerifier` принимал только открытый ключ издателя и не знал о
+  его сертификате, поэтому CRL, подписанный ключом CA с `KeyUsage` без
+  `cRLSign` (например, только `keyCertSign`), принимался; в
+  `verifyDelegated` отсутствие бита давало лишь предупреждение «для
+  обратной совместимости».
+
+  Стало: если у сертификата издателя есть `KeyUsage`, в нём обязан быть
+  `cRLSign`, иначе `PkixException` с причиной `MISSING_CRL_SIGN`
+  (сертификат без `KeyUsage` подписывать CRL вправе, RFC 5280 §4.2.1.3).
+  Проверка действует на всех путях: прямом, base+delta,
+  `verifyDelegated` (для CRL, подписанного самим CA), CAdES-X Long,
+  проверке цепочки, CMS и при выдаче `VerifiedCrl` из кэша (тот же ключ,
+  но сертификат без бита не пользуется чужой проверкой). Следствие: CA,
+  публикующий CRL с `KeyUsage` только `keyCertSign`, теперь отвергается;
+  его нужно перевыпустить с `cRLSign`.
+
+- **\[SECURITY:P2\] Ограничения имён: завершающая точка и регистр в
+  URI-хосте не обходят `excluded`, `iPAddress` в mapped-форме тоже.**
+
+  Было: хост URI `a.evil.com.` не попадал под запрет `.evil.com`, хост и
+  ограничение сравнивались без нормализации; SAN `10.0.0.1` проходил
+  мимо запрета `::ffff:10.0.0.0/120`, а `::ffff:10.0.0.1` мимо
+  `10.0.0.0/8`; в `directoryName` вложенный элемент мог выйти за границу
+  своего RDN и DN.
+
+  Стало: хост URI и URI-ограничения приводятся к lowercase A-label без
+  завершающей точки (ведущая точка ограничения сохраняется), имя, не
+  приводимое к такому виду (`evil.com..`), даёт `PARSE_ERROR`; для
+  `excluded` адрес проверяется в обеих формах и против ограничений обоих
+  семейств при любой маске; границей RDN служит конец DN, границей AVA
+  конец RDN. Для `permitted` правило прежнее: адрес другой формы не
+  принимается (fail-closed).
+
+- **\[SECURITY:P2\] Строгий разбор сертификата: `pathLenConstraint`,
+  `version`, хвост после сертификата, PEM из одного блока.**
+
+  Было: `pathLenConstraint` `02 01 FF` читался как 255 (ослабление
+  ограничения длины цепочки), неминимальная запись принималась;
+  `version` брался по первому байту (`02 02 02 00` читалось как версия
+  3), `[0]` не расходовался целиком, значения выше 2 принимались; байты
+  после сертификата оставались в `getEncoded()`; `pemToDer` склеивал
+  Base64 из всех блоков, и файл цепочки читался как одиночный
+  сертификат.
+
+  Стало: общий помощник `GostDerParser.readStrictNonNegativeInt`
+  отвергает знак, неминимальную запись и значение вне `int`; `version`
+  допускает 0..2 (явный v1 терпится), лишние байты внутри `[0]` и после
+  сертификата отвергаются; `pemToDer`, `GostCertificate.fromPemOrDer` и
+  остальные `fromPemOrDer` принимают ровно один PEM-блок, иначе
+  `IllegalArgumentException("expected exactly one PEM block, got N; use listFromPem")`.
+  Точность `accuracy` и `PKIStatus` в TSP читаются тем же строгим
+  помощником.
+
+- **\[BUGFIX\] `GeneralNameCodec` разбирает IP-литерал без DNS, имя
+  приводит к A-label и не искажает не-ASCII.**
+
+  Было: `encodeIpAddress` вызывал `InetAddress.getByName` (обращение к
+  DNS для имени хоста, mapped-адрес кодировался по-разному в зависимости
+  от записи), `encodeDnsName` и `encodeUri` молча заменяли не-ASCII
+  символы на `?`.
+
+  Стало: IP разбирается как литерал (`GostDnsName.parseIpAddress`),
+  IPv4-mapped кодируется как IPv4 (4 байта), не литерал и адрес с зоной
+  дают `IllegalArgumentException`; `dNSName` приводится к lowercase
+  A-label (Unicode кодируется как punycode, wildcard `*.` допустим
+  только полной левой меткой), `rfc822Name` и URI допускают только
+  US-ASCII. CIDR в `encodeIpConstraint` для mapped-адреса записывается
+  как IPv4-префикс.
+
+- **\[SECURITY:P3\] Ключевой материал затирается при отказе разбора
+  обёрнутого ключа и при сбое шифрования PBES2.**
+
+  Было: в CMS EnvelopedData `kek` и `iv` затирались только после
+  успешного `unwrap`, поэтому при отказе проверки имитовставки KExp15
+  (испорченный `wrappedCek`) они оставались в памяти; производные
+  `K_MAC` и `K_ENC` в `Kexp15CmsKeyWrap` не затирались никогда
+  (`SymmetricKey` копирует массив); PKCS#8 в `GostPbes2.encryptKey` не
+  затирался.
+
+  Стало: затирание в `finally` на любом пути выхода (`kari`, `ktri`,
+  `wrap`, `unwrap`, `encryptKey`).
+
+- **\[BUGFIX\] TSP: метка времени принимается только с `eContentType` =
+  `id-ct-TSTInfo`, битый ответ даёт `PkixException`.**
+
+  Было: тип содержимого в `encapContentInfo` не сверялся, токен с любым
+  типом читался как TSTInfo; границы обёрток `[0]` и `OCTET STRING` не
+  проверялись, битый `TimeStampResp` выпускал
+  `IllegalArgumentException`.
+
+  Стало: иной `eContentType` даёт `PkixException(OTHER)`, eContent
+  читается тем же разбором, что и при проверке подписи в CMS (BER с
+  неопределённой длиной и составной `OCTET STRING` из сегментов
+  допускаются, сегменты склеиваются), а пустой или усечённый элемент,
+  хвост, чужой тег, лишний элемент `encapContentInfo` и нарушение
+  структуры в `TspResponse.fromDer` и `parseTimeStampToken` дают
+  `PkixException(PARSE_ERROR)`.
+
+- **\[SECURITY:P1\] `SsrfGuard`: не глобально маршрутизируемые диапазоны
+  блокируются явной таблицей.**
+
+  Было: защита опиралась на `isSiteLocal`/`isLinkLocal` из JDK, поэтому
+  0/8, 100.64/10, 192.0.0/24, TEST-NET-1/2/3, 192.88.99/24, 198.18/15,
+  240/4 (включая 255.255.255.255), `::a.b.c.d`, 2001:db8::/32,
+  2001:2::/48, 100::/64 и 64:ff9b:1::/48 считались публичными.
+
+  Стало: IPv4-диапазоны RFC 6890 заданы одной таблицей, перечисленные
+  IPv6-префиксы блокируются. Следствие: адрес распространения CRL, OCSP
+  или TSP в таком диапазоне (например, частный УЦ на 192.0.2.x) теперь
+  считается заблокированным: загрузчик возвращает `null` («данных нет»)
+  вместо ошибки соединения или таймаута.
+
+- **\[SECURITY:P1\] `DeadlineWatchdog` больше не замораживает сроки
+  других соединений.**
+
+  Было: `disconnect()` вызывался в единственном потоке таймера на всю
+  JVM и блокировался, пока читатель не дочитает тело ответа (поток
+  таймера всё это время стоял), а за это время сторожа всех остальных
+  соединений (оба `UrlConnection*Fetcher`, `UrlConnectionTspTransport`)
+  не срабатывали: один злой сервер с каплей байтов снимал защиту по
+  времени для всех.
+
+  Стало: `disconnect()` идёт в одноразовом потоке-демоне (обычный
+  `new Thread`, без `Thread.ofPlatform()`, которого нет на Android 14),
+  `hasFired()` публичный, Javadoc больше не обещает общий срок на тело.
+  После срабатывания сторожа `getResponseCode()` может вернуть 200 с
+  неполными заголовками, поэтому ответ нужно отбрасывать по
+  `hasFired()`.
+
+- **\[SECURITY:P1\] Транспорты TSP: перенаправление не обходит проверку
+  SSRF, общий срок покрывает тело ответа.**
+
+  Было: `JdkHttpTspTransport` создавал клиента с
+  `followRedirects(NORMAL)`: SSRF проверялся только для исходного
+  адреса, переход на внутренний адрес не проверялся;
+  `HttpRequest.timeout` покрывал только заголовки, тело читалось без
+  срока. `UrlConnectionTspTransport` заводил сторожа с полными 30 с на
+  каждый переход (срок умножался на число переходов) и тело не обрывал.
+
+  Стало: оба транспорта работают на общем движке `pkix.internal.net`:
+  один срок на соединение, заголовки, тело и все переходы;
+  перенаправления выполняются вручную (не более 5 запросов), схема
+  (`http`, `https`) и SSRF проверяются на каждом переходе, понижение
+  `https` до `http` запрещено.
+
+- **\[BUGFIX\] Транспорты TSP: битый `Location` даёт `IOException`,
+  большое тело отказа не скрывает код статуса.**
+
+  Было: нераспознаваемый `Location` у `UrlConnectionTspTransport`
+  выпускал `IllegalArgumentException` из `URI.resolve`; тело ответа 4xx
+  и 5xx читалось пределом, который бросал при превышении 128 байт, и
+  сообщение теряло код статуса.
+
+  Стало: всё, что пришло от сервера, - `IOException`;
+  `IllegalArgumentException` только при пустом аргументе или
+  синтаксически неверном адресе вызывающего. Тело отказа усекается до
+  128 знаков (только печатные ASCII), код статуса сохраняется.
+
+- **\[BUGFIX\] `cRLNumber` и `BaseCRLNumber`: предел 20 октетов вместо
+  8, отрицательные значения отвергаются.**
+
+  Ранее CRL с номером длиннее 8 октетов отвергался с `PARSE_ERROR`, в
+  том числе настоящий CRL тестового УЦ ИнфоТеКС (16 октетов), а
+  отрицательный номер принимался. `CrlVerifier.extractCrlNumber` не
+  пропускал `critical` и возвращал `null` для critical `cRLNumber`,
+  из-за чего в `CrlCache` терялась база защиты от отката.
+
+  Стало: по RFC 5280 §5.2.3 принимается до 20 октетов величины (ведущий
+  `0x00` знака не считается), отрицательное значение даёт `PARSE_ERROR`;
+  `GostCrlBuilder` не выпускает такие номера; `extractCrlNumber`
+  пропускает `critical`.
+
+- **\[SECURITY:P2\] Строгий разбор CRL: расширения, записи и границы
+  структуры.**
+
+  Ранее неизвестное critical-расширение CRL и записи, повтор расширения,
+  расширение без OID, лишние данные за блоком и за `CertificateList`,
+  выход вложенного элемента за границу своего блока, битый
+  `IssuingDistributionPoint` и битые значения `cRLNumber`, AKI и
+  `reasonCode` молча игнорировались; структурные ошибки выходили
+  непроверяемым `IllegalArgumentException`.
+
+  Стало: после проверки подписи CRL разбирается строго, нарушение даёт
+  `PkixException` (`PARSE_ERROR` или `UNKNOWN_CRITICAL_EXTENSION`).
+  `certificateIssuer` в записи даёт `IDP_NOT_SUPPORTED`, critical
+  `freshestCRL` отвергается, поля `IssuingDistributionPoint` сверяются
+  по номеру поля, число расширений ограничено (`MAX_CRL_EXTENSIONS`,
+  `MAX_CRL_ENTRY_EXTENSIONS`).
+
+- **\[BUGFIX\] `uniqueID` в сертификате (`issuerUniqueID`,
+  `subjectUniqueID`) разбирается.**
+
+  Ранее `GostCertificate` не принимал каноничные примитивные теги `0x81`
+  и `0x82` (IMPLICIT BIT STRING) и бросал
+  `Unexpected field in TBSCertificate`: сертификаты ИнфоТеКС с
+  `uniqueID` не читались.
+
+  Стало: поля пропускаются (прежний constructed-вариант тоже); в
+  сертификате v1 они отвергаются (RFC 5280 §4.1.2.8).
+
+- **\[SECURITY:P3\] Декодеры CAdES-X Long отдают `PkixException` на
+  битом вводе.**
+
+  Ранее битый `certificate-values` или `revocation-values`
+  (неподписанные атрибуты) давал непроверяемое
+  `IllegalArgumentException` из `decodeCertificateValues` и
+  `decodeRevocationValues`, мимо обработчиков `PkixException`.
+
+  Стало: тело методов обёрнуто целиком, итог `PkixException` с причиной
+  `PARSE_ERROR`.
+
+- **\[SECURITY:P1\] `CrlVerifier.verifyDelegated`: подписант без
+  `KeyUsage` с `cRLSign` больше не принимается.**
+
+  Ранее отсутствие `KeyUsage` у делегированного подписанта считалось
+  «без ограничений» (`isCrlSigner()`), и любой сертификат УЦ без
+  `KeyUsage`, попавший в список подписантов, подписывал CRL от имени УЦ;
+  неизвестные critical-расширения подписанта не проверялись.
+
+  Стало: нужен `KeyUsage` с `cRLSign`
+  (`GostCertificate.hasCrlSignKeyUsage()`), без неизвестных
+  critical-расширений и в пределах срока действия. `isCrlSigner()` для
+  прямого пути не менялся.
+
+- **\[BUGFIX\] CAdES-C и X Long: OCSP-ответ со статусом не 0 даёт
+  `PkixException`.**
+
+  Ранее ответ службы без `responseBytes` (например, `tryLater`),
+  переданный в `CAdESExtender`, приводил к `NullPointerException` в
+  `CAdESCompleteData` (у такого ответа нет времени выдачи), а прямой
+  вызов `CAdESXLongData.encodeRevocationValues` молча клал его в
+  `RevocationValues`, которые затем не читались.
+
+  Стало: оба построителя до вычислений проверяют `isSuccessful()` и
+  отказывают с `PkixException` («OCSP: response with non-successful
+  status N cannot be embedded»).
+
+- **\[BUGFIX\] OCSP: алгоритм хэша CertID берётся из ответа, запись
+  выбирается по серийному номеру и полному CertID.**
+
+  Ранее длина хэша для сверки CertID определялась по ключу УЦ, а не по
+  `hashAlgorithm` записи, и верный ответ на CertID Стрибог-256 при УЦ с
+  ключом 512 бит отвергался. При нескольких записях с одним серийным
+  номером бралась первая, а статус проверялся раньше CertID: чужая
+  отозванная запись давала ложный `REVOKED`, а проверка evidence для
+  CAdES-X Long отвергала такой ответ как дубликат.
+
+  Стало: длина хэша определяется записью ответа (32 или 64 байта),
+  запись выбирается по полному CertID, сверка CertID выполняется до
+  проверки статуса. Если своей записи нет, отказ идёт по CertID, а не по
+  `REVOKED`. Дубликат полного CertID с разным статусом отвергается в
+  `verify`, любой дубликат полного CertID - в `verifyEvidence`. Подпись
+  ответа проверяется как прежде. Хэши издателя для сверки считаются по
+  уже разобранному сертификату, без повторного разбора DER на каждую
+  запись.
+
+- **\[BUGFIX\] Недоверенный ввод OCSP не приводит к непроверяемому
+  исключению.**
+
+  Ранее мусор в поле `certs` ответа (`new GostCertificate` на
+  недоверенном DER) и `byKey` длиной от 20 до 63 байт, кроме 32,
+  выпускали `IllegalArgumentException` из `OcspVerifier`, в обход
+  контракта `PkixException`; проверка в tls13
+  (`TlsCertUtils.verifyOcspResponse`) ловит только `PkixException`. Тот
+  же мусор в `certs` ронял построение CAdES-C и X Long
+  (`CAdESExtender`).
+
+  Стало: нераспознанный сертификат из `certs` пропускается в
+  `OcspVerifier` и `CAdESExtender` (запись `DEBUG` без DER),
+  недопустимая длина `byKey` даёт `PkixException`. Порядок «подпись,
+  затем `ResponderID`» сохранён: при неверной подписи отказ остаётся
+  `SIGNATURE_INVALID`.
+
+- **\[SECURITY:P3\] `GostPkcs12Loader` и `GostPkcs12Builder` отвергают
+  пароль с непарным суррогатом вместо замены на `?`.**
+
+  Ранее пароль кодировался через `Charset.encode`, который молча заменял
+  непарный суррогат на `?`: контейнер, собранный с паролем `ab?`,
+  открывался паролем с непарным суррогатом; промежуточный буфер
+  кодирования не затирался, а копия пароля в `GostPkcs12Loader` не
+  затиралась при отказе кодирования.
+
+  Стало: используется общий `PasswordUtf8.encode` из `crypto-gost-core`
+  (UTF-8 без промежуточного `String`, буфер затирается); непарный
+  суррогат даёт `IllegalArgumentException`, копия пароля затирается и
+  при отказе. Для допустимых паролей (в том числе с символами вне BMP,
+  их кодировка и раньше была верной) ключ PKCS#12 не меняется.
+  Исключение описано в Javadoc `build`, `load` и `decryptPrivateKey`.
+
+- **\[BUGFIX\] Эфемерный ключ CMS проходит строгий разбор SPKI и не
+  принимает лишних элементов.**
+
+  Ранее `AlgorithmIdentifier` с indefinite-length (BER КриптоПро) и
+  лишний элемент после BIT STRING разбирались нестрого; OID нулевой
+  длины в `otherName` SAN читал байт соседнего элемента.
+
+  Стало: `AlgorithmIdentifier` приводится к DER
+  (`normalizeBerSequenceToDer`) перед строгим `decodePublicKey`, лишний
+  элемент `originatorKey` даёт `PkixException`; OID нулевой длины
+  отвергается в `DerCodec.parseOid`.
+
+- **\[SECURITY:P2\] Запрет `directoryName` в NameConstraints не
+  обходится лишним атрибутом в RDN.**
+
+  Ранее для excluded RDN имени сравнивался с RDN запрета только при
+  равном числе AVA: имя `O=Evil+OU=x` не входило в запрещённое поддерево
+  `O=Evil`. Жадное сопоставление AVA к тому же могло пропустить запрет,
+  когда значение не декодировалось и совпадало с любым значением того же
+  OID.
+
+  Стало: для excluded RDN с дополнительными AVA считается вхождением в
+  запрещённое поддерево (строже RFC 5280 §7.1, ложное срабатывание
+  допустимо, пропуск запрета нет); AVA сопоставляются поиском
+  паросочетания, порядок перебора не влияет на результат. Для permitted
+  сравнение RDN прежнее (равенство).
+
+- **\[BUGFIX\] `emailAddress` с управляющими символами отвергается при
+  проверке NameConstraints.**
+
+  Ранее NUL, перевод строки и другие символы C0 и DEL в `emailAddress`
+  (IA5String) проходили строгий разбор DN.
+
+  Стало: такое значение даёт `PkixException` (`PARSE_ERROR`). Проверка
+  действует там, где DN разбирается для NameConstraints: subject DN в
+  ветках NameConstraints, SAN `directoryName` и сами ограничения.
+
+- **\[BUGFIX\] CAdES-X Long обрабатывает `OtherCertID` без
+  `issuerSerial`.**
+
+  Ранее ссылка без необязательного `issuerSerial` (RFC 5126 §5.7.3.3)
+  давала сырой `NullPointerException` вместо `PkixException`.
+
+  Стало: ссылка сверяется по `otherCertHash` - хэш всего DER сертификата
+  однозначно его задаёт; при наличии `issuerSerial` издатель и серийный
+  номер сверяются как прежде. Дубликаты ссылок определяются по `hashOid`
+  и значению хэша, в том числе без `issuerSerial`.
+
+- **\[BUGFIX\] Контрподпись проверяет KeyUsage и `signatureAlgorithm`
+  подписанта.**
+
+  Ранее поле `signatureAlgorithm` пропускалось, а
+  `isKeyUsageValidForSigning()` не вызывался: сертификат без
+  `digitalSignature` и `nonRepudiation` или с чужим OID алгоритма
+  принимался (основная подпись обе проверки выполняла).
+
+  Стало: обе проверки выполняются до построения цепочки; проверка OID
+  вынесена в общую функцию для основной подписи и контрподписи.
+
+- **\[BUGFIX\] Единая нормализация hostname и разбор IP-литералов в
+  `GostDnsName`.**
+
+  Ранее `trim()` срезал NUL и управляющие символы по краям
+  (`example.com\0` проходило); `verifyHostname` снимал одну завершающую
+  точку, а `GostDnsName` все (`example.com..` проходило); два детектора
+  IP (`GostCertificate` и `GostDnsName`) расходились (`127.0.0.+1`);
+  любая строка с `:` считалась IP и уходила в `InetAddress.getByName`,
+  где возможен запрос к DNS; числовые формы IPv4 (`2130706433`,
+  `0x7f000001`, `127.1`, `0177.0.0.1`) принимались как DNS-имена;
+  форматирующие символы и fullwidth, которые nameprep молча отбрасывал
+  или менял, не отсеивались.
+
+  Стало: один детектор и собственный разбор IPv4 и IPv6 без обращения к
+  DNS (`GostDnsName.parseIpAddress`); снимается ровно одна завершающая
+  точка; управляющие, форматирующие, суррогатные, private use и
+  неназначенные символы, строки, меняющиеся при NFKC после NFC, и
+  числовые формы IPv4 отвергаются (разложенная кириллица принимается).
+  `GostCertificate.verifyAddress(String)` принимает только IP-литералы и
+  не резолвит имена; IPv4-mapped IPv6 в любой записи совпадает с IPv4
+  SAN. `GostCertificate.isIpAddress` удалён.
+
+- **\[BUGFIX\] Публичные `decode*` в `CAdESCompleteData` переводят
+  ошибки разбора DER в `PkixException`.**
+
+  Ранее `decodeOtherHash`, `decodeOtherCertID`,
+  `decodeCompleteCertificateRefs`, `decodeCompleteRevocationRefs` и
+  `decodeCrlOcspRef` на пустом, обрезанном или повреждённом DER давали
+  `ArrayIndexOutOfBoundsException` или `IllegalArgumentException`.
+
+  Стало: `null`, пустой и повреждённый DER (ошибки `DerCodec`:
+  `IllegalArgumentException`, `IndexOutOfBoundsException`) дают
+  `PkixException` (`PARSE_ERROR`).
+
+- **\[BUGFIX\] Проверка подписей возвращает `PkixException` вместо
+  unchecked-исключений.**
+
+  Ранее подпись неверной длины, дайджест другой длины, чем ключ
+  подписанта, или неизвестный OID в `OtherHash` (CAdES-C, X Long) давали
+  `IllegalArgumentException`; в режиме `SignerSelection.ANY` один битый
+  SignerInfo прерывал проверку валидного подписанта.
+
+  Стало: CMS, CAdES (включая контрподпись), CRL и OCSP отклоняют такие
+  входы с `PkixException` (`ALG_MISMATCH` или `SIGNATURE_INVALID`),
+  `GostCertificate.verifySignature` и `GostCsrParser.verify` возвращают
+  `false`, а в режиме `ANY` проверка продолжается по остальным
+  подписантам. OID хэша в `OtherHash` ограничен Стрибогом-256/512 при
+  разборе.
+
+- **\[SECURITY:P2\] KeyUsage: padding-биты не считаются значимыми.**
+
+  Ранее единица в неиспользуемых битах BIT STRING (например,
+  `03 02 03 04`) взводила `keyCertSign`, `cRLSign` или `nonRepudiation`,
+  что влияло на проверку CA в цепочке, подписанта CRL и подписанта CMS.
+
+  Стало: `unusedBits` обязан быть в диапазоне 0..7, ненулевой padding
+  отклоняется как нарушение DER (`IllegalArgumentException`).
+
+- **\[BUGFIX\] NameConstraints: `minimum` и `maximum` в GeneralSubtree
+  разбираются по DER.**
+
+  Ранее парсер ожидал конструктивные теги `0xA0`/`0xA1` с вложенным
+  INTEGER, а при IMPLICIT TAGS в DER это примитивные `0x80`/`0x81`; тест
+  кодировал не-DER форму и маскировал ошибку, внутренний INTEGER не
+  ограничивался своей обёрткой.
+
+  Стало: принимаются только примитивные теги, значение читается строго
+  внутри обёртки; форма `0xA0`/`0xA1`, неминимальный INTEGER,
+  отрицательные значения и дубли отвергаются (`hasMalformed`).
+
+- **\[SECURITY:P2\] PKCS#12: связность цепочки проверяется на пути
+  JDK-fallback и для контейнеров УЦ.**
+
+  Ранее цепочка из JDK `KeyStore` возвращалась без проверки подписей,
+  поэтому поддельный CA с тем же subject DN попадал в
+  `getCertificateChain()`; для контейнера без конечного сертификата
+  порядок и связность не проверялись, а ключ сверялся с любым CA.
+
+  Стало: цепочка строится от сертификата ключа (для контейнера УЦ - от
+  самого CA) на обоих путях загрузки, несвязанные сертификаты
+  отбрасываются, а ключ сверяется с первым звеном. Добавлен
+  `Result.getAllCertificates()` - кандидаты в цепочку без проверки
+  связности; `getDroppedCertificateCount()` вычисляется по нему. На пути
+  JDK-fallback не-ГОСТ доверенные сертификаты (RSA, ECDSA) пропускаются
+  и не мешают загрузке ключа. Документация уточнена: связность не
+  заменяет MAC и не даёт аутентичности без внешнего якоря или пиннинга.
+
+- **\[SECURITY:P2\] Строгий разбор расширений X.509 и границ
+  DER-структур.**
+
+  Ранее расширение, `extnValue` и GeneralName могли выйти за границы
+  охватывающей структуры (вплоть до подписи); пустой или не-SEQUENCE
+  блок `[3]` означал «расширений нет»; битый `extnValue` известного
+  расширения (не та структура, хвост после неё) давал «расширения нет»;
+  BOOLEAN `critical` и `BasicConstraints.cA` читался как «первый байт не
+  равен 0», поэтому пустое значение давало FALSE, и неизвестное
+  critical-расширение игнорировалось; внешние поля CSR и ряд полей TBS
+  читались без границ родителя.
+
+  Стало: расширение лежит целиком внутри Extensions, `[3]` - последнее
+  поле TBS, а хвосты, пустой блок и отсутствие `extnValue` отклоняются.
+  Форма `extnValue` известных расширений (SKI, KU, EKU, BC, AKI, AIA,
+  CDP, CP) проверяется. BOOLEAN - строго DER (один октет 0x00 или 0xFF).
+  Неизвестный тег GeneralName в SAN/IAN отклоняется. Добавлены
+  `GostDerParser.readTlv(der, offset, limit)` и
+  `GostDerParser.readBoolean`. Границы внешней SEQUENCE соблюдаются в
+  `GostCertificate` и `GostCsrParser`; строгий разбор атрибута
+  extensionRequest в CSR.
+
+- **\[SECURITY:P2\] NameConstraints: subject `emailAddress` проверяется
+  вместе с SAN `rfc822Name`.**
+
+  Ранее адрес из subject проверялся, только если в SAN не было
+  `rfc822Name`; при ограничении только в mailbox-форме (`user@host`) -
+  не проверялся вовсе. Подчинённый УЦ мог положить разрешённый адрес в
+  SAN, а запрещённый - в subject.
+
+  Стало: при любом активном rfc822-ограничении проверяются оба
+  источника - в том числе когда SAN есть, но содержит только другие типы
+  имён. Это сознательное ужесточение сверх буквального текста RFC 5280
+  §4.2.1.10.
+
+- **\[SECURITY:P2\] NameConstraints: неподдерживаемые формы GeneralName
+  учитываются раздельно.**
+
+  Ранее ограничения на `x400Address`, `ediPartyName`, `registeredID` не
+  применялись, а имена этих форм в SAN пропускались; отказ был только
+  для `otherName`.
+
+  Стало: форма, на которую наложено ограничение
+  (`UnsupportedGeneralNameForm`), сопоставляется с формами в SAN;
+  пересечение - отказ (RFC 5280 §4.2.1.10), разные формы не конфликтуют.
+  В `GostCertificate` добавлен `getSanUnsupportedNameForms()`, в
+  `NameConstraintsData` - `unsupportedNameForms`.
+
+- **\[SECURITY:P3\] OCSP: `GostOcspResponseBuilder` не кодирует
+  `version` по умолчанию.**
+
+  Ранее в `TBSResponseData` писался явный `version [0] v1`, хотя
+  `DEFAULT v1` по DER (X.690 §11.5) опускается. КриптоПро нормализовал
+  такой ответ при сохранении в `revocation-values`, подпись над
+  исходными байтами переставала сходиться, и проверка CAdES-X Long
+  отвергала файл с `OCSP signature verification failed`.
+
+  Стало: `version` не кодируется; разбор не изменился (поле
+  необязательно).
+
+- **\[BUGFIX\] CAdES-X Long: цепочка TSA для `escTimeStamp` строится по
+  сертификатам всех штампов времени.**
+
+  Ранее промежуточный УЦ TSA, лежащий только во вложенном
+  `certificate-values` соседнего `signature-time-stamp`, не находился, и
+  файл КриптоПро отвергался.
+
+  Стало: сертификаты всех токенов и `certificate-values` служат
+  недоверенными кандидатами
+  (`TspResponse.verify(..., untrustedCandidates, trusted...)`); якоря -
+  только переданные. Сертификат TSA из кандидатов обязан совпасть с
+  `ESSCertIDv2` (`signingCertificateV2`), иначе отказ; токен только с
+  `signingCertificate` v1 (SHA-1) для такого сертификата не принимается.
+  Кандидаты собираются и при проверке CAdES-T; нечитаемый вложенный
+  `certificate-values` в токене штампа - отказ.
+
+- **\[BUGFIX\] CAdES-X Long: делегированный OCSP-ответчик ищется и в
+  `certificate-values`.**
+
+  Ранее при отсутствии ответчика в самом OCSP-ответе проверка подписи
+  падала (`OCSP signature verification failed`).
+
+  Стало: кандидат допускается только при наличии CAdES-C ссылки и
+  проходит `id-kp-OCSPSigning`, `KeyUsage`, срок и проверку подписи
+  издателем проверяемого сертификата; якорем не становится. Добавлена
+  перегрузка `ChainValidator.validateChainWithRevocationEvidence` со
+  списком кандидатов: null-элемент - `IllegalArgumentException`,
+  дубликаты по DER схлопываются, лимит
+  (`GostOids.MAX_OCSP_RESPONDER_CANDIDATES`) действует на уникальные,
+  сырой список ограничен `MAX_RAW_OCSP_RESPONDER_CANDIDATES`.
+
+- **\[SECURITY:P1!\] CAdES-C / CAdES-X Long: обязательная
+  `signature-time-stamp` (breaking change).**
+
+  Ранее проверка CAdES-C и CAdES-X Long принимала CAdES-BES с
+  добавленными unsigned C/X-атрибутами: метка времени проверялась только
+  при наличии. Это позволяло выдать BES за C или X Long и подменить
+  данные отзыва без доверенного времени.
+
+  Стало: при отсутствии `signature-time-stamp` хотя бы у одного
+  подписанта верификация C/X Long падает. `embedCompleteRefs()` требует
+  вход CAdES-T, `embedXLongType1()` с `tspUrl == null` не выпускает X
+  Long из BES. Пустой SET `signature-time-stamp` и несколько значений в
+  одном экземпляре отвергаются; несколько отдельных экземпляров от
+  разных TSA по-прежнему допускаются. Метка необходима, но не
+  достаточна: для привязки C/X-атрибутов и проверки свежести CRL/OCSP
+  относительно `genTime` добавлены `escTimeStamp` и окно
+  `[t_sig, t_esc]` (см. ниже).
+
+- **\[BUGFIX\] CAdES-X Long: partial CRL проверяется по сертификату.**
+
+  Ранее `onlyContainsUserCerts`/`onlyContainsCACerts` разбирались, но не
+  применялись: CRL с `onlyContainsCACerts` мог дать `good` для листового
+  сертификата.
+
+  Стало: в X-Long `onlyContainsUserCerts` допустим только для не-CA,
+  `onlyContainsCACerts` — только для CA; `onlySomeReasons`,
+  `onlyContainsAttributeCerts`, `nameRelativeToCRLIssuer` и
+  несовпадающий `distributionPoint` отклоняются. Общий `CrlVerifier`
+  применяет ту же область на всех путях: CRL, не покрывающий сертификат,
+  даёт `IDP_NOT_SUPPORTED`.
+
+- **\[SECURITY:P3\] Countersignature: пустой SET `counterSignature`
+  отвергается.**
+
+  Ранее пустой SET молча пропускался; теперь верификация падает с
+  ошибкой `Countersignature: empty SET of values`.
+
+- **\[BUGFIX\] CAdES detached-методы: `IllegalArgumentException` на
+  `null` вместо `NullPointerException`.**
+
+  Ранее detached-проверка требовала `content` через
+  `Objects.requireNonNull`, что давало `NullPointerException`.
+
+  Стало: `content == null` — ошибка вызова, как в CMS-API, поэтому
+  `CAdESVerifier.verify*Detached` и `verifyCountersignatureDetached`
+  бросают `IllegalArgumentException` с сообщением
+  `content must not be null`.
+
+- **\[SECURITY:P2\] Строгий разбор subject DN и OID.**
+
+  Ранее строковые значения DN декодировались с заменой некорректных
+  байтов, включая malformed UTF-8 и не-ASCII в
+  PrintableString/IA5String/NumericString; OID допускал неминимальное
+  кодирование, а emailAddress мог иметь любой строковый тип.
+
+  Стало: при проверке NameConstraints строки декодируются строго
+  (`CodingErrorAction.REPORT`) с проверкой алфавита PrintableString,
+  IA5String и NumericString; emailAddress принимается только как
+  IA5String и кодируется ею. Показ subject/issuer DN остаётся терпимым к
+  legacy-строковым кодировкам. Неминимальные OID отклоняются при любом
+  разборе, как в OpenSSL и JDK, а multi-byte первый subidentifier
+  разбирается корректно. Это исключает неоднозначное сравнение DN и
+  обход NameConstraints.
+
+- **\[BUGFIX\] `GostCertificate.verifyHostname(null)` теперь
+  fail-closed.**
+
+  Ранее `null` означал «проверка пропущена», поэтому забытое имя сервера
+  молча принималось за успешную проверку.
+
+  Стало: `null` и пустая строка дают `false`. Если проверка имени не
+  нужна, вызывающий обязан явно её не вызывать.
+
+- **\[SECURITY:P2\] Некорректные и повторяющиеся расширения сертификата
+  отклоняются.**
+
+  Ранее один и тот же OID расширения мог встретиться дважды, а элемент
+  списка расширений не-SEQUENCE или без OID молча пропускался. Итоговое
+  значение зависело от порядка разбора — источник обхода ограничений.
+
+  Стало: `GostExtensionParser` проверяет уникальность OID для всех
+  расширений, включая неизвестные некритичные, до разбора по типу.
+  Повтор, элемент не-SEQUENCE и отсутствие OID дают ошибку разбора
+  сертификата по RFC 5280 §4.2.
+
+- **\[SECURITY:P2\] NameConstraints: self-issued leaf больше не обходит
+  ограничения.**
+
+  Ранее проверка пропускала любой self-issued сертификат, включая leaf.
+  Sub-CA мог выпустить сертификат с subject, равным своему DN, и SAN вне
+  ограничений — цепочка считалась валидной.
+
+  Стало: self-issued промежуточный CA по-прежнему не проверяется, но
+  leaf (последний сертификат пути) проверяется всегда.
+
+- **\[BUGFIX\] NameConstraints: directoryName проверяется по subject и
+  SAN.**
+
+  Ранее directoryName-ограничения либо отклоняли цепочку fail-closed,
+  либо проверялись только по SAN и точным равенством.
+
+  Стало: проверяются непустой subject DN и все directoryName SAN;
+  поддерево сопоставляется по префиксу последовательности RDN, AVA
+  внутри RDN — как multiset. Permitted — каждое имя, excluded —
+  консервативно: NFKC, удаление невидимых/управляющих символов,
+  trim/collapse, регистр через `toUpperCase(ROOT).toLowerCase(ROOT)`;
+  неподдерживаемое строковое или нестроковое значение для excluded
+  считается совпадением. UniversalString поддерживается. Пустые
+  ограничения и malformed DER отклоняются, RDN/AVA ограничены по
+  количеству.
+
+- **\[SECURITY:P2\] NameConstraints: excluded dNSName/rfc822Name
+  учитывает wildcard.**
+
+  Ранее excluded dNSName/rfc822Name сравнивался с SAN буквально:
+  сертификат с SAN `*.example.com` проходил при запрете
+  `pay.example.com`, после чего TLS-проверка hostname подтверждала
+  запрещённое имя.
+
+  Стало: для excluded проверяется также покрытие имени wildcard-ом, а
+  wildcard в самих dNSName/rfc822Name/URI NameConstraints отклоняется
+  как невалидный. URI wildcard остаётся fail-closed.
+
+- **\[SECURITY:P2\] NameConstraints: permitted-поддеревья проверяют
+  каждое имя.**
+
+  Ранее для dNSName, iPAddress, rfc822Name и URI достаточно было
+  совпадения одного имени из SAN с permitted-поддеревом. Подчинённый CA
+  с ограничением `permitted=example.com` мог выпустить сертификат с SAN
+  `[host.example.com, bank.ru]`, и проверка цепочки проходила.
+
+  Стало: каждое имя соответствующего типа в сертификате обязано входить
+  в permitted-поддерево; при первом несовпадении цепочка отклоняется.
+  Ограничение на промежуточном CA больше нельзя обойти добавлением
+  легального имени.
+
+- **\[BUGFIX\] Проверка DNS/URI/rfc822 не зависит от locale.**
+
+  Ранее `toLowerCase()` без `Locale.ROOT` в NameConstraints, SAN rfc822
+  и проверке hostname давал разное поведение при Turkish locale:
+  excluded-поддерево могло не сработать.
+
+  Стало: нормализация DNS, URI и rfc822 выполняется через `Locale.ROOT`.
+
+- **\[SECURITY:P1\] NameConstraints от сторонних CA игнорировались из-за
+  EXPLICIT-кодирования (уязвимость).**
+
+  Ранее парсер требовал нестандартную EXPLICIT-обёртку GeneralSubtrees.
+  Сертификаты CryptoPro, OpenSSL, BouncyCastle и JDK с корректным
+  IMPLICIT TAGS (RFC 5280) давали пустой `NameConstraintsData`, поэтому
+  ограничения имён не применялись вообще — fail-open. Собственные тесты
+  этого не замечали: builder и парсер использовали одну и ту же неверную
+  EXPLICIT-форму.
+
+  Стало: builder кодирует `[0]`/`[1]` по IMPLICIT TAGS; парсер разбирает
+  корректный IMPLICIT и дополнительно принимает legacy EXPLICIT только
+  для уже выпущенных сертификатов. Добавлены фиксированные DER-векторы
+  OpenSSL (IMPLICIT) и legacy EXPLICIT, включая end-to-end проверку
+  применения ограничений. JDK/JCA больше не отклоняет такие сертификаты
+  при загрузке в KeyStore.
+
+- **\[SECURITY:P1\] Закрыт обход проверки `basicConstraints` для
+  верхнего сертификата цепочки.**
+
+  Ранее верхний сертификат принимался как якорь доверия без проверки
+  `basicConstraints CA=true` и `keyCertSign`, что позволяло использовать
+  конечный сертификат, выданный доверенным CA, для подписи поддельного
+  leaf.
+
+  Стало: якорь определяется по полному DER сертификата; верхний
+  сертификат, не являющийся якорем, обязан быть CA с `keyCertSign` при
+  длине цепочки больше одного; для цепочки из одного сертификата подпись
+  якорем проверяется всегда; для leaf, выпущенного якорем, CA-флаг не
+  требуется.
+
+- **\[BUGFIX\] CAdES-X Long: certificate-values и отзыв привязаны к
+  первичной проверенной цепочке (defense-in-depth).**
+
+  Ранее сертификат из `certificate-values`, не покрытый CAdES-C
+  reference, мог попасть в проверяемую цепочку; отзыв проверялся по
+  порядку атрибута, а в результат возвращался сырой список, включая не
+  входящие в первичную цепочку сертификаты с тем же DN/ключом, но другим
+  DER.
+
+  Стало: каждый сертификат атрибута обязан DER-совпадать с элементом
+  первичной проверенной цепочки или доверенным якорем; все промежуточные
+  CA ниже якоря обязательны и должны иметь CAdES-C reference; для всех
+  сертификатов ниже якоря, включая подписанта, обязательны непустые
+  данные отзыва; порядок произвольный и канонизируется по первичной
+  цепочке; отзыв проверяется только по ней, а в результате возвращается
+  проверенная цепочка. Основная CMS-проверка уже применяла NC/pathLen,
+  поэтому это усиление защиты, а не закрытие High-обхода.
+
+  Сертификаты делегированных OCSP-ответчиков допускаются в
+  `certificate-values`, если на них есть CAdES-C reference (КриптоПро
+  требует этого для подписанта из УЦ); якорями они не становятся.
+  Сертификаты издателей CRL вне первичной цепочки по-прежнему
+  отклоняются как посторонние.
+
+- **\[BUGFIX!\] OCSP: `issuerKeyHash` считается по RFC 6960 §4.1.1.**
+
+  Ранее хеш считался от значения BIT STRING вместе с октетом unused-bits
+  (в 0.7.1 так же), поэтому КриптоПро не находил OCSP-ответ для
+  сертификата.
+
+  Стало: хеш от битов ключа (`04 40 ...`), так же считается
+  `ResponderID.byKey`; результат совпадает с КриптоПро, OpenSSL и
+  BouncyCastle. Добавлен `GostCertificate.getSpkiKeyBits()`;
+  `getSpkiKeyValue()` сохранён и по-прежнему включает октет unused-bits
+  (для CertID его использовать нельзя). Запросы и ответы OCSP,
+  построенные версией 0.7.1, несовместимы: CertID у них другой.
+
+- **\[BUGFIX\] CAdES-C / X Long: ссылки совместимы с КриптоПро.**
+
+  Ранее `CompleteCertificateRefs` не содержали доверенный корень, а
+  `CompleteRevocationRefs` были на запись короче; КриптоПро не строил
+  цепочку подписанта из УЦ (0x800B010A), а для отзыва требовал
+  OCSP-ответ делегированного ответчика, указанного в ссылках
+  (0x800B010E).
+
+  Стало: в ссылки входят все сертификаты после подписанта, включая
+  корень, и сертификаты делегированных OCSP-ответчиков из переданных
+  ответов; в `CompleteRevocationRefs` одна запись на подписанта и на
+  каждую ссылку, для корня и ответчиков запись пустая. Ответчики входят
+  и в `certificate-values`. `buildCompleteRefsResult` требует списки
+  CRL/OCSP длиной в цепочку и принимает `additionalCerts`, доказательств
+  отзыва для которых не нужно. Верификатор принимает ссылку на
+  доверенный якорь без его копии в `certificate-values`.
+
+- **\[SECURITY:P3\] CAdES-X Long: вложенные доказательства TSA
+  fail-closed.**
+
+  Ранее при невозможности построить цепочку TSA вложения молча
+  пропускались, и выпускался X Long, который КриптоПро отвергает. Корень
+  цепочки подписанта подставлялся якорем TSA.
+
+  Стало: `PkixException`; якорями служат только переданные
+  `trustedTsaCerts` (корень TSA или сам сертификат TSA).
+
+- **\[BUGFIX\] CAdES: `mergeCertificates` с дедупликацией и лимитом.**
+
+  Ранее сертификаты токенов добавлялись в SignedData без дедупликации и
+  лимита, а нечитаемый токен лишь логировался.
+
+  Стало: дубликаты по DER удаляются, число сертификатов ограничено
+  `MAX_EMBEDDED_CERTS`, нечитаемый токен приводит к `PkixException`.
+
+- **\[BUGFIX\] CMS/TSP: пустой список якорей больше не отключает
+  проверку цепочки.**
+
+  Ранее `CmsSignedDataVerifier.verifyAny/verifyAll`,
+  `TspResponse.verify` и `CmsSignedAndEnvelopedData` при пустом списке
+  доверенных сертификатов проверяли только подпись, поэтому
+  самоподписанный подписант принимался как валидный.
+  `TspResponse.verify` мог принять самоподписанный TSA-сертификат с EKU
+  `timeStamping`.
+
+  Стало: пустой список и `null`-элементы дают
+  `IllegalArgumentException`; явный режим без цепочки задаёт
+  `VerifyOptions.signatureOnly(SignerSelection)`, который не проверяет
+  доверие и срок.
+
+- **\[SECURITY:P1\] PKCS#12: MAC обязателен, ключ сверяется с
+  сертификатом.**
+
+  Ранее при отсутствии `MacData` целостность не проверялась: без пароля
+  можно было удалить MAC и подменить CA-сертификат в открытом
+  SafeContents. Затем `GostSslBuilder.trustCa(pfx, pwd)` делал
+  подменённый CA якорем доверия. Дополнительно не проверялось
+  соответствие закрытого ключа сертификату.
+
+  Стало: по умолчанию MAC обязателен; legacy-контейнеры загружаются
+  только с явным `MacPolicy.ALLOW_MISSING`. Ключ сверяется с
+  leaf-сертификатом, несвязанные сертификаты не включаются в цепочку, а
+  их число доступно через `Result.getDroppedCertificateCount()`. Leaf
+  выбирается по совпадению ключа, поэтому порядок SafeBag в контейнере
+  не влияет на результат.
+
+- **\[BUGFIX\] CMS: KeyUsage подписанта проверяется всегда.**
+
+  Ранее подписант с KeyUsage только `keyEncipherment`, выпущенный
+  доверенным CA, принимался, потому что KeyUsage не проверялся ни при
+  пустом, ни при непустом списке якорей.
+
+  Стало: `CmsSignedDataVerifier` требует `digitalSignature` или
+  `nonRepudiation` (если KeyUsage задан) и отклоняет подпись с
+  `POLICY_VIOLATION`.
+
+- **\[SECURITY:P2\] Detached CMS больше не принимается без документа.**
+
+  Ранее `verifyAny`/`verifyAll` на detached SignedData возвращали успех
+  с `data() == null`, не проверяя message-digest; приложение могло
+  принять подпись без привязки к документу.
+
+  Стало: detached-подпись принимается только с
+  `VerifyOptions.detached(content)`, attached - только без него;
+  несовпадение даёт `PkixException`. CAdES:
+  `CAdESVerifier.verify*Detached` (`verifyBESDetached`,
+  `verifyTDetached`, `verifyCDetached`, `verifyXLongDetached`,
+  `verifyCountersignatureDetached`) принимают документ явно; `data()`
+  возвращает защитную копию переданного документа.
+
+### Добавлено
+
+- **\[FEATURE!\] `CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity`,
+  `CmsEnvelopedDataBuilder.withoutIntegrity()` и причина
+  `PkixException.Reason.INTEGRITY_REQUIRED`.**
+
+  Было: режим без имитовставки выбирался неявно, а контейнер без OMAC
+  расшифровывался так же, как с ней, и отличить подмену режима от успеха
+  было нельзя.
+
+  Стало: явный выбор режима без имитовставки при шифровании и приём
+  таких контейнеров при расшифровании отдельным методом; строгий
+  `decrypt` отказывает контейнеру без имитовставки причиной
+  `INTEGRITY_REQUIRED`. Подробности и несовместимые изменения - в
+  разделе «Изменено».
+
+- **\[FEATURE\] `GostCertificate.getExtensionValue(String oid)`
+  возвращает значение расширения (extnValue).**
+
+  Было: значение расширения по OID можно было получить только повторным
+  ручным разбором DER сертификата.
+
+  Стало: метод отдаёт копию содержимого `extnValue` (DER значения
+  расширения без обёртки, OID и флага критичности) из того же строгого
+  разбора, что и остальные свойства сертификата, или `null`, если
+  расширения нет. Повторяющиеся расширения по-прежнему отвергаются при
+  разборе, поэтому значение по OID однозначно.
+
+- **\[FEATURE\] Атрибуты CSR: `challengePassword` и произвольные
+  атрибуты в `GostCsrBuilder` и `GostCsrParser`.**
+
+  Было: сборщик писал в блок атрибутов только `extensionRequest`,
+  разборщик читал только его и молча пропускал остальное, пароль запроса
+  (RFC 2985 §5.4.1, в EST - RFC 7030 §3.5) передать было нельзя.
+
+  Стало: `GostCsrBuilder.attribute(oid, valuesDer...)` добавляет
+  произвольный атрибут, `sign(signer, char[])` и
+  `sign(privateKey, char[])` подписывают CSR с `challengePassword`.
+  Пароль в сборщике не хранится, массив вызывающего не изменяется;
+  значение кодируется как PrintableString или UTF8String, 1-255 знаков и
+  не более 255 байт, без управляющих знаков и одиночных суррогатов. Блок
+  атрибутов собирается по DER, порядок вызовов на результат не влияет.
+  `GostCsrParser.getAttributes()`, `getAttribute(oid)` и
+  `getChallengePassword()` (в `char[]`, без промежуточной `String`)
+  читают атрибуты; пароль принимается во всех типах `DirectoryString` со
+  строгим декодированием. Новые `CsrAttribute` и
+  `GostOids.ATTR_CHALLENGE_PASSWORD`.
+
+- **\[FEATURE\] Общий срок и чтение тела с пределом: `Deadline`,
+  `BoundedBodyReader`, `DeadlineExceededException`,
+  `BodyTooLargeException`.**
+
+  Таймауты `HttpURLConnection` и `HttpClient` ограничивают отдельные
+  фазы, а не операцию целиком. `Deadline` задаёт один срок на весь
+  запрос (от 1 мс до `MAX_FETCH_TIMEOUT` = 10 минут),
+  `BoundedBodyReader` читает тело с пределом размера и проверкой срока
+  между чтениями, ошибки срока и размера выделены в отдельные типы
+  (наследники `IOException`).
+
+- **\[FEATURE\] Единый объект пределов CRL `CrlLimits` и причина
+  `PkixException.Reason.CRL_LIMIT_EXCEEDED`.**
+
+  Было: превышение размера CRL и числа записей давало `PARSE_ERROR`,
+  неотличимый от битого CRL; пределы задавались парой `int` и
+  действовали только на прямом `CrlVerifier` и в JSSE, а в
+  `ChainValidator`, CMS и CAdES были зашиты значения по умолчанию,
+  поэтому подлинный CRL крупного УЦ (у ФНС 83% предела записей) нельзя
+  было принять на этих путях. Нулевые и отрицательные значения
+  принимались и проявлялись фатальным отказом на первом CRL.
+
+  Стало: неизменяемый `CrlLimits(maxSize, maxRevokedEntries)` (значения
+  больше нуля, `DEFAULT`, `withMaxSize`, `withMaxRevokedEntries`)
+  принимают все пути проверки: `CrlVerifier`, `ChainValidator`,
+  `VerifyOptions.crlLimits` в CMS, `CAdESVerifier.verifyXLong` и
+  `verifyXLongDetached`, `CAdESXLongData.decodeRevocationValues`,
+  `CAdESExtender.embedXLongType1`. Превышение любого предела даёт
+  `CRL_LIMIT_EXCEEDED` с сообщением о том, какой предел нарушен,
+  фактическом и настроенном значении; ни список «CRL непригоден» в CMS,
+  ни аналогичный список в JSSE эту причину не пропускают. Значения по
+  умолчанию не менялись (1 000 000 записей, 64 МиБ).
+
+- **\[FEATURE\] `TrustAnchors.fingerprint()`: стабильный отпечаток
+  набора доверенных якорей.**
+
+  Стрибог-256 от доменного тега, политики срока и отсортированных хэшей
+  DER якорей; не зависит от порядка якорей, считается один раз при
+  создании набора. Используется для привязки PSK-тикетов в tls13.
+
+- **\[FEATURE\] `VerifiedCrl` и `CrlVerifier.authenticate`: подпись и
+  разбор CRL выполняются один раз, сертификат проверяется по готовому
+  объекту.**
+
+  Было: каждая проверка сертификата заново считала хэш, подпись и строго
+  разбирала все записи CRL (≈0,84 с и ≈400 МиБ мусора на 800 000
+  записей).
+
+  Стало: `CrlVerifier.authenticate(crlDer, caKey, limits)`
+  (пределы — `CrlLimits`) возвращает неизменяемый `VerifiedCrl`,
+  привязанный к ключу издателя;
+  `VerifiedCrl.verifyFor(cert, caKey, minCrlNumber)` при каждом вызове
+  проверяет `thisUpdate` и срок, издателя, `cRLNumber`, запись об отзыве
+  и область CRL. Только прямой полный CRL; `getEstimatedBytes()` даёт
+  оценку удерживаемой памяти (длина DER плюс ≈245 байт на запись).
+
+- **\[FEATURE!\] Несовместимое изменение: OCSP - необязательный предел
+  возраста `thisUpdate` для всех ответов.**
+
+  Было: ответ со старым `thisUpdate` и далёким `nextUpdate` принимался,
+  `maxOcspAgeMs` действовал только на ответы без `nextUpdate`. Норма (Р
+  1323565.1.059-2024, п. 5.3) ограничивает время с `thisUpdate`.
+
+  Стало: полные перегрузки `OcspVerifier.verify` принимают
+  `Duration maxThisUpdateAge` (`null` - не задан, ноль и отрицательное
+  значение дают `IllegalArgumentException` до разбора ответа). Предел
+  применяется ко всем ответам, без `nextUpdate` действует меньший из
+  него и `maxOcspAgeMs`; отозванный ответ по-прежнему даёт `REVOKED`. По
+  умолчанию предел выключен, `ChainValidator` и CAdES-X Long его не
+  получают. Добавлен `OcspVerifier.requireValidMaxThisUpdateAge`. Полные
+  перегрузки с `long maxOcspAgeMs` заменены версиями с дополнительным
+  параметром; перегрузки без настройки свежести не менялись.
+
+- **\[FEATURE\] `GostOcspResponseBuilder.certIdHashLen(int)` - явный
+  выбор длины хэша CertID.**
+
+  Ранее длина хэша CertID всегда совпадала с размером ключа УЦ.
+
+  Стало: необязательный параметр (32 - Стрибог-256, 64 - Стрибог-512),
+  умолчание не меняется. Нужен для ответов, где хэш CertID не совпадает
+  с размером ключа УЦ.
+
+- **\[FEATURE\] `TrustAnchors.ofCertificates(GostCertificate...)`.**
+
+  Ранее набор якорей создавался только из списка.
+
+  Стало: добавлена перегрузка с переменным числом аргументов, массив
+  сертификатов передаётся прямо.
+
+- **\[FEATURE\] Явные API для безопасного доверия.**
+
+  `VerifyOptions.signatureOnly(SignerSelection)` (проверка без цепочки),
+  `GostPkcs12Loader.MacPolicy`,
+  `GostPkcs12Loader.Result.getDroppedCertificateCount()` и
+  `GostCertificate.isKeyUsageValidForSigning()`.
+
+- **\[FEATURE\] CAdES-X Long: проверка штампов подписи в форме
+  КриптоПро.**
+
+  `CAdESVerifier.verifyXLong` принимает `signature-time-stamp`, у
+  которого поле `certificates` пусто, а сертификат TSA и его цепочка
+  лежат во вложенном `certificate-values`: эти сертификаты используются
+  как недоверенные кандидаты, цепочка по-прежнему обязана сходиться к
+  доверенному якорю TSA.
+
+- **\[FEATURE\] `TrustAnchors`: якоря-сертификаты для
+  `ChainValidator`.**
+
+  Ранее `ChainValidator` принимал только ключи, поэтому `pathLen` и
+  `NameConstraints` корня не аутентифицировались, если пир не прислал
+  корень или прислал подменённый сертификат.
+
+  Стало: `TrustAnchors.ofCertificates()` и
+  `ChainValidator.validateChain()` строят эффективную цепочку снизу
+  вверх по DER/выпуску, применяют ограничения локального якоря,
+  поддерживают перевыпущенный корень с тем же ключом и закреплённый
+  промежуточный CA, а срок якоря при `n > 1` не проверяют (WARNING).
+
+- **\[SECURITY:P1\] CAdES-X Long Type 1: `escTimeStamp` и политики
+  свежести отзыва.**
+
+  Добавлен обязательный `escTimeStamp` (OID
+  `1.2.840.113549.1.9.16.2.25`) по RFC 5126 §6.3.5: он покрывает
+  `SignatureValue`, все `signature-time-stamp`,
+  complete-certificate-references и complete-revocation-references. Без
+  метки X-Long не собирается и не проверяется.
+
+  Добавлены `RevocationFreshnessPolicy` (`STRICT` по умолчанию и
+  `ETSI_DEFAULT`), `RevocationEvidenceWindow`, `CertRevocationEvidence`
+  и `ChainValidator.validateChainWithRevocationEvidence()`. `STRICT`
+  требует `thisUpdate >= t_sig - skew`; `ETSI_DEFAULT` — только свежести
+  на `t_esc`. Проверяются все встроенные CRL/OCSP, `revoked`/`unknown` в
+  любом доказательстве отклоняет, `ocspRepHash` и `nextUpdate`
+  обязательны. `VerifiedCAdESData` содержит применённую политику.
+
+- **\[FEATURE\] `GostDnsName`: Unicode hostname в A-label.**
+
+  Добавлен `GostDnsName.toAsciiHostname()`: нормализует имя, отклоняет
+  IDNA2003-неоднозначные `ß`, `ς`, ZWNJ и ZWJ и возвращает punycode для
+  SNI и проверки hostname.
+
+### Изменено
+
+- **\[OPS\] Движки сетевой загрузки пишут отказ на DEBUG, причина
+  отказа - публичное перечисление `FetchFailure`.**
+
+  Было: `JdkHttpFetch` и `UrlConnectionFetch` писали WARNING на каждый
+  отказ (адрес не разрешён, код не 200, перенаправление, тип
+  содержимого); вызывающий поглощал отказ и писал свою запись, поэтому
+  один отказ попадал в журнал дважды, а при загрузке штампа времени
+  запись дублировала исключение с адресом и кодом.
+
+Стало: движки пишут те же записи на DEBUG (тип содержимого теперь с
+очищенным значением). `FetchOutcome.reason()` и
+`FetchFailure.of(Throwable)` сводят причину к перечислению
+(`UNSUPPORTED_SCHEME`, `BAD_ADDRESS`, `ADDRESS_BLOCKED`,
+`REDIRECT_REJECTED`, `HTTP_STATUS`, `CONTENT_TYPE`, `TOO_LARGE`,
+`TIMEOUT`, `NETWORK`, `INTERNAL`): по типу исключения, текст не
+читается. Исключение загрузки штампа времени по-прежнему несёт код
+ответа и адрес без параметров, запись WARNING движка не пишется.
+
+- **\[OPS\] Библиотека не пишет INFO на каждую операцию: успехи на
+  DEBUG, DN не попадает в WARNING по сертификатам.**
+
+  Было: подпись, проверка, шифрование, расшифрование CMS и загрузка PFX
+  писали по одной-две записи INFO (размеры данных, серийный номер
+  получателя), которые по умолчанию попадали в консоль и в logcat
+  Android на каждую операцию. Предупреждения `TspResponse` о сертификате
+  службы штампов без `id-kp-timeStamping` содержали subject DN целиком.
+
+  Стало: успех этих операций пишется на DEBUG (12 записей), расчёт
+  серийного номера под проверкой уровня; в предупреждении `TspResponse`
+  только серийный номер, усечённый DN на DEBUG. Правило: DN сертификата
+  в журнал только усечённым и на DEBUG, в WARNING серийный номер (у
+  запроса на сертификат вместо серийного номера отпечаток открытого
+  ключа). `GostLogger.log(..., Throwable)` проверяет уровень, как
+  перегрузка с параметрами. В README добавлен раздел «Логирование»;
+  `TrustAnchors` описан в javadoc и README по сценариям (одна фабрика на
+  один якорь, перечисление, список).
+
+- **\[OPS\] Шум в журнале pkix снижен: одна запись WARNING на проверку
+  отзыва, дубли исключений убраны, особенности данных другой стороны на
+  DEBUG.**
+
+  Было: `ChainValidator` писал WARNING на каждый сертификат цепочки без
+  данных отзыва; `TspResponse` дублировал в WARNING шесть отказов, уже
+  описанных в исключении (messageImprint, hashAlgorithm, genTime, nonce,
+  нет токена); неприменимые `NameConstraints` с неподдерживаемыми
+  формами писались WARNING дважды (при разборе и при применении);
+  нестрогая кодировка `IssuingDistributionPoint`, расхождение AKI у base
+  и delta CRL и лишние сертификаты в PFX давали WARNING при каждом
+  разборе. Итоговый отказ «OCSP signature verification failed» не
+  говорил, какой делегированный сертификат ответчика и почему отброшен.
+  В записи о пропуске CRL выводился issuer DN целиком.
+
+  Стало: при отсутствии данных отзыва пишется одна запись WARNING на
+  проверку (сколько сертификатов пропущено, серийный номер листа), по
+  сертификату запись на DEBUG. Отказы `TspResponse`, описанные в
+  исключении, не дублируются; остаётся WARNING с серийным номером для
+  сертификата службы штампов без `id-kp-timeStamping` (в исключении
+  серийного номера нет). Перечисленные особенности данных другой стороны
+  пишутся на DEBUG. Пропуск кандидата на подписанта ответа OCSP и
+  кандидата CAdES (`signingCertificateV2` не совпал) пишется на DEBUG с
+  серийным номером и причиной. Issuer DN пропущенного CRL усечён до
+  `GostCertificate.DN_LOG_MAX_CHARS` (128) символов; добавлены
+  `GostCertificate.DN_LOG_MAX_CHARS` и `GostCrl.getIssuerDnForLog(int)`.
+  Остаются WARNING: истёкший якорь доверия, PKCS12 без MAC,
+  делегированный ответчик OCSP без `id-pkix-ocsp-nocheck`, нет
+  подходящего CRL в мягком режиме, неудачная самопроверка подписи,
+  неверная подпись запроса на сертификат, сертификат службы штампов без
+  `id-kp-timeStamping`.
+
+- **\[CHANGE\] Проверка подписи сертификата, CRL, OCSP, CMS, CAdES и CSR
+  опирается на `false` из `Signature.verifyHash`.**
+
+  Было: подпись неверной длины из недоверенного DER перехватывалась как
+  `IllegalArgumentException` и превращалась в
+  `PkixException(SIGNATURE_INVALID)` с текстом «malformed signature»; в
+  сертификате и CSR перехват возвращал `false`.
+
+  Стало: перехваты убраны, неверная длина даёт `false` и общий путь
+  «signature invalid» с той же причиной `SIGNATURE_INVALID`; меняется
+  только текст сообщения. `GostSignatureHelper.signHashChecked`
+  проверяет длину через `SignatureCodec.hasValidLength`.
+
+- **\[CHANGE\] Один интерфейс транспорта загрузки `FetchTransport`;
+  `GostOcspResponse.MAX_OCSP_RESPONSE_SIZE` публичный;
+  `GostCertificate.matchDnsName` пакетный.**
+
+  Было: три копии интерфейса транспорта (CRL, OCSP, TSP), предел размера
+  OCSP-ответа дублировался в загрузчиках, `matchDnsName` был публичным
+  ради менеджера ключей jsse.
+
+  Стало: общий внутренний `FetchTransport`, загрузчики используют предел
+  разбора, `matchDnsName` внутренний.
+
+- **\[CHANGE!\] Соль MacData и PBES2 увеличена до 32 байт; удалён
+  `GostPkcs12Builder.Builder.macHashLen`; константа
+  `GostOids.PBES2_SALT_LEN` переименована в `PBKDF2_SALT_LEN`.**
+
+  Было: соль PBKDF2 при записи 16 байт, MAC можно было считать на
+  Стрибог-256 (`macHashLen(32)`), чего нет в RFC 9548 и с чем не работал
+  OpenSSL; константа называлась `PBES2_SALT_LEN`.
+
+  Стало: соль 32 байта (RFC 9548 §8 рекомендует не менее 32, RFC 9337
+  допускает 8..32); константа `PBKDF2_SALT_LEN` общая для PBES2 и
+  MacData; при чтении и в `GostPkcs12Mac.compute` соль должна быть от 8
+  до 32 байт; MAC только HMAC-Стрибог-512.
+
+- **\[CHANGE!\] Несовместимость формата: PFX, созданные версиями
+  0.6.0-0.7.1 и промежуточными сборками 0.8.0, не читаются.**
+
+  Было: в `MacData` принимался OID HMAC `1.2.643.7.1.1.4.2`.
+
+  Стало: принимается только OID хэша по RFC 9548 §7; такие файлы нужно
+  перевыпустить (порядок перевыпуска описан в
+  `crypto-gost-pkix/README.adoc`, раздел PKCS#12).
+
+- **\[CHANGE\] `CrlVerifier` и `VerifiedCrl` принимают сертификат
+  издателя; `PkixException.Reason.MISSING_CRL_SIGN`.**
+
+  Было: `verify` и `verifyDelegated` принимали открытый ключ издателя,
+  `verifyDelegated` дополнительно необязательный сертификат CA.
+
+  Стало: все методы (`verify`, `verifyDelegated`, `authenticate`,
+  `verifyEvidence`, `VerifiedCrl.verifyFor`) принимают параметр
+  `GostCertificate issuerCa`; в `verifyDelegated` пара «ключ +
+  сертификат CA» сведена к одному сертификату. Новое значение
+  `Reason.MISSING_CRL_SIGN`. Прежние вызовы с ключом не собираются:
+  передайте сертификат CA.
+
+- **\[CHANGE\] `getExtensions()` возвращает независимую копию;
+  OID-константы `GostDerParser` закрыты.**
+
+  Было: `GostCertificate.getExtensions()` и
+  `GostCsrParser.getExtensions()` отдавали внутренние публичные массивы
+  разобранного сертификата (их правка меняла SAN и ограничения, на
+  которых строится проверка цепочки); 58 публичных `static final byte[]`
+  OID в `GostDerParser` были изменяемы извне.
+
+  Стало: возвращается глубокая копия (канонический
+  `ExtensionsResult.empty()` как есть), внутренняя проверка читает поля
+  без копирования; константы `*_OID_BYTES` доступны только внутри
+  пакета. Вместо них используются строки `GostOids` (добавлена
+  `GostOids.EXT_ANY_EKU`).
+
+- **\[SECURITY:P1!\] Несовместимое изменение: имитовставка (OMAC) в CMS
+  EnvelopedData включена по умолчанию; из API удалены `withOmac()`,
+  `contentEncryptionOid(String)`, `keyWrap(...)` и `CmsKeyWrap`.**
+
+  Было: `CmsEnvelopedDataBuilder` по умолчанию шифровал без
+  имитовставки, `CmsEnvelopedDataDecryptor.decrypt` принимал любой режим
+  и сменную обёртку ключа (`CmsKeyWrap`, единственная реализация
+  `Kexp15CmsKeyWrap`, интерфейс отдавал KEK и CEK открытыми массивами в
+  чужой код); OID шифра можно было задать отдельно от режима, получив
+  контейнер, где OID не соответствует содержимому.
+
+  Стало: построитель по умолчанию использует OMAC, отказ от неё явный:
+  `withoutIntegrity()`; OID шифра выводится из режима.
+  `decrypt(der, key, cert)` принимает только контейнеры с имитовставкой
+  и отвечает новой причиной `PkixException.Reason.INTEGRITY_REQUIRED` на
+  контейнер без неё; контейнеры без имитовставки читает
+  `decryptAllowingNoIntegrity` (для контейнера с имитовставкой MAC
+  проверяется всегда). Обёртка ключа одна (KExp15 Кузнечика),
+  `CmsKeyWrap` и `Kexp15CmsKeyWrap` закрыты в пакете.
+  `CmsSignedAndEnvelopedData` по-прежнему принимает контейнеры без
+  имитовставки: целостность обеспечивает подпись. В примере
+  `CmsEnvelopeTool` флаг `--omac` заменён на `--no-integrity`.
+  Совместимость: контейнеры 0.8.0 читаются версией 0.7.x, контейнеры
+  0.7.x (по умолчанию без имитовставки) читаются в 0.8.0 только через
+  `decryptAllowingNoIntegrity`. Пользовательский исчерпывающий `switch`
+  по `PkixException.Reason` без ветки `default` перестанет
+  компилироваться из-за нового значения.
+
+- **\[CHANGE\] Конструктор `GostExtensionParser.ExtensionsResult`
+  закрыт.**
+
+  Было: публичный конструктор с длинным списком параметров, к которому в
+  разборе расширений добавилась карта значений расширений; снаружи его
+  никто не вызывал.
+
+  Стало: объект создаёт только `GostExtensionParser`; публичными
+  остаются поля результата. Значения расширений доступны через
+  `GostCertificate.getExtensionValue`.
+
+- **\[SECURITY:P1\] CRL без `nextUpdate` не принимается проверяющей
+  стороной.**
+
+  Было: `GostCrl.isExpired()` для CRL без `nextUpdate` возвращал
+  `false`, такой CRL не устаревал и принимался `GostCrl.verify` и
+  `CrlVerifier.verify`, а значит и в `ChainValidator`, CMS и jsse; в
+  режиме CAdES-X Long он уже отвергался, так что старый CRL можно было
+  предъявлять бесконечно.
+
+  Стало: `GostCrl.requireValidNow()` отказывает с новой причиной
+  `PkixException.Reason.NEXT_UPDATE_MISSING` (политика проверяющей
+  стороны: RFC 5280 §5.1.2.5 обязывает УЦ включать `nextUpdate`). Разбор
+  такого CRL конструктором разрешён, `isExpired()` не менялся.
+  `GostCrlBuilder.sign()` без `nextUpdate` бросает
+  `IllegalStateException`; выпуск без него возможен только через
+  `withoutNextUpdate()` (для негативных тестов). В режиме CAdES-X Long
+  (`CrlVerifier.verifyEvidence`) причина отказа для такого CRL
+  изменилась с `OTHER` на `NEXT_UPDATE_MISSING`, как на остальных путях.
+
+- **\[CHANGE\] `GostCsrParser`: строгий разбор блока атрибутов CSR.**
+
+  Было: повтор `extensionRequest` принимался (побеждал последний),
+  лишний внутренний `SET` в блоке `[0]`, атрибуты без OID и любые байты
+  после открытого ключа молча пропускались.
+
+  Стало: повтор любого атрибута, пустой набор значений, хвостовые байты,
+  внутренний `SET` и данные вне блока `[0]` дают
+  `IllegalArgumentException`; CSR с некорректным паролем отвергается
+  целиком. Порядок элементов `SET OF` не проверяется. Сборщик кодировал
+  блок `[0]` по RFC 2986 (`IMPLICIT TAGS`, без внешнего `SET`) и раньше;
+  изменился только разбор.
+
+- **\[CHANGE!\] Транспорты TSP: единые правила ответа и перенаправлений,
+  срок параметром.**
+
+  Было: `JdkHttpTspTransport(HttpClient)` принимал любого клиента,
+  `Content-Type` проверялся по-разному (подстрока у
+  `JdkHttpTspTransport`, равенство у `UrlConnectionTspTransport`), срок
+  был константой 30 с, а `POST` при 301, 302 и 303 политика `NORMAL`
+  превращала в `GET`.
+
+  Стало: `JdkHttpTspTransport(HttpClient)` требует клиента с
+  `Redirect.NEVER` (`IllegalArgumentException`, несовместимое
+  изменение); добавлены конструкторы со сроком
+  (`JdkHttpTspTransport(Duration)`,
+  `JdkHttpTspTransport(HttpClient, Duration)`,
+  `UrlConnectionTspTransport(Duration)`, от 1 мс до 10 минут);
+  `Content-Type` сверяется на равенство типа без параметров и без учёта
+  регистра, до чтения тела, и только у ответа 200 (ответ 500 с
+  `text/plain` сообщается кодом статуса); `POST` следует только за 307 и
+  308 - TSA, работавшие через перенаправление 301, 302 или 303, теперь
+  получат отказ. Адрес в сообщениях исключений выводится как
+  `схема://хост:порт/путь`, без учётных данных и параметров запроса.
+
+- **\[CHANGE\] Пределы CRL передаются объектом `CrlLimits`, перегрузки с
+  парой `int` удалены.**
+
+  Было: `GostCrl(byte[], int, int)`,
+  `GostCrl.fromDer(byte[], int, int)`,
+  `GostCrl.fromPemOrDer(byte[], int, int)`,
+  `CrlVerifier.verify(..., int, int)` (одиночный CRL и пара base+delta),
+  `authenticate(..., int, int)` и `verifyDelegated(..., int, int)`.
+
+  Стало: те же методы принимают `CrlLimits`; короткие перегрузки со
+  значениями по умолчанию остались.
+  `ChainValidator.validateChainWithRevocation`,
+  `validateChainWithRevocationEvidence` и `validateRevocationEvidence`
+  получили перегрузки с `CrlLimits`. Построители
+  (`CmsSignedDataBuilder.addCrl`) пределов не принимают: конструктор
+  `GostCrl` разбирает только структуру, записи читаются при проверке.
+
+- **\[SECURITY:P2\] Несуществующие даты в ASN.1-времени отвергаются, а
+  не заменяются ближайшей существующей.**
+
+  Ранее `GostDerParser.parseTime` и `GostSignatureHelper.parseAsn1Time`
+  разбирали даты форматтером в нестрогом режиме: 30 февраля становилось
+  28 февраля, 29 февраля невисокосного года - 28 февраля, `240000` -
+  началом следующих суток. Срок сертификата, `thisUpdate` и `nextUpdate`
+  CRL, время ответа OCSP и дата отзыва могли означать не то, что
+  подписал УЦ.
+
+  Стало: UTCTime и GeneralizedTime разбираются строго по RFC 5280
+  §4.1.2.5 (только цифры ASCII, существующие день, месяц, час до 23,
+  минуты и секунды до 59, високосный год по григорианским правилам, год
+  GeneralizedTime от 0001), иначе `IllegalArgumentException` (в CRL и
+  OCSP - `PARSE_ERROR`). Миграция: CRL с несуществующей датой хотя бы в
+  одной записи отвергается целиком; сертификат с такой датой срока не
+  разбирается; строки построителей вида `20260230120000Z` дают ошибку.
+  Реальные CRL и сертификаты репозитория и каталогов Минцифры,
+  Сертум-Про, Казначейства, ФНС, ИнфоТеКС и OpenSSL-ГОСТ разбираются без
+  изменений. `TspResponse` не изменён.
+
+- **\[PERF\] Разбор записей CRL без форматтера и промежуточных строк.**
+
+  Ранее на каждую запись создавались строка и новый `DateTimeFormatter`,
+  а дата отзыва форматировалась обратно (≈1,9 КБ мусора из ≈2,4 КБ на
+  запись); проверка CRL на 800 000 записей выделяла ≈1,8 ГиБ.
+
+  Стало: дата проверяется целочисленным разбором, строка даты отзыва
+  собирается из проверенных байт. Измерено на CRL с 0,8 / 2 / 4 млн
+  записей: выделение за вызов `-78 / -79 / -80%`, время
+  `-27 / -29 / -26%` (JDK 21). Удерживаемый `GostCrl` и значения
+  `RevokedEntry` не изменились.
+
+- **\[SECURITY:P1\] `CrlVerifier` принимает `GostCertificate` и
+  применяет область CRL на всех путях.**
+
+  Ранее `verify`, `verifyDelegated` и пара base+delta принимали пару
+  «серийный номер + issuer DN» и не применяли область
+  `IssuingDistributionPoint`: подлинный CRL другого сегмента
+  (`onlyContainsCACerts`, чужой `distributionPoint`, `onlySomeReasons`)
+  давал «не отозван» в TLS, CMS и `ChainValidator`.
+
+  Стало: перегрузки с парой удалены, вместо них перегрузки с
+  `GostCertificate cert`. Запись об отзыве определяет `REVOKED` раньше
+  проверки области; CRL, не покрывающий сертификат, даёт
+  `IDP_NOT_SUPPORTED`. В паре base+delta IDP должны совпадать побайтно,
+  AKI с разными `keyIdentifier` отвергаются (если AKI только у одного,
+  предупреждение), `REMOVE_FROM_CRL` из чужого delta отзыв не снимает.
+
+- **\[SECURITY:P1\] CMS: CRL с неизвестным critical-расширением и CRL,
+  не покрывающий подписанта, пропускаются как неподдерживаемые.**
+
+  Ранее неизвестное critical-расширение игнорировалось, и такой CRL
+  использовался; CRL другого сегмента давал «не отозван».
+
+  Стало: такие CRL пропускаются, при `Revocation.required` итог
+  `REVOCATION_STATUS_UNKNOWN`, иначе предупреждение. Запись об отзыве в
+  CRL с неподходящей областью по-прежнему даёт `REVOKED`, а CRL с
+  неизвестным critical-расширением или indirect CRL не используется,
+  даже если в нём указан сертификат (RFC 5280 §5.2, §5.3).
+
+- **\[CHANGE\] OCSP: строгая проверка статуса ответа и версии запроса и
+  ответа.**
+
+  Ранее пустой `ENUMERATED` (`0A 00`) считался успешным ответом,
+  принимались статусы 4 (не используется) и 7 и выше, значение статуса
+  могло лежать за границей `OCSPResponse`, `responseBytes` рядом с
+  ошибочным статусом не замечался, а поле `version` в `GostOcspRequest`
+  и `GostOcspResponse` пропускалось без проверки.
+
+  Стало: допустимы статусы 0, 1, 2, 3, 5, 6; пустой и длиннее 1 байта
+  `ENUMERATED`, неизвестные статусы, `responseBytes` при статусе не 0 и
+  остаток после статуса дают `PkixException`. Версия в запросе и в
+  ответе отсутствует или равна 0 (явная версия 0 из примеров Р
+  1323565.1.059-2024 В.2 и В.3 принимается), иначе `PkixException`;
+  лишний элемент после версии внутри `[0]` тоже отвергается. Проверяется
+  остаток только внутри `OCSPResponse`; хвост после внешней `SEQUENCE`
+  по-прежнему не проверяется.
+
+- **\[CHANGE\] OCSP: ответ с `ResponderID` byKey длиной 20 байт (SHA-1
+  по Р 1323565.1.059-2024, п. 7.3.3.3) принимается без сверки хэша.**
+
+  Ранее такой ответ отвергался: `OcspVerifier` сверял byKey только
+  Стрибогом.
+
+  Стало: подпись проверяется конкретным ключом до `ResponderID`, поэтому
+  20-байтный byKey законной сторонней службы пропускается без сверки
+  (запись `DEBUG`); 32 и 64 байта сверяются Стрибогом, прочие длины дают
+  `PkixException`. Построитель по-прежнему выпускает только Стрибог. В
+  `README` добавлен подраздел об известных отступлениях от нормы.
+
+- **\[DOCS\] `GostCrlBuilder.thisUpdateNow()` описан с предупреждением
+  для CAdES-X Long.**
+
+  Ранее откат на 5 минут в `thisUpdateNow()` совпадал с нижней границей
+  окна свежести `STRICT`: CRL, построенный до штампа времени, при смене
+  секунды между ними оказывался вне окна и отвергался при встраивании;
+  то же происходило при штампе внешнего сервера с опережающими часами.
+  Такие примеры были в README и в демонстрации с реальным сервером
+  штампов.
+
+  Стало: Javadoc рекомендует `thisUpdate(Instant.now())` для
+  доказательств, встраиваемых под `STRICT`; примеры исправлены.
+  Поведение метода и окно `STRICT` не менялись.
+
+- **\[CHANGE!\] Несовместимое изменение: PKCS#12 не принимает пароль с
+  непарным суррогатом.**
+
+  Ранее такой пароль принимался: непарный суррогат заменялся на `?`, и
+  контейнер открывался паролем, отличающимся от заданного.
+
+  Стало: `GostPkcs12Loader.load`, `GostPkcs12Loader.decryptPrivateKey` и
+  `GostPkcs12Builder.build` бросают `IllegalArgumentException`. Пароли
+  без непарных суррогатов работают как прежде.
+
+- **\[CHANGE!\] PBES2-OMAC и PKCS#12 с `kuznyechik-ctracpkm-omac`
+  соответствуют RFC 9337.**
+
+  Ранее закрытый ключ шифровался схемой Encrypt-then-MAC, и
+  PKCS#8/PKCS#12 с OMAC не совместимы с OpenSSL gost-engine.
+
+  Стало: используется схема RFC 9337 (см. изменение в модуле core); файл
+  эталонного engine расшифровывается, наш файл расшифровывается
+  эталоном. `CmsOmacHelper` работает на том же режиме, байты CMS-OMAC не
+  изменились (проверено фикстурами OpenSSL); при ошибке имитовставки
+  открытый текст затирается, `content-mac` неверной длины отвергается.
+
+- **\[CHANGE\] Параметры PRF в PBES2 кодируются с NULL.**
+
+  Ранее `AlgorithmIdentifier` PRF (HMAC-Streebog) записывался без
+  параметров, хотя RFC 9337 §7.1 требует NULL.
+
+  Стало: после OID PRF записывается NULL. Чтение не изменилось
+  (принимаются оба варианта), совместимость с OpenSSL gost-engine
+  подтверждена кросс-валидацией.
+
+- **\[SECURITY:P1\] PBES2 и CMS строго проверяют OID шифра и длину
+  UKM.**
+
+  Ранее любой неизвестный OID шифра в PBES2 (в том числе Магма)
+  расшифровывался как Кузнечик `CTR-ACPKM`; отсутствующий `ukm` давал
+  нулевой IV; в CMS-OMAC UKM короче 16 байт молча дополнялся нулями в
+  seed `KDF_TREE`, что ослабляло защиту от повтора гаммы. В CMS
+  EnvelopedData любой неизвестный OID шифра содержимого уходил в ветку
+  без проверки OMAC и давал мусор вместо ошибки; замена OID с OMAC на
+  обычный режим и удаление атрибута `content-mac` возвращали мусор как
+  успешный результат.
+
+  Стало: PBES2 принимает только `CTR-ACPKM` и `CTR-ACPKM-OMAC`
+  Кузнечика, `ukm` обязателен и ровно 16 байт (RFC 9337 §7.3); CMS
+  требует content-UKM ровно 16 байт при разборе и в `CmsOmacHelper`.
+  Формат данных при шифровании не изменился. `CmsEnvelopedDataDecryptor`
+  принимает только `KUZ_CTR_ACPKM` и `KUZ_CTR_ACPKM_OMAC`; проверка
+  шифра, согласованности режима с атрибутом `content-mac`,
+  `originatorInfo` и внешнего `keyEncryptionAlgorithm` выполняется до
+  работы с закрытым ключом, отказ даёт `PkixException`. Политику
+  целостности см. в разделе «Изменено».
+
+- **\[SECURITY:P1\] Разбор `unprotectedAttrs` в CMS EnvelopedData больше
+  не зацикливается на нескольких атрибутах.**
+
+  Ранее при двух атрибутах равной длины ручной цикл по смещениям не
+  продвигался по данным, список рос до `OutOfMemoryError`; воспроизвести
+  это мог любой, кто может зашифровать контейнер для получателя
+  (достаточно его сертификата).
+
+  Стало: разбор идёт общим разбором SEQUENCE. Повторяющийся
+  `content-mac`, элемент не `SEQUENCE`, пустое или усечённое поле,
+  данные после явного `SET` и лишний элемент `EnvelopedData` отвергаются
+  `PkixException` с причиной `PARSE_ERROR`.
+
+- **\[CHANGE!\] `CmsContentInfo.decode` сообщает о битом DER через
+  `PkixException(PARSE_ERROR)`.**
+
+  Ранее ошибка парсера выходила наружу как `IllegalArgumentException`,
+  хотя метод объявляет `PkixException`; через
+  `CmsSignedDataVerifier.verify` это достигало вызывающего кода,
+  например `CmsSignedAndEnvelopedData.verifyAndDecrypt`.
+
+  Стало: `IllegalArgumentException` парсера превращается в
+  `PkixException` с причиной `PARSE_ERROR`. Пользовательский код,
+  перехватывавший `IllegalArgumentException` вокруг `decode`, нужно
+  перевести на `PkixException`.
+
+- **\[CHANGE\] `GostPkcs12Builder` одноразовый, пароль затирается при
+  любой ошибке сборки.**
+
+  Ранее при несовпадении ключа и сертификата пароль не затирался:
+  проверка стояла до `try/finally`.
+
+  Стало: после проверки наличия ключа и сертификата билдер расходуется,
+  пароль затирается при любом исходе. Повторный `build()` и
+  `buildAndWriteTo()` дают `IllegalStateException`. Отсутствие ключа или
+  сертификата билдер не расходует: ошибку конфигурации можно исправить.
+
+- **\[CHANGE\] T61String в NameConstraints (`directoryName`)
+  сравнивается только побайтово.**
+
+  Ранее T61 декодировался как Latin-1, хотя настоящая T.61 с ним не
+  совпадает: одно значение читалось по-разному у нас и у стороннего
+  разборщика.
+
+  Стало: два T61 совпадают в permitted только при побайтовом равенстве,
+  T61 и значение другого строкового типа не совпадают. В excluded T61
+  срабатывает при совпавших предшествующих RDN и том же OID независимо
+  от значения (fail-closed). Различие только в регистре или пробелах
+  совпадением не считается. Отображение DN не изменилось.
+
+- **\[CHANGE\] `GostDnParser.encodeDn` отвергает управляющие символы.**
+
+  Ранее `trim()` молча срезал NUL и другие символы не больше U+0020 по
+  краям, поэтому значение вида `CN=abc` с завершающим NUL проходило.
+
+  Стало: любой управляющий символ (`Character.isISOControl`: C0, DEL,
+  C1) в строке DN, включая хвостовые `\n` и `\t`, даёт
+  `IllegalArgumentException`. Проверка выполняется до разбиения и
+  обрезки пробелов.
+
+- **\[CHANGE\] `GostDerParser.oidBytesToDottedString` принимает
+  однобайтовый OID и проверяет границы.**
+
+  Ранее `len < 2` отвергалось, хотя однобайтовый OID (например `1.2`)
+  допустим по X.690; `start + len` могло переполнить `int`.
+
+  Стало: допустим `len >= 1`, выход за массив и отрицательные значения
+  дают `IllegalArgumentException`, `null` - `NullPointerException`.
+  Константа `MAX_OID_SUBIDENTIFIERS` переименована в `MAX_OID_ARCS`,
+  счётчик ведётся по аркам, лимит прежний - 128 арок.
+
+- **\[CHANGE\] `CAdESSignerResult.revocationValues()` содержит только
+  проверенные CRL и OCSP-ответы.**
+
+  Ранее возвращался весь сырой набор атрибута revocation-values, включая
+  значения, подпись которых не проверялась (например, относящиеся к
+  самому якорю); Javadoc проверки обещал проверку подписей, а метод
+  сверял только хэши.
+
+  Стало: наружу уходят значения сертификатов ниже якоря, прошедшие
+  проверку подписи и статуса отзыва; свежесть гарантируется на уровне
+  сертификата (минимум одно значение в окне), остальные значения записи
+  могут лежать вне окна. Ссылки `completeRevocRefs` могут указывать на
+  значения, не вошедшие в результат.
+
+- **\[CHANGE\] `ChainValidator.validateChainWithRevocationEvidence`
+  возвращает проверенное evidence.**
+
+  Ранее возвращал `void`.
+
+  Стало: возвращает `List<CertRevocationEvidence>` (индексы ниже якоря
+  эффективной цепочки, без дублей). Исходники вызывающих совместимы, но
+  скомпилированный код требует пересборки (`NoSuchMethodError`).
+
+- **\[CHANGE\] SAN URI с IPv4 с ведущими нулями под NameConstraints
+  по-прежнему отвергается как IP-хост.**
+
+  Ранее решал детектор `GostCertificate.isIpAddress`, принимавший
+  ведущие нули и знак.
+
+  Стало: проверка идёт через `GostDnsName.isIpAddressOrNumericForm`
+  (строгий IP или числовая форма IPv4), отказ сохранён для `0177.0.0.1`,
+  `09.0.0.1` и числовых форм.
+
+- **\[CHANGE!\] Проверка CMS SignedData: единый
+  `CmsSignedDataVerifier.verify(der, VerifyOptions)` (breaking
+  change).**
+
+  Ранее было 15 методов `verify*` (матрица ANY/ALL, detached, только
+  подпись, отзыв), выбор метода менял гарантии безопасности; результат
+  делился на `VerifiedSignedData` и `MultiSignerVerifiedData`.
+
+  Стало: параметры задаёт
+  `VerifyOptions.trusting(TrustAnchors, SignerSelection, Revocation)`
+  или `VerifyOptions.signatureOnly(SignerSelection)`, плюс
+  `.detached(content)` и `.untrustedCandidates(...)`. Режим подписантов
+  и политика отзыва передаются аргументами, сочетание «только подпись
+  плюс отзыв» невозможно. Результат один — `VerifiedSignedData` со
+  `signers()`; `signer()` бросает исключение при нескольких подписантах.
+  `MultiSignerVerifiedData` удалён.
+
+- **\[CHANGE!\] Проверка CAdES вынесена в `CAdESVerifier` и принимает
+  `TrustAnchors` (breaking change).**
+
+  Ранее `CAdESExtender` сочетал сборку (`embed*`, `addTimestamp`) и 12
+  методов проверки (`verifyCAdESBES`, `verifyCAdEST`, `verifyCAdESC`,
+  `verifyCAdESXLong`, `verifyCountersignature` и их detached-варианты),
+  а якоря передавались как `GostCertificate...`.
+
+  Стало: проверка в `CAdESVerifier` с методами по уровням (`verifyBES`,
+  `verifyT`, `verifyC`, `verifyXLong`, `verifyCountersignature`,
+  `*Detached`), якоря передаются как `TrustAnchors` — как в
+  `CmsSignedDataVerifier`. `CAdESExtender` содержит только сборку.
+  Пустые или `null` якоря отвергаются `IllegalArgumentException` (ранее
+  `PkixException`). Проверка уровня не оценивает атрибуты старших
+  уровней: `verifyBES` проходит на подписи CAdES-T/C/X Long, метки в
+  результат не попадают.
+
+- **\[CHANGE\] Срок якоря в CAdES: явный `AnchorExpiryPolicy.WARN`
+  достижим для подписи, цепочки значений сертификатов и
+  контрподписанта.**
+
+  Ранее срок якоря в CAdES был жёстко `REJECT` независимо от переданных
+  якорей.
+
+  Стало: `DEFAULT` трактуется как `REJECT`, явное значение сохраняется
+  (как в CMS). Цепочка TSA всегда проверяется со строгим `REJECT`:
+  доказательство времени политикой `WARN` не ослабляется.
+
+- **\[SECURITY:P2\] Проверка отзыва в CMS: `Revocation.required`
+  отказывает без подходящего CRL.**
+
+  Ранее `verify*WithRevocationCheck` без подходящего CRL только писали
+  WARNING, и подписант проходил, хотя метод назывался проверкой отзыва.
+
+  Стало: `Revocation.required(crls)` при отсутствии CRL для сертификата
+  ниже якоря бросает `PkixException` с
+  `Reason.REVOCATION_STATUS_UNKNOWN`. Прежнее поведение доступно только
+  явно — `Revocation.ifAvailable(crls)`. Внешний список CRL обязателен
+  (`null` отвергается).
+
+- **\[CHANGE!\] `ChainValidator`: проверка принимает якоря-сертификаты и
+  возвращает эффективную цепочку (breaking change).**
+
+  Ранее `validateChain(chain, keys)` и
+  `validateChainWithRevocation(chain, keys, ...)` принимали открытые
+  ключи и возвращали `void`, поэтому `NameConstraints` и `pathLen` корня
+  не аутентифицировались, а результат проверки нельзя было использовать
+  повторно.
+
+  Стало: `resolveChain` достраивает цепочку по DER/выпуску,
+  `validateChain` проверяет и возвращает неизменяемую эффективную
+  цепочку, `validateChainWithRevocation`,
+  `validateChainWithRevocationEvidence` (с кандидатами в OCSP-ответчики)
+  и `validateRevocationEvidence` сохраняют отзыв. Пустой `TrustAnchors`
+  и `null` отвергаются `IllegalArgumentException`.
+
+- **\[CHANGE\] Срок доверенного якоря задаётся политикой
+  `AnchorExpiryPolicy` в `TrustAnchors`.**
+
+  Ранее поведение при истёкшем якоре определялось разными кусками кода:
+  `ChainValidator` при `n > 1` только писал WARNING, а
+  `CmsSignedDataVerifier` и `CAdESExtender` отклоняли такой якорь
+  отдельной локальной проверкой.
+
+  Стало: `TrustAnchors.withExpiryPolicy(DEFAULT | WARN | REJECT)`
+  возвращает новый набор. `DEFAULT` трактует потребитель:
+  `ChainValidator` и TLS как `WARN`, CMS и CAdES как `REJECT`; явное
+  значение всегда побеждает. Закреплённый leaf (`n == 1`) проверяется на
+  срок при любой политике. Поведение по умолчанию не изменилось.
+
+- **\[CHANGE\] Расширения X.509 допустимы только в сертификате v3.**
+
+  Ранее блок `[3]` в сертификате v1 или v2 разбирался как действующие
+  расширения.
+
+  Стало: такой сертификат отклоняется с `IllegalArgumentException` (RFC
+  5280 §4.1.2.9).
+
+- **\[CHANGE!\] `parseExtensionsFromSequence` и
+  `parseFromExtensionsBlock` строгие к структуре и границам (breaking
+  change).**
+
+  Ранее пустая SEQUENCE и не-SEQUENCE на входе давали пустой результат,
+  хвост после Extensions игнорировался.
+
+  Стало: любое нарушение - `IllegalArgumentException`. Добавлен вариант
+  `parseExtensionsFromSequence(der, offset, limit)`: `limit` - конец
+  охватывающей структуры, SEQUENCE обязана заканчиваться на нём.
+  `parseFromExtensionsBlock` принимает третий аргумент `tbsLimit`.
+
+- **\[CHANGE!\] OCSP nonce приведён к RFC 8954 (breaking change).**
+
+  Ранее `extnValue` содержал сырые байты nonce на одном уровне OCTET
+  STRING, длина составляла 16 байт, разбор принимал любое содержимое,
+  битое расширение молча игнорировалось, при дубликатах запрос и ответ
+  вели себя по-разному.
+
+  Стало: nonce вложен как `OCTET STRING` внутрь `extnValue`, клиент
+  генерирует 32 байта, при разборе допустима длина 1..32. Невалидная
+  структура, длина вне диапазона и дубликаты расширения отклоняются
+  `PkixException`; `GostOcspResponseBuilder.nonce(byte[])` проверяет
+  длину и копирует массив. `getNonce()` по-прежнему возвращает сырые
+  байты значения `Nonce`. Прежний одноуровневый формат явно не
+  поддерживается; значения, структурно совпадающие с корректным `Nonce`,
+  от него неотличимы и принимаются. Клиент прежней версии не работает с
+  ответчиком новой: его запрос с одноуровневым nonce отклоняется. Новый
+  клиент с ответчиком прежней версии работает: тот возвращает в ответ
+  разобранное содержимое `extnValue` и заворачивает его ещё раз, на
+  проводе получается RFC-формат.
+
+- **\[SECURITY:P1!\] CAdES-X Long: строгая проверка отзыва и breaking
+  change для `embedXLongType1`.**
+
+  Ранее X-Long проверял отзыв на текущее время и принимал одно CRL/OCSP
+  на сертификат; `ocspRepHash == null` позволял подставить любой
+  OCSP-ответ, а CRL без `nextUpdate` действовал бессрочно.
+
+  Стало: `CAdESVerifier.verifyXLong()` требует `escTimeStamp`, проверяет
+  отзыв в окне `[t_sig, t_esc]`, все доказательства и их привязку
+  (включая обязательный `ocspRepHash`). CRL без `nextUpdate`,
+  delta/indirect CRL и доказательство для чужого сертификата
+  отклоняются. `embedXLongType1()` требует TSP transport/URL для
+  `escTimeStamp` и заранее применяет политику. Цепочка сертификатов и
+  TSA по-прежнему проверяются на текущее время; отзыв после `genTime` не
+  разрешается (fail-closed).
+
+  `embedXLongType1()` не добавляет вторую `signature-time-stamp`, если
+  она уже есть у всех подписантов, и заменяет существующие C-ссылки и
+  X-значения данными из аргументов, а не оставляет старые.
+
+- **\[SECURITY:P2!\] Удалена key-only модель доверия (breaking
+  change).**
+
+  Ранее доверие можно было задавать открытыми ключами через
+  `validateChain(chain, keys)` и
+  `validateChainWithRevocation(chain, keys, ...)`. В этом режиме
+  `NameConstraints`, `pathLen` и срок корня не были аутентифицированы, а
+  совпадение ключа не гарантировало, что доверенный сертификат имеет тот
+  же DER.
+
+  Стало: якорями могут быть только сертификаты. Удалены key-перегрузки
+  `validateChain` и `validateChainWithRevocation`. В
+  `GostX509TrustManager` удалены key-конструкторы, в
+  `GostTrustManagerParameters` — `Builder.caPublicKeys()` и
+  `getCaPublicKeys()`. Миграция: замените доверенные ключи на
+  сертификаты (`TrustAnchors.ofCertificate(cert)` или
+  `ofCertificates(list)`), а `validateChain(chain, keys)` — на
+  `validateChain(chain, anchors)`. Каждый сертификат в наборе считается
+  самостоятельным якорем: ограничения и срок расположенного выше CA не
+  наследуются.
+
+- **\[SECURITY:P2\] CMS и CAdES: цепочка строится только по
+  сертификатам-якорям.**
+
+  Ранее `CmsSignedDataVerifier` и контрподпись `CAdESExtender` проверяли
+  цепочку по открытым ключам из `trustedCerts`, а `CertChainBuilder` мог
+  остановиться на любом самоподписанном сертификате.
+
+  Стало: каждый сертификат в `trustedCerts` — самостоятельный якорь.
+  Доверять можно напрямую подписанту или промежуточному CA, но тогда
+  ограничения и срок вышестоящего корня не применяются. Перевыпущенный
+  корень с тем же ключом работает: побеждает локальная копия якоря.
+  Самоподписанный сертификат, не входящий в `trustedCerts`, больше не
+  принимается как конец цепочки и даёт `INCOMPLETE_CHAIN`. Срок якоря в
+  CMS проверяется всегда; в отличие от TLS, где для `n > 1` это только
+  предупреждение, истёкший якорь CMS отклоняется.
+
+## Модуль crypto-gost-core
+
+### Исправлено
+
+- **\[SECURITY:P3\] `getEncoded` закрытого ключа после `destroy()`
+  бросает `IllegalStateException`, на границах JCA уничтоженный ключ
+  даёт проверяемые исключения.**
+
+  Было: `GostECPrivateKey.getEncoded()` возвращал `null` (у
+  `GostSecretKey` исключение), `catch (Exception)` скрывал любые сбои
+  кодирования; `KeyFactory`, `Signature.initSign` и `KeyAgreement.init`
+  с уничтоженным ключом бросали `IllegalStateException`.
+
+  Стало: `IllegalStateException` у обоих ключей, `null` только для ключа
+  на незарегистрированной кривой; `InvalidKeySpecException` и
+  `InvalidKeyException` на границах JCA.
+
+- **\[BUGFIX\] JCA `KeyAgreement`: после `generateSecret` объект
+  возвращается в состояние после `init`.**
+
+  Было: открытый ключ партнёра сохранялся, повторный `generateSecret`
+  без `doPhase` давал тот же секрет, вопреки контракту JCA.
+
+  Стало: партнёр сбрасывается, без нового `doPhase`
+  `IllegalStateException`; закрытый ключ и UKM сохраняются. Ключ
+  партнёра на другой кривой отвергается в `doPhase`
+  (`InvalidKeyException`), а не в `generateSecret`.
+
+- **\[BUGFIX\] `Pkcs7Padding.unpad` проверяет размер блока.**
+
+  Было: `blockSize = 0` давал `ArithmeticException`.
+
+  Стало: `IllegalArgumentException`.
+
+- **\[BUGFIX\] `AuthenticatedStream`: формат 0x03 — версия первым
+  байтом, nonce 128 бит, непрерывная гамма CTR.**
+
+  Было: nonce 64 бита, случайный 8-байтный IV каждого чанка при общем
+  ключе CTR потока (повтор гаммы при совпадении IV), 29 байт на чанк,
+  пределы нагрузки не указаны.
+
+  Стало: заголовок `[версия][nonce 16][chunkSize 4]`, чанк
+  `[chunkLen 4][flags 1][CMAC 16]`, гамма не повторяется внутри потока,
+  пределы указаны в документации; потоки 0x02 не читаются.
+
+- **\[BUGFIX\] `AuthenticatedStream` и `AuthenticatedCipher`: `null`
+  вместо данных, потока или ключа даёт `NullPointerException`; `flush()`
+  после сбоя записи бросает `IOException`.**
+
+  Было: `AuthenticatedCipher.open(null, key)` давал
+  `AuthenticationException`, остальные случаи NPE из глубины KDF;
+  `flush()` на непригодном шифрующем потоке доходил до нижнего потока.
+
+  Стало: единообразная проверка аргументов в начале каждого метода;
+  `flush()` после сбоя записи бросает `IOException`.
+
+- **\[BUGFIX\] `AuthenticatedStream`: `flush()` шифрующего потока
+  доводит полные чанки до нижнего потока.**
+
+  Было: `flush()` ничего не делал, и буферизованный нижний поток не
+  отдавал записанные чанки получателю.
+
+  Стало: вызывает `flush()` нижнего потока; неполный хвост уходит с
+  `finish()` или `close()`.
+
+- **\[BUGFIX\] `AuthenticatedStream`: ключи потока затираются при ошибке
+  и сразу после последнего чанка.**
+
+  Было: читатель затирал ключи только в `close()` (читатель встроенного
+  потока его не вызывает); сбой записи оставлял ключи и позволял
+  продолжить запись.
+
+  Стало: читатель затирает ключи после последнего чанка и при ошибке,
+  писатель при сбое затирает их и становится непригодным.
+
+- **\[BUGFIX\] Копии ключа затираются в `KeyGenerator`, фабриках ключей
+  (PBKDF2, PKCS#8) и `GostKeyGeneratorSpi`.**
+
+  Было: исходные массивы и копии из `getEncoded()` оставались в куче.
+
+  Стало: затираются в `finally`; `engineTranslateKey` не делает
+  промежуточный `PKCS8EncodedKeySpec`.
+
+- **\[BUGFIX\] `Mgm`: неполный блок в середине сообщения и вызовы после
+  `finish` отвергаются.**
+
+  Было: `processBytes` порциями 5+5 принимался и давал шифртекст и тег,
+  расходящиеся с RFC 9058 (неполный блок дополнялся нулями, входил в MAC
+  и сдвигал счётчик); `processBytes` после `finishEncryption`
+  принимался; повторный `finish*` на неинициализированном объекте давал
+  «Already finished» вместо «не инициализирован».
+
+  Стало: непустой `processBytes` после неполного блока бросает
+  `IllegalStateException`, после `finish` бросают `processBytes` и
+  `updateAAD`; проверка инициализации идёт до установки признака
+  завершения. Дробный `updateAAD` по-прежнему допустим, а `reinitICN`
+  снимает запрет.
+
+- **\[BUGFIX\] `Kuznyechik.encryptToFields` требует ключ.**
+
+  Было: без ключа или после `destroy` метод считал на нулевых раундовых
+  ключах и молча отдавал значение, не являющееся шифртекстом
+  (`processBlock` при этом бросал исключение).
+
+  Стало: `IllegalStateException`.
+
+- **\[BUGFIX\] Длина IV режимов CBC, CFB, OFB кратна блоку.**
+
+  Было: принимался любой IV не короче 16 байт, в том числе 17, и регистр
+  сдвига работал вне режимов стандарта; JCA-шифры принимали только ровно
+  16, а javadoc `Cipher` говорил «не менее 16».
+
+  Стало: IV кратен 16 байтам (m = n·z, ГОСТ Р 34.13-2015; контрольный
+  пример CBC А.1.4 с IV 32 байта проходит на низкоуровневом режиме и
+  через JCA), иначе `IllegalArgumentException` (в JCA
+  `InvalidAlgorithmParameterException`). CTR по-прежнему принимает ровно
+  8 байт. `Cipher.decrypt(data, key, mode)` читает встроенный IV только
+  по умолчанию, для более длинного IV нужна перегрузка с явным IV
+  (указано в javadoc).
+
+- **\[BUGFIX\] JCA: `GCMParameterSpec` с тегом не 128 бит и режимы WRAP
+  и UNWRAP отвергаются при `init`.**
+
+  Было: `GCMParameterSpec(96, …)` молча давал тег 128 бит; `WRAP_MODE`
+  принимался как шифрование, `UNWRAP_MODE` как расшифрование, а `wrap()`
+  бросал `UnsupportedOperationException` без текста.
+
+  Стало: тег не 128 бит даёт `InvalidAlgorithmParameterException`; WRAP
+  и UNWRAP во всех трёх шифр-SPI дают `UnsupportedOperationException` с
+  понятным текстом уже при `init`, до изменения состояния.
+
+- **\[BUGFIX\] Шифры и фабрика ключей проверяют имя алгоритма ключа.**
+
+  Было: `Cipher.init`, `SecretKeyFactory.generateSecret` и
+  `translateKey` принимали любой RAW-ключ из 32 байт (например, с именем
+  `AES`) и делали из него ключ Кузнечика; `engineGetKeySpec` присваивала
+  ярлык `Kuznyechik` ключу другого алгоритма; уничтоженный ключ и ключ
+  неверной длины давали непроверяемые исключения; ключ CMAC неверной
+  длины давал исключение шифра.
+
+  Стало: принимаются имена `Kuznyechik` и `GOST3412-2015` (без учёта
+  регистра), иначе `InvalidKeyException` (`InvalidKeySpecException` в
+  фабрике); уничтоженный ключ и неверная длина тоже дают проверяемые
+  исключения. `Mac` имя не проверяет (законны
+  `SecretKeySpec(bytes, "RAW")` и `GostSecretKey("Kuznyechik")` для
+  CMAC), CMAC требует 32 байта. Следствие: ключи с другим именем нужно
+  пересоздать под именем `Kuznyechik`.
+
+- **\[BUGFIX\] `GostSecretKey(String, SymmetricKey)` затирает временную
+  копию ключа.**
+
+  Было: копия из `SymmetricKey.getKey()` оставалась в куче до сборки
+  мусора.
+
+  Стало: копия берётся во владение и затирается, в том числе при отказе
+  конструктора.
+
+- **\[BUGFIX\] `MgmCipher.open` на повреждённом пакете бросает
+  `AuthenticationException`.**
+
+  Было: короткий пакет и ICN со старшим битом 1 давали
+  `IllegalArgumentException`, `null` давал `NullPointerException`, тогда
+  как `AuthenticatedCipher.open` на таких входах бросал
+  `AuthenticationException`.
+
+  Стало: один тип отказа для любого повреждения пакета; ключ `null` в
+  `seal` и `open` отвергается как `IllegalArgumentException` (ошибка
+  вызывающего).
+
+- **\[BUGFIX\] `AuthenticatedStream.close()` закрывает нижний поток.**
+
+  Было: `close()` нижний поток не закрывал, хотя пример в javadoc обещал
+  закрытие файла; чтение после `close` падало `IllegalStateException` на
+  уничтоженном ключе.
+
+  Стало: потоки `sealing` и `opening` закрывают нижний поток (в том
+  числе при сбое записи последнего чанка), повторный `close()`
+  безопасен, чтение после `close()` даёт `IOException`; если конструктор
+  `opening` бросил исключение, нижний поток остаётся за вызывающим.
+
+- **\[BUGFIX\] JCA `KeyAgreement`: ключ `null` даёт
+  `InvalidKeyException`.**
+
+  Было: `init(null)` и `doPhase(null, true)` в ECDH и VKO давали
+  `NullPointerException`.
+
+  Стало: `InvalidKeyException` с понятным текстом.
+
+- **\[SECURITY:P1\] Устранена гонка по закрытому ключу в
+  `ECDSASigner`.**
+
+  Было: `generateSignature` читал ключ дважды (для нонса `k` и для `s`),
+  а `destroy()` и `init()` затирали массив на месте без синхронизации.
+  Если затирание попадало между чтениями (другой поток или повторный
+  вход через дайджест, который подписант получает от фабрики),
+  выдавалась подпись `s = k·e`, и по ней и обычной подписи того же хэша
+  вычислялся `d = (s_good - k·e)/r`. Если копия ключа снималась
+  посередине затирания, подпись получалась верной под усечённым ключом и
+  выдавала его младшие байты. Затронуты `ECDSASigner` и `DigestSigner`,
+  которые держат в поле и делят между потоками; `Signature`, TLS, JCA и
+  pkix создают подписанта на вызов и затронуты не были.
+
+  Стало: ключ, кривая и базовая точка копируются в локальные переменные
+  один раз в начале операции и сверяются с оптимистичной меткой
+  `StampedLock` до и после вычисления; при изменении состояния подпись
+  не выдаётся (`IllegalStateException`). `init` проверяет `destroyed`
+  внутри блокировки, `destroy()` необратим. Выработка `k` и кодирование
+  подписи не менялись. Класс по-прежнему не предназначен для общего
+  использования несколькими потоками (Javadoc `ECDSASigner` и
+  `DigestSigner`, ADR 08).
+
+- **\[SECURITY:P1\] Нонс детерминированной подписи выводится из числа
+  `e` уравнения подписи.**
+
+  Ранее затравка `k` (RFC 6979) строилась из байт хэша в прямом порядке,
+  а число `e` ГОСТ Р 34.10-2012 читается из хэша младшим байтом вперёд.
+  Два разных хэша могли дать один `k` при разных `e`, и по двум подписям
+  с общим `r` вычислялся закрытый ключ: `k = (s1 - s2)/(e1 - e2)`,
+  `d = (s1 - k·e1)/r`. Достаточно двух вызовов `Signature.signHash` или
+  `GostSigner.signHash` с подобранными хэшами; затронуты все 7
+  зарегистрированных кривых, а также `ECDSASigner.generateSignature` и
+  `TlsSignatureCodec.sign` при прямом вызове. Подпись сообщения
+  (`Signature.sign`), CMS, pkix и рукопожатие TLS не затронуты: там хэш
+  считается внутри, и подобрать нужную пару хэшей Стрибога практически
+  невозможно.
+
+  Стало: на вход HMAC-DRBG подаётся `int2octets(e)`, где `e` взято после
+  замены 0 на 1. Равный `k` возможен только при равном `e`, то есть при
+  побайтно равной подписи. Детерминированные подписи изменились
+  (эталонные значения для кривой RFC 7091 и CryptoPro-A пересчитаны и
+  сверены с BouncyCastle `HMacDSAKCalculator`), проверка подписей и
+  совместимость с КриптоПро и OpenSSL не затронуты. Ключи следует
+  считать скомпрометированными, только если `signHash` подписывал хэши,
+  присланные недоверенной стороной.
+
+- **\[BUGFIX\] `ECDSASigner` имеет явное состояние: до `init`, после
+  `destroy()` и в неверном режиме отказ - `IllegalStateException`.**
+
+  Ранее `generateSignature` до `init` или после `init(false)`, а также
+  `verifySignature` до `init` или после `init(true)` (при допустимых `r`
+  и `s`) падали с `NullPointerException` из недоинициализированных
+  полей, а `verifySignature` не проверял даже `destroy()`, хотя Javadoc
+  обещает непригодность объекта. При неудачном `init` режим менялся до
+  проверки типа параметров, и объект оставался в смешанном состоянии.
+
+  Стало: `init` сбрасывает признак инициализации, проверяет тип
+  параметров до присвоения режима и отмечает объект готовым только в
+  конце; обе операции проверяют состояние и отказывают с понятным
+  сообщением («is not initialized», «has been destroyed», «initialized
+  for …, not for …»).
+
+- **\[BUGFIX!\] Несовместимое изменение:
+  `KeyAgreement.vkoGostR3410_2012_512` отвергает кривую не на 512 бит.**
+
+  Ранее метод принимал ключи на 256-битной кривой и возвращал 64 байта
+  хэша от 32-байтных координат; RFC 7836 §4.3.2 допускает этот вариант
+  только для 512-битных ключей. Javadoc ссылался на §4.3.1.
+
+  Стало: при `hlen` кривой не 64 метод бросает
+  `IllegalArgumentException` до чтения закрытого ключа;
+  `vkoGostR3410_2012_256` по-прежнему принимает 256- и 512-битные ключи
+  (§4.3.1), как и JCA `VKOGOST3410-2012-256`. Вызовы в `pkix` выбирают
+  вариант по `hlen` и не затронуты. Добавлены тесты на Примеры 7 (в том
+  числе через JCA) и 8 RFC 7836.
+
+- **\[BUGFIX\] `Cfb(Kuznyechik, bits)` проверяет размер сегмента, имя
+  режима отражает сегмент.**
+
+  Ранее проверок не было: `Cfb(7)` и `Cfb(0)` давали сегмент 0 байт,
+  `Cfb(200)` падал с `ArrayIndexOutOfBoundsException`, `Cfb(12)` молча
+  давал сегмент в 1 байт, имя всегда было `…/CFB128`.
+
+  Стало: допускается размер, кратный 8, от 8 до 128 бит, иначе
+  `IllegalArgumentException`; имя вида `…/CFB64`. Правильность короткого
+  сегмента подтверждена расчётом по определению из ГОСТ Р 34.13-2015 и
+  сверкой с Bouncy Castle (`G3413CFBBlockCipher`). Кросс-проверки на
+  OpenSSL и КриптоПро для него нет: они поддерживают только полный блок.
+
+- **\[BUGFIX\] `Cmac` отвергает неположительный размер тега,
+  `getAlgorithmName` возвращает `…/CMAC`.**
+
+  Ранее `new Cmac(cipher, 0)` создавался и давал пустой тег, `-8` падал
+  только в `doFinal`; имя возвращалось от внутреннего CBC (`…/CBC`).
+
+  Стало: размер не больше 0 даёт `IllegalArgumentException` при
+  создании; имя `GOST3412-2015/CMAC`.
+
+- **\[SECURITY:P3\] Затираются промежуточные копии секретов.**
+
+  Ранее big-endian копии координат общего секрета (`KeyAgreement`, в том
+  числе путь TLS), закрытого ключа при кодировании в PKCS#8
+  (`GostDerCodec.encodePrivateKey`) и случайных байт при генерации ключа
+  (`KeyGenerator`) оставались в памяти до сборки мусора; `ECDSASigner`
+  лишний раз переводил `d` в `BigInteger` и обратно при выработке нонса.
+
+  Стало: эти байтовые массивы затираются в `finally`, в `ECDSASigner`
+  используется прямая копия `dBytes`, а `FieldElement.toBigInteger`
+  затирает свой временный буфер. Затираются только массивы байт:
+  значения в `BigInteger` (скаляр, координаты общей точки, `d` при
+  подписи) и лимбы точки остаются в памяти до сборки мусора.
+
+- **\[BUGFIX\] Открытый ключ с неканоническими координатами
+  отвергается.**
+
+  Ранее `ECPoint.affine` приводил координаты по модулю `p`, поэтому
+  `(x + p, y)`, `y = p` и отрицательные значения принимались как тот же
+  ключ при разборе `GostECPublicKeySpec`: у одного ключа было несколько
+  кодировок.
+
+  Стало: `affine` бросает `IllegalArgumentException`, если `x` или `y`
+  вне `[0, p)`; повторная проверка диапазона в `GostDerCodec` и
+  повторная проверка принадлежности кривой в `GostKeyFactorySpi` убраны.
+
+- **\[BUGFIX\] Состояние JCA `Signature` для ГОСТ Р 34.10-2012
+  сбрасывается и при ошибке.**
+
+  Ранее накопленное сообщение очищалось только при успехе; после
+  исключения (например, подпись неверной длины) оно попадало в следующий
+  вызов, и `verify` принимал подпись над M1‖M2, а верную подпись M2
+  отвергал.
+
+  Стало: состояние сбрасывается при любом исходе `sign` и `verify`;
+  `engineUpdate(byte[], int, int)` проверяет границы при прямом вызове
+  SPI.
+
+- **\[BUGFIX\] `KeyGenerator.init(int)` для Кузнечика бросает
+  стандартный `java.security.InvalidParameterException`.**
+
+  Ранее бросался собственный класс-наследник `RuntimeException`, который
+  нельзя перехватить по контракту JCA.
+
+  Стало: стандартное исключение, внутренний класс удалён.
+
+- **\[SECURITY:P3\] Затирается ключевой материал в `Kuznyechik`,
+  `Streebog`, `Hmac`, `Cmac` и статических помощниках API.**
+
+  Ранее после `Kuznyechik.init` (в том числе при каждой смене ключа
+  секции ACPKM) в куче оставалась копия ключа; `Hmac.clear()` не затирал
+  рабочие буферы `Streebog`, и `K ⊕ ipad` оставался в `update_tmp`;
+  `Cmac.init` не затирал блок `L = E(K, 0)`; `Pbkdf2Streebog.generate`,
+  `CmacApi.cmac`, `Digest.hmac` и `KeyExport` не уничтожали созданные
+  ими `Hmac` и `Cmac`.
+
+  Стало: `Kuznyechik.init` затирает копию ключа в `finally`; новый
+  `Digest.destroy()` (в `Streebog` затирает рабочие буферы и сбрасывает
+  состояние, объект остаётся пригодным) вызывается из `Hmac.clear()`,
+  который теперь сначала снимает признак инициализации; `Cmac.init`
+  затирает `L` и освобождает старые подключи только после успешного
+  вычисления новых; перечисленные помощники уничтожают свои `Hmac` и
+  `Cmac` в `finally`.
+
+- **\[BUGFIX\] `DerCodec` проверяет границы длин без переполнения и
+  разбирает OID по X.690.**
+
+  Ранее сумма `contentOff + len` при длине около 2³¹−1 переполнялась и
+  проходила проверку: `parseOctetString` падал с `OutOfMemoryError`,
+  `collectImplicitOctets` возвращал пустой результат или бросал
+  `IndexOutOfBoundsException`, потомок мог выйти за границу родителя.
+  `parseOid` молча отбрасывал обрезанную дугу, принимал неминимальную,
+  читал байт за значением при нулевой длине и разбирал первый
+  subidentifier одним байтом (`2.999` превращался в `3.16.55`);
+  `encodeOid("2.999")` давал `1.15`. `parseBoolean` принимал длину 0 и 2
+  и значение `0x01`, `parseBitString` не проверял число неиспользуемых
+  бит.
+
+  Стало: любая выходящая за границу длина даёт
+  `IllegalArgumentException`; `parseOid` и `encodeOid` соответствуют
+  X.690 §8.19 (многобайтный первый subidentifier, проверка первой пары
+  дуг); `parseBoolean` требует DER (длина 1, `0x00` или `0xFF`);
+  `parseBitString` требует не более 7 неиспользуемых бит и нулевые
+  младшие биты. BER с indefinite-length в `collectImplicitOctets`
+  по-прежнему принимается, но не выходит за границу родителя. Добавлены
+  `parseStrictSequence`, `parseBitStringWithUnused` и
+  `normalizeBerSequenceToDer`.
+
+- **\[SECURITY:P2\] `GostDerCodec.decodePublicKey` отвергает
+  неоднозначные и неканонические кодировки открытого ключа.**
+
+  Ранее один и тот же ключ имел несколько нестрогих SPKI: принимались
+  байты после SEQUENCE, BER с indefinite-length, лишние элементы, чужой
+  OID алгоритма (например `rsaEncryption`), любой `digestParamSet`,
+  ненулевые неиспользуемые биты и координаты `x`, `y` не меньше модуля
+  поля (`x+p` для CryptoPro-B/C и TC26-B-512 помещается в поле у
+  большинства ключей).
+
+  Стало: SPKI разбирается строго по DER; OID алгоритма должен
+  соответствовать размеру кривой; `digestParamSet` проверяется по
+  правилу набора параметров (RFC 9215 §4.2, по исходному OID кривой:
+  XchA и TC26-B-256 описывают одну кривую, но правила для них
+  противоположны); `x` и `y` должны быть меньше `p`. Допустимые по RFC
+  9215 варианты OID набора параметров и необязательный `digestParamSet`
+  сохраняются.
+
+- **\[BUGFIX\] `AuthenticatedStream` отвергает мастер-ключ длиной не 32
+  байта.**
+
+  Ранее мастер-ключ шёл прямо в KDF\_TREE, которому длина безразлична,
+  поэтому ключ из одного байта или любой другой длины молча принимался,
+  хотя документация обещала 32 байта.
+
+  Стало: `sealing` и `opening` бросают `IllegalArgumentException`, если
+  длина ключа не равна 32 байтам; в поток до отказа ничего не
+  записывается.
+
+- **\[BUGFIX\] `Hmac`, `CmacApi.verifyMac` и JCA `Mac` не работают без
+  ключа.**
+
+  Ранее `Hmac` без `init` и после `destroy`/`clear` возвращал тег, не
+  зависящий от ключа (при повторных `doFinal` значение менялось);
+  `CmacApi.verifyMac(null, null)` и пара пустых тегов давали `true`,
+  хотя Javadoc обещал `false`; после неудачного `init` (`null`,
+  параметры не того типа, ненулевые параметры или неподдерживаемый ключ
+  в `GostMacSpi`) MAC продолжал считать прежним ключом.
+
+  Стало: `update`, `doFinal` и `reset` у `Hmac` без инициализации
+  бросают `IllegalStateException`; неудачный `init` оставляет `Hmac` и
+  JCA `Mac` неинициализированными; `verifyMac` возвращает `false` для
+  `null` и пустого тега в любом аргументе. Пустой ключ HMAC по-прежнему
+  допустим (RFC 2104).
+
+- **\[SECURITY:P1\] Обход аутентификации в `Kuznyechik/CTR-ACPKM-OMAC`
+  при повторном `doFinal`.**
+
+  Ранее повторный `doFinal` на том же `Cipher` без `init` брал
+  кешированный тег первого сообщения: чужой шифртекст с прежним тегом
+  принимался, гамма продолжалась вместо возврата в начало. При
+  шифровании второй `doFinal` выдавал шифртекст на продолжении гаммы со
+  старым тегом.
+
+  Стало: расшифрование после `doFinal` (в том числе после ошибки тега)
+  возвращается в состояние после `init`; шифрование после `doFinal`
+  требует нового `init`, иначе `IllegalStateException`. `init` на
+  шифрование с тем же ключом и тем же UKM, на которых уже выдан
+  шифртекст, отвергается (`InvalidAlgorithmParameterException`), в том
+  числе после промежуточного `init` на расшифрование; с новым UKM или
+  ключом допустим. Защита действует в пределах одного экземпляра
+  `Cipher`.
+
+- **\[BUGFIX\] Повторная инициализация и `reset()` в `CtrAcpkmMode` не
+  наследуют прежнее состояние.**
+
+  Ранее `init` и `destroy` не сбрасывали неполный блок гаммы, и новый
+  сеанс использовал остаток старой; `reset()` не возвращал исходный ключ
+  после смены ключа ACPKM; `getMacTag()` после дополнительных
+  `processBytes` отдавал устаревший тег и ссылку на внутренний массив.
+
+  Стало: состояние сбрасывается полностью, `reset()` восстанавливает
+  ключ нулевой секции, MAC финализируется один раз
+  (`finishEncryption()`/`verifyEncryptedTag(byte[])`), `processBytes`
+  после финализации даёт `IllegalStateException`. Временные ключи
+  затираются; `decryptWithMac` затирает непроверенный открытый текст при
+  ошибке тега.
+
+- **\[BUGFIX\] `ShortBufferException` в `Kuznyechik/CTR-ACPKM` не
+  сдвигает гамму.**
+
+  Ранее размер выходного буфера проверялся после обработки: повтор
+  вызова с достаточным буфером давал испорченные данные.
+
+  Стало: размер проверяется до обработки; непроверенный открытый текст
+  при ошибке тега затирается.
+
+- **\[BUGFIX\] Маскированный закрытый ключ RFC 9548 не импортируется
+  молча неверным скаляром.**
+
+  Ранее `GostDerCodec.decodePrivateKey` (в том числе через `KeyFactory`,
+  `GostSsl.loadPrivateKey` и `GostPkcs12Loader.adaptPrivateKey`)
+  разворачивал весь `OCTET STRING` и отдавал конструктору
+  `PrivateKeyParameters`, который оставлял младшие `n` байт:
+  маскированный `I = K_M ‖ M` давал `K_M` вместо ключа, а нулевая маска
+  (`K = 0`) принималась как `d = K_M`. Явная проверка была только в
+  `GostPbes2`.
+
+  Стало: длина содержимого проверяется в `decodePrivateKey` по длине
+  скаляра кривой. Длина не больше `n` допустима (обрезанные нулевые
+  старшие байты); за `n` есть ненулевой байт - маскированный ключ,
+  `UnsupportedOperationException`; за `n` одни нули - неканоническая
+  длина, `IllegalArgumentException`. Хвост просматривается без раннего
+  выхода. Дополнительно затираются промежуточные копии ключа. Явный
+  вызов `checkNotMasked` из `GostPbes2.decryptKey` удалён за
+  ненадобностью; метод остался публичным.
+
+- **\[SECURITY:P2\] `PublicKeyParameters` проверяет, что кривая точки
+  совпадает с объявленными параметрами.**
+
+  Ранее конструктор проверял принадлежность точки её собственной кривой
+  и не сверял её с `params`; `KeyAgreement` сравнивал кривые ключей
+  только по `p`, `n` и `hlen`. Точка одной кривой с параметрами другой
+  принималась, и закрытый ключ умножался на точку чужой кривой. Штатный
+  разбор SPKI и TLS key\_share рассогласования не давал, риск возникал
+  при ручной сборке ключа.
+
+  Стало: несовпадение кривой точки и `params` даёт
+  `IllegalArgumentException`; `ECParameters` получил структурные
+  `equals` и `hashCode` по параметрам конструктора, `KeyAgreement`
+  сравнивает кривые ими (самодельная кривая с теми же `p`, `n`, `hlen`
+  больше не принимается за стандартную). Отображение кривой в OID
+  (`GostCurves.oidOf`) по-прежнему идёт по ссылке: ключ с копией
+  параметров по значению пригоден для вычислений, но не кодируется в DER
+  (`encodePublicKey` даёт `IllegalArgumentException`,
+  `GostECPublicKey.getEncoded()` возвращает `null`), потому что
+  канонический OID назначается только зарегистрированным экземплярам.
+
+- **\[BUGFIX\] JCA-шифр Кузнечика не зависит от нарезки входа:
+  исправлены CFB, OFB и CBC-расшифрование.**
+
+  Ранее `update` с неполным блоком в CFB портил регистр обратной связи,
+  а в OFB отбрасывал остаток гаммы блока, поэтому шифртекст зависел от
+  нарезки. CBC-расшифрование с padding отдавало через `update` последний
+  блок вместе с дополнением, не снимая и не проверяя его
+  (`CipherInputStream` возвращал 32 байта вместо 20, испорченный padding
+  проходил без `BadPaddingException`). `ShortBufferException` в
+  `GostCipherSpi` и `GostMgmCipherSpi` бросался после обработки, и
+  повтор вызова с достаточным буфером давал другой результат или ошибку.
+
+  Стало: CTR, CFB и OFB обрабатывают вход одним вызовом `processBytes`
+  без накопления, шифртекст не зависит от нарезки и совпадает с OpenSSL
+  (`gost-engine`) в обе стороны. CBC-расшифрование с padding удерживает
+  последний блок до `doFinal`, где дополнение снимается и проверяется.
+  Размер выходного буфера проверяется до обработки; для
+  CBC-расшифрования с padding в `doFinal` до обработки отвергается
+  только заведомо малый буфер (буфер ровно под открытый текст
+  принимается, как в SunJCE); если буфер не меньше минимума, но короче
+  открытого текста, `ShortBufferException` приходит уже после
+  расшифрования. При расшифровании одним вызовом состояние
+  восстанавливается, и повтор с достаточным буфером даёт верный
+  результат; после `update` регистр цепочки сдвинут, поэтому шифр
+  блокируется до нового `init` (`IllegalStateException`), а не
+  возвращает молча неверные данные. Запись в выходной буфер при
+  совпадающем входном и выходном массиве идёт через временный массив.
+
+- **\[BUGFIX\] JCA-шифр Кузнечика требует IV при расшифровании и не
+  принимает padding вне CBC.**
+
+  Ранее `init(DECRYPT, key)` без параметров молча генерировал случайный
+  IV и давал мусор без ошибки; `Kuznyechik/CTR/PKCS5Padding` и подобные
+  трансформации создавались, а padding игнорировался, поэтому вызывающий
+  считал данные дополненными. После `BadPaddingException` накопленный
+  шифртекст и сдвинутый регистр CBC оставались в шифре, и следующий
+  `doFinal` возвращал мусор без исключения.
+
+  Стало: расшифрование без IV отвергается
+  (`InvalidAlgorithmParameterException`, а через
+  `Cipher.init(DECRYPT, key)` без параметров - `InvalidKeyException`);
+  padding для CTR, CFB и OFB отвергается при `getInstance`
+  (`NoSuchPaddingException`); после любого исхода `doFinal`
+  расшифрование возвращается в состояние после `init`. Промежуточные
+  буферы CBC (накопление, дополненные и расшифрованные данные)
+  затираются.
+
+- **\[BUGFIX\] `GostCurves`: набор XchB задан верно, имена кривых
+  находятся в любом регистре.**
+
+  Ранее XchB был зарегистрирован под OID `1.2.643.2.2.38.0` (это дуга
+  политик CryptoPro, а не набор параметров) и с параметрами CryptoPro-B,
+  поэтому сертификаты и ключи с настоящим OID XchB `1.2.643.2.2.36.1`
+  отвергались как неизвестные. Имена кривых хранились в смешанном
+  регистре (`cryptopro-A`, `tc26-gost-A-256`), а поиск понижал регистр
+  только запроса, поэтому `byName("cryptopro-a")` и `isSupported` по
+  имени в нижнем регистре не находили ни одну кривую.
+
+  Стало: XchB - `1.2.643.2.2.36.1` с параметрами CryptoPro-C (RFC 4357
+  §11.4; XchA по-прежнему совпадает с CryptoPro-A); OID
+  `1.2.643.2.2.38.0` больше не считается набором параметров. Имена
+  находятся в любом регистре (`Locale.ROOT`) в `byName` и `isSupported`.
+  `oidOf` канонизирует алиасы: ключ, разобранный с OID XchA или XchB,
+  при повторном кодировании получает OID CryptoPro-A или CryptoPro-C
+  соответственно (параметры те же).
+
+- **\[BUGFIX\] Провайдер не регистрирует ложные алиасы по OID.**
+
+  Ранее `Cipher.getInstance("1.2.643.7.1.1.5.1")` возвращал
+  Kuznyechik-MGM (это дуга Magma; Кузнечик - `1.2.643.7.1.1.5.2`), а
+  `KeyAgreement.getInstance("1.2.643.7.1.1.6.2")` - сырой ECDH,
+  результат которого отличается от согласования по этому идентификатору
+  (agreement для CMS: нет UKM и хеширования).
+
+  Стало: оба алиаса убраны, `getInstance` по этим OID даёт
+  `NoSuchAlgorithmException`. Имена `Kuznyechik-MGM` и `ECDHGOST2012`, а
+  также алиасы CTR-ACPKM (`…5.2.1`, `…5.2.2`) и согласования по `…6.1`
+  сохранены.
+
+- **\[BUGFIX\] Пароль в JCA `PBKDF2WithHmacStreebog512` кодируется в
+  стандартный UTF-8; непарный суррогат отвергается.**
+
+  Ранее каждый суррогат кодировался тремя байтами (CESU-8), поэтому для
+  паролей с символами вне BMP (например, эмодзи) ключ не совпадал с
+  другими реализациями.
+
+  Стало: общий `PasswordUtf8.encode` кодирует пароль в UTF-8 без
+  промежуточного `String`, буфер затирается вместе с копией, которую
+  отдаёт `PBEKeySpec.getPassword()`; ключ для паролей в BMP не меняется,
+  для паролей с символами вне BMP теперь соответствует UTF-8 (эталоны
+  получены независимо на OpenSSL с gost-engine). Непарный суррогат даёт
+  `InvalidKeySpecException`.
+
+- **\[SECURITY:P3\] `Digest.digest256` и `digest512` затирают рабочие
+  буферы Стрибога.**
+
+  Ранее статические `Digest.digest256`/`digest512` после вычисления не
+  вызывали `destroy()`; `reset()` рабочие буферы не очищает, поэтому в
+  них оставались хвост входа (последний неполный блок) и производные от
+  него значения. Затронуты все, кто хеширует этими методами секретные
+  данные (в том числе отпечаток ключа в защите от повтора IV).
+
+  Стало: буферы затираются в `finally`; результат не меняется.
+
+- **\[BUGFIX\] Защита от повтора UKM в `Kuznyechik/CTR-ACPKM` не
+  пропускает UKM с общим началом и не хранит ключ.**
+
+  Ранее защита сравнивала весь UKM, а без OMAC гамма зависит только от
+  его первых 8 байт (допускался UKM длиной от 8 байт): UKM `X` и `X ‖ Y`
+  считались разными парами, хотя дают одну гамму. Кроме того, в
+  экземпляре шифра до замены пары хранились сырые байты ключа.
+
+  Стало: сравнивается эффективный nonce (без OMAC - первые 8 байт UKM, с
+  OMAC - все 16), вместо ключа хранится отпечаток (Стрибог-256 от метки
+  и ключа). Общая защита `EncryptionReuseGuard` используется также в
+  `GostCipherSpi` и `GostMgmCipherSpi`.
+
+- **\[SECURITY:P3\] Затирание копии ключа и промежуточных буферов в
+  JCA-шифрах и `MgmCipher.open`.**
+
+  Ранее `init` в `GostCipherSpi` и `GostMgmCipherSpi` оставлял копию
+  ключа в куче до сборки мусора (в `GostCtrAcpkmCipherSpi` затирание
+  было); накопительные буферы `GostMgmCipherSpi` и
+  `GostCtrAcpkmCipherSpi` при нескольких `update` оставляли прежние
+  копии открытого текста; `MgmCipher.open` при неверном теге не затирал
+  неподтверждённый открытый текст.
+
+  Стало: копия ключа затирается сразу после `init` (в том числе при
+  отказе проверки параметров), прежний буфер затирается при каждом
+  добавлении данных, неподтверждённый открытый текст затирается при
+  ошибке тега. Это выполнение правила о затирании ключевых данных, а не
+  исправление эксплуатируемой уязвимости.
+
+- **\[BUGFIX\] `AuthenticatedStream.sealing` отвергает размер чанка вне
+  диапазона от 16 байт до 1 МиБ при создании.**
+
+  Ранее писатель проверял только нижнюю границу, а читатель отвергал
+  чанк больше 1 МиБ: `sealing(out, key, 2 МБ)` записывал поток, который
+  нельзя было прочитать, данные оказывались потеряны.
+
+  Стало: размер чанка вне `[16, 1 048 576]` даёт
+  `IllegalArgumentException` до записи заголовка.
+
+- **\[SECURITY:P2\] Дополнение ISO 7816-4 принимается только в последнем
+  блоке.**
+
+  Ранее `ISO7816d4Padding.padCount` искал последний байт `0x80` по всему
+  расшифрованному буферу: ноль-заполненный хвост длиннее блока
+  (например, `0x80` и 29 нулей) снимался как дополнение, и
+  расшифрованный текст молча укорачивался. Затронуты `Cipher.decrypt`
+  (CBC, `ISO7816_4`) и JCA `Kuznyechik/CBC/ISO7816-4`.
+
+  Стало: проверяется только последний блок, маркер обязан лежать в нём,
+  дополнение занимает от 1 до 16 байт; иначе `IllegalArgumentException`
+  в `Cipher` и `BadPaddingException` в JCA.
+  `ISO7816d4Padding.writePadding` при длине данных не меньше длины
+  буфера бросает `IllegalArgumentException` вместо
+  `ArrayIndexOutOfBoundsException`.
+
+- **\[SECURITY:P2\] `SignatureCodec.encode` не усекает и не искажает
+  компоненты подписи.**
+
+  Ранее проверка по длине `toByteArray()` пропускала `r = 2²⁵⁶ + 1` (на
+  33 байта без знакового нуля), и значение молча усекалось до 1;
+  отрицательные компоненты кодировались как дополнительный код.
+
+  Стало: компонента, не помещающаяся в `rolen` байт или отрицательная,
+  даёт `IllegalArgumentException`; граничные значения `n - 1` и
+  `2^(8*rolen) - 1` кодируются.
+
+- **\[BUGFIX\] `Cipher.encryptingStream` и `decryptingStream` ничего не
+  пишут и не читают при отказе.**
+
+  Ранее при режиме CBC (потоковый API его не поддерживает) или ключе
+  неверной длины IV уже был записан в выходной поток вызывающего или
+  изъят из его входного потока, а затем бросалось исключение.
+
+  Стало: режим и ключ проверяются до первой записи и до чтения IV; при
+  отказе потоки вызывающего остаются нетронутыми.
+
+- **\[SECURITY:P2\] `AuthenticatedStream`: ошибка целостности и усечение
+  при чтении различимы, разбор чанков строгий.**
+
+  Ранее ошибка аутентификации при `read()` приходила обычным
+  `IOException` (пример в Javadoc с `catch (AuthenticationException)`
+  никогда не срабатывал); усечение посреди чанка выдавалось обычным
+  `IOException`, а любой сбой нижнего потока при чтении заголовка
+  чанка - усечением; флаги, кроме `0x00` и `0x01`, и не последний чанк
+  неполной длины (пустой чанк читался как конец потока без проверки на
+  усечение) принимались молча; после ошибки аутентификации следующий
+  `read()` возвращал `-1`, то есть выглядел как чистый конец потока, а
+  после сбоя нижнего потока чтение продолжалось с середины структуры
+  чанка.
+
+  Стало: ошибки целостности и усечение (в заголовке потока, заголовке
+  чанка и посреди шифртекста) приходят как `AuthenticationIOException`
+  (из `read()`) или `AuthenticationException` (из `opening`); прочие
+  `IOException` нижнего потока передаются как есть. Флаги вне
+  `{0x00, 0x01}` и не последний чанк длиной не `chunkSize` отвергаются
+  до чтения шифртекста. После любой ошибки чтения поток непригоден:
+  повторный `read()` снова бросает исключение, а не возвращает `-1`.
+  Данные после последнего чанка по-прежнему не читаются (защищённый
+  поток можно встраивать в более длинный); это описано в Javadoc.
+
+### Изменено
+
+- **\[OPS!\] Несовместимое изменение: из `GostLogger` удалены `LogSink`
+  и `setInstanceSink`.**
+
+  Было: публичный приёмник записей, нужный только тестам; при заданном
+  приёмнике `isLoggable` возвращал `true` на любом уровне, а в семи
+  классах pkix и jsse лежали служебные методы `setLoggerForTest`. Стало:
+  записи идут только в `java.util.logging`, `isLoggable` проверяет
+  уровень JUL, служебные методы удалены. Перехват записей в тестах:
+  обработчик JUL на родителе логгеров модуля.
+
+- **\[OPS!\] Несовместимое изменение: `GostLogger` перенесён из
+  `org.rssys.gost.pkix.util` в `org.rssys.gost.util`.**
+
+  Было: импорт `org.rssys.gost.pkix.util.GostLogger`. Стало:
+  `org.rssys.gost.util.GostLogger`. Имена логгеров не менялись,
+  настройки `logging.properties` продолжают действовать.
+
+- **\[CHANGE\] Сообщения `AuthenticatedStream` о повреждении и усечении
+  содержат позицию чанка.**
+
+  Было: «Chunk integrity violation: CMAC mismatch», «last chunk not
+  found», «chunk is incomplete» без указания места; в потоке на десятки
+  гигабайт нельзя было понять, где повреждение. Стало: сообщение
+  заканчивается `[chunk N, plaintext offset M]` (номер чанка с нуля и
+  смещение его открытого текста от начала данных, без заголовка потока);
+  так же для недопустимых флагов и длины чанка. До первого чанка
+  (неполный заголовок потока) позиции нет.
+
+- **\[CHANGE\] `Streebog` считает на словах `long[8]`, таблицы строятся
+  при загрузке класса.**
+
+  Было: состояние хранилось массивом `byte[64]` в обратном порядке, на
+  каждый блок вход разворачивался, а `xor512`, `F` и сложение шли
+  побайтно; 2048 значений таблицы и константы раундов лежали литералами
+  (файл в 1134 строки).
+
+  Стало: состояние в `long[8]`, вход читается словами little-endian без
+  разворотов, 2048 значений таблицы вычисляются из S-блока и матрицы A
+  при загрузке класса, константы раундов записаны словами; перенос при
+  сложении блоков по модулю 2⁵¹² считается без ветвлений. Значение хэша
+  не изменилось (векторы RFC 6986 §10, замороженные эталоны,
+  кросс-валидация с BC и OpenSSL). Замер JMH, Стрибог-256, три форка, BC
+  в том же прогоне: вход 64 байта 3180 → 1731 нс, 1 КиБ 15,3 → 8,2 мкс,
+  16 КиБ 208 → 112 мкс (≈1,85 раза на всех размерах; BC 3135 нс, 15,1 и
+  207 мкс). Защищённый конструктор `Streebog` принимает байт начального
+  значения вместо массива.
+
+- **\[CHANGE\] `Streebog.update` и `doFinal` проверяют границы до начала
+  работы.**
+
+  Было: `update` с отрицательной длиной молча ничего не делал, а при
+  выходе за массив бросал `ArrayIndexOutOfBoundsException` из разных
+  мест; `doFinal` в короткий массив бросал исключение уже после
+  вычисления, и хэш оставался в недействительном состоянии.
+
+  Стало: `IndexOutOfBoundsException` до обработки данных; неудачный
+  `doFinal` состояние хэша не меняет.
+
+- **\[CHANGE\] Нейтральные тексты ошибок целостности в
+  `AuthenticatedStream` и `AuthenticatedCipher`.**
+
+  Было: сообщения содержали слова «truncation attack» и «tampered».
+
+  Стало: «truncated stream» и «modified». Тип исключений и условия
+  отказа не менялись.
+
+- **\[PERF\] Раундовые константы Кузнечика считаются один раз при
+  загрузке класса.**
+
+  Было: каждый `init` заново вычислял 32 константы C\_n = L(e\_n) (по 16
+  шагов регистра с умножениями в GF(2⁸)), около 36 мкс на вызов; это
+  платил каждый новый шифр, MAC и режим, в том числе по два раза на
+  каждый чанк `AuthenticatedStream`.
+
+  Стало: около 0,5 мкс на `init`. Шифрование и проверка малого пакета
+  `MgmCipher` ускорились с 38 до 2,7 мкс, `AuthenticatedCipher` на 4 КиБ
+  с 143 до 75 мкс (замер в один круг, времена ориентировочные; числа
+  выделений от загрузки машины не зависят).
+
+- **\[PERF\] Убраны лишние выделения памяти и копии в `scrypt`, потоках
+  `Cipher`, `AuthenticatedCipher`, `AuthenticatedStream`, `MgmCipher` и
+  `Mgm`.**
+
+  Было: Salsa20/8 создавал два массива на каждый из 2·N·2r вызовов
+  (scrypt при N = 2¹², r = 8 выделял 25,8 МиБ мусора при 4 МиБ рабочей
+  памяти); `wrapEncrypting` и `wrapDecrypting` выделяли массив на каждую
+  запись и чтение; `seal` и `open` копировали шифртекст, тег и соль;
+  чанк `AuthenticatedStream` выделял два-три массива; `Mgm` писал
+  короткий тег через временный массив и сравнивал тег через копию.
+
+  Стало: scrypt 12,7 → 6,5 мс и 25,8 → 4,2 МиБ на вызов; чтение
+  `AuthenticatedStream` 2,1 → 0,9 мс и 157 → 26 КиБ, запись 129 → 56 мкс
+  и 9,7 → 1,2 КиБ на чанк 4 КиБ; потоки `Cipher` без выделений на запись
+  и чтение (расшифрование идёт на месте в буфере вызывающего);
+  `AuthenticatedCipher` на 4 КиБ 11,5 → 7,2 КиБ. Времена здесь тоже из
+  одного круга и ориентировочные. Затирание сохранено для секретов:
+  открытого текста, вычисленного тега (в том числе в рабочих полях шифра
+  после `Mgm.finishDecryption`), рабочих блоков scrypt, ключей.
+  Затирание шифртекста, соли, принятого тега и IV убрано: они не
+  секретны.
+
+- **\[CHANGE\] Запись в потоки `Cipher` с неверными границами даёт
+  `IndexOutOfBoundsException`.**
+
+  Было: `write(byte[], int, int)` шифровательного потока при
+  отрицательной длине бросал `NegativeArraySizeException`, а при выходе
+  за массив `DataLengthException`.
+
+  Стало: `IndexOutOfBoundsException` до обращения к шифру и к нижнему
+  потоку, как требует контракт `OutputStream`.
+
+- **\[PERF\] Таблица базовой точки G для проверки подписи строится один
+  раз на кривую.**
+
+  Было: каждая проверка (`Signature.verify` создаёт подписанта на каждый
+  вызов) строила wNAF-таблицу G заново, 7 мкс на 256-битной кривой и 40
+  мкс на 512-битной (1,4 и 2 % времени проверки).
+
+  Стало: таблица лежит в `ECParameters` (поле `volatile`, без
+  блокировок), строится при первой проверке. Таблица открытого ключа Q
+  по-прежнему строится на каждую проверку: её стоимость того же порядка,
+  а кэш в ключе дал бы выгоду только при повторных проверках одним
+  ключом.
+
+- **\[CHANGE\] Удалён неиспользуемый и дублирующий код в публичном API
+  `crypto-gost-core`.**
+
+  Было: `Mgm.getTagSize`, `Mgm.getAlgorithmName`, `Mgm.getBlockSize`,
+  статический `Mgm.gf128Mul` (эталон для тестов),
+  `GostDerCodec.encodeSpkiKeyValue` нигде не использовался;
+  `DerCodec.compareDer` был открыт, хотя нужен только для сортировки SET
+  OF; `DerCodec.decodeTag` возвращал `int[2]`, где второй элемент всегда
+  1; у `Cbc` был публичный `processBytes`, который бросал
+  `UnsupportedOperationException`.
+
+  Стало: перечисленные методы удалены, `DerCodec.compareDer` закрыт
+  (pkix сортирует SET OF через `DerCodec.sortDer`), `decodeTag`
+  возвращает `int`; `Ctr`, `Cfb`, `Ofb` наследуют общий потоковый
+  базовый класс, а `Cbc` потоковых методов не имеет. Бинарная
+  совместимость нарушена.
+
+- **\[SECURITY:P1\] `Mgm.finishDecryption` отвергает тег, не
+  помещающийся в буфер.**
+
+  Было: `Arrays.copyOfRange` молча дополнял короткий тег нулями, и
+  сравнение шло с подложенным значением.
+
+  Стало: `IllegalArgumentException`; тег сравнивается прямо в буфере
+  через `ConstantTime.equals`, вычисленный тег затирается; ошибка границ
+  выдаётся до завершения расшифрования, и верный буфер после неё
+  принимается. Так же `finishEncryption`: тег, не умещающийся в буфер,
+  даёт `IllegalArgumentException`, а не `IndexOutOfBoundsException`
+  после завершения шифрования.
+
+- **\[CHANGE\] Внутренний класс `FieldElement` убран из открытого API
+  `crypto-gost-core`.**
+
+  Было: `FieldElement`, `FieldElement.MontgomeryParams` и поля
+  `ECParameters.montParams` и `ECParameters.fa` были открыты, хотя это
+  арифметика подписи, нужная только пакету `signature`; метод
+  `equals(FieldElement)` при вызове через `Object` сравнивал ссылки.
+
+  Стало: всё перечисленное видно только внутри пакета; сравнение
+  называется `isEqualTo` и учитывает модуль поля. Бинарная совместимость
+  нарушена. Замеры операций поля в `bench/signature` вынесены в
+  `FieldBench`.
+
+- **\[CHANGE\] Открытые ключи сравниваются по значению.**
+
+  Было: два `PublicKeyParameters` и `GostECPublicKey` с одной кривой и
+  точкой не были равны.
+
+  Стало: `equals` и `hashCode` по кривой и нормализованным аффинным
+  координатам (форма точки не важна); закрытые ключи сравниваются только
+  по ссылке.
+
+- **\[CHANGE\] `Pkcs7Padding` и `ISO7816d4Padding` имеют одинаковый
+  интерфейс `pad` и `unpad`, запись на месте называется
+  `ISO7816d4Padding.writePadding`.**
+
+  Было: `addPadding` и `removePadding` у PKCS#7; у ISO 7816-4
+  `addPadding(byte[], int len)` писал на месте и возвращал `len`, снятия
+  дополнения массивом не было, испорченное дополнение давало
+  `IllegalStateException`.
+
+  Стало: `pad` и `unpad` в обоих классах, `addPadding` удалён совсем
+  (старый вызов `addPadding(buffer, len)` не должен компилироваться, а
+  не молча менять смысл), испорченное дополнение ISO 7816-4 даёт
+  `IllegalArgumentException`, как у PKCS#7. `Cmac` пользуется
+  `writePadding` без выделений. Бинарная совместимость нарушена.
+
+- **\[CHANGE\] Размеры блока, ключа, тега и ICN определены один раз.**
+
+  Было: числа 16 и 32 повторялись в `Cipher`, `Mgm`, `MgmCipher`,
+  `AuthenticatedCipher`, `KeyExport` и SPI.
+
+  Стало: размеры берутся из `Kuznyechik` и `MgmCipher`.
+
+- **\[CHANGE\] Параметры scrypt по умолчанию названы, N снижен с 2¹⁹ до
+  2¹⁷.**
+
+  Было: `KeyGenerator.deriveKey(password, salt)` содержал число `524288`
+  и выделял одним массивом 512 МиБ, на Android 14+ с ограниченной кучей
+  это могло приводить к `OutOfMemoryError`; javadoc `SCrypt`
+  рекомендовал другое значение.
+
+  Стало: параметры названы (`SCRYPT_N_DEFAULT`, `SCRYPT_R_DEFAULT`,
+  `SCRYPT_P_DEFAULT`), N = 2¹⁷ (128 МиБ, минимум OWASP при r = 8, p =
+  1), рекомендации согласованы; для большей стойкости N передаётся явно.
+  Ключи, выведенные с прежними параметрами, не совпадут: для прежних
+  данных передайте N = 524288 явно.
+
+- **\[CHANGE\] `AuthenticatedStream.sealing` возвращает `SealingStream`
+  с методом `finish()`.**
+
+  Было: последний чанк писал только `close()`, закрывающий нижний поток;
+  встроить защищённый поток в сокет без собственной обёртки было нельзя.
+
+  Стало: `finish()` пишет последний чанк, делает flush, затирает ключи и
+  нижний поток не закрывает. Бинарная совместимость нарушена, исходный
+  код совместим.
+
+- **\[CHANGE\] Классы с ключами и режимы стали `final`.**
+
+  Было: `SymmetricKey`, `ParametersWithIV`, `Hmac`, `Cmac`, `Ctr`,
+  `Cfb`, `Ofb`, `Cbc`, `Streebog256`, `Streebog512` наследовались;
+  подкласс мог переопределить `getKey()` и `destroy()`.
+
+  Стало: `final`.
+
+- **\[CHANGE\] `Signature.verify`, `verifyHash` и `DigestSigner.verify`
+  возвращают `false` на подписи неверной длины.**
+
+  Было: подпись неверной длины, пустая или `null` приводила к
+  `IllegalArgumentException` (при `r` и `s` вне диапазона уже
+  возвращалось `false`), и вызывающий на недоверенном входе обязан был
+  ловить исключение.
+
+  Стало: для таких подписей возвращается `false`; неверная длина хэша,
+  `null`-ключ и уничтоженный ключ по-прежнему дают исключение. JCA
+  `java.security.Signature.verify` бросает `SignatureException` на
+  подписи неверной длины, как у JDK (`GostSignatureSpi` проверяет длину
+  сам). Добавлен `SignatureCodec.hasValidLength`, длина компоненты
+  `rolen` вычисляется в одном месте.
+
+- **\[CHANGE\] Строгий разбор PrivateKeyInfo, общий для
+  `decodePrivateKey` и `checkNotMasked`.**
+
+  Было: разбор BER-терпимый (неопределённая длина, байты после
+  структуры), лишние элементы после ключа принимались молча,
+  `checkNotMasked` версию не проверял и разбирал структуру отдельно от
+  `decodePrivateKey`; пустые параметры алгоритма давали
+  `ArrayIndexOutOfBoundsException`, лишний элемент в
+  `AlgorithmIdentifier` проходил, OID алгоритма подписи не сверялся с
+  размером кривой.
+
+  Стало: только DER с определённой длиной, без хвоста; версия 0
+  допускает `[0] attributes`, версия 1 `[0]` и `[1]` в этом порядке;
+  иные версии, элементы, порядок и повторы отвергаются;
+  `AlgorithmIdentifier` содержит ровно OID и параметры (один или два
+  элемента), OID подписи должен соответствовать размеру кривой, всё
+  отвергается `IllegalArgumentException`; оба метода пользуются одним
+  разбором.
+
+- **\[CHANGE\] `ECDSASigner.verifySignature` при конкурентном изменении
+  подписанта бросает `IllegalStateException`.**
+
+  Было: вердикт мог быть посчитан по смеси двух состояний (например,
+  таблицы одной кривой и модуль другой), в том числе неверное `false`.
+
+  Стало: исключение вместо вердикта. `Signature.verify` и `verifyHash`
+  создают проверяющего на каждый вызов и поведения не меняют, исключение
+  увидят только прямые пользователи `ECDSASigner` и `DigestSigner`.
+
+- **\[CHANGE\] `ECDSASigner` отвергает хэш неверной длины и фабрику
+  дайджеста, не совпадающую с кривой.**
+
+  Было: `generateSignature` и `verifySignature` принимали хэш любой
+  длины, а подпись принимала дайджест короче порядка кривой (нонс
+  получался короче порядка, его старшие биты были известны, и ключ
+  восстанавливался решёточной атакой).
+
+  Стало: `IllegalArgumentException` при длине хэша, не равной
+  `ECParameters.hlen`, и при подписи с фабрикой, размер дайджеста
+  которой не совпадает с кривой. Режим проверки подписи фабрику не
+  использует и не затронут. Javadoc `GostSigner` фиксирует контракт:
+  детерминированный нонс зависит только от `(d, e)`, случайный берётся
+  из криптостойкого источника; `signHash` назван оракулом подписи, его
+  нельзя отдавать недоверенной стороне.
+
+- **\[CHANGE!\] Несовместимое изменение: удалены
+  `RuntimeCryptoException` и 12 неиспользуемых методов `Pack`; `Pack`
+  стал `final`.**
+
+  Ранее публичный API `crypto-gost-core` содержал класс
+  `RuntimeCryptoException` и методы `Pack`, которые не вызывались нигде
+  в репозитории (основной код, тесты, примеры, bench, кросс-модули):
+  `bigEndianToInt`, `intToBigEndian`, `bigEndianToLong`,
+  `longToBigEndian`, `longToLittleEndian` (обе перегрузки),
+  `intToLittleEndian`, `littleEndianToInt` (обе перегрузки),
+  `littleEndianToLong` (обе перегрузки) и пятиаргументный `xorBlock`.
+  `Pack` был объявлен как `public abstract class` без приватного
+  конструктора и допускал наследование.
+
+  Стало: остались `xorBlock(byte[], byte[], int)`, `reverseBytes` и
+  `toFixedLengthBigEndian`; `Pack` объявлен как `final` с приватным
+  конструктором (как остальные утилитные классы), добавлено описание
+  класса. Если код пользователя использовал удалённые методы, их нужно
+  заменить собственными функциями.
+
+- **\[CHANGE!\] Несовместимое изменение: `Cmac` принимает только
+  `Kuznyechik`, публичный конструктор `Cbc(BlockCipher)` удалён.**
+
+  Ранее `Cmac` и `Cbc` принимали любой `BlockCipher`, в том числе режимы
+  (`Cfb`, `Ctr`, `Ofb`): отказ наступал поздно и невнятно, в
+  `Cmac.init`, а таблица полиномов для размеров блока, которых в
+  библиотеке нет, оставалась мёртвым кодом. Остальные режимы (`Cfb`,
+  `Ctr`, `Ofb`, `Mgm`) уже принимали только `Kuznyechik`.
+
+  Стало: конструкторы `Cmac(Kuznyechik)` и `Cmac(Kuznyechik, int)`,
+  `Cbc` принимает только `Kuznyechik`; таблица `POLY_*` и `lookupPoly`
+  заменены константой остатка многочлена GF(2¹²⁸) (`0x87`, RFC 4493
+  §2.3). Результат CMAC не меняется.
+
+- **\[SECURITY:P2\] JCA-шифры `Kuznyechik/MGM` и
+  `Kuznyechik/CTR-ACPKM-OMAC` копят вход за линейное время, а не за
+  квадратичное.**
+
+  Ранее каждый `update` выделял буфер ровно на накопленное плюс новый
+  ввод и копировал в него всё прежнее: при потоковой подаче блоками по 8
+  КиБ (`CipherOutputStream`) 16 МиБ шифровались 5-6 секунд. Кроме того,
+  `getOutputSize` мог вернуть отрицательное число на огромной длине
+  ввода, а отказ по размеру в `CTR-ACPKM-OMAC` не затирал накопленный
+  буфер.
+
+  Стало: ёмкость буфера растёт удвоением, прежний массив затирается при
+  росте, 16 МиБ тех же блоков обрабатываются за 0,7-0,9 секунды (64 МиБ
+  за 3-3,5 секунды); `getOutputSize` не переполняется, отказ по размеру
+  затирает буфер. При расшифровании MGM убрана лишняя копия шифртекста.
+  Цена: ёмкость буфера может вдвое превышать размер сообщения, а в
+  момент роста в памяти одновременно старый и новый массивы. Сообщение
+  по-прежнему целиком остаётся в памяти до `doFinal`: тег проверяется до
+  выдачи открытого текста. Обычный `CTR-ACPKM` потоковый и не изменился.
+  Результаты шифрования и расшифрования те же.
+
+- **\[CHANGE\] `ECPoint.add` объединён с вариантом для `a ≠ −3`,
+  документация приведена к реальной формуле.**
+
+  Ранее два метода сложения дублировали одну формулу, Javadoc ссылался
+  на алгоритмы, которых в коде нет, а комментарии называли кофактор 4
+  только у TC26-C-512 (он есть и у TC26-A-256).
+
+  Стало: один `add` на формуле EFD add-1998-cmo-2 (12M + 4S), формула
+  общая с `addDistinct`; групповые результаты не изменились. Координаты
+  бесконечности после `add` не определены, проверять нужно только
+  `isInfinity()`: на TC26-A-256 и TC26-C-512 `add(P, −P)` теперь
+  возвращает `(X, Y, 0)` вместо `(0, 0, 0)`. Сложение на этих кривых
+  выделяет меньше памяти, на TC26-C-512 немного быстрее.
+
+- **\[DOCS\] Исправлено описание ADR-01 про `BigInteger` в подписи ГОСТ
+  Р 34.10-2012.**
+
+  Ранее ADR утверждал, что умножение имеет фиксированную длину
+  операндов, чтение бит `testBit` не ветвится, детерминизм `k`
+  (RFC 6979) защищает от статистических атак, ни один провайдер не
+  считает `s` в поле порядка, а оценка «≈1 нс» и «10⁶ подписей»
+  обоснована; описание копий `d` отставало от кода. Комментарий в
+  `ECDSASigner` называл лестницу выполняющейся за постоянное время.
+
+  Стало: описаны реальные зависимости от значений (переносы и деление
+  Кнута, переход по биту в `testBit` и `? 1 : 0`), остаточный риск при
+  чтении бит `k`, довод про детерминизм `k` снят (повторная подпись даёт
+  тот же `k` и позволяет усреднять шум), отмечено, что SunEC считает `s`
+  в поле порядка, а `FieldElement` с модулем n позволил бы сделать то
+  же; решение оставить `BigInteger` записано как отложенное, а не
+  вынужденное. Недоказанные цифры удалены, перечислены копии `d` и `k`.
+  Поведение библиотеки не изменилось.
+
+- **\[PERF\] Ускорены скалярное умножение, подпись и проверка ГОСТ Р
+  34.10-2012.**
+
+  Ранее лестница Монтгомери на каждой итерации выполняла полное сложение
+  с вложенным удвоением, `shiftLeft` считался умножением Монтгомери, на
+  итерацию приходилось два обмена регистров, а wNAF-таблица для базовой
+  точки строилась и при подписи.
+
+  Стало: в лестнице используется сложение без вложенного удвоения,
+  `shiftLeft` выполняется удвоениями, обмен регистров один на итерацию,
+  wNAF-таблица строится только при проверке подписи. Проверку ускорили
+  более дешёвые `twice()` и `add()`, подпись - лестница и отказ от
+  построения таблицы. Подпись быстрее на 93 % (256 бит) и 136 % (512
+  бит), проверка - на 50 % и 80 %, `ECPoint.multiply` - в 2,1-2,35 раза,
+  аллокации на подпись меньше на 45-46 %.
+
+- **\[CHANGE\] `ECPoint.multiply` отвергает недопустимый скаляр:
+  поведение публичного API.**
+
+  Ранее `null` давал `NullPointerException`, отрицательный скаляр
+  обрабатывался через `testBit` в дополнительном коде, а старшие биты
+  слишком длинного скаляра молча отбрасывались.
+
+  Стало: `IllegalArgumentException` при `null`, `k < 0` и
+  `k.bitLength() > n.bitLength()`; `k = n` и `k = n + 1` допустимы,
+  `k = 0` даёт бесконечность.
+
+- **\[CHANGE\] Бесконечная точка из `ECPoint.multiply` определяется
+  только через `isInfinity()`.**
+
+  Ранее на TC26-A-256 и TC26-C-512 сумма `P + (−P)` в лестнице давала
+  `(0, 0, 0)`.
+
+  Стало: `(X, Y, 0)` с произвольными `X` и `Y`, как уже было на
+  остальных кривых; `getX()` и `getY()` у такой точки смысла не имеют.
+
+- **\[PERF\] Повторные проверки подгруппы открытого ключа убраны: полная
+  проверка выполняется один раз, в конструкторе `PublicKeyParameters`.**
+
+  Ранее после конструктора `PublicKeyParameters` те же
+  `isValidPublicKey()` повторяли `GostDerCodec.decodePublicKey` и три
+  метода `KeyAgreement`; на кривых с кофактором 4 (TC26-A-256,
+  TC26-C-512) каждый повтор — ещё одно скалярное умножение
+  `multiply(n)`. `KeyGenerator` и `Signature.derivePublicKey` проверяли
+  подгруппу и у точки `d·G`, которая лежит в ней по построению.
+
+  Стало: проверка оставлена в конструкторе, повторы удалены
+  (`PublicKeyParameters` и `ECPoint` неизменяемы, других путей создания
+  ключа нет). Генерация ключа и вывод открытого ключа на кривых с
+  кофактором 4 выполняются быстрее; точные цифры будут получены
+  измерением.
+
+- **\[CHANGE\] Преобразование `BigInteger` в массив фиксированной длины
+  строгое; добавлен `Pack.toFixedLengthBigEndian`.**
+
+  Ранее пять независимых копий преобразования (`KeyAgreement`,
+  `GostDerCodec`, `TlsEncoding`, `ECDSASigner`, `TlsSignatureCodec`)
+  молча усекали значение слева, а отрицательное число теряло знак и
+  превращалось в положительное (`-1` в 255).
+
+  Стало: общий помощник `Pack.toFixedLengthBigEndian` бросает
+  `IllegalArgumentException` для отрицательного значения, значения шире
+  `len` байт и `len <= 0`, всегда возвращает новый массив и затирает
+  свою временную копию `toByteArray()`; тем же помощником пользуется
+  `PrivateKeyParameters`. Из `TlsEncoding` удалён package-private
+  `toFixedLengthBytes`.
+
+- **\[SECURITY:P1!\] `ECParameters` проверяет `hlen`: несовместимое
+  изменение публичного конструктора.**
+
+  Ранее `hlen` не проверялся, и для 512-битной кривой с `hlen = 32`
+  секрет и скаляр молча усекались.
+
+  Стало: `hlen` должен быть 32 или 64 и совпадать с длиной в байтах
+  модуля поля и порядка подгруппы, иначе `IllegalArgumentException`;
+  зарегистрированные кривые проходят проверку. Длина закрытого ключа в
+  `KeyGenerator` берётся из порядка подгруппы.
+
+- **\[CHANGE\] `ECPoint.affine` отвергает координаты вне `[0, p)`:
+  поведение публичного API.**
+
+  Ранее координаты приводились по модулю `p`.
+
+  Стало: `IllegalArgumentException`; вызовы внутри библиотеки передают
+  канонические значения.
+
+- **\[PERF\] JCA-подпись ГОСТ Р 34.10-2012 хэширует сообщение
+  потоково.**
+
+  Ранее все данные копились в памяти (`ByteArrayOutputStream`, затем ещё
+  одна копия при подписи), поэтому размер подписываемых данных
+  ограничивался памятью.
+
+  Стало: данные сразу подаются в Стрибог-256 или Стрибог-512, а подпись
+  и проверка выполняются через `Signature.signHash` и
+  `Signature.verifyHash`; в памяти остаётся только состояние дайджеста,
+  его рабочие буферы затираются после каждой подписи и проверки.
+
+- **\[CHANGE!\] `DerCodec.parseBoolean` и `GostDerCodec.decodePublicKey`
+  строже: несовместимое изменение.**
+
+  Ранее `parseBoolean` принимал любой ненулевой октет как TRUE, а
+  `decodePublicKey` не читал OID алгоритма и принимал наследный OID ГОСТ
+  Р 34.10-2001.
+
+  Стало: `parseBoolean` принимает только `0x00` и `0xFF`;
+  `decodePublicKey` принимает только OID `1.2.643.7.1.1.1.1` и
+  `1.2.643.7.1.1.1.2`, ключи с `1.2.643.2.2.19` и SPKI с нарушением RFC
+  9215 (например, `digestParamSet` у TC26-B/C/D-256 или его отсутствие у
+  CryptoPro и XchA) отвергаются.
+
+- **\[SECURITY:P1!\] `AuthenticatedCipher`: ключи CTR и CMAC разделены,
+  предел по числу сообщений поднят с ≈2¹⁶ до ≈2⁴⁸.**
+
+  Ранее один ключ использовался и для CTR, и для CMAC, а случайный IV из
+  8 байт ограничивал безопасное число сообщений на ключ примерно 2¹⁶
+  (совпадение IV повторяет гамму); предел нигде не был указан.
+
+  Стало: из мастер-ключа и случайной 16-байтной соли через KDF\_TREE
+  выводятся отдельные ключи CMAC и CTR; тег считается от
+  `версия ‖ соль ‖ шифртекст` и проверяется до расшифрования. Формат
+  пакета `[версия 0x01][соль 16][CMAC 16][шифртекст]`, накладные расходы
+  33 байта вместо 24. Безопасно не более ≈2⁴⁸ сообщений на ключ. Пакеты
+  прежнего формата не принимаются (несовместимое изменение). Вынесена
+  общая функция вывода пары ключей для `AuthenticatedCipher` и
+  `AuthenticatedStream`. Мастер-ключ длиной не 32 байта по-прежнему
+  отвергается (`IllegalArgumentException`): проверка перенесена в
+  функцию вывода ключей, так как Кузнечик больше не видит мастер-ключ.
+
+- **\[CHANGE!\] `PrivateKeyParameters` отвергает `d ≤ 0` и `d ≥ n` по
+  исходному значению.**
+
+  Ранее `d` нормализовался в `byte[]` до проверки диапазона: `2²⁵⁶+5`
+  усекалось до `5`, а знак терялся (`-1` становилось `255`), неверный
+  скаляр проходил как валидный ключ.
+
+  Стало: диапазон проверяется до сериализации, нарушение даёт
+  `IllegalArgumentException`. Нарушение совместимости: конструктор с
+  отрицательным или слишком большим `d` больше не нормализует значение,
+  а бросает исключение.
+
+- **\[CHANGE!\] `CTR-ACPKM-OMAC` переведён на схему RFC 9337 (MAC по
+  открытому тексту, шифруется `M ‖ MAC`).**
+
+  Ранее `CtrAcpkmMode.encryptWithMac`/`decryptWithMac` и JCA-шифр
+  `Kuznyechik/CTR-ACPKM-OMAC` считали CMAC по шифртексту
+  (Encrypt-then-MAC) и дописывали тег открыто: формат не совпадал с RFC
+  9337 §5.1.1 и с gost-engine, файл эталона не расшифровывался.
+
+  Стало: CMAC считается по открытому тексту, тег шифруется продолжением
+  того же потока CTR-ACPKM (в том числе после смены ключа ACPKM).
+  Нарушение совместимости: прежний формат не читается. `getMacTag()`
+  заменён на `finishEncryption()` и `verifyEncryptedTag(byte[])`;
+  публичные `CtrAcpkmMode.deriveContentKeys` и `computeCmac` удалены
+  (единственный потребитель `CmsOmacHelper` использует режим с OMAC).
+  Формат подтверждён эталонным gost-engine (master) в обе стороны:
+  кросс-валидация PBES2-OMAC запускается при заданных свойствах
+  `openssl.reference.*`, без них пропускается; известный ответ эталона
+  закреплён в юнит-тесте.
+
+- **\[SECURITY:P1!\] UKM обязателен в `CtrAcpkmMode`, длина проверяется
+  по режиму.**
+
+  Ранее `ukm == null` молча давал нулевой IV (одна и та же гамма на
+  ключ), для режима без OMAC принимался любой UKM не короче 8 байт без
+  проверки.
+
+  Стало: `null` даёт `IllegalArgumentException`, голый `SymmetricKey`
+  без UKM не принимается; `CTR-ACPKM` требует не менее 8 байт,
+  `CTR-ACPKM-OMAC` - ровно 16. Нарушение совместимости: `encryptOnly` и
+  `decryptOnly` с `null` вместо UKM больше не работают.
+
+- **\[DOCS\] Исправлены описание ADR-06 и ссылки на стандарты по
+  CTR-ACPKM.**
+
+  Ранее ADR-06 утверждал, что UKM в `Kuznyechik/CTR-ACPKM`
+  детерминирован и снимает риск коллизии; ACPKM приписывался ГОСТ Р
+  34.13-2015 §6.2.
+
+  Стало: в SPI UKM случайный, граница коллизии без OMAC ≈2³² (безопасный
+  предел ≈2¹⁶ сообщений на ключ), уникальность UKM обязательна во всех
+  вариантах; ссылки заменены на Р 1323565.1.017-2018 и RFC 8645.
+
+- **\[CHANGE!\] Несовместимое изменение: данные CFB и OFB, зашифрованные
+  прежней версией неполными порциями `update`, не расшифруются.**
+
+  Ранее такой шифртекст был нестандартным (в OFB без остатка гаммы
+  блока, в CFB с искажённым регистром обратной связи); round-trip
+  прежней версией той же нарезкой проходил.
+
+  Стало: шифртекст соответствует ГОСТ Р 34.13-2015, поэтому данные,
+  полученные прежней версией через `update` с порциями не кратными 16
+  байтам, ни новая версия, ни OpenSSL не расшифруют. Данные,
+  зашифрованные одним `doFinal` или порциями, кратными 16 байтам, не
+  затронуты. CBC-расшифрование с padding через `update` отдаёт на блок
+  меньше: последний блок выдаётся в `doFinal`.
+
+- **\[SECURITY:P1!\] Несовместимое изменение: шифр Кузнечика в JCA после
+  `doFinal` требует нового `init`.**
+
+  Ранее повторный `doFinal` без `init` не сбрасывал шифр и продолжал
+  поток (в CTR, CFB и OFB гамма шла дальше, в CBC продолжалась цепочка),
+  поэтому расшифрование второго сообщения молча давало мусор; в MGM
+  данные накапливались без отказа до следующего `doFinal`. Блокировка
+  нужна и потому, что сброс шифра по контракту JCA повторил бы IV под
+  тем же ключом (CTR и OFB - та же гамма и XOR открытых текстов, CFB -
+  XOR первых блоков, CBC - общий префикс из целых блоков).
+
+  Стало: после успешного шифрования (`Kuznyechik/CTR`, `CFB`, `OFB`,
+  `CBC`) любой `update` или `doFinal` бросает `IllegalStateException` до
+  нового `init`; `getIV()` остаётся доступным. `Kuznyechik/MGM` требует
+  нового `init` в обе стороны, в том числе после ошибки тега, и `update`
+  после завершения бросает сразу, а не при следующем `doFinal`.
+  Расшифрование возвращается в состояние после `init`, как требует
+  контракт JCA. Повтор пары (ключ, IV) при `init` на шифрование
+  отвергается, см. отдельную запись ниже.
+
+- **\[SECURITY:P1!\] Несовместимое изменение: `init` на шифрование с
+  теми же ключом и IV (ICN) отвергается во всех режимах JCA.**
+
+  Ранее явный `init(ENCRYPT, key, sameIv)` на том же экземпляре `Cipher`
+  принимался и молча повторял гамму (CTR, OFB), первые блоки (CFB),
+  давал предсказуемый IV (CBC) или повтор ICN (MGM); защита была только
+  в `Kuznyechik/CTR-ACPKM`.
+
+  Стало: `GostCipherSpi` (CTR, CFB, OFB, CBC) и `GostMgmCipherSpi`
+  бросают `InvalidAlgorithmParameterException`, если на этой паре уже
+  выдан шифртекст. Режим WRAP считается шифрованием, сгенерированный IV
+  входит в пару, расшифрование не проверяется. Проверка действует в
+  пределах экземпляра и помнит последнюю использованную пару (после A,
+  затем B пара A снова принимается); уникальность IV между экземплярами
+  обеспечивает вызывающий (новый экземпляр с тем же IV работает).
+
+- **\[SECURITY:P1!\] Несовместимое изменение: MGM отвергает пустой
+  открытый текст при пустом AAD (RFC 9058 §6).**
+
+  Ранее при пустых открытом тексте и AAD тег равнялся `E_K(0)` и не
+  зависел от ICN: один перехваченный тег принимался под любым ICN (обход
+  уникальности nonce, повтор сообщения под другим номером). TLS не
+  затронут: AAD записи — 5-байтовый заголовок.
+
+  Стало: `Mgm.finishEncryption` бросает `IllegalArgumentException`,
+  `Mgm.finishDecryption` - `AuthenticationException` (в JCA -
+  `AEADBadTagException`); то же для `MgmCipher.seal`, `sealWithIcn` и
+  `open`. Пустой открытый текст с непустым AAD работает. Javadoc
+  `Mgm.reinitICN` описывает требование уникальности ICN.
+
+- **\[CHANGE!\] Несовместимое изменение API:
+  `ISO7816d4Padding.padCount(byte[], int)`, класс `final`.**
+
+  Ранее `padCount(byte[])` принимал весь расшифрованный буфер, класс был
+  открытым и допускал создание экземпляров.
+
+  Стало: `padCount(byte[] in, int blockSize)` проверяет последний блок;
+  класс `final` с закрытым конструктором. Вызывающий код компилируется
+  после замены вызова. `AuthenticatedStream.opening` на пустом или
+  неполном заголовке потока теперь бросает `AuthenticationException`, а
+  не `IOException`.
+
+- **\[CHANGE!\] Несовместимое изменение: ряд ранее принимавшихся OID и
+  имён больше не принимается или означает другое.**
+
+  Ранее `GostCurves` принимал OID `1.2.643.2.2.38.0` как XchB (с
+  параметрами CryptoPro-B); провайдер отдавал
+  `Cipher.getInstance("1.2.643.7.1.1.5.1")` как Kuznyechik-MGM и
+  `KeyAgreement.getInstance("1.2.643.7.1.1.6.2")` как `ECDHGOST2012`.
+
+  Стало: `1.2.643.2.2.38.0` - неизвестный набор параметров
+  (`IllegalArgumentException`), а OID XchB `1.2.643.2.2.36.1` задаёт
+  параметры CryptoPro-C, а не B; оба алиаса провайдера отсутствуют
+  (`NoSuchAlgorithmException`), вместо них используйте имена
+  `Kuznyechik-MGM` и `ECDHGOST2012` (для согласования по идентификатору
+  `1.2.643.7.1.1.6.2` нужна схема VKO с UKM, см.
+  `KeyAgreement.vkoGostR3410_2012_512`). Имена кривых теперь находятся в
+  любом регистре, а раньше только в том написании, которое записано в
+  реестре.
+
+- **\[CHANGE!\] Несовместимое изменение: ключ PBKDF2 для паролей с
+  символами вне BMP, отвергаются непарные суррогаты.**
+
+  Ранее ключ, выведенный JCA `PBKDF2WithHmacStreebog512` из пароля с
+  символами вне BMP, был получен из CESU-8, а пароли с непарным
+  суррогатом принимались.
+
+  Стало: ключ для таких паролей соответствует UTF-8; данные, защищённые
+  прежним ключом, можно открыть, только повторно выведя ключ по прежнему
+  правилу. Для паролей в BMP ключ не меняется. Непарный суррогат
+  отвергается (`InvalidKeySpecException`).
+
+- **\[SECURITY:P2\] Нонс `k` привязан к кривой: один закрытый ключ на
+  разных кривых больше не даёт общий нонс.**
+
+  Было: затравка HMAC-DRBG зависела от `(d, e)`, кривая в неё не
+  входила; один ключ и один хэш на двух кривых одной длины могли дать
+  общий `k` - опасный класс, безопасность которого не доказана, а API
+  использование одного ключа на нескольких кривых не запрещает.
+
+  Стало: после `int2octets(e)` во вход HMAC на шагах d и f добавлен
+  идентификатор кривой (Стрибог-256 от канонической записи параметров
+  `p, a, b, Gx, Gy, n, hlen, cofactor`, RFC 6979 §3.6), `k` зависит от
+  `(d, e, кривая)`. Ранее выработанные подписи остаются верными, но
+  детерминированная подпись того же хэша тем же ключом теперь имеет
+  другие `(r, s)`: побайтная воспроизводимость прежних подписей
+  теряется. `GostSigner`: контракт нонса уточнён (зависимость от
+  параметров кривой).
+
+- **\[CHANGE!\] Подпись по умолчанию вероятностная: гибридный нонс
+  включён по умолчанию во всём публичном API.**
+
+  Было: нонс `k` вырабатывался детерминированно, подпись одного хэша тем
+  же ключом всегда была одной и той же: сбойная и верная подписи одного
+  сообщения раскрывали `d`, шум тайминга по одному `k` можно было
+  усреднять, равенство сообщений было видно по равенству подписей.
+
+  Стало: `NonceMode.DEFAULT = HEDGED`. `ECDSASigner(factory)`,
+  `Signature.sign`, `Signature.signHash`, `GostSigner.of(priv)`, JCA,
+  `TlsSignatureCodec.sign` и подписи pkix подмешивают в нонс свежие
+  случайные байты (`CryptoRandom.INSTANCE`), поэтому подпись одного и
+  того же хэша каждый раз другая, и все они верны. Ранее выданные
+  подписи остаются верными: проверка от нонса не зависит. Теряется
+  побайтная воспроизводимость: `Signature.sign(data)` по умолчанию не
+  совпадает с `Signature.signHash(hash(data))`, собранные дважды
+  сертификат, CSR, CRL, CMS и ответ OCSP различаются значением подписи.
+  Прежнее поведение задаётся явно: `NonceMode.DETERMINISTIC` (перегрузки
+  `Signature`, `GostSigner.of(priv, mode)`, в JCA
+  `GostSignatureParameterSpec`,
+  `new ECDSASigner(factory, NonceMode.DETERMINISTIC, null)`). Одиночный
+  сбойный нонс и сбой в `k·G` по-прежнему не закрыты, кэш-тайминг по `d`
+  тоже (риск снижен, не закрыт), см. ADR 01, ADR 07. Цена по замеру
+  `SignatureBench`: на 256 битах подпись медленнее примерно на 6% (≈43
+  мкс из ≈634 мкс), на 512 битах разницы не видно.
+
+### Добавлено
+
+- **\[FEATURE\] `GostLogger.withContext(String)`: префикс соединения в
+  записях.**
+
+  Записи одного соединения помечаются `[conn#N]`; имя JUL-логгера и
+  настройка уровня не меняются. `null` и пустая метка означают «без
+  префикса», управляющие символы и скобки в метке отвергаются. Префикс
+  строится только после проверки уровня, поэтому при выключенном журнале
+  лишних строк нет.
+
+- **\[FEATURE\] Внешний AAD в `AuthenticatedStream` и
+  `AuthenticatedCipher`: `sealing`, `opening`, `seal`, `open` с
+  параметром `aad`.**
+
+  Было: привязать поток или пакет к контексту (имя файла, получатель,
+  номер сообщения) было нечем, контекст приходилось класть в открытый
+  текст.
+
+  Стало: AAD передаётся последним параметром; короткие формы, пустой
+  массив и `null` равнозначны. AAD не пишется в выход и входит в
+  затравку KDF\_TREE (`соль ‖ aad`, `streamNonce ‖ aad`), поэтому формат
+  и версии не меняются, а при пустом AAD данные прежние. Неверный AAD
+  неотличим от неверного ключа. README core объясняет, что такое AAD и
+  что в него класть.
+
+- **\[FEATURE\] Добавлен публичный `SafeText` для обезвреживания
+  недоверенного текста в журнале; `CoreSilenceTest` проверяет, что core
+  в журнал не пишет.**
+
+  Стало: `SafeText` (адрес без учётных данных и параметров запроса,
+  печатный ASCII с пределом длины) лежит в базовом модуле и открыт
+  приложению: tls13 и jsse не тянут внутренний пакет pkix.
+  `printableAscii(String, int maxLength)` задаёт свой предел, `null`
+  даёт `"null"`. Тест `CoreSilenceTest` по байткоду проверяет, что core
+  в журнал и консоль не пишет. Раздел «Логирование» README core
+  описывает уровни, включение и то, что не попадает в журнал.
+
+- **\[TESTS\] Тесты `Streebog`: векторы RFC 6986 §10 в записи стандарта,
+  замороженные эталоны, границы буферизации, сложение по модулю 2⁵¹².**
+
+  Было: «пример 2» в `HMacTest` подавал M2 в записи RFC без переворота
+  байт, а ожидание было снято с BC, поэтому пример стандарта не
+  проверялся; затирание рабочих буферов проверялось по именам полей.
+
+  Стало: RFC печатает сообщение и хэш старшим байтом вперёд, тест
+  переворачивает вход и выход (M1 и M2, 256 и 512 бит); новый
+  `StreebogTest` сверяет хэши с эталонами прежней реализации на
+  граничных длинах и по сводному значению для длин 0…300 (три набора
+  данных, включая все `0xFF`), проверяет подачу `update(byte)`, кусками
+  и пустыми вызовами, повторное использование объекта, `reset()` и
+  `destroy()` посреди потока, границы аргументов, перенос при сложении
+  `N` и `Σ` против `BigInteger`; затирание проверяется по всем
+  полям-массивам и не зависит от их имён.
+
+- **\[FEATURE\] `Pack.writeInt`, `readInt`, `writeLong`, `readLong`,
+  `writeFixedLengthBigEndian` и
+  `ConstantTime.equals(byte[], int, byte[], int, int)`.**
+
+  Было: запись и чтение целых в big-endian повторялись вручную (в том
+  числе в `AuthenticatedStream`), а теги сравнивались только целыми
+  массивами, поэтому перед сравнением их копировали.
+
+  Стало: общие методы `Pack` и сравнение диапазонов без раннего выхода;
+  границы проверяются до сравнения.
+
+- **\[FEATURE\] `KeyAgreement.VKOGOST3410-2012-512` в JCA (OID
+  1.2.643.7.1.1.6.2).**
+
+  Было: VKO на 512 бит был только в `api.KeyAgreement`, два SPI
+  согласования ключа повторяли друг друга почти целиком.
+
+  Стало: JCA-согласование с результатом 64 байта; на 256-битном ключе
+  `init` бросает `InvalidKeyException`; общий базовый класс для ECDH,
+  VKO-256 и VKO-512.
+
+- **\[FEATURE\] `destroy()` и `AutoCloseable` у `Digest` и `CmacApi`,
+  `destroy()` у `Signer` и `DigestSigner`.**
+
+  Было: ipad и opad HMAC, расписание ключа CMAC и копию закрытого ключа
+  в подписанте нельзя было затереть; `CmacApi.destroy` был закрытым.
+
+  Стало: публичный идемпотентный `destroy()`, после него экземпляр
+  непригоден для всех алгоритмов. В javadoc ключей записано: `destroy()`
+  не должен пересекаться с операциями над ключом.
+
+- **\[FEATURE\] Чтение PKCS#8 версии 1 (OneAsymmetricKey, RFC 5958) с
+  `[1] publicKey`.**
+
+  Было: `GostDerCodec.decodePrivateKey` принимал только версию 0
+  (`Unsupported PKCS#8 version: 1`), поэтому ключ из эталонного PFX RFC
+  9548 (пример A.2) не загружался, в том числе через `KeyFactory`.
+
+  Стало: версия 1 принимается: `[1] publicKey` обязателен (первый октет
+  0x00 или 0x01, затем точка x‖y), открытый ключ сверяется с вычисленным
+  из d, при несовпадении ключ отвергается. Запись по-прежнему даёт
+  версию 0 без открытого ключа.
+
+- **\[FEATURE\] Выбор режима нонса в публичном API и в JCA.**
+
+  Было: `Signature.sign`, `Signature.signHash`, `GostSigner.of` и
+  JCA-подпись режим нонса не принимали.
+
+  Стало: `Signature.sign(data, priv, mode)` и
+  `Signature.sign(data, priv, mode, SecureRandom)`; то же для
+  `signHash`; `GostSigner.of(priv, mode)`; в JCA
+  `Signature.setParameter(new GostSignatureParameterSpec(mode))` (новый
+  класс в `org.rssys.gost.jca.spec`; режим сохраняется между `initSign`
+  и меняется только новым `setParameter`; `null` и чужой spec дают
+  `InvalidAlgorithmParameterException`; `getParameters()` возвращает
+  `null`). Источник случайности гибридного режима в JCA задаётся
+  стандартно, `initSign(key, random)`; формы `initSign(key)` и
+  `initVerify` сбрасывают его. Для детерминированного режима источник
+  игнорируется и не вызывается; длина хэша проверяется до обращения к
+  источнику.
+
+- **\[FEATURE\] `NonceMode` и гибридный нонс в `ECDSASigner`.**
+
+  Было: нонс `k` только детерминирован, подпись одного хэша тем же
+  ключом всегда одна и та же, поэтому сбойная и верная подписи одного
+  сообщения раскрывают `d`, а шум тайминга по одному `k` можно
+  усреднять.
+
+  Стало: `ECDSASigner(factory, NonceMode.HEDGED, SecureRandom)`
+  подмешивает в затравку свежие случайные байты `Z` длиной `rolen` по
+  образцу черновика `draft-irtf-cfrg-det-sigs-with-noise-05` (одно `Z`
+  на шагах d и f, дополнение нулями до границы блока Стрибога, `Z`
+  затирается, при отказе источника случайности подписи нет и отката на
+  детерминизм нет). `NonceMode.DETERMINISTIC` побайтно равен прежнему
+  поведению; умолчание гибридное (см. запись «Изменено» про смену
+  умолчания). Раскладка сверена с независимым эталоном на BouncyCastle
+  на 7 кривых, 15 мутаций убиты. ADR 07 переписан по существу (в том
+  числе исправлено смешение RFC 6979 §3.6 и гибрида), ADR 08 описывает
+  инварианты обоих режимов.
+
+- **\[TESTS\] Замороженные эталоны подписи и тесты гонки подписанта, ADR
+  08.**
+
+  `FrozenSignatureVectorsTest` фиксирует `(r, s)` на всех 7 кривых для
+  малого и полноразмерного ключей и подписи публичного API: любое
+  изменение выработки `k` или кодирования подписи видно сразу (подпись с
+  иным `k` остаётся верной, поэтому проверки свойств её не замечают).
+  `ECDSASignerRaceTest` воспроизводит гонку детерминированно (повторный
+  вход из дайджеста: `destroy()` и `init()` на ключ другой кривой
+  посреди подписи) и стресс-тестами подписи и проверки. ADR 08 описывает
+  оба пути утечки, что именно обеспечивает безопасность, цену блокировки
+  и остаточный риск.
+
+- **\[TESTS\] Вывод нонса `k` накрыт сеткой тестов: зависимость от `d`,
+  сверка с независимой реализацией, мутационная проверка.**
+
+  Было: проверялись только свойства - «подпись верна» и «подпись
+  детерминирована»; подпись с другим `k` остаётся верной, поэтому ни эти
+  проверки, ни кросс-валидация с BouncyCastle, OpenSSL и КриптоПро
+  дефект выработки `k` не замечали.
+
+  Стало: `NonceDerivationTest` проверяет, что `k` - функция пары
+  `(d, e)` (после привязки к кривой - тройки `(d, e, кривая)`, см.
+  запись о привязке ниже): ключи, различающиеся одним байтом (включая
+  старшую половину 512-битных ключей), дают разные `k`; равные
+  `(d, хэш)` - равные `k`; разные `e` - разные `k`. `k`
+  восстанавливается из подписи по `k = (s - r·d)·e⁻¹ mod n`, а не
+  читается из приватного метода. `NonceOracleCrossValidationTest`
+  сверяет `k` с независимым эталоном HMAC-DRBG на BouncyCastle (эталон
+  принимает байты хэша и сам считает `e`; параметры наших кривых
+  сверяются с BouncyCastle): сетка 98 пар `(d, хэш)` на каждой из 7
+  кривых, ветка отбраковки кандидата и сдвиг `bits2int`. Мутационная
+  проверка: 11 правок `generateK` (затравка из байт хэша, перестановка
+  `d` и `e`, удаление `d`, 0x00/0x01, обрезка `d`, сдвиг `bits2int`,
+  ветка h.3, лишний байт, `mod n`, замена 0 на 1, прямой порядок байт) -
+  каждая роняет хотя бы один тест. Прежний дефект (затравка из
+  `bits2int(хэш) mod n` вместо `e`) ловят замороженные подписи
+  (`FrozenSignatureVectorsTest`, `SignatureTest`), тесты на пары хэшей с
+  равной прежней затравкой (`DeterministicNonceTest`,
+  `SignatureAttackModelTest`) и сверка с эталоном; более широкую правку
+  (любая подстановка вместо `e`, сохраняющая различие `k`) видят только
+  замороженные подписи и эталон.
+
+- **\[FEATURE\] `PrivateKeyParameters.derivePublicKey()`: открытый ключ
+  `Q = d·G` из закрытого.**
+
+  Метод сам вычисляет `d·G`, внешних точек не принимает и всегда
+  проверяет принадлежность кривой. Для зарегистрированных кривых
+  проверка подгруппы пропускается: порядок базовой точки равен n,
+  поэтому `d·G` лежит в подгруппе по построению. Самодельная кривая и
+  равная по значению копия проходят ту же проверку, что и внешний ключ,
+  по объявленному кофактору (при `h = 1` проверяется только
+  принадлежность кривой, верность кофактора остаётся на совести
+  создателя параметров). `Signature.derivePublicKey` и `KeyGenerator`
+  пользуются этим методом. Пары `d -> Q`, полученные OpenSSL
+  (gost-engine), для всех 7 кривых проверяются в обычном `mvn test`.
+
+- **\[FEATURE\] `PasswordUtf8.encode(char[])`.**
+
+  Строгое кодирование пароля в UTF-8 без промежуточного `String`:
+  суррогатная пара даёт одну 4-байтовую последовательность, непарный
+  суррогат отвергается (`IllegalArgumentException`), буфер кодировщика
+  затирается; результат затирает вызывающий. Общий путь для JCA PBKDF2 и
+  PKCS#12.
+
+- **\[FEATURE\] `GostDerCodec.encodeSpkiKeyBits(PublicKeyParameters)`.**
+
+  Биты ключа SubjectPublicKeyInfo без октета unused-bits (DER
+  `OCTET STRING` из `x_LE || y_LE`) для хешей OCSP по RFC 6960 §4.1.1.
+
+- **\[FEATURE\] `AuthenticationIOException`.**
+
+  Наследник `IOException` для ошибок целостности при чтении из
+  `InputStream` (подмена, порча, усечение), с причиной
+  `AuthenticationException`. Позволяет отличить атаку от обычной ошибки
+  ввода-вывода: первую повторять нельзя, вторую можно.
+
+## Модуль crypto-gost-tls13
+
+### Исправлено
+
+- **\[BUGFIX\] Сервер переходит на ключи приложения сразу после своего
+  Finished (RFC 8446 §4.4.4).**
+
+  Было: ключ записи приложения сервер получал только после Finished
+  клиента, поэтому alert при отказе клиентскому сертификату был защищён
+  ключом рукопожатия, а клиент, уже читающий ключом приложения, видел
+  `bad_record_mac` вместо причины. Ключ чтения приложения у клиента
+  включался при отправке его Finished, а не при приёме Finished сервера.
+
+  Стало: смена ключа записи стоит в выходном потоке сразу за Finished
+  сервера, клиент получает настоящий код alert (например, 44 или 48);
+  ключ чтения клиента меняется при приёме Finished сервера.
+  Мастер-секрет вырабатывается раньше, секрет рукопожатия затирается
+  сразу.
+
+- **\[BUGFIX\] Alert при отказе во время обработки ClientHello уходит
+  открытым.**
+
+  Было: если сервер отказывал после выработки ключей рукопожатия
+  (например, при выборе ALPN), alert шифровался ими, хотя ServerHello
+  ещё не ушёл и клиент не мог его расшифровать.
+
+  Стало: ключ записи сервера включается только за отправленным
+  ServerHello.
+
+- **\[SECURITY:P2\] Пределы размера сообщений рукопожатия по типу,
+  проверка по заголовку.**
+
+  Было: любое сообщение рукопожатия могло копиться до ≈3,2 МБ.
+
+  Стало: Certificate — до 3 276 848 байт, остальные сообщения — до 131
+  400 байт (наибольший ClientHello по RFC 8446 §4.1.2), после
+  рукопожатия — до 131 342 байт; превышение даёт `decode_error` до
+  прихода тела.
+
+- **\[SECURITY:P1\] Отключённый набор шифров не выбирается ни сервером,
+  ни клиентом.**
+
+  Было: сервер принимал предпочтительный набор, даже если он не в списке
+  разрешённых, клиент сверял набор из ServerHello только когда он
+  отличался от начального, а при выборе сертификата по SNI сборщик
+  сообщений пересоздавался с жёстким списком наборов.
+
+  Стало: предпочтительный набор учитывается только из разрешённых, набор
+  из ServerHello сверяется всегда, список сохраняется при замене
+  сборщика.
+
+- **\[BUGFIX\] Отзыв OCSP-ответом даёт alert `certificate_revoked` (44)
+  с сохранённой причиной.**
+
+  Было: `PkixException(REVOKED)` превращался в `bad_certificate` без
+  `cause`.
+
+  Стало: код 44 (RFC 8446 §6.2), исходное исключение в `cause`.
+
+- **\[BUGFIX\] Сервер не выдаёт тикеты возобновления без хранилища PSK и
+  после его сбоя.**
+
+  Было: `TlsSession` отправляла `NewSessionTicket` до проверки хранилища
+  и до записи в него. Сервер без хранилища выдавал тикет, который не мог
+  принять, а при сбое хранилища клиент получал тикет, неизвестный
+  серверу; быстрое повторное подключение могло обогнать запись.
+
+  Стало: тикет выдаётся только при заданном `setPskStore` и только после
+  успешной записи в хранилище; при сбое пишется одно предупреждение,
+  остальные тикеты соединения не выдаются, рукопожатие продолжается
+  (контракт `PskStore.onTicketReceived`). Как и в jsse. `setPskStore` на
+  сервере нужно вызывать до рукопожатия.
+
+- **\[BUGFIX\] `NewSessionTicket` с пустым `ticket` отвергается с
+  `decode_error` (RFC 8446 §4.6.1).**
+
+  Было: разбор принимал пустой тикет (в RFC `opaque ticket<1..2^16-1>`),
+  хранилище отвергало его исключением.
+
+  Стало: `TlsMessageParser.parseNewSessionTicket` бросает
+  `TlsException(decode_error)` на пустой `ticket`.
+
+- **\[BUGFIX\] Просроченный конечный сертификат даёт alert
+  `certificate_expired` (RFC 8446 §6.2).**
+
+  Было: просроченный сертификат сервера и клиента (mTLS) закрывал
+  соединение с `bad_certificate`, тогда как просроченный промежуточный
+  уже давал `certificate_expired`.
+
+  Стало: срок конечного сертификата отвергается с `certificate_expired`
+  в обоих направлениях.
+
+- **\[BUGFIX\] Сообщения рукопожатия соблюдают согласованный
+  `max_fragment_length` (RFC 6066 §4).**
+
+  Было: нарезка исходящих записей по лимиту включалась только в конце
+  рукопожатия, поэтому зашифрованные сообщения рукопожатия
+  (`Certificate` сервера, `Certificate` и `Finished` клиента при mTLS)
+  уходили записями до 16 КБ даже при согласованных 512 байтах;
+  собственный приёмник лимит для сообщений рукопожатия не проверяет, и
+  нарушение оставалось незаметным.
+
+  Стало: `TlsSession` режет зашифрованные сообщения рукопожатия по
+  согласованному лимиту сразу после согласования (сервер после
+  `ClientHello`, клиент после `EncryptedExtensions`). Запись отправки
+  после KeyUpdate снова получает согласованный лимит и сама отвергает
+  больший фрагмент.
+
+- **\[BUGFIX\] `KeyUpdate` с `request_update` вне {0, 1} отвергается с
+  `illegal_parameter` (RFC 8446 §4.6.3).**
+
+  Было: значения 2..255 принимались как запрос ответного обновления
+  ключей.
+
+  Стало: любое значение, кроме 0 и 1, закрывает соединение с alert
+  `illegal_parameter`; проверка идёт до учёта частоты KeyUpdate пира.
+  Значения 0 и 1 вынесены в `TlsConstants.KEY_UPDATE_NOT_REQUESTED` и
+  `TlsConstants.KEY_UPDATE_REQUESTED`.
+
+- **\[BUGFIX\] `TlsSession.createServer` с `null` вместо сертификата
+  отвечает `IllegalArgumentException` сразу.**
+
+  Было: `null` принимался как единственный сертификат цепочки и приводил
+  к ошибке только при рукопожатии.
+
+  Стало: ошибка настройки видна при создании сессии; `null`-элементы в
+  цепочках сертификатов и в списке `oidFilters` конфигураций отвергаются
+  с `IllegalArgumentException`.
+
+- **\[BUGFIX\] Фильтр `KeyUsage` в `oid_filters` принимает значение в
+  DER, как остальные расширения (RFC 8446 §4.2.5).**
+
+  Было: значение фильтра читалось как содержимое BIT STRING без тега и
+  длины, тогда как для ExtendedKeyUsage и CertificatePolicies ждали DER
+  целиком. Фильтр с корректным `BIT STRING` (например, `03 02 07 80`) не
+  подходил ни одному сертификату, а искажённое значение (например,
+  `04 00`) принималось как «любой сертификат»; пустое значение принимало
+  и сертификат без `KeyUsage`.
+
+  Стало: значение разбирается как DER `BIT STRING` (тег, длина, число
+  неиспользуемых бит, не больше двух байт битов), неиспользуемые биты в
+  запрос не входят; искажённое значение не подходит. Сертификат без
+  `KeyUsage` не подходит под любой фильтр `KeyUsage`, пустое значение
+  требует лишь наличия расширения, как у остальных расширений. Ранее
+  принимавшееся «сырое» значение без тега (`07 80`) теперь не подходит.
+
+- **\[BUGFIX\] `TlsSession` сохраняет приёмный лимит
+  `max_fragment_length` после KeyUpdate.**
+
+  Было: лимит на запись приёма ставился один раз в конце рукопожатия, а
+  при KeyUpdate запись пересоздавалась без него, и после первой смены
+  ключей фрагменты больше согласованного размера принимались.
+
+  Стало: запись приёма, созданная после рукопожатия, получает лимит
+  сразу; запись с открытым текстом больше лимита отвергается с
+  `record_overflow` и после KeyUpdate.
+
+- **\[BUGFIX\] Недопустимый код `max_fragment_length` вызывает alert
+  `illegal_parameter`, а не `decode_error` (RFC 6066 §4).**
+
+  Было: сервер на ClientHello с кодом не из 1..4 и клиент на
+  EncryptedExtensions с таким кодом отвечали `decode_error`, как на
+  нарушение формата.
+
+  Стало: неверная длина тела расширения (не 1 байт) по-прежнему даёт
+  `decode_error`, недопустимый код при верной длине даёт
+  `illegal_parameter`.
+
+- **\[BUGFIX\] `TlsHandshakeEngine.setServerPsk(null)` отвечает
+  `IllegalArgumentException`.**
+
+  Было: `null` вместо ключа давал `NullPointerException` из
+  `psk.clone()`, а `setPsk` на ту же ошибку отвечал
+  `IllegalArgumentException`.
+
+  Стало: оба метода одинаково отвергают `null` с
+  `IllegalArgumentException`.
+
+- **\[BUGFIX\] Хвост после значения `cookie` в HelloRetryRequest
+  отвергается.**
+
+  Было: расширение `cookie`, в котором после значения были лишние байты,
+  принималось; проверка длины пропускала `cookieLen < len - 2`.
+
+  Стало: тело расширения должно быть ровно `cookie<1..2^16-1>` (RFC 8446
+  §4.2.2), лишние байты дают `decode_error`.
+
+- **\[BUGFIX\] Искажённый `NewSessionTicket` разбирается в движке и
+  фатален независимо от хранилища PSK.**
+
+  Было: движок отдавал сырое тело; `TlsSession` разбирал его только при
+  заданном хранилище PSK, jsse только при наличии контекста сессии, RMS
+  и имени узла, а ошибка разбора в jsse подавлялась («работа
+  продолжается без resumption»). Битый тикет принимался молча или рвал
+  соединение в зависимости от настройки.
+
+  Стало: `TlsHandshakeEngine.receivePostHandshake` разбирает тикет
+  сразу, любое нарушение структуры (RFC 8446 §4.6.1) даёт `decode_error`
+  и закрывает соединение во всех слоях; подавление ошибки в jsse убрано.
+
+- **\[BUGFIX\] Клиент и сервер отвергают расширения не из своего
+  сообщения и расширения без запроса по таблице RFC 8446 §4.2.**
+
+  Было: `cookie` в обычном ServerHello, `pre_shared_key` в
+  HelloRetryRequest, известное расширение не из своего сообщения в
+  EncryptedExtensions, CertificateEntry, CertificateRequest и
+  NewSessionTicket принимались молча; форма `key_share` (в
+  HelloRetryRequest два байта, в ServerHello полная запись) различалась
+  только по длине, код alert зависел от пути.
+
+  Стало: известное расширение не из этого сообщения даёт
+  `illegal_parameter`, расширение без запроса, в том числе неизвестное,
+  в ответах даёт `unsupported_extension` (исключение: `cookie` в
+  HelloRetryRequest), форма `key_share` проверяется по типу сообщения
+  (`decode_error`). В CertificateRequest и NewSessionTicket неизвестные
+  расширения по-прежнему игнорируются. ServerHello разбирается в
+  порядке: версия, структура и таблица, поля `legacy_*`, значения,
+  поэтому сервер TLS 1.2 получает `protocol_version`.
+
+- **\[BUGFIX\] Сервер отвергает неизвестные и незапрошенные расширения в
+  CertificateEntry клиентского сертификата.**
+
+  Было: расширение в записи сертификата клиента, которого сервер не
+  запрашивал в CertificateRequest, пропускалось, если тип был
+  неизвестен.
+
+  Стало: расширение без запроса, в том числе неизвестное, даёт
+  `unsupported_extension`, известное расширение не из Certificate
+  (например `key_share`) даёт `illegal_parameter`; допустимое расширение
+  `status_request` принимается, если сервер запрашивал его в
+  CertificateRequest. Это видимое изменение для внешних клиентов mTLS,
+  присылающих собственные расширения.
+
+- **\[BUGFIX\] `NewSessionTicket` проверяет блок расширений.**
+
+  Было: `parseNewSessionTicket` возвращал результат сразу после билета,
+  блок `ticket_extensions` не читался, любой хвост принимался.
+
+  Стало: блок расширений обязателен (RFC 8446 §4.6.1), его отсутствие и
+  хвост за ним дают `decode_error`, допустим только `early_data`,
+  известное расширение не из этого сообщения даёт `illegal_parameter`.
+
+- **\[BUGFIX\] Клиент отвергает ответные расширения
+  `EncryptedExtensions`, на которые не было запроса.**
+
+  Было: ALPN, `max_fragment_length` и `server_name` в
+  `EncryptedExtensions` принимались без проверки, что клиент их
+  отправлял; ответ ALPN с несколькими именами читался по первому;
+  `EncryptedExtensions` короче двух байт принимались как пустые;
+  незапрошенный `max_fragment_length` давал `illegal_parameter`.
+
+  Стало: расширение, отсутствующее в последнем ClientHello (в том числе
+  после HelloRetryRequest), даёт `unsupported_extension`; несколько имён
+  в ответе ALPN, непустое подтверждение `server_name` и
+  `EncryptedExtensions` короче двух байт дают `decode_error`;
+  несовпадение значения `max_fragment_length` по-прежнему
+  `illegal_parameter`. Проверка идёт по реально отправленным байтам
+  ClientHello и до разбора значений, поэтому код alert не зависит от
+  порядка расширений. Имя ALPN из ответа пира очищается в тексте
+  исключения.
+
+- **\[BUGFIX\] Клиент проверяет эхо `legacy_session_id` и
+  `legacy_compression_method` в ServerHello и HelloRetryRequest.**
+
+  Было: оба поля пропускались без проверки, сервер с чужим эхо или с
+  ненулевым сжатием принимался.
+
+  Стало: эхо, не совпадающее с отправленным клиентом идентификатором
+  (сейчас пустым), эхо длиннее 32 байт и сжатие не 0 дают
+  `illegal_parameter` (RFC 8446 §4.1.3); версия из `supported_versions`
+  по-прежнему проверяется раньше этих полей (§4.2.1).
+
+- **\[BUGFIX\] Принятый PSK виден клиенту при любом `legacy_version` в
+  ServerHello.**
+
+  Было: `selected_identity` читался отдельным проходом, который при
+  `legacy_version` не 0x0303 считал, что расширений нет; клиент считал
+  PSK не принятым, хотя `key_share` и `supported_versions` разбирались,
+  и рукопожатие обрывалось с ложным кодом alert.
+
+  Стало: `selected_identity` разбирается тем же проходом, что остальные
+  расширения, `legacy_version` игнорируется при наличии
+  `supported_versions` (RFC 8446 §4.2.1).
+
+- **\[BUGFIX\] Исключение из `ClientCertificateSelector` даёт alert
+  `internal_error`, а не `decode_error`.**
+
+  Было: `TlsHandshakeEngine.receive` превращал любое непроверяемое
+  исключение, в том числе из селектора приложения, в `TlsException` с
+  кодом `decode_error`, и пир видел «ошибку формата» там, где сбой был у
+  нас.
+
+  Стало: сбой селектора (и выбранная цепочка без открытого ключа у
+  листа) завершает рукопожатие кодом `internal_error`; исходное
+  исключение сохраняется как причина, его текст в сообщение не попадает.
+
+- **\[BUGFIX\] `supported_versions`: точные коды alert, проверка
+  выбранной версии в ServerHello и HelloRetryRequest.**
+
+  Было: отсутствие расширения в ClientHello и любой его дефект (битый
+  формат, нет TLS 1.3) давали `missing_extension`, `protocol_version`
+  нигде не использовался; клиент не проверял `supported_versions` в
+  ServerHello и HelloRetryRequest вовсе и принимал ответ без расширения
+  или с версией 0x0303.
+
+  Стало: ClientHello без расширения или со списком без 0x0304 даёт
+  `protocol_version` (клиент предлагает TLS 1.2 или ниже, RFC 8446
+  §4.2.1, §6.2), битый формат (пустой список, нечётная длина, длина не
+  `n+1`) даёт `decode_error`. Клиент проверяет ServerHello и
+  HelloRetryRequest одной функцией: нет расширения даёт
+  `protocol_version`, тело не из двух байт даёт `decode_error`, версия
+  не 0x0304 даёт `illegal_parameter` (§4.2.1).
+
+- **\[BUGFIX\] Строгий разбор `server_name`: одна запись `host_name`,
+  недопустимые имена отвергаются до PSK и выбора сертификата.**
+
+  Было: расширение с битой структурой, пустым или не-ASCII именем молча
+  игнорировалось, хвост после первой записи пропускался, NUL и
+  управляющие символы проходили как допустимое имя; имя уходило в
+  привязку PSK-тикета и в `SniCertificateSelector` раньше, чем полный
+  разбор его проверял, и разбиралось до трёх раз на ClientHello.
+
+  Стало: `parseClientHelloSni` вызывается один раз в начале обработки
+  ClientHello, бросает `TlsException`, и одно проверенное значение
+  получают привязка PSK, селектор и `getRequestedServerName()`. Ровно
+  одна запись `host_name`; структурные нарушения (пустое расширение или
+  список, нулевая длина имени, несовпадение длин, хвост, чужой
+  `name_type`) дают `decode_error`; не-ASCII, NUL и управляющие символы,
+  длина больше 253 (RFC 1035 §2.3.4, текстовая форма без точки по RFC
+  6066 §3) и пустые метки дают `unrecognized_name`. Одна конечная точка
+  по-прежнему срезается. Строже OpenSSL: хвост после записи, управляющие
+  символы кроме NUL и не-ASCII у него принимаются. Предел 63 знака на
+  метку не проверяется.
+
+- **\[BUGFIX\] Клиент не отправит имя, которое отвергнет наш сервер.**
+
+  Было: `TlsClientConfig`, `TlsHandshakeEngine.setServerHostname` и
+  публичный `TlsMessageBuilder.buildClientHello` принимали любую строку;
+  в SNI уходили имена длиннее предела и с пустыми метками, а имя в
+  Unicode или с NUL при прямом вызове `setServerHostname` молча не
+  отправлялось (сертификат по умолчанию вместо ошибки).
+
+  Стало: одна проверка по байтам (`ServerNameCheck`) вызывается в
+  `TlsClientConfig.withServerHostname`, `setServerHostname` и при сборке
+  расширения; нарушение даёт `IllegalArgumentException` без имени в
+  сообщении. IP-литералы и пустое имя по-прежнему не попадают в SNI и
+  ошибкой не считаются.
+
+- **\[BUGFIX\] Клиент при mTLS отправляет пустой Certificate, если схемы
+  его ключа нет в списке CertificateRequest.**
+
+  Было: клиент подписывал CertificateVerify схемой своего ключа, не
+  сверяя её со списком `signature_algorithms` из CertificateRequest (RFC
+  8446 §4.4.3 требует схему из списка), а `parseCertificateRequest` при
+  отсутствии в списке наших схем завершал рукопожатие
+  `handshake_failure`, хотя §4.4.2.3 велит отправить пустой Certificate;
+  пустой список схем тоже давал `handshake_failure`.
+
+  Стало: запрос хранит список схем
+  (`ClientCertificateRequest.signatureSchemes`), структурные нарушения
+  списка дают `decode_error`. Если схема ключа клиентского сертификата
+  не предложена сервером, клиент отправляет пустой Certificate без
+  CertificateVerify (сервер отвечает `certificate_required` или, при
+  необязательной проверке, продолжает рукопожатие) и пишет
+  предупреждение в журнал с кодом схемы. Если не предложена схема
+  подписи сертификата цепочки (по `signature_algorithms_cert`, а без
+  него по `signature_algorithms`), цепочка всё равно отправляется с
+  предупреждением в журнале: отступление от буквы §4.4.2.3 ради
+  совместимости. Решение единое для `TlsSession` и `GostSSLEngine`.
+
+- **\[BUGFIX\] Строгий разбор `signature_algorithms` в ClientHello;
+  отсутствие расширения допустимо только при принятом PSK.**
+
+  Было: структура расширения проверялась только когда серверу нужна
+  схема подписи, битый список (нечётная длина, несовпадение длин, пустой
+  список) при принятом PSK или без цепочки принимался молча; отсутствие
+  расширения отвергалось всегда, в том числе у ClientHello с
+  `pre_shared_key`, хотя RFC 8446 §9.2 требует его только без PSK.
+
+  Стало: структура проверяется всегда, нарушение даёт `decode_error`.
+  Нет ни `pre_shared_key`, ни `signature_algorithms`:
+  `missing_extension`; есть `pre_shared_key`, нет
+  `signature_algorithms`: рукопожатие продолжается, если сервер принял
+  PSK, иначе `missing_extension` (сервер не подписывает
+  CertificateVerify без согласия клиента). Когда клиент не предложил
+  схему сертификата сервера, рукопожатие, как и прежде, продолжается
+  (RFC 8446 §4.4.3), но сервер пишет строку журнала `INFO` с кодом схемы
+  своего сертификата, именем из SNI и признаком второго ClientHello
+  после HelloRetryRequest.
+
+- **\[BUGFIX\] Клиент включает ключ записи рукопожатия на ServerHello:
+  alert при отказе до Finished сервера зашифрован.**
+
+  Было: клиентский ключ записи рукопожатия применялся только при
+  получении Finished сервера, поэтому alert клиента при отказе до этого
+  (неверная цепочка сертификата сервера, ошибка в сообщениях сервера)
+  уходил открытой записью, хотя RFC 8446 (приложение A.1) велит клиенту
+  сначала сменить ключ на ключ рукопожатия, если возможно (SHOULD).
+
+  Стало: `TlsHandshakeEngine` выставляет ключ записи сразу после вывода
+  ключей в `receiveServerHello` (в том числе после HelloRetryRequest);
+  alert клиента после ServerHello уходит под ключом рукопожатия
+  (`TlsSession`, `GostSSLEngine`, Netty), до ServerHello по-прежнему
+  открытый. До Finished сервера клиент ничего не отправляет, поэтому на
+  проводе успешного рукопожатия, нумерация записей Certificate,
+  CertificateVerify и Finished не меняются.
+
+- **\[BUGFIX\] Сервер видит настоящий alert клиента, пришедший открытой
+  записью после ClientHello; неожиданный внешний тип записи даёт
+  `unexpected_message`.**
+
+  Было: клиент включает ключ записи рукопожатия только после Finished
+  сервера и до этого шлёт alert (например, при отказе в сертификате)
+  открытой записью (RFC 8446, приложение A.1; так делает и OpenSSL).
+  Сервер к этому моменту уже ждал зашифрованные записи, пытался
+  расшифровать два байта и отвечал `Record payload too small for tag: 2`
+  вместо настоящего кода клиента. Запись с внешним типом, отличным от
+  `application_data`, давала `bad_record_mac` или `decode_error` в
+  зависимости от длины.
+
+  Стало: сервер принимает открытую запись типа alert, пока от клиента не
+  пришла первая успешно расшифрованная запись и рукопожатие не
+  завершено. Fatal alert даёт `TlsException.fromPeer`, `close_notify`
+  даёт `PeerClosedException` и ответный `close_notify` под ключами
+  рукопожатия, длина тела не равная 2 даёт `decode_error`, нулевая
+  `unexpected_message`. У клиента окна нет: открытый alert сервера после
+  ServerHello отвергается. `TlsRecord.unprotect` (все варианты)
+  отвергает по заголовку запись с внешним типом не `application_data`:
+  `unexpected_message` (RFC 8446 §5). Проверка формата alert вынесена в
+  `TlsUtils.requireAlertLength` и `TlsUtils.alertDescription`. Ветка
+  `RuntimeException` рукопожатия перед отправкой alert создаёт запись
+  под ключами рукопожатия, если они уже выработаны.
+
+- **\[BUGFIX\] `InMemoryTlsTransport`: закрытие транспорта будит ждущий
+  `receiveRecord()`.**
+
+  Было: `receiveRecord()` проверял признак закрытия один раз до
+  ожидания, а `close()` ждущего не будил; у пары каждая сторона знала
+  только о собственном закрытии, поэтому вторая сторона ждала до
+  таймаута (10 с), даже если пир уже закрыт.
+
+  Стало: у пары общая метка закрытия, ожидание идёт квантами по 50 мс и
+  перечитывает метку; ждущий `receiveRecord()` просыпается не позже
+  одного кванта и после дренажа записей получает
+  `IOException("Transport closed")`. Срок ожидания считается один раз.
+
+- **\[SECURITY:P1\] Сервер разбирал `pre_shared_key` нестрого: битая
+  структура молча давала полное рукопожатие, а выбор был только по
+  первой identity.**
+
+  Было: сервер читал лишь первую identity, не проверял
+  `psk_key_exchange_modes`, положение `pre_shared_key` в списке
+  расширений и число binder, отсекал binder фиксированным хвостом
+  `3 + hashLen`; повтор расширения в ClientHello не отвергался.
+
+  Стало: структура разбирается целиком и до обращения к хранилищу (RFC
+  8446 §4.2.9, §4.2.11). Нет `psk_key_exchange_modes` -
+  `missing_extension`; `pre_shared_key` не последним, повтор любого
+  расширения (§4.2), число binder не равно числу identity, binder
+  длиннее 31 байта, но не `hashLen` - `illegal_parameter`; обрезанные
+  длины, binder короче 32 байт, лишние байты - `decode_error`. В
+  хранилище просматриваются не больше `MAX_PSK_IDENTITIES` (5) первых
+  identity, выбирается первая известная, binder проверяется только у
+  неё; при отказе по возрасту сервер к следующей identity не переходит.
+  `selected_identity` в ServerHello равен номеру выбранной identity,
+  клиент проверяет его границы (`illegal_parameter`), неожиданный
+  `pre_shared_key` - `unsupported_extension`. Повторы расширений
+  отвергаются и в ServerHello, HelloRetryRequest и EncryptedExtensions.
+
+- **\[BUGFIX\] Второй ClientHello после HRR не учитывал выбор среди
+  нескольких identity.**
+
+  Стало: запоминается выбранная в CH1 identity; в CH2 identity должны
+  быть подмножеством identity CH1 с тем же порядком (иначе
+  `illegal_parameter`), выбранная ищется по байтам, хранилище не
+  опрашивается, identity за пределом просмотра в CH1 не становится
+  выбранной после удаления первых пяти.
+
+- **\[BUGFIX\] Возобновление по PSK через HelloRetryRequest не работало
+  с OpenSSL и КриптоПро: неверный PSK binder второго ClientHello.**
+
+  Было: binder считался как
+  `Hash(Hash(message_hash || HRR) || Truncate(CH2))`, то есть вложенным
+  хэшем. RFC 8446 §4.2.11.2 требует
+  `Hash(message_hash || HRR || Truncate(CH2))` одним хэшем. Внешняя
+  сторона отвергала такой binder, а наши клиент и сервер возобновлялись
+  через HRR только друг с другом.
+
+  Стало: префикс транскрипта (`message_hash || HRR`) передаётся в сыром
+  виде и хэшируется вместе с усечённым ClientHello одним проходом.
+  Возобновление через HRR подтверждено кросс-валидацией с OpenSSL и
+  КриптоПро в обе стороны.
+
+- **\[SECURITY:P1\] Второй ClientHello после HRR принимал PSK,
+  отвергнутый в первом.**
+
+  Было: сервер не переносил решение из первого ClientHello во второй.
+  Тикет с неверным возрастом, отвергнутый в CH1, принимался в CH2; при
+  явном `setServerPsk` принимался и PSK, которого в CH1 не было; при
+  гонке `peek -> get` отвергнутый тикет оставался в памяти и принимался
+  в CH2.
+
+  Стало: решение принимается в CH1 и не пересматривается. В CH2
+  хранилище не опрашивается; другая identity или PSK, которого не было в
+  CH1, дают `illegal_parameter`; отвергнутый в CH1 PSK игнорируется
+  (полное рукопожатие); для принятого проверяется только binder.
+  Непринятый PSK затирается сразу.
+
+- **\[BUGFIX\] ClientHello с PSK содержал расширение `pre_shared_key`
+  неверной длины: повторное соединение с внешним сервером, выдающим
+  тикеты, обрывалось.**
+
+  Было: `TlsMessageBuilder.buildClientHelloWithPsk` выделял под
+  расширение на 2 байта меньше записываемой структуры (не учитывался
+  префикс длины identity). Binder подставлялся в последние `hashLen`
+  байт и затирал младший байт длины списка binders и байт длины binder.
+  Сервер crypto-gost этого не замечал: он отрезает последние
+  `3 + hashLen` байт фрейма так же, как клиент. Внешние реализации
+  разбирают структуру по RFC 8446 §4.2.11 и отвечали фатальным
+  `decode_error` (OpenSSL: `bad extension`), поэтому первое соединение
+  клиента tls13 и jsse с внешним сервером, выдающим тикеты, проходило, а
+  второе, с тикетом, обрывалось. Ошибка есть во всех версиях начиная с
+  0.2.0.
+
+  Стало: размер расширения верный, клиент crypto-gost возобновляет
+  сессию с OpenSSL (gostprov); возобновление проверено кросс-валидацией
+  и с КриптоПро. Совместимость версий сохраняется: сервер и клиент
+  по-прежнему отрезают последние `3 + hashLen` байт полученного фрейма,
+  поэтому старый клиент возобновляется с новым сервером, а новый клиент
+  со старым. Обходной путь для необновлённых клиентов tls13: не вызывать
+  `setPskStore` (тикеты не предлагаются). Ограничение: возобновление,
+  при котором само соединение идёт через HelloRetryRequest, с внешними
+  реализациями не работает (binder второго ClientHello считается иначе).
+  Для сервера tls13 это значит: внешний клиент возобновляет сессию,
+  только если группа сервера (`TlsServerConfig.withSelectedNamedGroup`)
+  совпадает с первой группой в `key_share` клиента (у `csptest` это
+  GC256A, у `TlsSession` GC256B). Прежнее утверждение, что КриптоПро не
+  возобновляет сессии TLS 1.3, неверно: возобновление работает, когда
+  HelloRetryRequest нет.
+
+- **\[SECURITY:P1\] PSK-тикет не переживает сертификат сервера.**
+
+  Было: возобновление не показывает сертификат, а срок тикета (24 часа
+  на сервере) не зависел от срока сертификатов: клиент возобновлял
+  сессию с сервером, чей сертификат уже истёк, а новые тикеты
+  возобновлённой сессии продлевали такое доверие бесконечно.
+
+  Стало: `PskEntry` несёт границу `validUntil` - наименьший `notAfter`
+  среди сертификатов, по которым сервер принят (`PeerTrustBoundary`);
+  запись просрочена строго после неё, допуск часов нулевой. Срок тикета
+  ограничивается остатком до границы, возобновлённая сессия наследует
+  границу прежней записи, а при неопределимой границе тикет не
+  сохраняется. Сервер ограничивает `ticket_lifetime` сроком своей
+  цепочки (округление вниз до секунд) и не выдаёт тикет при остатке
+  меньше секунды.
+
+- **\[BUGFIX\] Сервер не принимает PSK-тикет при другом SNI (RFC 6066
+  §3).**
+
+  Было: серверное хранилище находило тикет по байтам; тикет арендатора A
+  принимался при SNI арендатора B, если хранилище было общим.
+
+  Стало: запись привязана к SNI клиента на момент выдачи; при другом SNI
+  (и при несовпадении «есть SNI» и «нет SNI») тикет не принимается и не
+  расходуется, сервер выполняет полное рукопожатие.
+
+- **\[SECURITY:P1\] PSK-тикет больше не предъявляется чужому серверу и
+  не переносится между моделями доверия.**
+
+  Было: клиент предлагал самый свежий тикет из хранилища, чей бы он ни
+  был. Возобновление по PSK не показывает сертификат, поэтому тикет,
+  полученный от сервера A, мог завершить рукопожатие с сервером B без
+  проверки цепочки, имени и отзыва.
+
+  Стало: тикет привязан к имени сервера из SNI (в нижнем регистре) и к
+  модели доверия: режим проверки (цепочка и имя, цепочка без сверки
+  имени, без аутентификации сервера), отпечаток якорей с политикой их
+  срока, `requireOcspStapling`, `interopAcceptGostBaseSigScheme`,
+  алгоритм хэша KDF. Привязку сверяет `TlsSession`, не полагаясь на
+  хранилище. При сверке имени и пустом имени сервера тикет не
+  предлагается и не сохраняется; смена якорей или настроек проверки
+  делает прежние тикеты непригодными.
+
+- **\[BUGFIX\] `TlsEncoding.decodePoint` принимает точку только точной
+  длины и с каноническими координатами.**
+
+  Ранее лишние байты после точки и координаты не меньше `p` принимались
+  (RFC 9367 §6.1.1.3 требует ровно `X || Y` длиной
+  `2·coordinate_length`).
+
+  Стало: длина не равна `2·hlen` даёт `decode_error`, координата вне
+  `[0, p)` даёт `handshake_failure`, как и точка не на кривой.
+
+- **\[BUGFIX!\] ECDHE рукопожатия TLS 1.3 учитывает кофактор кривой (RFC
+  9367 §6.1.1.1, §6.1.1.2).**
+
+  Ранее секрет считался как `d·Q`, и на GC256A и GC512C (`h = 4`)
+  рукопожатие с КриптоПро завершалось ошибкой `SEC_E_MESSAGE_ALTERED`
+  (`0x8009030F`), а с OpenSSL gostprov не завершалось: «Handshake record
+  authentication failed». Свои клиент и сервер ошибались одинаково,
+  поэтому внутренние тесты расхождения не видели, а в проверках с
+  внешними реализациями этих двух кривых не было. До 0.5.5 `d`
+  умножалось на кофактор без `mod n`, и старшие биты скаляра терялись,
+  то есть на кривых с `h = 4` рукопожатие не было корректным ни в одной
+  версии; в 0.5.5 кофактор убрали по неверному диагнозу.
+
+  Стало: `(h·d mod n)·Q` через `KeyAgreement.computeSharedSecret`;
+  результат совпадает с RFC 9367 Приложение A.1.2 (Пример 1 на GC512C с
+  `h = 4`, Пример 2 на GC256B) и подтверждён на GC256A и GC512C с
+  КриптоПро CSP и OpenSSL gostprov (эталона RFC для GC256A нет). Секреты
+  рукопожатия на GC256A и GC512C изменились: версии до этой правки на
+  этих кривых несовместимы; для остальных кривых (`h = 1`) совместимость
+  сохраняется. Пока `KeyAgreement` повторно проверяет открытый ключ, на
+  этих двух кривых рукопожатие делает одну лишнюю проверку подгруппы.
+
+- **\[BUGFIX\] `HkdfStreebog.expand` затирает буфер `T(i)`.**
+
+  Ранее при длине вывода не больше длины хеша (`deriveSecret`) буфер `t`
+  совпадал с результатом, но не затирался: вызывающий код очищал только
+  результат, и в куче оставались traffic secret и `derived`, из которого
+  считается master secret.
+
+  Стало: `t` затирается в `finally`; `hmac.clear()` в
+  `HkdfStreebog.extract`, `expand` и `TlsKeySchedule.computeVerifyData`
+  (вместе с `finished_key`) также выполняется в `finally`, то есть и при
+  исключении.
+
+- **\[BUGFIX\] Сервер шлёт OCSP-staple только по запросу клиента.**
+
+  Ранее staple отправлялся всегда, если был настроен, даже когда
+  ClientHello не содержал `status_request`; сторонние клиенты отвергали
+  такой handshake (RFC 8446 §4.2).
+
+  Стало: staple отправляется, только если итоговый ClientHello (после
+  HRR - второй) запросил `status_request`; нарушение структуры
+  расширения даёт `decode_error`, неизвестный `status_type`
+  игнорируется. Добавлены `TlsMessageParser.clientHelloRequestsOcsp` и
+  `TlsConstants.STATUS_TYPE_OCSP`.
+
+- **\[BUGFIX!\] OCSP-staple кодируется как CertificateStatus (RFC 6066
+  §8) — breaking change.**
+
+  Ранее в `CertificateEntry` уходило `status_type || DER` без длины
+  ответа, поэтому OpenSSL и другие корректные пиры отвергали staple, а
+  наш клиент не мог разобрать чужой.
+
+  Стало: на проводе `status_type(1) || uint24(len) || DER`. Разбор
+  строгий: длина обязана точно заполнять расширение, нулевая длина и
+  лишние байты дают `decode_error`; формат без длины (версии 0.7.x и
+  ниже) отвергается намеренно, чтобы не гадать по байтам DER.
+  `withOcspStaplingResponse` и `TlsServerCredentials` принимают ответ
+  длиной от 1 до 65527 байт, пустой массив бросает
+  `IllegalArgumentException` (отключение — только `null`).
+
+- **\[BUGFIX\] Certificate и CertificateRequest: пустой
+  `certificate_request_context` и границы контейнеров.**
+
+  Ранее контекст считался ровно одним байтом, длины записей и расширений
+  сверялись с границей всего буфера, а не контейнера, хвост после списка
+  и дубли расширений в `CertificateEntry` не отклонялись, поэтому разбор
+  мог разойтись с реализацией пира.
+
+  Стало: непустой контекст и дубль расширения дают `illegal_parameter`;
+  выход записи или расширения за границу контейнера, а также хвост после
+  `certificate_list` и после extensions в CertificateRequest -
+  `decode_error`. Post-handshake аутентификация не поддерживается,
+  поэтому непустой контекст в handshake недопустим (RFC 8446 §4.3.2,
+  §4.4.2).
+
+- **\[SECURITY:P1\] PSK несовместим с запросом клиентского
+  сертификата.**
+
+  Ранее публичный `TlsHandshakeEngine.setPsk` на серверном engine с
+  `requestClientAuth` давал `pskAccepted` при верном binder, и сервер не
+  отправлял `CertificateRequest`, то есть полностью терял аутентификацию
+  клиента (mTLS). Сервер выдавал `NewSessionTicket` и принимал PSK даже
+  при запросе клиентского сертификата, поэтому повторное подключение
+  проходило без аутентификации клиента; явный `setServerPsk` также
+  обходил mTLS.
+
+  Стало: `setPsk` разрешён только клиенту, `setServerPsk` и
+  `setServerPskStore` - только серверу (иначе `IllegalStateException`).
+  Сервер с запросом сертификата (need и want) не принимает PSK, не
+  выдаёт тикет, PSK-lookup не выполняет и тикет не потребляет, а ведёт
+  полный handshake; `setServerPsk` при mTLS бросает
+  `IllegalStateException`, прямое наличие `pskKey` -
+  `handshake_failure`. Флаг `isClientAuthRequested()` снимается до
+  уничтожения `TlsHandshakeEngine`.
+
+- **\[BUGFIX\] Пустой `key_share` в первом ClientHello запрашивает
+  HelloRetryRequest (RFC 8446 §4.2.8).**
+
+  Ранее сервер отвечал `missing_extension` на ClientHello с расширением
+  `key_share` и пустым списком `client_shares`, хотя клиент вправе так
+  запросить выбор группы у сервера.
+
+  Стало: сервер выбирает группу из `supported_groups` (предпочтение
+  сервера, иначе первая общая) и отправляет HRR; общей группы нет -
+  `handshake_failure`. `missing_extension` остаётся при отсутствии
+  расширения `key_share` и при пустом списке без `supported_groups` (RFC
+  8446 §9.2). ClientHello после HRR по-прежнему обязан содержать ровно
+  одну запись.
+
+- **\[BUGFIX\] Сервер отправляет совместимый `change_cipher_spec` при
+  непустом `legacy_session_id` (RFC 8446 §D.4).**
+
+  Ранее сервер эхо-отражал `legacy_session_id` клиента, но CCS не
+  отправлял, что нарушает требование §D.4 (MUST) для режима
+  совместимости с middlebox.
+
+  Стало: ровно один открытый CCS (`14 03 03 00 01 01`) сразу после
+  первого сообщения сервера (HelloRetryRequest, а при его отсутствии
+  ServerHello); после второго ServerHello CCS не повторяется, при пустом
+  `legacy_session_id` не отправляется. В транскрипт CCS не входит.
+  Добавлены `TlsUtils.buildCompatibilityCcsRecord()`,
+  `TlsHandshakeEngine.isServerCompatCcsPending()` и
+  `takeServerCompatCcs()`.
+
+- **\[BUGFIX\] Сервер не отправляет HelloRetryRequest на группу, уже
+  присланную клиентом в `key_share` (RFC 8446 §4.1.4, §4.2.8).**
+
+  Ранее при отсутствии предпочтительной группы сервера в
+  `supported_groups` клиента HRR запрашивал первую группу клиента, часто
+  ту же, что в `key_share`; клиент прерывал handshake с
+  `illegal_parameter` (OpenSSL: alert 47). Парсер ClientHello выбирал
+  одну запись `key_share`, остальные терялись (после совпадения с
+  ожидаемой группой разбор списка обрывался, хвостовые записи не
+  проверялись).
+
+  Стало: парсер проходит весь список `key_share` без раннего выхода
+  (битая хвостовая запись даёт `decode_error`), `ParsedKeyShare` хранит
+  все записи `key_share` (`keyShareEntries`, `keySharePresent`,
+  `supportedGroupsDeclared`), группу выбирает движок: предпочтение
+  сервера из `key_share`, иначе HRR на предпочтение сервера, иначе
+  первая поддерживаемая запись `key_share` без HRR, иначе HRR на группу
+  вне `key_share`. ClientHello после HRR обязан содержать ровно одну
+  запись запрошенной группы, иначе `illegal_parameter`. Парсер больше не
+  бросает `missing_extension` на отсутствующем `key_share`: это решает
+  движок.
+
+- **\[SECURITY:P1\] Полная валидация legacy `change_cipher_spec` (RFC
+  8446 §5).**
+
+  Ранее `TlsSession` пропускал любой CCS в рукопожатии без проверки
+  содержимого, а CCS после Finished давал `IllegalArgumentException` из
+  `TlsRecord.unprotect` вместо fatal alert.
+
+  Стало: CCS с длиной не 1 или значением не `0x01`, CCS первой записью
+  на сервере (до ClientHello) и CCS после Finished отклоняются с
+  `unexpected_message`; корректный CCS игнорируется. Добавлены
+  `TlsUtils.consumeCompatibilityCcs` и константы
+  `CCS_COMPAT_PAYLOAD_LENGTH`/`CCS_COMPAT_VALUE`.
+
+- **\[BUGFIX\] Сервер отклоняет `NewSessionTicket` от клиента.**
+
+  Ранее `TlsHandshakeEngine.receivePostHandshake` принимал NST в любой
+  роли, поэтому клиент мог инжектить тикеты в серверный `PskStore`,
+  выбирая identity, nonce и срок жизни, а также вытеснять тикеты других
+  клиентов.
+
+  Стало: по RFC 8446 §4.6.1 NST принимается только в роли CLIENT; на
+  сервере попытка завершается `TlsException` с `unexpected_message`,
+  тикет в `PskStore` не сохраняется.
+
+- **\[BUGFIX\] IDN-домены в SNI и проверке hostname.**
+
+  Ранее кириллический адрес не преобразовывался: SNI молча не
+  отправлялся, а wildcard-сертификаты для зон `xn--` не совпадали с
+  именем.
+
+  Стало: `withServerHostname` и `GostSSLEngine` приводят адрес к
+  A-label; SNI, `SniCertificateSelector` и `verifyHostname` используют
+  один punycode. Wildcard `*.example.xn--p1ai` разрешён, `*.xn--p1ai`
+  (вся зона) отклоняется. Адреса с `ß`, `ς`, ZWNJ и ZWJ отклоняются
+  из-за неоднозначности IDNA2003. IP-литералы (IPv4, IPv6, в скобках и с
+  зоной) не отправляются в SNI, а ASCII-имена с `_` по-прежнему
+  принимаются.
+
+- **\[BUGFIX\] `TlsClientConfig.withoutHostnameVerification()` отключает
+  сверку имени при заданном `withServerHostname`.**
+
+  Ранее флаг не доходил до `TlsSession`: при заданном имени сертификат
+  сервера сверялся с ним всё равно.
+
+  Стало: сверка отключается, SNI по-прежнему передаётся серверу; без
+  имени и без этого вызова `TlsSession.createClient` отвергает
+  конфигурацию, как и прежде.
+
+- **\[BUGFIX\] Записи `TlsSession` строятся по согласованному набору
+  шифров.**
+
+  Было: записи создавались по набору из конфигурации сессии, а не по
+  выбранному в рукопожатии. При разных настройках сторон (L и S) ключи
+  TLSTREE расходились с 9-й записи, и соединение рвалось с ошибкой
+  проверки подлинности; SNMAX брался не от согласованного набора.
+
+  Стало: ключи и SNMAX всегда берутся от набора, выбранного в
+  рукопожатии (RFC 9367); `getCipherSuite()` до рукопожатия возвращает
+  настроенный набор, после него согласованный.
+
+- **\[SECURITY:P1\] `TlsSession` закрывается на первой же ошибке:
+  чтение, запись, смена ключа и рукопожатие.**
+
+  Было: после подделанной или повреждённой записи `read()` не отправлял
+  alert и не закрывал сессию; номер записи при отказе не растёт, поэтому
+  атакующий мог подбирать тег MGM на одном номере, а сессия продолжала
+  работать. Сбой транспорта и исчерпание SNMAX в `write()`, сбой
+  отправки в `initiateKeyUpdate()` (движок оставался в ожидании
+  подтверждения новых ключей) и неудачное рукопожатие тоже оставляли
+  сессию живой. После fatal alert пира движок с секретами не
+  уничтожался, повторный вызов `handshakeAs…` проходил, а копия
+  расшифрованных данных приложения не затиралась.
+
+  Стало: единый метод остановки уничтожает движок, ключи записей и буфер
+  открытого текста. `read()` на `TlsException` отправляет fatal alert,
+  на `RuntimeException` отправляет `internal_error` (в лог только класс
+  исключения), на сбое транспорта останавливает сессию без alert.
+  `write()` и `initiateKeyUpdate()` останавливают сессию при сбое
+  транспорта и при исчерпании SNMAX. Сессия закрывается при любой ошибке
+  рукопожатия, повторный `handshakeAs…` даёт `IllegalStateException`.
+  Ошибки вызова (слишком большой фрагмент, превышен лимит KeyUpdate)
+  сессию не закрывают.
+
+- **\[BUGFIX\] Сбой проверки записи: alert `bad_record_mac` (20) вместо
+  `decrypt_error` (51).**
+
+  Было: подделанная запись отвергалась с кодом 51, который по RFC 8446
+  §5.2 относится к ошибкам подписи и Finished; константа
+  `ALERT_BAD_RECORD_MAC` не использовалась. Подлинная запись без единого
+  ненулевого байта (нет типа содержимого) отвергалась как ошибка
+  проверки.
+
+  Стало: сбой проверки записи даёт `bad_record_mac`, запись без типа
+  содержимого даёт `unexpected_message` (RFC 8446 §5.4); `decrypt_error`
+  остаётся для CertificateVerify, Finished и binder PSK.
+
+- **\[BUGFIX\] Секреты затираются, а не теряются: ключ ECDHE сервера,
+  прежние ключи при смене ключа, копии RMS.**
+
+  Было: серверный эфемерный ключ ECDHE после расчёта общего секрета
+  только терял ссылку и оставался в памяти нетронутым; прежние
+  `TlsTrafficKeys` при KeyUpdate заменялись без затирания (записи сессии
+  держат собственные копии, поэтому их уничтожение оригиналы не
+  трогало); копии Resumption Master Secret в `TlsSession` не затирались.
+  `TlsRecord` после `destroy()` молча шифровал нулевым ключом.
+
+  Стало: ключ ECDHE затирается сразу после расчёта, прежние ключи
+  затираются при смене, копии RMS затираются в `finally`.
+  `TlsRecord.protect` и `unprotect` после `destroy()` бросают
+  `IllegalStateException`, повторный `destroy()` безопасен.
+
+- **\[BUGFIX\] KeyUpdate: один ответ на несколько запросов пира,
+  повторный вызов объединяется с первым.**
+
+  Было: два `update_requested` подряд до подтверждения смены ключа (в
+  jsse оно откладывается до `wrap()`) ставили два ответных KeyUpdate,
+  выведенных из одного и того же секрета; пир сдвигал ключ чтения
+  дважды, а отправитель ключ записи один раз, и следующие записи не
+  расшифровывались. Повторный `initiateKeyUpdate` до подтверждения давал
+  то же.
+
+  Стало: на несколько запросов пира отправляется один ответ (ключ чтения
+  сдвигается на каждый запрос). Повторный
+  `TlsHandshakeEngine.initiateKeyUpdate` до отдачи стоящего KeyUpdate
+  объединяется с первым: секрет записи сдвигается один раз, запрос
+  `update_requested` повышает стоящее сообщение; `TlsSession` при этом
+  не закрывается.
+
+- **\[BUGFIX\] Alert пира в рукопожатии не отражается обратно, на
+  `close_notify` пира отправляется ответный `close_notify`.**
+
+  Было: fatal alert пира внутри рукопожатия превращался в исключение с
+  его же кодом, и `TlsSession` отправляла этот код пиру обратно; на
+  `close_notify` пира в рукопожатии отвечала `handshake_failure`; на
+  обрыв транспорта пыталась отправить alert в закрытое соединение.
+
+  Стало: на fatal alert пира ответа нет, сессия закрывается; на
+  `close_notify` отправляется один ответный `close_notify` (открытой
+  записью, пока нет ключей записи, зашифрованной после); на обрыв
+  транспорта alert не отправляется (RFC 8446 §6, §6.1).
+
+- **\[SECURITY:P2\] Открытые записи до ключей и alert разбираются
+  строго: тип, длина, пустые и склеенные записи.**
+
+  Было: открытая запись до установки ключей целиком шла в буфер
+  рукопожатия: alert пира (например, `handshake_failure` от сервера без
+  общего набора шифров) превращался в мусор handshake, пользователь
+  видел ошибку разбора или обрыв вместо настоящей причины; тип 23,
+  запись длиннее 2¹⁴, хвост за записью и пустые записи не отвергались;
+  alert длиной больше двух байт принимался молча; в `ClientHello` не
+  проверялся конец блока расширений.
+
+  Стало: открытая запись принимается только как handshake или alert
+  (`unexpected_message` для другого типа), длина больше 2¹⁴ даёт
+  `record_overflow`, хвост за записью и `ClientHello` с хвостом после
+  расширений - `decode_error`. Пустая handshake-запись (открытая,
+  зашифрованная, в `read()`) и пустой alert - `unexpected_message`,
+  alert из одного байта или склеенные alert - `decode_error` (RFC 8446
+  §5.1, §5.4). Версию открытой записи не проверяем: RFC 8446 §5.1 велит
+  игнорировать поле.
+
+- **\[BUGFIX\] `read()` разбирает все служебные сообщения записи;
+  сообщения не пересекают смену ключа, размер ограничен.**
+
+  Было: из handshake-записи после рукопожатия обрабатывалось одно
+  сообщение, остаток ждал следующей записи (ответ на KeyUpdate из
+  середины записи задерживался); данные приложения посреди
+  незавершённого сообщения принимались; границы записи перед сменой
+  ключа никто не проверял (байты после Finished пира молча
+  отбрасывались); размер служебного сообщения был ограничен только общим
+  пределом на цепочку сертификатов (около 3 МБ).
+
+  Стало: все сообщения записи разбираются до приёма следующей,
+  `MAX_POST_HANDSHAKE` - единственный лимит числа сообщений за вызов, а
+  число handshake-записей за вызов ограничено бюджетом
+  `MAX_POST_HANDSHAKE_RECORDS` (выведен из пределов сообщений; данные
+  приложения и alert в него не входят); сообщение перед сменой ключа
+  (KeyUpdate, Finished, ServerHello, ClientHello) обязано заканчивать
+  запись, иначе `unexpected_message` (RFC 8446 §5.1); запись другого
+  типа между фрагментами сообщения даёт `unexpected_message` (alert
+  разбирается первым); размер служебного сообщения ограничен
+  `TlsConstants.MAX_POST_HANDSHAKE_MESSAGE_SIZE` и проверяется по
+  заголовку.
+
+- **\[SECURITY:P2\] Лимит KeyUpdate: окно по времени для чужих
+  обновлений вместо счётчика на соединение, собственные не считаются.**
+
+  Было: общий счётчик (32) на соединение считал и собственные, и чужие
+  KeyUpdate, поэтому приложение с периодической сменой ключа (раз в час)
+  теряло соединение на 33-м обновлении без вины пира; защиту от потока
+  сообщений счётчик не обеспечивал.
+
+  Стало: чужие KeyUpdate ограничены скользящим окном
+  (`TlsConstants.MAX_PEER_KEY_UPDATES_PER_WINDOW` = 10 за
+  `KEY_UPDATE_RATE_WINDOW_NANOS` = 1 с), превышение даёт
+  `unexpected_message`; собственные обновления не ограничиваются
+  (доверенное приложение). `TlsHandshakeEngine.initiateKeyUpdate` больше
+  не бросает `TlsException` по лимиту; у прямых пользователей движка
+  окно единственная защита, а `MAX_POST_HANDSHAKE` в `read()` защищает
+  от всплеска подряд идущих сообщений.
+
+- **\[BUGFIX\] Селектор ALPN: `null` завершает рукопожатие алертом
+  `no_application_protocol` (120), пустая строка означает «без ALPN».**
+
+  Было: `null` от `TlsHandshakeEngine.setAlpnSelector` молча трактовался
+  как «ALPN не используем», и отказ селектора (например, Netty при
+  `FATAL_ALERT`) превращался в успешное рукопожатие; контракт JDK
+  (`SSLEngine.setHandshakeApplicationProtocolSelector`) и RFC 7301 §3.2
+  требуют отказа.
+
+  Стало: `null` даёт `TlsException` с алертом 120, пустая строка
+  продолжает рукопожатие без ALPN, протокол не из списка клиента
+  по-прежнему отвергается.
+
+### Изменено
+
+- **\[OPS\] Записи tls13 несут `[conn#N]`, alert пишется именем, набор
+  шифров - именем и кодом.**
+
+  Метка `conn#N` выдаётся один раз на `TlsHandshakeEngine` и ставится
+  префиксом к записям соединения; записи до создания движка идут без
+  префикса. Alert пишется как `bad_certificate (42)`, набор шифров -
+  `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L (0xc103)`; `close_notify`
+  больше не отдельная строка.
+
+- **\[CHANGE\] Отзыв по OCSP-степлу несёт серийный номер; предупреждение
+  режима interop пишется один раз на процесс.**
+
+  Было: `TlsCertUtils.verifyOcspResponse` бросал постоянный текст без
+  идентификатора, а запись менеджера доверия при отзыве не называла
+  сертификат; `interopAcceptGostBaseSigScheme` и staple без сертификата
+  издателя давали WARNING на каждое рукопожатие.
+
+  Стало: `TlsException` при отзыве содержит `serial=0x...`;
+  предупреждение interop — одна запись на процесс (`AtomicBoolean`);
+  staple без издателя пишется на DEBUG.
+
+- **\[OPS\] Отказ PSK по данным клиента (неверный binder, возраст
+  билета) пишется на DEBUG, а не WARNING.**
+
+  Было: проверка binder и `ticket_age` писала WARNING; запись binder
+  повторяла исключение с тем же текстом и alert `decrypt_error`. Любой
+  клиент мог заполнить журнал сервера предупреждениями, а причина отказа
+  уже была в исключении.
+
+  Стало: причина остаётся в `TlsException` и в alert, запись о возрасте
+  билета и о пропуске тикета по имени сервера на DEBUG. Схемы подписи
+  собеседника (сервер не предложил схему сертификата клиента, клиент не
+  предложил схему сертификата сервера), билет, не поместившийся в
+  ClientHello или слишком длинный для предъявления, пишутся на DEBUG.
+  WARNING остаются: чужая привязка и просроченная запись хранилища PSK,
+  сбой вывода PSK в `TlsTicketHelper`, сбой `PskStore.onTicketReceived`,
+  пропуск проверки OCSP без сертификата издателя, режим
+  `interopAcceptGostBaseSigScheme`, неверная подпись `CertificateVerify`
+  (серийный номер), непредвиденный сбой библиотеки. Сбой при чтении
+  теперь пишется и при рукопожатии, с классом исключения без текста.
+
+- **\[CHANGE\] Якоря клиента задаются одним способом; предупреждение о
+  неверной подписи `CertificateVerify` без DN.**
+
+  Было: в 0.7.1 якоря клиента задавались открытыми ключами через
+  конструктор и `withCaPublicKey(s)`; в предупреждении о неверной
+  подписи CertificateVerify стоял subject DN собеседника, в котором у
+  квалифицированного сертификата ФИО, СНИЛС и ИНН.
+
+  Стало: единственный путь -
+  `TlsClientConfig.withTrustAnchors(TrustAnchors)`, как
+  `TlsServerConfig.needClientAuth(TrustAnchors)`. В предупреждении
+  серийный номер, усечённый DN на DEBUG.
+
+- **\[CHANGE!\] Смена ключа записи — элемент выходного потока
+  `TlsHandshakeEngine.poll()`.**
+
+  Было: `poll()` отдавал `byte[]`, смена ключа записи сообщалась флагом
+  (`hasWriteKeysChanged`, `getWriteKeys`, `confirmWriteUpdate`,
+  `hasPendingWriteUpdate`), и её место относительно сообщений держалось
+  на порядке вызовов.
+
+  Стало: `poll()` отдаёт `HandshakeOutput`: `Message` или
+  `WriteKeyChange` сразу за сообщением, после которого смена действует
+  на проводе. Метка несёт ключи и набор шифров эпохи, как
+  `RecordMemo.encodeCipher` в JDK. KeyUpdate идёт так же. Флаговое API
+  удалено, `acknowledgeKeyChange` переименован в
+  `acknowledgeReadKeyChange`, добавлен `isKeyUpdateQueued`. Ключи в
+  неотданных метках затирает `destroy()`. У клиента и сервера одно поле
+  набора шифров: отдельное поле «согласованного» набора у клиента
+  расходилось с основным.
+
+- **\[CHANGE\] Общий сборщик сообщений рукопожатия
+  `HandshakeMessageAssembler`.**
+
+  Было: `TlsSession` и движок jsse собирали сообщения каждый своим
+  буфером.
+
+  Стало: один сборщик: пределы по типу сообщения, граница записи при
+  смене ключа чтения, отказ пустой записи; остаток не переписывается на
+  каждую запись.
+
+- **\[CHANGE\] `TlsClientConfig` и `TlsServerConfig` хранят копии
+  переданных списков и массивов.**
+
+  Было: конфигурации сохраняли ссылки на цепочки сертификатов, списки
+  ALPN, `oidFilters` и массив OCSP-ответа вызывающего и отдавали их же
+  геттерами. Проверку при установке (например, длины имён ALPN) можно
+  было обойти изменением списка после неё, OCSP-ответ подменить, цепочку
+  изменить во время рукопожатия;
+  `withClientCertificateChain(GostCertificate...)` оборачивал чужой
+  массив.
+
+  Стало: при приёме проверка выполняется над копией, которая затем и
+  сохраняется (списки неизменяемы, `byte[]` копируется). Геттеры списков
+  отдают неизменяемый список, геттеры OCSP-ответа отдают копию.
+  Изменение исходного списка или массива после настройки больше не
+  действует, попытка изменить список из геттера даёт
+  `UnsupportedOperationException`. `null` по-прежнему принимается там,
+  где значим (клиентская цепочка, `oidFilters`, OCSP-ответ).
+
+- **\[CHANGE\] Фильтр `oid_filters` берёт значение расширения у
+  `GostCertificate.getExtensionValue`, ручной обход DER сертификата
+  удалён.**
+
+  Было: `TlsCertUtils` заново обходил TBS-часть DER сертификата
+  (version, serial, SPKI, uniqueID, расширения) и мягче, чем pkix, искал
+  расширение; при побайтовом сравнении значения передавался конец
+  диапазона вместо длины, поэтому фильтр почти всегда не срабатывал, а
+  на сертификате с `issuerUniqueID` или `subjectUniqueID` (теги `0x81`,
+  `0x82`) обход TBS выходил с `false`.
+
+  Стало: значение берётся из строгого разбора pkix
+  (`GostCertificate.getExtensionValue`), около 80 строк обхода DER и
+  вспомогательные методы удалены, `uniqueID` больше не мешает. Значение
+  фильтра сравнивается с значением расширения побайтно, пустое значение
+  требует наличия расширения; `GostX509KeyManager` учитывает такие
+  фильтры при выборе клиентского сертификата.
+
+- **\[CHANGE\] Изменяемые массивы `TlsConstants.HRR_RANDOM` и
+  `TlsConstants.MAX_FRAG_LEN_VALUES` удалены, для `max_fragment_length`
+  добавлены `TlsUtils.maxFragmentLength(int)` и
+  `TlsUtils.isMaxFragmentLengthCode(int)`.**
+
+  Было: оба массива были публичными и изменяемыми, их содержимое могло
+  подменить любой вызывающий код; диапазон кодов 1..4 проверялся числами
+  более чем в десяти местах, а индексирование `MAX_FRAG_LEN_VALUES`
+  недопустимым кодом давало `ArrayIndexOutOfBoundsException`.
+
+  Стало: значение random у HelloRetryRequest видно только пакету разбора
+  сообщений, снаружи остаётся предикат
+  `TlsMessageParser.isHelloRetryRequest`.
+  `TlsUtils.maxFragmentLength(code)` возвращает размер фрагмента по коду
+  1..4, для нуля и недопустимых кодов полный размер
+  `MAX_PLAINTEXT_LENGTH`; `TlsUtils.isMaxFragmentLengthCode(code)`
+  единственный предикат допустимого кода. Запись, сессия, сборка и
+  разбор сообщений, `GostSSLSocket` и `GostSSLEngine` используют их
+  вместо собственных проверок.
+
+- **\[CHANGE\] Конструктор `TlsHandshakeEngine` проверяет длину хеша,
+  сервер не выбирает набор шифров с другой длиной хеша.**
+
+  Было: длина хеша для секретов KeyUpdate приходила в конструктор
+  отдельно от набора шифров, а ключи и IV выводились по длине из набора;
+  при расхождении KeyUpdate молча вывел бы неверные ключи. Согласование
+  набора на сервере длину хеша не учитывало.
+
+  Стало: конструктор отвергает `hashLen`, не равный
+  `ciphersuite.getHashLen()`, с `IllegalArgumentException`.
+  `TlsMessageBuilder.negotiateCiphersuite(byte[], TlsCiphersuite, int)`
+  получил третий параметр, длину хеша движка, и пропускает наборы с
+  другой длиной: клиент, предложивший допустимый набор, получает его, а
+  при отсутствии пересечения прежний `handshake_failure`. Сегодня все
+  наборы 256-битные, поведение не меняется.
+
+- **\[CHANGE\] Магические числа заменены именованными константами
+  `TlsConstants`.**
+
+  Было: размеры и пределы (длина преамбулы ClientHello, заголовок
+  CertificateVerify, пределы длины имени и списка ALPN, длина тикета и
+  его nonce, начальный размер буфера рукопожатия, длина ключа TLSTREE)
+  стояли в коде числами, `Arrays.fill` затирал отдельные буферы мимо
+  `TlsUtils.wipeArray`, а ветки EKU и CertificatePolicies в фильтре
+  `oid_filters` повторяли друг друга.
+
+  Стало: добавлены `CLIENT_HELLO_FIXED_PREAMBLE_LENGTH`,
+  `CERTIFICATE_VERIFY_HEADER_SIZE`, `ALPN_PROTOCOL_NAME_MAX_LENGTH`,
+  `ALPN_PROTOCOL_LIST_MAX_LENGTH`, `MAX_TICKET_LENGTH`,
+  `TICKET_NONCE_LENGTH`, `HANDSHAKE_BUFFER_INITIAL_CAPACITY`; затирание
+  идёт через `wipeArray`; фильтры EKU и CertificatePolicies используют
+  один метод. Поведение не изменилось.
+
+- **\[CHANGE\] Вывод ключей KeyUpdate, PSK binder и PSK возобновления
+  сведён в `TlsKeySchedule`, метки HKDF стали внутренними.**
+
+  Было: блок вывода ключей при KeyUpdate («traffic upd», затем «key» и
+  «iv») стоял в `TlsHandshakeEngine` трижды; `finished_key` с HMAC
+  выводился отдельно в `TlsKeySchedule` и в `TlsPskHelper`; метки HKDF
+  лежали в публичных изменяемых массивах `HkdfStreebog.PREFIXED_*` и
+  `HkdfStreebog.LABEL_PREFIX`, а строки `TlsConstants.LABEL_*` в рабочем
+  коде не использовались (в тестах заменены литералами).
+
+  Стало: статические `TlsKeySchedule.nextTrafficSecret`,
+  `deriveTrafficKeys(secret, ciphersuite)`, `computePskBinder`,
+  `derivePsk` работают без экземпляра (после рукопожатия он уничтожен),
+  движок готовит отложенные ключи записи одним закрытым методом.
+  `HkdfStreebog.PREFIXED_*` и `LABEL_PREFIX` видны только пакету
+  `crypto` и собираются из `TlsConstants.HKDF_LABEL_PREFIX`;
+  `TlsConstants.LABEL_*` (кроме `LABEL_TLSTREE_*`) удалены. Выводимые
+  значения и порядок затирания секретов не изменились;
+  `TlsPskHelper.derivePsk` прежний.
+
+- **\[CHANGE\] Удалены неиспользуемые публичные символы.**
+
+  Было: в `TlsHandshakeEngine`, `HandshakeContext`, `TlsCiphersuite`,
+  `TlsConstants` оставались методы и константы без единого вызова:
+  `getServerAppTrafficSecret` и `getClientAppTrafficSecret` движка,
+  `State.HANDSHAKE_DONE`, `hasEcdheKey`, `getAcceptedCaDns`,
+  `setAcceptedCaDns`, `setOidFilters`, `getOidFilters` контекста
+  рукопожатия, методы отображения IANA-имён групп и схем подписи в
+  `TlsCiphersuite` с константами `IANA_GC*` и `IANA_SIG_*`,
+  `MAX_DELEGATED_CERTS`.
+
+  Стало: символы удалены, секреты трафика движок наружу больше не
+  отдаёт. `isDone()` сравнивается только с `POST_HANDSHAKE`. Имена
+  шифронаборов, `getIanaName` и `byIanaName` остались.
+
+- **\[CHANGE\] `TlsMessageBuilder.buildHelloRetryRequest(int, byte[])`
+  стал внутренним.**
+
+  Было: публичный метод собирал HelloRetryRequest с cookie и пустым
+  `legacy_session_id`, то есть не по RFC 8446 §4.1.3; рабочий код его не
+  вызывал.
+
+  Стало: метод доступен только тестам модуля, для HelloRetryRequest
+  сервер использует перегрузку с запрошенной группой.
+
+- **\[CHANGE\] `TlsHandshakeEngine.PostHandshakeResult` отдаёт
+  разобранный `NewSessionTicket`.**
+
+  Было: поле `nstBody` (сырое тело), каждый потребитель разбирал его
+  сам.
+
+  Стало: поле `ticket` типа `TlsMessageParser.ParsedNewSessionTicket`,
+  разбор один раз в движке.
+
+- **\[CHANGE!\] Сигнатуры разбора ответных сообщений принимают множество
+  отправленных расширений.**
+
+  Было: `parseServerHello(byte[])`, `parseCertificate(byte[])`,
+  `parseEncryptedExtensions(byte[])`.
+
+  Стало: `parseServerHello(byte[], Set<Integer>)`,
+  `parseCertificate(byte[], Set<Integer>)`,
+  `parseEncryptedExtensions(byte[], Set<Integer>)`; старые перегрузки
+  удалены. Типы расширений собственного ClientHello извлекает
+  `TlsMessageParser.extensionTypesOfClientHello`. `ParsedServerHello`
+  несёт `legacySessionIdEcho` и `selectedPskIdentity`
+  (`NO_PSK_IDENTITY`, если `pre_shared_key` нет), а
+  `TlsMessageBuilder.getSentLegacySessionId()` отдаёт идентификатор,
+  записанный в ClientHello.
+
+- **\[ENHANCEMENT\] Имена ALPN кодируются ISO-8859-1 вместо US-ASCII,
+  сеттеры движка проверяют имена при установке.**
+
+  Было: в ClientHello и в ответе сервера символ выше U+007F молча
+  превращался в `?`, а байты от 0x80 в ответе пира в U+FFFD; сеттеры
+  ALPN движка и `SSLParameters.setApplicationProtocols` имена не
+  проверяли, ошибка всплывала из `beginHandshake`.
+
+  Стало: символ U+0000..U+00FF передаётся одним байтом без искажений,
+  как в JDK 16+ (например, GREASE `0x8A8A`); символ выше U+00FF
+  отвергается; `TlsHandshakeEngine.setClientAlpnProtocols`,
+  `setServerAlpnProtocols` проверяют имена при установке, `null` и
+  пустой список допустимы.
+
+- **\[CHANGE\] `ClientCertificateSelector.select` получает запрос
+  целиком (`ClientCertificateRequest`) и вызывается на каждый
+  CertificateRequest; селектор единственный источник учётных данных.**
+
+  Было: `select(List<byte[]> caDns, List<OIDFilter> oidFilters)`
+  вызывался только при непустых `oid_filters` или
+  `certificate_authorities`, схем подписи сервера не получал, а без
+  фильтров уходила цепочка из `TlsClientConfig`; `null` от селектора при
+  отсутствии фильтров цепочку из конфигурации не отменял. Разобранный
+  запрос был вложенной записью
+  `TlsMessageParser.CertificateRequestInfo`.
+
+  Стало: `select(ClientCertificateRequest request)` (запись перенесена в
+  `org.rssys.gost.tls13.config` вместе с неизменяемостью: списки и
+  массивы копируются, аксессоры отдают копии; `OIDFilter` тоже копирует
+  массивы) получает DN удостоверяющих центров, OID-фильтры, признак
+  запроса OCSP-staple и схемы подписи сервера. Селектор вызывается на
+  каждый CertificateRequest, и `null` от него даёт пустой Certificate:
+  цепочка из `TlsClientConfig` не подставляется. Лямбду
+  `(caDns, oidFilters) -> ...` перепишите в `request -> ...`
+  (`request.caDns()`, `request.oidFilters()`); без селектора поведение
+  прежнее.
+
+- **\[CHANGE\] `parseClientHelloSni` бросает `TlsException`;
+  `setServerHostname` и `TlsMessageBuilder.buildClientHello` бросают
+  `IllegalArgumentException` на недопустимое имя.**
+
+  Было: `parseClientHelloSni` на любой ошибке отдавал `null`;
+  `setServerHostname("пример.рф")` или имя с NUL молча отправляли
+  ClientHello без SNI.
+
+  Стало: `parseClientHelloSni` бросает `TlsException` (`decode_error`
+  или `unrecognized_name`), `null` означает только «расширения нет» или
+  неверный `legacy_version`. `setServerHostname` и `buildClientHello`
+  отвергают недопустимое имя `IllegalArgumentException`: имя в Unicode
+  передавайте A-меткой (`xn--e1afmkfd.xn--p1ai`) или через
+  `TlsClientConfig.withServerHostname`, который преобразует его сам.
+
+- **\[CHANGE\] `InMemoryTlsTransport`: закрытие любой стороны закрывает
+  соединение целиком, отправка в закрытое соединение - `IOException`.**
+
+  Было: `close()` закрывал только свою сторону; у пары `sendRecord` в
+  закрытого пира молча ставил запись в очередь, которую никто не читает;
+  у одиночного транспорта `sendRecord` после закрытия бросал
+  `IllegalStateException`.
+
+  Стало: метка закрытия общая для пары, полузакрытия на уровне
+  транспорта нет (полузакрытие RFC 8446 §6.1 выражается через
+  `close_notify`); `sendRecord` в закрытое соединение (в том числе у
+  одиночного транспорта) бросает `IOException`, `inject` по-прежнему
+  `IllegalStateException`. Записи, поставленные до закрытия, получатель
+  читает по порядку до исключения.
+
+- **\[SECURITY:P2\] `TlsHandshakeEngine.setPsk` отвергает пустую,
+  отсутствующую и не помещающуюся в расширение identity; клиент не
+  сохраняет слишком длинный тикет.**
+
+  Было: пустая identity уходила в ClientHello, и строгий сервер отвечал
+  `decode_error` посреди рукопожатия; identity длиной 65493-65535 байт
+  переполняла длины расширения.
+
+  Стало: `IllegalArgumentException` при настройке (граница
+  `TlsPskHelper.maxIdentityLength`, 65492 байта при Стрибоге-256); тикет
+  из `NewSessionTicket` длиннее границы не сохраняется (tls13 и jsse).
+  Граница лишь грубый фильтр: тикет предельной длины вместе с другими
+  расширениями всё равно может не поместиться в блок расширений
+  ClientHello (uint16). Тогда клиент собирает ClientHello без
+  `pre_shared_key`, идёт полным рукопожатием и убирает тикет из кэша
+  (`TlsHandshakeEngine.isPskOfferWithdrawn()`), а не падает с
+  `IllegalArgumentException` на каждом соединении. Во втором ClientHello
+  после HRR PSK снять нельзя: переполнение из-за cookie сервера даёт
+  `TlsException` с `internal_error`.
+
+- **\[CHANGE\] ClientHello выпусков 0.2.0-0.7.1 с PSK отвергается
+  `decode_error`.**
+
+  Было: сервер принимал `pre_shared_key`, укороченный на 2 байта (binder
+  затирал младший байт длины списка binders и байт длины binder).
+
+  Стало: такой кадр нарушает структуру и отвергается, в том числе во
+  втором ClientHello.
+
+- **\[CHANGE\] Неверный `Finished` и неверная подпись
+  `CertificateVerify` дают `decrypt_error`.**
+
+  Было: `handshake_failure` для `Finished` и `bad_certificate` для
+  подписи.
+
+  Стало: `decrypt_error` (RFC 8446 §4.4.3, §4.4.4). Несовместимая со
+  схемой ключа подпись по-прежнему `bad_certificate`.
+
+- **\[CHANGE!\] `TlsPskHelper.verifyBinder` и `verifyBinderAfterHrr`
+  принимают смещения вектора binders и binder; `buildServerHello`
+  принимает номер identity; удалены `parseClientHelloPskIdentity`,
+  `parseClientHelloPskIdentityAndAge`, `parseServerHelloHasPsk`.**
+
+  Было: проверка резала хвост `3 + hashLen`, ServerHello всегда нёс
+  `selected_identity = 0`, разбор был мягким.
+
+  Стало: усечение по началу вектора binders,
+  `buildServerHello(point, int selectedPskIdentity, group)`, разбор
+  через `TlsMessageParser.parseClientHelloPsk` и
+  `parseServerHello(body, sentExtensionTypes).selectedPskIdentity`.
+
+- **\[CHANGE!\] Удалены `TlsPskHelper.computeBinderForHrr` и
+  `verifyBinderForHrr`, добавлены `computeBinderAfterHrr` и
+  `verifyBinderAfterHrr`.**
+
+  Было: методы принимали `Hash(message_hash || HRR)`.
+
+  Стало: принимают `message_hash || HRR` в сыром виде. Имена изменены
+  намеренно: оба параметра имеют тип `byte[]`, и старый вызов с хэшем
+  компилировался бы и молча давал неверный binder.
+
+- **\[CHANGE\] Неверный PSK binder даёт алерт `decrypt_error` вместо
+  `handshake_failure` (RFC 8446 §6.2).**
+
+- **\[CHANGE!\] `TlsSession.wasResumed()`: итог запоминается при
+  завершении рукопожатия.**
+
+  Было: метод бросал `IllegalStateException` после `close()`, хотя
+  Javadoc обещал `false`.
+
+  Стало: до завершения рукопожатия `IllegalStateException`, после него -
+  итог последнего рукопожатия, в том числе после `close()`.
+
+- **\[CHANGE\] `TlsSignatureCodec.sign` и `verify` проверяют `rolen`
+  против кривой.**
+
+  Было: `rolen` не сверялся с длиной порядка кривой; слишком длинный
+  `rolen` при подписи молча дополнял компоненты нулями.
+
+  Стало: `IllegalArgumentException`, если `rolen` не равен
+  `ceil(n.bitLength()/8)`.
+
+- **\[CHANGE!\] `PskEntry`: обязательный параметр `validUntil`.**
+
+  Было: конструктор принимал семь параметров.
+
+  Стало: восьмой параметр `validUntil` (миллисекунды эпохи);
+  `PskEntry.NO_CERTIFICATE_BOUND` - для записей без границы, библиотека
+  сама её не использует. Появились `getValidUntil()` и публичный
+  `PeerTrustBoundary` (цепочка границы доверия, `min(notAfter)`,
+  ограничение срока тикета).
+
+- **\[SECURITY:P1\] API `PskStore` и `PskEntry`: привязка тикета к
+  серверу и модели доверия.**
+
+  Было: `getForResumption()` без параметров, конструктор `PskEntry` без
+  привязки; собственные реализации `PskStore` не различали серверов.
+
+  Стало: `getForResumption(PskBinding)` возвращает запись только с
+  равной привязкой, у `PskEntry` обязательный параметр `binding`
+  (серверная запись - `PskBinding.forServer(sni)`, запись JSSE-клиента -
+  настоящая привязка к серверу и модели доверия), у `TlsCiphersuite`
+  появился `getKdfHashAlgorithm()`. Собственные реализации `PskStore`
+  нужно обновить. Клиент и сервер должны использовать разные экземпляры
+  хранилища: запись клиента и запись сервера с одним тикетом в общем
+  хранилище затирают друг друга. Примеры и тест Android-демо переведены
+  на два хранилища.
+
+- **\[CHANGE\]
+  `TlsCertUtils.verifyOcspResponse(cert, issuer, maxOcspAgeMs)`
+  принимает ещё `Duration maxThisUpdateAge`.**
+
+  Перегрузка с `long maxOcspAgeMs` заменена версией с дополнительным
+  параметром; `null` сохраняет прежнее поведение, перегрузка без
+  настройки свежести не менялась.
+
+- **\[CHANGE\] `TlsEncoding.decodePoint`: повторная проверка
+  принадлежности точки подгруппе убрана.**
+
+  Ранее после создания `PublicKeyParameters` точка проверялась ещё раз,
+  на кривых с кофактором 4 это лишнее скалярное умножение на каждое
+  рукопожатие.
+
+  Стало: проверяет конструктор, его `IllegalArgumentException`
+  переводится в `handshake_failure`; для пира поведение прежнее (точка
+  вне кривой или вне подгруппы → тот же alert).
+
+- **\[CHANGE!\] `TlsCertificateValidator`: единая политика
+  `TlsPeerPolicy` вместо перегрузок `check*` (breaking change).**
+
+  Ранее роль (сервер, клиент) и стадия проверки были закодированы в
+  именах методов (`checkServerCertificateChain`,
+  `checkClientCertificateChain`), а перегрузки различались
+  обязательностью staple и возрастом OCSP-ответа.
+
+  Стало: `TlsPeerPolicy.server(hostname, anchors)` / `client(anchors)` с
+  `requireOcspStaple(boolean)` и `maxOcspAge(ms)`; для явного
+  небезопасного режима — `serverLeafOnly(hostname)` и
+  `clientLeafOnly()`. `null` и пустое имя сервера дают
+  `IllegalArgumentException`; проверка без сверки имени выбирается явно:
+  `serverWithoutHostnameVerification(anchors)` и
+  `serverLeafOnlyWithoutHostnameVerification()`. Валидатор: `validate`,
+  `validateStructure` (стадия до сетевой загрузки отзыва, возвращает
+  эффективную цепочку), `validateRevocation`, `validateLeafOnly`,
+  `verifyCertificateVerify`. Если leaf невалиден и корень неизвестен,
+  alert теперь `bad_certificate` (был `unknown_ca`).
+
+- **\[CHANGE!\] Режим mTLS на сервере задаётся вместе с доверенными
+  якорями (breaking change).**
+
+  Ранее mTLS включался наличием ключей CA (`withCaPublicKeys`): `null`
+  или пустой список молча его отключали, а режим «клиентский сертификат
+  необязателен» в прямом tls13 был недоступен.
+
+  Стало: по умолчанию mTLS выключен (`ClientAuth.NONE`); режим и якоря
+  задаются одним вызовом `TlsServerConfig.needClientAuth(TrustAnchors)`
+  или `wantClientAuth(TrustAnchors)`, `null` и пустой набор отвергаются
+  (`IllegalArgumentException`), последний вызов заменяет режим и якоря
+  целиком. Настройка клиентской конфигурации описана в записи про
+  key-only API.
+
+- **\[DOCS\] `TlsServerConfig`: документация о проверке отзыва
+  клиентского сертификата.**
+
+  Ранее Javadoc утверждал, что прямой tls13-путь проверяет присланный
+  клиентом OCSP-staple, хотя сервер не запрашивал `status_request` в
+  CertificateRequest и отклонял клиентский staple.
+
+  Стало: явно указано, что по умолчанию (`ClientOcspPolicy.OFF`) прямой
+  tls13-сервер отзыв клиентского сертификата не проверяет; проверку
+  staple включает `withClientOcspPolicy`, CRL и загрузку OCSP по сети
+  выполняет JSSE (`GostX509TrustManager`).
+
+- **\[CHANGE!\] `TlsServerConfig` и `TlsClientConfig`: удалён key-only
+  API (breaking change).**
+
+  Ранее `withCaPublicKeys(emptyList())` и `withCaPublicKey(null)` молча
+  выключали запрос клиентского сертификата, а key-конструкторы принимали
+  `PublicKeyParameters`.
+
+  Стало: удалены key-конструкторы, `withCaPublicKey(s)` и
+  `getCaPublicKey(s)`. Миграция: `new TlsClientConfig(cs, caKey)` →
+  `new TlsClientConfig(cs, TrustAnchors.ofCertificate(caCert))`, а
+  `withCaPublicKey(key)` →
+  `withTrustAnchors(TrustAnchors.ofCertificate(cert))` (клиентская
+  конфигурация). mTLS у сервера включается
+  `needClientAuth`/`wantClientAuth`, по умолчанию он выключен
+  (`ClientAuth.NONE`).
+
+- **\[CHANGE\] Прямой tls13-путь не загружает отзыв клиентской
+  цепочки.**
+
+  По умолчанию `CertificateRequest` не содержит `status_request`,
+  поэтому сервер не запрашивает OCSP у клиента (запрос включается
+  `ClientOcspPolicy`). Присланный staple проверяется по всем
+  сертификатам цепочки, но CRL и активная загрузка OCSP не выполняются.
+  Для полной проверки отзыва клиентской цепочки используйте JSSE.
+
+- **\[CHANGE!\] `TlsRecord`: ошибки формата записи - `TlsException` с
+  `decode_error`, а не `IllegalArgumentException`.**
+
+  Было: `unprotect` на коротком теле, неверной версии заголовка,
+  несовпадении длины и нагрузке короче тега бросал
+  `IllegalArgumentException`, который выходил из `TlsSession.read()`
+  вместо fatal alert.
+
+  Стало: эти ошибки - `TlsException` с `decode_error`; превышение длины
+  остаётся `record_overflow`. `IllegalArgumentException` только для
+  `null`.
+
+- **\[CHANGE!\] `TlsSession.read()`: fatal alert пира - `TlsException` с
+  кодом, `close_notify` - `PeerClosedException`.**
+
+  Было: fatal alert пира выходил из `read()` как `IOException` с кодом
+  только в тексте, `close_notify` - как голый `EOFException`, который
+  нельзя было отличить от обрыва транспорта.
+
+  Стало: fatal alert пира - `TlsException` с `isFromPeer() == true` и
+  `getAlertCode()`; `close_notify` - `PeerClosedException` (наследует
+  `EOFException`, прежний контракт сохранён). То же в `handshakeAs…`.
+
+- **\[CHANGE\] `TlsServerConfig.withTicketsToSend`: верхний предел
+  `TlsConstants.MAX_TICKETS_TO_SEND` (5).**
+
+  Было: число тикетов не ограничивалось, а клиентский `read()`
+  обрабатывает не более `MAX_POST_HANDSHAKE` (8) сообщений подряд: при 8
+  тикетах клиент до данных приложения не доходил.
+
+  Стало: значения больше 5 дают `IllegalArgumentException`, запас лимита
+  клиента остаётся на KeyUpdate. `MAX_POST_HANDSHAKE` вынесен в
+  `TlsConstants`.
+
+- **\[CHANGE!\] `TlsSession.read()`: восемь служебных сообщений подряд
+  проходят, отказ на девятом.**
+
+  Было: лимит считался по записям: восемь служебных сообщений в восьми
+  записях не доходили до данных приложения, а сообщение, разрезанное
+  больше чем на восемь записей, не собиралось, хотя его размер допустим.
+
+  Стало: лимит считается по сообщениям (8 за вызов), записи ограничены
+  отдельным бюджетом; девятое служебное сообщение даёт
+  `unexpected_message`.
+
+- **\[OPS\] `TlsAlerts` (имена alert), `TlsCiphersuite.forLog()` и
+  `TlsHandshakeEngine.getConnectionLabel()`.**
+
+  Alert в журнале пишется именем и кодом (`bad_certificate (42)`), набор
+  шифров - IANA-именем и кодом
+  (`TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L (0xc103)`), метка
+  соединения - `conn#N`. `toString()` набора шифров не меняется.
+
+- **\[CHANGE!\] `TlsMessageParser.extractRecordData` заменён на
+  `parsePlaintextRecord`.**
+
+  Новый метод проверяет рамку открытой записи (длина, усечение, хвост) и
+  возвращает тип с телом (`PlaintextRecord`); смысл типа и содержимого
+  проверяет `TlsSession`.
+
+- **\[SECURITY:P2\] Содержимое записи длиннее 2¹⁴ отвергается с
+  `record_overflow` при любом `max_fragment_length`.**
+
+  Было: проверка длины содержимого после расшифровки действовала только
+  при согласованном уменьшенном `max_fragment_length`; при значении по
+  умолчанию нулевой padding позволял пиру прислать запись с содержимым
+  до 16 623 байт, и оно доходило до приложения (RFC 8446 §5.1, §5.2: не
+  более 2¹⁴).
+
+  Стало: `TlsRecord.unprotect` безусловно отвергает содержимое длиннее
+  2¹⁴ (16 384) байт кодом `record_overflow`; запись ровно в 2¹⁴
+  принимается.
+
+### Добавлено
+
+- **\[OPS\] Журнал рукопожатия и сессии на DEBUG: стадия, набор шифров и
+  группа, PSK, KeyUpdate, алерты с кодом, причины пропуска тикета.**
+
+  Было: модуль писал около двадцати записей, почти все WARNING; по
+  журналу нельзя было понять, на какой стадии оборвалось рукопожатие,
+  какой набор шифров согласован, предложен ли и принят ли PSK, кто
+  прислал alert.
+
+  Стало: на DEBUG пишутся переходы стадий движка при старте, приёме
+  сообщения и отдаче исходящего потока (`Handshake stage A -> B`),
+  принятые параметры (`ServerHello accepted`, `ClientHello accepted`:
+  набор шифров, группа, PSK, очищенное имя SNI), `HelloRetryRequest` с
+  группой, итог поиска PSK на сервере, начало и итог рукопожатия (роль,
+  набор, возобновление, ALPN), отказ рукопожатия со стадией и кодом
+  alert, отправленные и принятые alert (`close_notify` отдельной
+  строкой; запись «отправлен» после успешной отправки, при сбое
+  транспорта `Alert not sent`), `KeyUpdate`, выдача и приём
+  `NewSessionTicket` и причины, по которым билет не выдан или не
+  сохранён. Отсутствующие SNI и ALPN пишутся как `none`. Секреты, тикеты
+  и тексты исключений в записи не попадают.
+  `TlsHandshakeEngine.getFailedStage()` отдаёт стадию отказа. Раздел
+  «Логирование» README tls13 перечисляет записи.
+
+- **\[FEATURE\] `TlsTicketHelper`: общая часть выдачи и приёма тикетов
+  возобновления.**
+
+  Было: сервер `TlsSession`, сервер jsse, клиент `TlsSession` и клиент
+  jsse каждый сам выводили PSK, собирали `PskEntry`, сохраняли и
+  затирали ключевой материал; исправление приходилось вносить в каждом
+  месте (так в клиенте jsse осталось незатёртым выведенное значение
+  PSK).
+
+  Стало: `TlsTicketHelper.issue` (сервер: тикет, `ticket_age_add`,
+  nonce, PSK, запись в хранилище) и `TlsTicketHelper.storeReceived`
+  (клиент: PSK и запись) в пакете `psk`; отправка сообщения и проверки
+  конкретной стороны остаются у вызывающего. Сбой хранилища логируется
+  один раз и не пробрасывается.
+
+- **\[FEATURE\] `TlsHandshakeEngine.getSentClientCertificateChain()`:
+  цепочка клиентского сертификата, которая реально ушла серверу.**
+
+  Было: после `CertificateRequest` узнать, что именно отправлено, было
+  нельзя: селектор или сверка схем подписи могли заменить цепочку из
+  конфигурации или обнулить её.
+
+  Стало: метод возвращает `null`, если сервер `CertificateRequest` не
+  присылал; пустой список при пустом Certificate; иначе неизменяемую
+  копию отправленной цепочки (лист первым). `GostSSLEngine` строит по
+  нему `SSLSession.getLocalCertificates()`.
+
+- **\[FEATURE\] `TlsCertUtils.isSchemeOffered`, `leafSignatureScheme`,
+  `unofferedChainSchemes`: сверка схем подписи клиентской цепочки с
+  `CertificateRequest`.**
+
+  Было: правило «схема ключа листа входит в `signature_algorithms`,
+  подписи цепочки сверяются по кривой следующего сертификата» жило в
+  пакетно-приватном классе движка рукопожатия, и селектору в `jsse`
+  пришлось бы дублировать его.
+
+  Стало: три публичных метода в `TlsCertUtils`; ими пользуются и движок
+  рукопожатия, и `GostX509KeyManager.asClientCertificateSelector()`,
+  поэтому правило не расходится.
+
+- **\[FEATURE\] `TlsMessageParser.parseClientHelloPsk` и
+  `ParsedClientPsk`: строгий разбор PSK-расширений ClientHello.**
+
+  Результат разбора хранит ссылки на тело сообщения и смещения, identity
+  копируется только по запросу (`identity(i)`); для сверки второго
+  ClientHello с первым есть `identitiesSnapshot()` (одним массивом) и
+  `isOrderedSubsetOf(snapshot)`. Контракт `PskStore`: реализация не
+  должна сохранять ссылку на массив тикета, переданный в `get`, `peek` и
+  `remove`, стек затирает его после возврата.
+
+- **\[FEATURE\] `TlsConstants.MAX_PSK_IDENTITIES` и коды алертов RFC
+  8446 §6, которых не было.**
+
+  Предел просматриваемых identity (5) и коды `bad_record_mac`,
+  `unsupported_certificate`, `certificate_unknown`, `access_denied`,
+  `protocol_version`, `insufficient_security`, `inappropriate_fallback`,
+  `user_canceled`, `unrecognized_name`,
+  `bad_certificate_status_response`, `unknown_psk_identity`. Также
+  `TlsPskHelper.computeBinder` и `computeBinderAfterHrr` с произвольным
+  числом binder (по смещению вектора).
+
+- **\[FEATURE\] `TlsClientConfig.withSelectedNamedGroup(int)`: стартовая
+  группа ECDHE клиента.**
+
+  Было: клиент `TlsSession` всегда начинал с GC256B, и на сервере с
+  другой кривой каждое соединение шло через HRR.
+
+  Стало: группу можно задать (имя то же, что у
+  `TlsServerConfig.withSelectedNamedGroup`); неподдерживаемая группа
+  отвергается при настройке.
+
+- **\[FEATURE\] `PskBindingProfile` и `PskBinding.forServer(String)`.**
+
+  `PskBindingProfile.verificationId` - единый вычислитель идентификатора
+  модели доверия для tls13 и jsse (режим проверки, OCSP-staple, флаг
+  совместимости подписи, алгоритм хэша KDF, идентичность доверия). Общий
+  вычислитель исключает расхождение канонической записи между модулями.
+  `PskBinding.forServer(sni)` строит привязку серверной записи.
+
+- **\[FEATURE\] `TlsPeerPolicy.maxThisUpdateAge(Duration)`:
+  необязательный предел возраста `thisUpdate` OCSP-ответа.**
+
+  Предел действует на приложенный ответ листа и промежуточных
+  сертификатов на серверной и клиентской ветках
+  `TlsCertificateValidator`; `null` - не задан (по умолчанию), ноль и
+  отрицательное значение дают `IllegalArgumentException`.
+  `TlsClientConfig` предел не настраивает, как и `maxOcspAgeMs`.
+
+- **\[FEATURE\] `ClientAuth`, `TlsServerConfig.getClientAuthMode()` и
+  `TlsSession.hasPeerCertificate()`.**
+
+  Ранее при необязательной аутентификации клиента приложение не могло
+  узнать, предъявил ли клиент сертификат, а сам режим из
+  `TlsServerConfig` был недостижим.
+
+  Стало: режим `WANT` принимает клиента без сертификата, предъявленный
+  сертификат проверяется так же строго, как при `NEED`; наличие
+  проверенного сертификата показывает `hasPeerCertificate()` (для PSK он
+  `false`, хотя пир аутентифицирован ключом). Режим читается через
+  `getClientAuthMode()`.
+
+- **\[FEATURE\] OCSP-staple клиентского сертификата при mTLS:
+  `ClientOcspPolicy`.**
+
+  Ранее сервер не мог запросить OCSP у клиента, а присланный клиентом
+  staple отвергался (`unsupported_extension`), поэтому отзыв клиентского
+  сертификата на прямом tls13 не проверялся.
+
+  Стало: `TlsServerConfig.withClientOcspPolicy(OFF | REQUEST | REQUIRE)`
+  добавляет в `CertificateRequest` пустое `status_request` (RFC 8446
+  §4.4.2.1). Присланный staple проверяется всегда; при `REQUIRE` его
+  отсутствие даёт `bad_certificate`. Клиент прикладывает ответ только по
+  запросу: `TlsClientConfig.withOcspStaplingResponse()` или третий
+  компонент `TlsClientCredentials` для сертификата, выбранного
+  селектором (staple из конфигурации к нему не подставляется). По
+  умолчанию `OFF`, поведение прежнее. Политика без доверенных якорей и
+  staple без клиентской цепочки в конфигурации дают
+  `IllegalArgumentException` при создании сессии. Непустое тело
+  `status_request` в `CertificateRequest` даёт `decode_error`.
+
+- **\[FEATURE\] Якоря-сертификаты в TLS 1.3.**
+
+  Ранее `TlsClientConfig`/`TlsServerConfig`/`TlsSession` хранили только
+  `PublicKeyParameters`, поэтому `pathLen` и `NameConstraints` корня не
+  проверялись при опущенном корне.
+
+  Стало: конструкторы, `TlsClientConfig.withTrustAnchors(TrustAnchors)`,
+  `TlsServerConfig.needClientAuth()`/`wantClientAuth()` и
+  `TlsCertificateValidator.validate*` принимают `TrustAnchors`;
+  ограничения якоря применяются, key-only API удалён.
+
+- **\[FEATURE\] `PeerClosedException`, `TlsException.fromPeer` и
+  `isFromPeer()`.**
+
+  `PeerClosedException` (наследует `EOFException`) сообщает о штатном
+  закрытии пира по `close_notify` и отличает его от обрыва транспорта.
+  `TlsException.fromPeer(code, message)` и `isFromPeer()` отмечают fatal
+  alert, присланный пиром: ответный alert на него не отправляется.
+
+- **\[FEATURE\] `TlsSession.exportKeyingMaterial`: экспорт ключевого
+  материала (RFC 8446 §7.5).**
+
+  Было: привязку к каналу (`tls-exporter`, RFC 9266; SCRAM-PLUS,
+  EAP-TLS, NTS) получить было нельзя, секрет экспорта не вырабатывался.
+
+  Стало: метод возвращает
+  `HKDF-Expand-Label(Derive-Secret(secret, label, ""), "exporter", Hash(context), length)`
+  на Стрибоге-256; секрет выводится из хэша транскрипта до server
+  Finished и затирается вместе с ключами. Метка до 249 байт в UTF-8,
+  контекст до 65535 байт (`null` равен пустому), длина от 1 до
+  `255 * hashLen`; до рукопожатия и после закрытия
+  `IllegalStateException`. При возобновлении по PSK значение новое,
+  `KeyUpdate` его не меняет. RFC 9367 экспорт не определяет: схема взята
+  из RFC 8446, значения сверены с `-keymatexport` OpenSSL-gost (клиент и
+  сервер при полном рукопожатии, сервер также при возобновлении).
+
+- **\[FEATURE\]
+  `TlsRecord.unprotect(record, plaintext, applicationDataLimit)`:
+  расшифровка с пределом на открытый текст записи приложения.**
+
+  Было: расшифровка, не поместившаяся в приёмник, откатывалась только по
+  размеру собственного буфера, а о приёмнике потребителя читатель
+  записей не знал; чтобы не терять данные, `SSLEngine` приходилось
+  держать остаток открытого текста между вызовами.
+
+  Стало: если открытый текст `application_data` больше предела,
+  возвращается `OUTPUT_TOO_SMALL` с `hint` = нужный размер, запись не
+  потребляется, порядковый номер не сдвигается, расшифрованное
+  затирается; записи рукопожатия и alert пределом не ограничиваются.
+  Двухаргументная перегрузка работает как раньше, отрицательный предел
+  даёт `IllegalArgumentException`.
+
+## Модуль crypto-gost-jsse
+
+### Исправлено
+
+- **\[BUGFIX\] Сервер не выдаёт данные приложения вместе с
+  `NEED_WRAP`.**
+
+  Было: пока NewSessionTicket ждал отправки, `unwrap()` расшифровывал
+  запись данных, пришедшую за Finished клиента, и возвращал её вместе с
+  `NEED_WRAP`, в том числе при повторном вызове до `wrap()`; потребитель
+  по контракту `SSLEngine` вправе такие данные не учитывать.
+
+  Стало: до отправки NewSessionTicket `unwrap()` ничего не потребляет и
+  возвращает `NEED_WRAP`, как `SSLEngineImpl` в JDK; запись выдаётся
+  после `wrap()`. Путь mTLS без NewSessionTicket и чтение клиентом
+  данных сервера до своего Finished не изменились.
+
+- **\[BUGFIX\] Сообщения рукопожатия, склеенные в одну запись после
+  Certificate, больше не останавливают рукопожатие.**
+
+  Было: если CertificateVerify и Finished пришли в той же записи, что и
+  Certificate, после задачи проверки сертификата их никто не разбирал, и
+  `unwrap()` без новых байт возвращал `BUFFER_UNDERFLOW`.
+
+  Стало: остаток разбирается в той же задаче под замком движка, как в
+  JDK; ошибка разбора закрывает соединение с настоящим кодом alert.
+
+- **\[BUGFIX\] Граница записи при смене ключа чтения, пустые записи
+  рукопожатия, пределы по заголовку.**
+
+  Было: хвост за ClientHello, ServerHello, Finished и KeyUpdate в той же
+  записи и пустая запись рукопожатия принимались; буфер сборки
+  ограничивался 2 686 976 байтами с кодом `record_overflow` и
+  копировался целиком на каждую запись.
+
+  Стало: `unexpected_message` (RFC 8446 §5.1); пределы и коды как в
+  tls13 (`decode_error` по заголовку), сборка без копирования буфера на
+  каждую запись. После рукопожатия в одной записи не больше
+  `MAX_POST_HANDSHAKE` (8) служебных сообщений, как в `TlsSession`.
+
+- **\[BUGFIX\] Alert отказа клиентскому сертификату доходит до
+  клиента.**
+
+  Было: клиент получал `bad_record_mac` вместо кода (например, 44 при
+  отзыве по CRL).
+
+  Стало: код alert виден на проводе; проверено кросс-валидацией с
+  OpenSSL в обе стороны.
+
+- **\[BUGFIX\] Тайм-аут чтения посреди записи не теряет прочитанное.**
+
+  Было: `SocketTimeoutException` посреди записи терял прочитанные байты,
+  и следующее чтение принимало середину записи за заголовок.
+
+  Стало: частично прочитанная запись сохраняется, повторное чтение
+  продолжает её; при закрытии она затирается.
+
+- **\[SECURITY:P1\] `GostSsl.verify` проверяет сертификат клиента.**
+
+  Было: сервер не запрашивал сертификат клиента, и mTLS «подтверждался»
+  с любым клиентским сертификатом.
+
+  Стало: сервер требует и проверяет сертификат клиента.
+
+- **\[BUGFIX\] `GostSSLSocket.getApplicationProtocol()` реализован.**
+
+  Было: `UnsupportedOperationException` из реализации `SSLSocket` по
+  умолчанию.
+
+  Стало: возвращается согласованный протокол ALPN.
+
+- **\[BUGFIX\] Неотправленные сообщения рукопожатия и тикеты затираются
+  при закрытии движка.**
+
+  Было: при закрытии затирались только ключи в метках очереди отправки,
+  а сообщения (Finished, тикеты) и недоотправленный фрагмент оставались
+  до сборки мусора.
+
+  Стало: очередь отправки затирается целиком, как очередь движка
+  рукопожатия.
+
+- **\[BUGFIX\] Журнал закрытия отражает факт отправки `close_notify`.**
+
+  Было: «close\_notify sent» писалось и тогда, когда запись не собрана.
+
+  Стало: «close\_notify queued» или «close\_notify not sent: no write
+  keys to protect it».
+
+- **\[BUGFIX\] `close_notify` больше не теряется, если движок закрыт
+  раньше сокета.**
+
+  Было: `isOutboundDone()` становился истинным сразу после
+  `closeOutbound()`, `GostSSLSocket.close()` пропускал отправку
+  собранного, но не отданного `close_notify`, а затем разрушал движок
+  вместе с записью: пир видел обрыв соединения.
+
+  Стало: `isOutboundDone()` истинно только после отдачи закрывающей
+  записи; `close()` отправляет `close_notify`.
+
+- **\[SECURITY:P1\] Поздний `setSSLParameters` не отключает проверку
+  имени сервера у идущего рукопожатия.**
+
+  Было: алгоритм проверки имени читался при выполнении асинхронной
+  задачи проверки сертификата, и вызов `setSSLParameters` с `null` между
+  `NEED_TASK` и выполнением задачи снимал сверку имени.
+
+  Стало: алгоритм фиксируется при `beginHandshake()`, задача проверки
+  получает снимок.
+
+- **\[BUGFIX\] Имя пира сокета берётся без обратного DNS-запроса.**
+
+  Было: `GostSSLSocket` по `InetAddress` вызывал `getHostName()` (запрос
+  PTR-записи, блокирующий в `accept()`), и по этому имени сверялся
+  сертификат.
+
+  Стало: `InetSocketAddress.getHostString()`: исходное имя адреса либо
+  литерал.
+
+- **\[BUGFIX\] `SSLSession.getPacketBufferSize()` вмещает запись
+  наибольшей длины.**
+
+  Было: возвращалось 16640 (тело записи без заголовка), запись
+  наибольшей длины в такой буфер не помещалась.
+
+  Стало: заголовок, наибольшее тело и запас движка (16709).
+
+- **\[BUGFIX\] Сессия публикуется полностью собранной; значения сессии
+  потокобезопасны.**
+
+  Было: `GostSSLEngine` записывал сессию в `volatile`-поле до привязки к
+  контексту и OCSP-ответов, значения сессии лежали в `HashMap`.
+
+  Стало: сессия собирается в локальной переменной и публикуется
+  последним шагом; значения в `ConcurrentHashMap`, `null` вместо имени
+  отвергается.
+
+- **\[BUGFIX\] Открытый текст затирается.**
+
+  Было: `plaintextBuf` переживал закрытие движка, невыданные данные
+  лежали в `ByteArrayOutputStream`, который при сбросе содержимое не
+  затирает.
+
+  Стало: `plaintextBuf` затирается при закрытии; открытый текст между
+  вызовами `unwrap()` не хранится (запись принимается целиком или
+  возвращается `BUFFER_OVERFLOW`), а при `closeInbound()` невыданное
+  затирается; `GostSSLSocket.close()` затирает буфер расшифровки и
+  непрочитанный остаток (под замком чтения, если читатель занят,
+  затирает он сам).
+
+- **\[BUGFIX\] Отзыв сертификата по CRL даёт alert `certificate_revoked`
+  (44), журнал различает отзыв по коду alert.**
+
+  Было: пир получал `bad_certificate`; запись «отозван» выбиралась по
+  подстроке сообщения.
+
+  Стало: код alert выбирается по цепочке причин
+  (`PkixException(REVOKED)` даёт 44), запись журнала по коду alert.
+
+- **\[BUGFIX\] `GostSsl.socket` закрывает сокет при неудачном
+  рукопожатии, `verifyServer` сохраняет флаг прерывания.**
+
+- **\[BUGFIX\] Подбор записи `GostX509KeyManager` по общему типу ключа
+  `ECGOST3410-2012`.**
+
+  Было: общий тип без размера возвращал только 512-битные ключи.
+
+  Стало: общий тип подходит ключу любого размера, размерные типы
+  сверяются точно.
+
+- **\[BUGFIX\] Вытеснение кэша OCSP по ближайшему сроку; сообщение
+  «Handshake buffer overflow» показывает настоящий размер; убрано ложное
+  предупреждение про PSK у сервера без host.**
+
+- **\[BUGFIX\] Клиент `GostSSLEngine` затирает выведенный PSK при
+  сохранении тикета; тикет на сервере ставится в очередь после записи в
+  хранилище.**
+
+  Было: клиент не затирал локальный массив выведенного PSK после
+  передачи его в `PskEntry` (запись держит собственную копию), и
+  ключевой материал оставался в куче до сборки мусора; сервер ставил
+  `NewSessionTicket` в очередь до записи в хранилище, а исключение
+  хранилища не ловили ни сервер, ни клиент, вопреки контракту
+  `PskStore.onTicketReceived`.
+
+  Стало: PSK затирается в `finally`; сервер сначала сохраняет запись и
+  только затем ставит тикет в очередь; сбой хранилища на обеих сторонах
+  пишется в журнал без ключевого материала и не прерывает рукопожатие и
+  чтение (тикет в этом случае не выдаётся и не запоминается). Встроенное
+  хранилище такого сбоя не вызывает, защита рассчитана на будущие и
+  пользовательские хранилища.
+
+- **\[BUGFIX\] `GostSSLSocket` отправляет fatal alert пиру сразу при
+  сбое, а не при `close()`.**
+
+  Было: при ошибке рукопожатия, чтения или записи движок готовил fatal
+  alert (например, `record_overflow` на запись больше согласованного
+  `max_fragment_length`), но сокет отдавал его пиру только в `close()`.
+  Приложение, поймавшее `SSLException` и не закрывшее сокет, оставляло
+  пира без alert до таймаута.
+
+  Стало: сокет отправляет alert до проброса исключения (под `writeLock`,
+  без ожидания блокировки, чтобы не взаимоблокироваться с писателем;
+  если писатель занят, alert уходит при `close()`). Повторной отправки
+  нет.
+
+- **\[BUGFIX\] `GostSSLEngine` и `GostSSLSocket` отвергают запись больше
+  согласованного `max_fragment_length` с `record_overflow` (RFC 6066
+  §4).**
+
+  Было: запись приёма в `GostSSLEngine` создавалась без лимита, поэтому
+  проверку размера открытого текста по согласованному значению ни
+  движок, ни работающий на нём `GostSSLSocket` не вели. Единственной
+  защитой была грубая проверка длины записи в сокете до расшифровки (с
+  запасом 255 байт на дополнение); при использовании `GostSSLEngine`
+  напрямую (Netty и подобные) лимита на приём не было вовсе.
+
+  Стало: каждая запись получает согласованный лимит при создании, в том
+  числе после KeyUpdate; запись с открытым текстом больше лимита
+  отвергается с `record_overflow`. Лимит включается после рукопожатия,
+  сообщения рукопожатия не проверяются, как и раньше.
+
+- **\[BUGFIX\] `GostSSLSocket` принимает запись с дополнением сверх
+  прежнего запаса при согласованном `max_fragment_length`.**
+
+  Было: до расшифровки запись длиннее «фрагмент + 1 + 255 + тег»
+  отвергалась с `IOException`, хотя дополнение `TLSInnerPlaintext`
+  ограничено только общим пределом записи (RFC 8446 §5.4), а
+  `TlsSession` такую запись принимала (при лимите 512 собеседник с
+  полным фрагментом и дополнением 300 байт отвергался только в сокете).
+
+  Стало: ранняя проверка удалена, остаётся общий предел записи, а размер
+  открытого текста по согласованному лимиту сверяет `TlsRecord` после
+  расшифровки.
+
+- **\[BUGFIX\] `GostSSLEngine` при mTLS выбирает клиентский сертификат
+  по `CertificateRequest`, а не до него.**
+
+  Было: клиент выбирал сертификат при создании рукопожатия (первый
+  подходящий по типу ключа, 256 бит раньше 512), не зная ни схем подписи
+  сервера, ни его списка CA. Сервер, предлагавший только 512-битные
+  схемы, получал пустой Certificate и отвечал `certificate_required`,
+  хотя 512-битный сертификат у клиента был;
+  `GostX509KeyManager.asClientCertificateSelector()` движком не
+  использовался.
+
+  Стало: движок вызывает селектор на основе `GostX509KeyManager` при
+  получении `CertificateRequest`. Запись отбирается по `oid_filters`, по
+  `certificate_authorities` (издатель любого сертификата цепочки; пустой
+  список не фильтрует, непустой без совпадений даёт пустой Certificate)
+  и по схеме ключа листа из `signature_algorithms`; среди подошедших
+  предпочитается запись, подписи цепочки которой тоже предложены.
+  Проверено на `s_server -Verify 1 -client_sigalgs` с `-CAfile` и
+  `-no_ca_names`.
+
+- **\[BUGFIX!\] `GostSSLEngine`: код alert, названный движком
+  рукопожатия, не подменяется на `handshake_failure`.**
+
+  Было: любая ошибка `TlsHandshakeEngine.receive` (формат, версия, имя)
+  превращалась в `TlsException` с кодом `handshake_failure`: пир получал
+  alert 40, приложение `SSLHandshakeException` без настоящей причины,
+  `protocol_version` и `unrecognized_name` до них не доходили.
+
+  Стало: сохраняется исходный код (`protocol_version`,
+  `unrecognized_name`, `decode_error`, `illegal_parameter` и др.), он
+  уходит пиру открытым alert и определяет тип исключения по
+  `AlertMapper`, как в JDK: `unexpected_message` даёт
+  `SSLProtocolException`, `internal_error` даёт `SSLException`, прочие
+  коды рукопожатия `SSLHandshakeException`. Приложение, которое ловило
+  только `SSLHandshakeException`, это заметит. Недопустимое имя узла
+  (длина больше 253, пустые метки) даёт `SSLException` при
+  `beginHandshake`, а не исключение внутри рукопожатия.
+
+- **\[BUGFIX\] Сервер `GostSSLEngine` принимает открытый alert клиента в
+  окне рукопожатия; строгий разбор alert.**
+
+  Было: после ClientHello открытый alert клиента читался как
+  зашифрованная запись (`Record payload too small for tag: 2`),
+  настоящий код терялся; alert короче двух байт давал `internal_error`,
+  длиннее двух принимался по первым двум байтам; после закрытия пиром до
+  появления ключей записи ответный `close_notify` не отправлялся.
+
+  Стало: открытая alert-запись принимается на сервере до первой
+  расшифрованной записи клиента и до конца рукопожатия: fatal alert даёт
+  `SSLException` с настоящим кодом, `close_notify` закрывает приём,
+  неполная запись даёт обычный `BUFFER_UNDERFLOW` без изменения
+  состояния. Нулевая длина даёт `unexpected_message`, длина не равная 2
+  `decode_error`. Ответный `close_notify` уходит открытой записью, если
+  пир закрыл рукопожатие до появления ключей записи. Открытый alert
+  сервера после ServerHello и в эпохе ключей приложения отвергается
+  (`unexpected_message`). Fatal alert пира пишется в журнал на уровне
+  `DEBUG`.
+
+- **\[BUGFIX\] `GostSSLEngine`: после отказа пир получает fatal alert, а
+  не обрыв.**
+
+  Было: ошибка в `unwrap()` (подмена записи, нарушение протокола, отказ
+  проверки сертификата) закрывала движок и разрушала ключи, а `wrap()`
+  после этого бросал `SSLException("Engine is closed")`: alert пиру не
+  отправлялся нигде, `closeOutbound()` после ошибки давал открытый
+  `close_notify`, `pollOutboundRecord()` возвращал `null`. Отказ
+  проверки сертификата не замечал ближайший `wrap()`, статус оставался
+  `NEED_UNWRAP`, а настоящий код (`bad_certificate`, `unknown_ca`)
+  подменялся на `handshake_failure` или терялся; при отсутствии данных
+  от пира рукопожатие зависало.
+
+  Стало: ошибка собирает alert текущим ключом записи (до ключей открытой
+  записью) и отдаёт его через `wrap()` или `pollOutboundRecord()`;
+  `getHandshakeStatus()` даёт `NEED_WRAP`, `isOutboundDone()` истинно
+  после отдачи, повторный `wrap()` возвращает `CLOSED`. Отказ задачи
+  проверки сертификата обрабатывается самой задачей с настоящим кодом,
+  ближайший `wrap()`/`unwrap()` бросает исключение один раз (как в JDK),
+  затем `wrap()` отдаёт alert. После собранного `close_notify` alert не
+  ставится (повтор nonce при откате номера записи запрещён).
+  `SSLException` из `unwrap()` больше не оборачивается в «I/O error
+  during unwrap».
+
+- **\[BUGFIX\] `GostSSLEngine`: закрытие и параллельный отказ не дают
+  `IllegalStateException`.**
+
+  Было: `unwrap()` с ошибкой разрушал ключи записи, которыми в этот
+  момент пользовался `wrap()` в другом потоке: наружу выходил
+  `IllegalStateException` («Record is destroyed», «MGM not
+  initialized»), исчерпание SNMAX тоже. `close_notify` пира разрушал и
+  входную, и выходную стороны, не давая дописать данные (полузакрытие).
+
+  Стало: разрушение идёт по сторонам: `close_notify` пира разрушает
+  только входную сторону, выходную и движок рукопожатия закрывает свой
+  `close_notify`; наружу только `SSLException`. При закрытии пиром
+  первым `closeOutbound()` отправляет ответный `close_notify` (RFC 8446
+  §6.1): раньше только писал в журнал.
+
+- **\[OPS\] Предупреждения `CrlCache` о CRL, не помещающемся в бюджет,
+  не повторяются на каждом соединении.**
+
+  Было: «CRL … not cached, it is fetched again on every connection»
+  писалось при каждой загрузке такого CRL (то есть на каждом
+  соединении), а «raw DER is kept» - при каждой загрузке разобранного
+  CRL, превышающего бюджет.
+
+  Стало: каждое из предупреждений выдаётся один раз на адрес и издателя
+  (три независимых набора ключей, каждый ограничен 1000 ключей; при
+  переполнении набора предупреждение пишется каждый раз, без
+  запоминания). `clear()` сбрасывает наборы.
+
+- **\[SECURITY:P1\] Медленный сервер OCSP или CDP не может подвесить
+  проверку сертификата и рукопожатие на неограниченное время.**
+
+  Было: сервер, быстро отдавший заголовки, а затем присылавший тело по
+  байту раз в несколько секунд, удерживал загрузку весь ответ (в пробе
+  при сроке 1 с все четыре загрузчика ждали 12 с): `HttpRequest.timeout`
+  у `JdkHttp*Fetcher` покрывает только заголовки, а `DeadlineWatchdog` у
+  `UrlConnection*Fetcher` тело не обрывал (его `disconnect()`
+  блокировался). Адрес задаёт тот, кто выпустил сертификат.
+
+  Стало: один общий срок на соединение, заголовки, тело и
+  перенаправления во всех четырёх загрузчиках (`HttpClient`: `sendAsync`
+  с `get(остаток)` и `cancel`; `HttpURLConnection`: срок между чтениями
+  при `readTimeout` в четверть срока, честная гарантия «срок + одно
+  чтение»). Ответ с неполными заголовками после обрыва сторожем
+  отбрасывается.
+
+- **\[BUGFIX\] `OcspFetcher.fetch` не бросает непроверяемых
+  исключений.**
+
+  Было: `JdkHttpOcspFetcher` с нулевым или отрицательным сроком бросал
+  `IllegalArgumentException`/`NullPointerException` из `fetch`, а
+  `UrlConnectionOcspFetcher` при битом `Location` —
+  `IllegalArgumentException`, при `Location: file:` —
+  `ClassCastException`; исключение уходило в менеджер доверия.
+
+  Стало: любая ошибка — `null`; `Location` с чужой схемой, битый или
+  отсутствующий — недоступность. Для CRL те же случаи дают `null` или
+  `IOException`.
+
+- **\[BUGFIX\] Возобновление по PSK через HelloRetryRequest в
+  `GostSSLEngine` работало только между нашими узлами.**
+
+  Было: клиент и сервер jsse используют `TlsHandshakeEngine` из tls13 и
+  наследовали неверный binder второго ClientHello (см. модуль
+  crypto-gost-tls13).
+
+  Стало: возобновление через HRR подтверждено кросс-валидацией сервера
+  jsse с OpenSSL `s_client` (HRR подтверждён трассой `-msg`) и КриптоПро
+  `csptest -tlsc` (HRR следует из его `key_share` только с GC256A).
+
+- **\[BUGFIX\] Клиент jsse не мог возобновить сессию с внешним сервером,
+  выдающим тикеты.**
+
+  Было: клиент `GostSSLEngine` использует тот же сборщик ClientHello,
+  что и tls13, и повторное соединение с сервером OpenSSL, выдавшим
+  тикет, обрывалось фатальным `decode_error` (ошибка длины расширения
+  `pre_shared_key` в tls13, во всех версиях начиная с 0.2.0).
+
+  Стало: возобновление работает (кросс-валидация с OpenSSL: клиент jsse
+  с сервером `s_server`, сервер jsse с клиентами OpenSSL и КриптоПро).
+  Обходной путь для необновлённых, создающих `GostSSLEngine` напрямую:
+  передать `sessionContext = null` в `GostSSLEngine.createForClient`
+  (без контекста сессий тикеты не предлагаются). Ограничение то же, что
+  у tls13: возобновление через HelloRetryRequest с внешними реализациями
+  не работает; группу клиента (по умолчанию GC256B) задавайте через
+  `setClientNamedGroup`. Для сервера jsse: внешний клиент возобновляет
+  сессию, только если группа сервера совпадает с первой группой в
+  `key_share` клиента (у `csptest` это GC256A); для `GostSSLEngine`
+  сервера эту группу также задаёт `setClientNamedGroup`.
+
+- **\[SECURITY:P2!\] Нулевые и отрицательные пределы CRL отвергаются при
+  создании менеджера доверия и сборщиков.**
+
+  Было: `maxCrlSize` и `maxRevokedEntries` не больше нуля принимались и
+  проявлялись фатальным отказом на первом CRL с сообщением об ошибке
+  разбора.
+
+  Стало: `IllegalArgumentException` в `GostX509TrustManager` и
+  `GostTrustManagerParameters.Builder`, `IllegalStateException` в
+  `GostSslBuilder`. Превышение числа записей даёт отказ с причиной
+  `CRL_LIMIT_EXCEEDED` при `IF_CDP_PRESENT` и `REQUIRE`: такой CRL не
+  пропускается как недоступный адрес.
+
+- **\[BUGFIX\] PSK-тикет jsse не переживает сертификат сервера.**
+
+  Было: тикет клиента и сервера жил до 7 суток независимо от срока
+  сертификатов; клиент возобновлял сессию с сервером, чей сертификат уже
+  истёк, а новые тикеты возобновлённой сессии продлевали доверие
+  бесконечно.
+
+  Стало: клиент ограничивает тикет границей по проверенной цепочке (в
+  режиме `insecureTrustAll` - по сроку leaf) и наследует её при
+  возобновлении; сервер ограничивает `ticket_lifetime` сроком
+  собственной цепочки и не выдаёт тикет при остатке меньше секунды.
+  Собственные тикеты сервера перестают приниматься после истечения его
+  сертификата.
+
+- **\[SECURITY:P1\] Клиент jsse привязывает PSK-тикет к серверу и модели
+  доверия.**
+
+  Было: engine с отключённой проверкой имени (opt-out,
+  `setSSLParameters` с пустой строкой) сохранял тикет по `host:port`, а
+  engine того же контекста с включённым HTTPS возобновлялся по нему без
+  проверки имени и сертификата. Поиск тикета привязку записи не сверял.
+
+  Стало: привязка = имя узла (без учёта регистра) + идентификатор модели
+  доверия (режим проверки имени, флаг совместимости подписи, алгоритм
+  хэша KDF, идентификатор экземпляра `GostX509TrustManager`). Движок
+  сверяет привязку записи и игнорирует чужую. Имя узла в ключе тикета
+  больше не зависит от регистра. Клиент без менеджера доверия PSK не
+  предлагает и тикет не сохраняет.
+
+- **\[BUGFIX\] Клиент jsse отправлял возраст тикета в секундах вместо
+  миллисекунд.**
+
+  Было: `obfuscated_ticket_age` вычислялся делением на 1000, а сервер
+  сверяет возраст в миллисекундах с допуском 60 с; возобновление
+  работало только для тикетов младше минуты, дальше молча шло полное
+  рукопожатие.
+
+  Стало: возраст передаётся в миллисекундах (RFC 8446 §4.2.11).
+
+- **\[SECURITY:P1\] `application_data` до завершения рукопожатия
+  отвергается; `unwrap` не потребляет записи, пока идёт проверка
+  сертификата.**
+
+  Было: `GostSSLEngine` в ветке `application_data` не проверял состояние
+  рукопожатия. Пир, дошедший до `ServerHello`, знает handshake-ключи и
+  мог зашифровать ими данные: сервер отдавал их приложению до `Finished`
+  клиента, при `needClientAuth` - до `Certificate`. `unwrap` не учитывал
+  ожидание задачи проверки сертификата (`NEED_TASK`): вызов до её
+  выполнения разбирал следующую запись, и данные законного пира,
+  зашифрованные ключами приложения, расшифровывались handshake-ключами
+  (ложный `decrypt_error`).
+
+  Стало: до проверки `Finished` пира запись `application_data` даёт
+  фатальный `unexpected_message`, в буфер приложения ничего не попадает
+  (как в `TlsSession`). Пока задача проверки сертификата не выполнена,
+  `unwrap` возвращает `OK`/`NEED_TASK` и ничего не потребляет; Finished
+  и данные клиента из одного полёта после задачи обрабатываются без
+  ошибок.
+
+- **\[SECURITY:P1\] Слишком большой CRL больше не отключает проверку
+  отзыва.**
+
+  Ранее загрузчик CRL при превышении предела размера ответа возвращал
+  `null`, адрес считался недоступным, и при `CrlPolicy.IF_CDP_PRESENT`
+  соединение проходило без проверки отзыва, хотя разбор в `GostCrl` на
+  тот же размер давал фатальную ошибку. Предел загрузчика (64 МиБ) был
+  отдельной константой, не связанной с `maxCrlSize`.
+
+  Стало: загрузчики `JdkHttpCrlFetcher` и `UrlConnectionCrlFetcher`
+  бросают новое `CrlSizeLimitException`, `GostX509TrustManager`
+  отказывает сразу, при включённой проверке CRL (в том числе
+  `IF_CDP_PRESENT`) и без перехода к следующему адресу CDP: одного
+  зеркала со слишком большим ответом достаточно для отказа.
+  `Content-Length` проверяется до чтения тела (если заголовка нет,
+  размер неизвестен и считается при чтении; `UrlConnectionCrlFetcher`
+  так же трактует и невалидный заголовок), ответ ровно по пределу
+  принимается. Предел загрузчика по умолчанию берётся из
+  `GostCrl.DEFAULT_MAX_CRL_SIZE`. CRL длиннее `maxCrlSize`, пришедший от
+  собственного загрузчика, даёт понятную ошибку вместо `PARSE_ERROR`.
+
+- **\[BUGFIX\] Некорректный ответ CDP не приводит к непроверяемому
+  исключению в загрузчиках CRL.**
+
+  Ранее нечисловой, пустой или слишком длинный `Content-Length` в ответе
+  заставлял `HttpClient` бросить `IllegalArgumentException`, которую
+  `GostX509TrustManager` не перехватывал: адрес CDP не пропускался, а
+  проверка сертификата падала непроверяемым исключением.
+
+  Стало: ошибка разбора ответа становится `IOException`, адрес считается
+  недоступным, как при прочих сетевых сбоях. Аналогично
+  `UrlConnectionCrlFetcher` при некорректном `Location` переадресации
+  или схеме не `http`/`https` возвращает `null`, а при порте вне
+  диапазона бросает `IOException` вместо непроверяемого исключения.
+
+- **\[SECURITY:P2\] Кэш OCSP различает издателей с одинаковыми серийными
+  номерами.**
+
+  Ранее ключ записи состоял из двух серийных номеров (издателя и
+  сертификата): у разных УЦ они часто совпадают, и запись одного УЦ
+  подставлялась другому, что давало ложный отказ. Обхода отзыва не было:
+  ответ из кэша проверяется при каждом использовании.
+
+  Стало: ключ - хеш сертификата издателя (Стрибог-256, включает DN,
+  открытый ключ и серийный номер) и серийный номер проверяемого
+  сертификата.
+
+- **\[BUGFIX\] Некорректное имя узла в `GostSSLEngine` даёт
+  `SSLException`.**
+
+  Ранее непустой некорректный `peerHost` (например `a..b`) вызывал
+  непроверяемое `IllegalArgumentException` при `beginHandshake` (и
+  `startHandshake` сокета).
+
+  Стало: `SSLException` без имени пира в сообщении, причина сохраняется;
+  имя проверяется до создания состояния рукопожатия,
+  полуинициализированного движка не остаётся.
+
+- **\[BUGFIX\] Срок записи кэшей OCSP и CRL не превышает окно, которое
+  принимает проверка.**
+
+  Ранее запись жила `nextUpdate` плюс 1 час, хотя OCSP-ответ отвергается
+  сразу после `nextUpdate`, а CRL - после `nextUpdate` плюс 5 минут:
+  просроченный ответ отдавался из кэша, проверка его отклоняла, а
+  повторного запроса не было до часа.
+
+  Стало: OCSP-запись живёт до `nextUpdate` (без `nextUpdate` - до
+  `thisUpdate` плюс `maxOcspAgeMs`), но не дольше `ocspCacheTtlMs`; срок
+  считается по `SingleResponse` проверяемого сертификата, уже
+  просроченный ответ не кэшируется. CRL-запись живёт до `nextUpdate`
+  плюс допуск часов 5 минут, как в проверке; `cRLNumber` для защиты от
+  отката сохраняется и после истечения.
+
+- **\[SECURITY:P1\] Кэши CRL и OCSP заполняются только проверенными
+  ответами.**
+
+  Ранее CRL и OCSP-ответ, полученные по сети, попадали в кэш до проверки
+  подписи: поддельный ответ с далёким `nextUpdate` и большим `cRLNumber`
+  оставался в кэше и отравлял защиту от отката CRL, из-за чего
+  последующие соединения отклонялись.
+
+  Стало: запись в кэш делается только после успешной проверки. CRL
+  кэшируется по паре «адрес + сертификат издателя» и переиспользуется
+  для других сертификатов того же издателя; запись об отзыве проверяется
+  на каждом соединении.
+
+- **\[BUGFIX\] Клиентская `getStatusResponses()` возвращает OCSP-staple
+  сервера.**
+
+  Ранее клиентская сессия всегда отдавала пустой список, хотя staple
+  сервера уже проверялся `GostX509TrustManager`.
+
+  Стало: список содержит ответы, присланные сервером, в порядке его
+  цепочки (запись нулевой длины означает «ответа нет», хвостовые пустые
+  отброшены). Снимок делается до валидации, поэтому ответ, который
+  клиент получил по сети при `STAPLING_OR_FETCH`, в него не попадает.
+  Серверная сессия не изменена.
+
+- **\[BUGFIX\] OCSP-staple сервера, заданный до `beginHandshake()`,
+  больше не теряется.**
+
+  Ранее `GostSSLEngine.initHandshake` передавал в `TlsHandshakeEngine`
+  `null`, а `setOcspResponse` применялся только к уже созданному engine,
+  поэтому staple, заданный до начала handshake, не отправлялся. При
+  выборе сертификата по SNI (клиенты почти всегда шлют SNI) staple
+  терялся и во время handshake: селектор `GostX509KeyManager` возвращал
+  учётные данные без ответа.
+
+  Стало: staple передаётся в конструктор engine и сохраняется при выборе
+  по SNI, если выбран тот же сертификат, что и по умолчанию.
+  `getStatusResponses()` клиентской сессии больше не возвращает
+  собственный staple клиента.
+
+- **\[BUGFIX\] `GostSSLEngine` (сервер): совместимый
+  `change_cipher_spec` после первого сообщения при непустом
+  `legacy_session_id` (RFC 8446 §D.4).**
+
+  Ранее `wrap` сервера отдавал только HelloRetryRequest или ServerHello,
+  хотя клиент с непустым `legacy_session_id` ожидает CCS (OpenSSL,
+  браузеры).
+
+  Стало: CCS записывается в тот же вызов `wrap` сразу за первым
+  сообщением; место под него учитывается до изменения состояния, поэтому
+  `BUFFER_OVERFLOW` и повтор не дублируют запись. `bytesProduced`
+  включает CCS.
+
+- **\[BUGFIX\] `GostSSLEngine`: открытый совместимый
+  `change_cipher_spec` после HelloRetryRequest больше не отвергается,
+  остальной CCS проверяется.**
+
+  Ранее открытый CCS, который OpenSSL-сервер шлёт после HRR до второго
+  ServerHello, вызывал `unexpected_message` (падали GC512A/B с
+  `s_server`), а в зашифрованной фазе CCS пропускался без проверки
+  содержимого и допускался после Finished.
+
+  Стало: корректный CCS (длина 1, значение `0x01`) молча отбрасывается
+  до Finished; CCS с иным содержимым, до первого ClientHello и после
+  Finished приводит к `SSLException(unexpected_message)`. Момент «до
+  ClientHello» определяется фактом обмена (сервер принял первую
+  handshake-запись, клиент записал ClientHello), а не состоянием движка:
+  явный `beginHandshake()` до обмена его не сдвигает.
+
+- **\[SECURITY:P1\] Устранён fail-open при отсутствии доверенных
+  ключей.**
+
+  Ранее `SSLContext.init(null, null, null)` и
+  `TrustManagerFactory.init(null)` подставляли trust-all, а сторонний
+  `TrustManager` молча игнорировался; клиент принимал самоподписанный
+  сертификат MITM-сервера.
+
+  Стало: `SSLContext.init` принимает `null` только для сервера без mTLS,
+  а сторонний или `null`-элемент массива отвергает с
+  `KeyManagementException`; `GostSSLEngine` при наличии сертификата пира
+  без `GostX509TrustManager` завершает handshake с `unknown_ca`;
+  `TrustManagerFactory` бросает `KeyStoreException` на `null` и на
+  хранилище без ГОСТ-якорей, собирает все ГОСТ-якоря, а не последний.
+
+- **\[SECURITY:P1\] HTTPS/LDAPS без адреса собеседника теперь отказ.**
+
+  Ранее при включённом endpoint identification и `peerHost == null`
+  (`createSSLEngine()` без host, Netty `newEngine()` без host) проверка
+  имени молча пропускалась, хотя пользователь считал её включённой.
+
+  Стало: `checkServerTrusted` для `SSLEngine` и `SSLSocket`, а также
+  engine-путь `GostSSLEngine` требуют непустой host при HTTPS/LDAPS и
+  иначе бросают `CertificateException`; handshake завершается
+  `bad_certificate`.
+
+- **\[BUGFIX\] SNI для кириллического `peerHost`.**
+
+  Ранее `GostSSLEngine` передавал Unicode в SNI-билдер, и расширение
+  `server_name` молча не отправлялось.
+
+  Стало: `peerHost` преобразуется в A-label; SNI и проверка hostname
+  используют одно punycode-значение.
+
+- **\[BUGFIX\] OCSP/CRL не запрашиваются до структурной проверки
+  цепочки.**
+
+  Ранее `validateChainWithOcsp` сначала загружал OCSP/CRL по всей
+  цепочке и только потом проверял подписи, сроки и ограничения. Битая
+  цепочка вызывала сетевые запросы, а в клиентской цепочке CRL
+  проверялся только для leaf.
+
+  Стало: порядок — структура и PKIX, затем загрузка OCSP/CRL, затем
+  только revocation-проверка без повторной PKIX. В клиентской цепочке
+  проверяются OCSP и CRL для всех сертификатов, кроме корня.
+  `insecureTrustAll()` не делает сетевых запросов и не проверяет CRL, но
+  проверяет присланный stapled OCSP. Обязательность OCSP относится к
+  серверному сертификату: для клиентского сертификата при
+  `STAPLING_OR_FETCH` выполняется best-effort fetch, при
+  `STAPLING_REQUIRED` загрузки нет; `CrlPolicy.REQUIRE` обеспечивает
+  строгий отзыв только при отсутствии OCSP-ответа.
+
+- **\[BUGFIX\] Единая политика stapled-OCSP без издателя.**
+
+  Ранее клиентская revocation-проверка безусловно отклоняла staple без
+  издателя, а серверная игнорировала его с предупреждением; поведение
+  расходилось.
+
+  Стало: для обеих сторон staple с издателем проверяется и при ошибке
+  отклоняется; без издателя при необязательном OCSP — `WARNING` и
+  игнорирование, при обязательном — отказ. `insecureTrustAll` сетевых
+  запросов не делает.
+
+- **\[BUGFIX\] Переполнение выходного буфера во время рукопожатия больше
+  не рвёт соединение.**
+
+  Ранее `wrap()` извлекал handshake-фрейм, создавал `writerRecord` и
+  увеличивал `seqNum` до проверки `dst.remaining()`. При
+  `BUFFER_OVERFLOW` повтор отправлял ServerHello зашифрованным, а запись
+  терялась, что приводило к `bad_record_mac`.
+
+  Стало: размер записи (с `ciphersuite.getTagLen()` для зашифрованных
+  фреймов) проверяется до любых изменений состояния; очередь, фрагмент,
+  текущая запись, ожидающие ключи записи и `seqNum` при нехватке места
+  не меняются.
+
+- **\[BUGFIX\] `FINISHED` отдаётся ровно один раз.**
+
+  Ранее `getHandshakeStatus()` возвращал `FINISHED`, в том числе при
+  непустой очереди и неотправленном фрагменте, поэтому потребитель мог
+  пропустить завершающий `wrap()`.
+
+  Стало: `getHandshakeStatus()` возвращает `NEED_WRAP`/`NEED_UNWRAP`, а
+  `FINISHED` — ровно один раз из завершающего `wrap()` или `unwrap()`,
+  включая mTLS-путь и ранний `BUFFER_UNDERFLOW`. Флаг сбрасывается при
+  закрытии и ошибках.
+
+- **\[BUGFIX\] `insecureTrustAll` не требует OCSP.**
+
+  Ранее `STAPLING_OR_FETCH` в insecure-режиме включал обязательность
+  OCSP, хотя сетевой fetch запрещён; сертификат без staple отклонялся.
+
+  Стало: обязательность задаёт только `requireOcsp`, присланный staple
+  по-прежнему проверяется при наличии издателя, сетевых запросов нет.
+
+- **\[SECURITY:P1\] Неподдерживаемый алгоритм endpoint identification
+  больше не отключает проверку имени молча.**
+
+  Ранее любое значение, кроме `HTTPS` и `LDAPS` (например, `LDAP`,
+  опечатка, строка из пробелов), выключало сверку имени без ошибки, в
+  том числе при возобновлении по PSK.
+
+  Стало: `GostSSLEngine.beginHandshake()` бросает `SSLException` до
+  отправки ClientHello, а `GostX509TrustManager` -
+  `CertificateException`; для сокета отказ выдаётся до запроса сессии.
+  Пустая строка и `null` по-прежнему означают «проверка отключена».
+
+- **\[BUGFIX\] Узел из одних пробелов приравнен к отсутствию узла.**
+
+  Ранее такой host при начале рукопожатия давал
+  `IllegalArgumentException` при нормализации имени, а NewSessionTicket
+  без имени узла сохранялся в кэше PSK под пустым ключом.
+
+  Стало: SNI и поиск PSK пропускаются, тикет без имени узла не
+  сохраняется, проверка имени не включается,
+  `createSSLEngine(" ", port)` ведёт себя как `createSSLEngine()`.
+
+- **\[BUGFIX\] `GostSSLEngine`: прежние записи при нескольких сменах
+  ключа не остаются незатёртыми.**
+
+  Было: отложенное уничтожение прежнего `writerRecord` держало один
+  слот, и вторая смена ключа до ближайшего `wrap()` теряла первую
+  прежнюю запись без затирания; ожидающие ключи, не применённые
+  `wrap()`, при повторной установке не затирались; копия RMS и PSK
+  серверной ветки затиралась не в `finally`.
+
+  Стало: прежние записи ставятся в очередь и уничтожаются все под
+  `outboundLock`, очередь очищается и при закрытии движка; ожидающие
+  ключи, RMS и PSK затираются и при сбое хранилища.
+
+- **\[BUGFIX\] `GostSSLEngine.unwrap` возвращает `BUFFER_OVERFLOW`, если
+  запись не помещается в буферы приёмника, и не хранит открытый текст
+  между вызовами.**
+
+  Было: при нехватке места в буферах приёмника движок расшифровывал
+  запись целиком, выдавал часть, остаток держал во внутреннем буфере и
+  отдавал следующим вызовом, в том числе без новых сетевых данных; в
+  Undertow остаток забирал другой поток ввода-вывода, и хвост тела
+  запроса разбирался как начало нового запроса
+  (`UT005014 Invalid token`, закрытие соединения, «Обрыв канала» у
+  клиента при больших телах и `Connection: close`).
+
+  Стало: как в JDK, запись принимается целиком или не потребляется
+  совсем: при нехватке места (сумма `remaining()` всех буферов, каждый
+  буфер учитывается один раз) возвращается `BUFFER_OVERFLOW` с
+  `bytesConsumed = 0`, `bytesProduced = 0`, вход и порядковый номер
+  записи не сдвигаются; потребитель увеличивает буфер и повторяет вызов.
+  Проверка идёт до выдачи данных и только для `application_data`:
+  рукопожатие и alert принимаются при любом приёмнике, а данные
+  приложения до Finished пира по-прежнему дают fatal alert
+  `unexpected_message`, а не `BUFFER_OVERFLOW`. Если Finished клиента и
+  запись приложения пришли в одном буфере, Finished принимается сразу,
+  запись ждёт места; после `close_notify` склеенные данные не
+  разбираются. `ReadOnlyBufferException` бросается до потребления
+  записи, `null` в `src`/`dsts` и неверные границы дают
+  `IllegalArgumentException`/`IndexOutOfBoundsException`.
+
+- **\[BUGFIX\] Контракт ALPN приведён к JDK: пустая строка вместо `null`
+  после рукопожатия.**
+
+  Было: `GostSSLEngine.getApplicationProtocol()` возвращал `null` после
+  рукопожатия без ALPN, а `getHandshakeApplicationProtocol()` оставался
+  заполненным после его завершения; интеграции, читающие результат без
+  проверки на `null` (Netty), падали с `NullPointerException` или
+  `AssertionError`, в том числе у сервера с ALPN при клиенте без ALPN.
+
+  Стало: `getApplicationProtocol()` возвращает `null`, пока протокол не
+  определён, имя протокола, как только он согласован, и пустую строку
+  после завершения рукопожатия, если протокол не согласован;
+  `getHandshakeApplicationProtocol()` после завершения рукопожатия
+  возвращает `null`. Javadoc селектора описывает `null` как отказ
+  (алерт 120) и пустую строку как «без ALPN».
+
+- **\[BUGFIX\] `GostSSLContextSpi.engineInit` отвергает сторонний,
+  `null` и второй `GostX509KeyManager`.**
+
+  Было: сторонний `KeyManager` и `null`-элемент молча заменялись пустым
+  `GostX509KeyManager`, второй менеджер игнорировался; сервер падал на
+  рукопожатии без внятной причины.
+
+  Стало: `KeyManagementException`, как для `TrustManager`; один и тот же
+  экземпляр дважды, `null` и пустой массив (клиент без mTLS) допустимы.
+
+- **\[BUGFIX\] `GostSSLEngine.setUseClientMode(true)` после `false`
+  возвращает клиентский контекст сессий.**
+
+  Было: переключение в серверную роль подменяло контекст сессий, а
+  возврат к клиентской роли его не возвращал, и клиент брал PSK из
+  серверного хранилища.
+
+  Стало: движок хранит оба контекста и переключает их вместе с ролью в
+  обе стороны.
+
+### Изменено
+
+- **\[OPS\] Записи jsse несут `[conn#N]`, alert пишется именем, набор
+  шифров - именем и кодом.**
+
+  Метка `conn#N` выдаётся один раз на движок и ставится префиксом к
+  записям экземпляра; фабричные предупреждения
+  (`applyEndpointIdentification`, `createForClientNoHostnameCheck`)
+  остаются без префикса. Alert пишется как `bad_certificate (42)`,
+  `close_notify` больше не отдельная строка; набор шифров -
+  `TLS_GOSTR341112_256_WITH_KUZNYECHIK_MGM_L (0xc103)`. Записи общего
+  `GostX509TrustManager` номера соединения не имеют: он обслуживает
+  параллельные рукопожатия, корреляция по серийному номеру и времени.
+
+- **\[OPS\] Отказ сертификата собеседника — одна запись на DEBUG; в
+  отказе рукопожатия есть стадия и код alert.**
+
+  Было: менеджер доверия писал WARNING на любой отказ, `GostSSLEngine`
+  добавлял второй WARNING с исключением и стеком; «Handshake failed»
+  писал текст ошибки движка без стадии; «Handshake completed» — полный
+  DN пира, SNI и ALPN без очистки.
+
+  Стало: менеджер пишет только отзыв (одна WARNING с серийным номером),
+  остальные отказы собеседника — одна DEBUG-запись движка со стадией,
+  кодом alert и очищенным текстом, без исключения и стека;
+  `RuntimeException` даёт WARNING с типом. «Handshake error/failed»
+  несут стадию (`getFailedStage()`), код alert и тип; DN пира усечён,
+  SNI и ALPN очищены через `peerTextForLog`. WARNING, которые мог
+  вызывать собеседник (промежуточный сертификат без OCSP), переведены на
+  DEBUG.
+
+- **\[OPS!\] Несовместимое изменение: имена логгеров jsse совпадают с
+  классами.**
+
+  Было: `org.rssys.gost.jsse.GostSSLEngine`,
+  `org.rssys.gost.jsse.GostSSLSessionContext`,
+  `org.rssys.gost.jsse.GostX509TrustManager`,
+  `org.rssys.gost.jsse.GostSslBuilder`,
+  `org.rssys.gost.jsse.GostSSLContextSpi` и отдельные логгеры
+  загрузчиков `org.rssys.gost.jsse.crl.*` и
+  `org.rssys.gost.jsse.ocsp.*`. Стало: шесть логгеров по классам:
+  `org.rssys.gost.jsse.engine.GostSSLEngine`,
+  `org.rssys.gost.jsse.socket.GostSSLSocket`,
+  `org.rssys.gost.jsse.engine.GostSSLSessionContext`,
+  `org.rssys.gost.jsse.manager.GostX509TrustManager`,
+  `org.rssys.gost.jsse.manager.GostTrustManagerFactorySpi` и
+  `org.rssys.gost.jsse.crl.CrlCache`; загрузчики в журнал не пишут (см.
+  ниже). Настройки `logging.properties` со старыми именами перестанут
+  действовать: уровень для пакета (`org.rssys.gost.jsse.level`)
+  продолжает работать.
+
+- **\[OPS\] Отказ загрузки CRL и OCSP записывается один раз, менеджером
+  доверия: серийный номер, адрес без параметров, причина.**
+
+  Было: загрузчики и менеджер писали по записи на один отказ; в записи о
+  недоступном зеркале CRL шёл текст исключения (`e.getMessage()`)
+  загрузчика, то есть недоверенный текст.
+
+Стало: загрузчики (`JdkHttpOcspFetcher`, `UrlConnectionOcspFetcher`,
+`JdkHttpCrlFetcher`, `UrlConnectionCrlFetcher`) в журнал не пишут и
+возвращают причину перечислением `FetchFailure`:
+`OcspFetchResult.failure()` (запись получила третий компонент,
+двухаргументный конструктор остался), `CrlFetchResult.failure()`,
+`CrlCache.NoDataException.failure()`. Менеджер пишет
+`OCSP fetch failed for cert=... from ...: TIMEOUT` и
+`CRL mirror unavailable, trying next: ...: NETWORK`; для стороннего
+загрузчика причина определяется по типу исключения. Запись о
+промежуточном сертификате без OCSP-ответа несёт серийный номер, запись
+об отказе `getSession()` сокета пишет только тип исключения.
+
+- **\[OPS\] Три записи ERROR об обработанных отказах переведены на
+  WARNING.**
+
+  Было: превышение размера CRL, отзыв по CRL и откат `cRLNumber`
+  писались на ERROR, хотя библиотека отказ обработала (исключение
+  получает вызывающий, при откате остаётся прежний CRL). Стало: WARNING.
+  Запись о превышении размера несёт предел в байтах без текста
+  исключения.
+
+- **\[OPS\] Успешная загрузка OCSP пишется на DEBUG, DN принятого
+  клиентского сертификата усечён.**
+
+  Было: «OCSP fetch success» писался на INFO на каждую загрузку; DN
+  принятого клиентского сертификата в записи DEBUG не усекался.
+
+  Стало: запись на DEBUG (адрес санитизируется под проверкой уровня), DN
+  усечён до 128 символов.
+
+- **\[CHANGE\] `GostSSLSocket.getSession()` запускает рукопожатие и ждёт
+  его; после отказа рукопожатия сокет закрыт.**
+
+  Было: до рукопожатия возвращалась пустая сессия, а после отказа
+  рукопожатия сокет оставался открытым; после тайм-аута чтения повторный
+  `startHandshake()` падал на «Handshake already started».
+
+  Стало: по контракту `SSLSocket`; из обратного вызова рукопожатия
+  возвращается текущая сессия без повторного запуска, при отказе —
+  пустая сессия без исключения. Отказ рукопожатия (ошибка протокола,
+  обрыв, непредвиденный сбой) закрывает сокет; тайм-аут чтения, как в
+  JDK, не роковой: сокет открыт, повторный вызов продолжает рукопожатие.
+  `GostSSLEngine.getHandshakeSession()` во время рукопожатия возвращает
+  сессию рукопожатия, а не `null`.
+  `GostX509TrustManager.requireHostnameForEndpointId(Socket)` берёт
+  только сессию рукопожатия, как в JDK, и рукопожатие не запускает.
+
+- **\[CHANGE\] Предел кэша сессий 20 480 по умолчанию и у серверного
+  контекста.**
+
+  Было: серверный кэш сессий был без предела, и каждое полное
+  рукопожатие оставляло в нём сессию.
+
+  Стало: `GostSSLSessionContext.DEFAULT_SESSION_CACHE_SIZE` для любого
+  контекста; `setSessionCacheSize(0)` снимает предел.
+
+- **\[SECURITY:P2!\] Загрузчик CRL без политики CRL — ошибка
+  конфигурации. Несовместимое изменение.**
+
+  Было: `crlFetcher` при `CrlPolicy.DISABLED` (по умолчанию) молча не
+  использовался, и отзыв по CRL не проверялся.
+
+  Стало: `GostSslBuilder` бросает `IllegalStateException`,
+  `GostTrustManagerParameters.Builder` и конструктор
+  `GostX509TrustManager` — `IllegalArgumentException`. Задайте
+  `crlPolicy(CrlPolicy.IF_CDP_PRESENT)` или `REQUIRE`.
+
+- **\[CHANGE\] Сеттеры и геттеры параметров `GostSSLEngine` берут замок
+  движка.**
+
+  Было: параметры одного вызова `setSSLParameters` могли попасть в
+  начинающееся рукопожатие частично.
+
+  Стало: рукопожатие видит либо все значения вызова, либо ни одного, как
+  в JDK. Порядок замков записан в javadoc: замки сокета раньше замка
+  движка.
+
+- **\[SECURITY:P1\] Включённые наборы шифров и протоколы действуют.**
+
+  Было: `setEnabledCipherSuites` и `setEnabledProtocols` только
+  сохраняли значения, рукопожатие всегда предлагало оба набора RFC 9367.
+
+  Стало: клиент предлагает, а сервер принимает только включённые наборы;
+  пустой список допустим и даёт `SSLHandshakeException` при рукопожатии
+  (как в JDK). Если контейнер передаёт пустой или чужой список наборов,
+  ГОСТ-наборы нужно отдать явно
+  (`GostJsseConstants.supportedCipherSuites()`); `SSLParameters` без
+  наборов (`null`) список не меняет.
+
+- **\[CHANGE\] Параметры снимаются при `beginHandshake()`,
+  `setSSLParameters` как в JDK.**
+
+  Было: `needClientAuth` и `wantClientAuth` только включались, пустой
+  массив ALPN игнорировался.
+
+  Стало: режим аутентификации клиента задаётся полностью, пустой ALPN
+  снимает протоколы; поздние изменения видны геттерам, но на идущее
+  рукопожатие не влияют.
+
+- **\[CHANGE\] Контракт закрытия `SSLEngine` приближен к JDK.**
+
+  Было: `wrap`/`unwrap` на штатно закрытом движке бросали
+  `SSLException`, `wrap` после `closeOutbound()` возвращал `OK`.
+
+  Стало: штатное закрытие даёт `CLOSED`; после `close_notify` пира
+  сначала выдаются данные, расшифрованные до закрытия (`CLOSED` только
+  когда остаток выдан); `closeInbound()` затирает невыданные данные и
+  закрывает выходную сторону (отличие от JDK: отвечать нечем, ключи
+  записи уничтожены); после отказа исключение с кодом alert остаётся.
+
+- **\[CHANGE!\] Удалены без замены: `IanaMapper`, `AlertMapper.isFatal`,
+  `GostSslBuilder.trustCaFromPem`,
+  `GostX509TrustManager.extractHostnameForEndpointId`,
+  `GostTrustManagerParameters.hasTrustAnchors`, `OcspPolicy.DISABLED`,
+  `GostSSLEngine(km, tm)`, `GostSSLSession.touch`.**
+
+  Было: классы и методы без вызовов (`OcspPolicy.DISABLED` проверку
+  присланного OCSP-ответа не отключал).
+
+  Стало: `trustCa(byte[])` принимает и PEM-цепочку; время последнего
+  обращения к сессии равно времени создания.
+
+- **\[CHANGE\] Изменены сигнатуры:
+  `new GostSSLSessionContext(TlsCiphersuite)`,
+  `GostJsseConstants.supportedProtocols()` и `supportedCipherSuites()`
+  вместо публичных массивов.**
+
+  Было: конструктор принимал набор и длину хэша (можно было передать
+  несовпадающую пару), публичные изменяемые массивы.
+
+  Стало: длина хэша выводится из набора, списки отдаются копиями.
+
+- **\[CHANGE\] `GostKeyManagerFactorySpi` по контракту
+  `KeyManagerFactorySpi`.**
+
+  Было: повторный `init` накапливал записи, исключения заворачивались в
+  `RuntimeException`, до `init` менеджер выдавался.
+
+  Стало: записи заменяются, исключения по контракту, до `init`
+  `IllegalStateException`, `init(null)` даёт пустой менеджер.
+
+- **\[CHANGE\] Выбор записи по SNI через
+  `GostCertificate.verifyHostname`; `setOcspCacheTtlMs` проверяет
+  значение; `ocspPolicy(null)` равна `IF_PRESENT`; схема в адресах
+  загрузчиков CRL и OCSP регистронезависима.**
+
+- **\[CHANGE\] Режимы `needClientAuth` и `wantClientAuth`
+  взаимоисключающие, как в JDK.**
+
+  Было: включение `wantClientAuth` оставляло `needClientAuth`, а
+  круговой вызов `setSSLParameters(getSSLParameters())` мог отключить
+  обязательный mTLS.
+
+  Стало: включение одного режима сбрасывает другой, `getSSLParameters()`
+  возвращает действующий режим, круговой вызов его сохраняет; то же у
+  `GostSSLServerSocket`.
+
+- **\[CHANGE\] Сужена и расширена видимость: `CrlCache.size()` и
+  `clear()`, а также конструктор `GostSslBuilder` пакетные,
+  `GostSslBuilder` стал `final`; публичными стали
+  `GostX509TrustManager.requireHostname`,
+  `CrlCache.requireValidMaxBytes` и новый `SslParameterNames`.**
+
+  Было: служебные методы кэша и конструктор билдера были доступны извне,
+  проверку имён наборов и протоколов каждый класс писал отдельно.
+
+  Стало: общая проверка `SslParameterNames.checkedCipherSuites` и
+  `checkedProtocols`, внутренние методы закрыты.
+
+- **\[CHANGE\] `GostSsl`: PEM доверенных CA читается набором, сертификат
+  и ключ - ровно одним блоком.**
+
+  Было: `serverContext` и `clientContext` читали CA через
+  `fromPemOrDer`, а `pemToDer` склеивал Base64 всех блоков; файл с
+  несколькими корнями (как `--cacert` у curl) читался неверно или давал
+  ошибку декодирования.
+
+  Стало: `caPem` принимает один сертификат или набор корней
+  (`GostCertificate.listFromPem`), все они попадают в доверенные.
+  `certPem`, `keyPem` и `GostSslBuilder.certificate` принимают ровно
+  один PEM-блок, файл цепочки там отвергается с понятной ошибкой:
+  передача промежуточных сертификатов сервера этими методами не
+  поддерживается.
+
+- **\[CHANGE\] `ticket_nonce` у сервера jsse - 8-байтовый счётчик.**
+
+  Было: сервер jsse выдавал случайный `ticket_nonce` длиной с хэш набора
+  шифров; уникальность в пределах соединения (RFC 8446 §4.6.1)
+  гарантировалась только вероятностно.
+
+  Стало: nonce - 8-байтовый big-endian номер тикета в соединении, как у
+  `TlsSession`; выдача и сохранение тикетов идут через
+  `TlsTicketHelper`.
+
+- **\[CHANGE\] `GostSSLEngine.setSSLParameters` проверяет имена ALPN
+  сразу.**
+
+  Было: имя длиннее 255 байт или с символом выше U+00FF принималось и
+  вызывало `IllegalArgumentException` позже, из `beginHandshake` или
+  `wrap`.
+
+  Стало: недопустимое имя отвергается при установке параметров
+  (`IllegalArgumentException`).
+
+- **\[CHANGE\] `SSLSession.getLocalCertificates()` и
+  `getLocalPrincipal()` клиента отражают отправленное в этом
+  рукопожатии; исключение селектора даёт `SSLException` и alert
+  `internal_error`.**
+
+  Было: цепочка выставлялась всегда, как только у `KeyManager` находился
+  подходящий алиас, даже если сервер сертификат не запрашивал или клиент
+  отправил пустой Certificate; исключение из кода селектора выходило из
+  `unwrap` без alert пиру.
+
+  Стало: до `CertificateRequest`, при пустом Certificate и при
+  возобновлении по PSK оба метода возвращают `null` (как у JDK без
+  клиентской аутентификации); после выбора это отправленная цепочка.
+  Исключение селектора завершает рукопожатие `SSLException` с alert
+  `internal_error`, текст исключения в сообщение не попадает.
+
+  Связанное изменение: OCSP-ответ, заданный через
+  `GostSSLEngine.setOcspResponse`, клиент прикладывает только к
+  выбранному листу (совпадает серийный номер); чужой ответ не
+  отправляется с предупреждением в журнале. Раньше он уходил с любым
+  сертификатом, и сервер отвергал рукопожатие из-за несовпадения CertID,
+  теперь при политике `REQUEST` оно проходит без staple, а при `REQUIRE`
+  отвергается как «staple нет».
+
+- **\[CHANGE\] `GostSSLEngine`: один замок на движок вместо двух, вызовы
+  `wrap()` и `unwrap()` одного движка сериализуются.**
+
+  Было: два замка (входной и выходной) позволяли `wrap()` и `unwrap()`
+  идти параллельно, поэтому ключи записи, общий движок рукопожатия и
+  очередь отложенного уничтожения записей защищались протоколами между
+  замками (`tryLock` в обратном порядке, отложенное разрушение); часть
+  флагов общего движка читалась без видимости между потоками.
+
+  Стало: один `ReentrantLock`, как в `SSLEngineImpl` JDK, под ним
+  `wrap`, `unwrap`, `beginHandshake`, `closeInbound`, `closeOutbound`,
+  `pollOutboundRecord`, `initiateKeyUpdate`, `getHandshakeStatus`,
+  `setOcspResponse`; старая запись при смене ключа уничтожается сразу.
+  Проверка цепочки сертификатов (может ходить в сеть) выполняется вне
+  замка. Параллельные `wrap` и `unwrap` по-прежнему разрешены
+  контрактом, но выполняются по очереди; конфигурационные настройки
+  задаются до `beginHandshake()`.
+
+- **\[CHANGE\] `CrlCache`: CRL без `nextUpdate` не кэшируется.**
+
+  Было: для такого CRL запись жила один час (`DEFAULT_TTL_MS`), а
+  проверка его принимала.
+
+  Стало: проверка CRL без `nextUpdate` отвергается (см. раздел
+  crypto-gost-pkix), ветка срока по умолчанию удалена; в `expiryOf()`
+  осталась защитная `IllegalStateException`.
+
+- **\[CHANGE!\] Перепроверка CRL раньше `nextUpdate`: `crlMaxAge` по
+  умолчанию 6 часов, сигнатура `CrlCache.get` и конструктор
+  `CrlCache`.**
+
+  Было: загруженный CRL жил в кэше до `nextUpdate` плюс допуск часов, и
+  новый CRL, выпущенный УЦ раньше, не был виден до истечения записи;
+  `CrlCache.get` принимал `(key, loader, authenticator, maxWait)`,
+  `CrlCache()` и `CrlCache(long)` создавали кэш без перепроверки.
+
+  Стало: запись старше `crlMaxAge` с последней успешной загрузки, но ещё
+  не истёкшая, перепроверяется одним из соединений (остальные не ждут и
+  берут действующую запись). При неудаче запись остаётся до
+  `nextUpdate`, повтор не раньше `min(crlMaxAge, 5 минут)`, в журнал
+  одно предупреждение на серию; откат `cRLNumber` или отсутствие номера
+  пишутся как ERROR, запись не заменяется. Включено по умолчанию (6
+  часов); благодаря условному запросу (см. ниже) перепроверка
+  неизменившегося CRL стоит один короткий запрос. Прежнее значение по
+  умолчанию было 24 часа, потому что перепроверка шла полной загрузкой
+  (40 МБ у CRL ФНС). Задержка видимости нового CRL равна `crlMaxAge`
+  плюс интервал выпуска CRL у УЦ (при ежесуточной публикации около 30
+  часов вместо 48); если CDP не отдаёт `Last-Modified` или адрес
+  отвечает перенаправлением, каждая перепроверка - полная загрузка, и
+  значение стоит увеличить. Несовместимые изменения:
+  `CrlCache.get(key, loader, recheckLoader, authenticator, maxWait)`,
+  конструктор `CrlCache(long maxBytes, Duration maxAge)` (прежние
+  `CrlCache()` и `CrlCache(long)` удалены), полная фабрика
+  `GostX509TrustManager.fromTrustAnchors` и `GostSsl` получили параметр
+  `crlMaxAge` после `crlCacheMaxBytes`.
+
+- **\[CHANGE!\] `CrlCache.get` принимает срок ожидания чужой загрузки;
+  потолок проверки CRL около 60 с вместо 90 с.**
+
+  Было: если тот же CRL уже грузило другое соединение, поток ждал
+  результата без собственного срока; бюджет 30 с ограничивал только
+  начало собственных загрузок, поэтому потолок для CRL был до 90 с и
+  держался лишь пока загрузчик инициатора соблюдал свой срок.
+
+  Стало: `get(key, loader, authenticator, Duration maxWait)`
+  (несовместимое изменение, старая сигнатура удалена; `maxWait` от нуля
+  до 10 минут, иначе `IllegalArgumentException`). Срок ограничивает
+  только ожидание: попадание в кэш отдаётся при любом сроке, поток без
+  инициатора грузит сам (первая загрузка разрешена всегда), инициатор не
+  отменяется и не портится. Менеджер доверия передаёт остаток бюджета
+  проверки (общий для всех зеркал). Ожидающий, не дождавшийся
+  инициатора, получает `DeadlineExceededException`; при
+  `CrlPolicy.IF_CDP_PRESENT` проверка отзыва для него пропускается, как
+  при недоступном CDP (в том числе когда подлинный CRL просто ещё не
+  загрузился), при `REQUIRE` - отказ. В журнал пишется одна запись «Gave
+  up waiting for a concurrent CRL load» на серию сдач по адресу (после
+  успешной загрузки этого адреса следующая сдача снова пишется).
+  Потолок - «бюджет плюс одна своя загрузка» (сетевая часть); проверка
+  подписи загруженного CRL срока не имеет.
+
+- **\[CHANGE!\] `CrlCache.lastKnownCrlNumber` больше не публичный.**
+
+  Было: метод был `public`, хотя менеджер доверия его не вызывает (откат
+  номера проверяет сам `get`).
+
+  Стало: пакетный (несовместимое изменение).
+
+- **\[CHANGE!\] Загрузчики OCSP и CRL ведут себя одинаково: проверка
+  параметров, редиректы, размер.**
+
+  Было: `JdkHttpOcspFetcher` не проверял срок и предел размера при
+  создании (ошибка вылезала при первой загрузке),
+  `UrlConnectionOcspFetcher` принимал срок 0 как «ждать вечно»,
+  редиректы следовали только у `UrlConnection*` (`Jdk*` на любой 3xx
+  отвечали `null`), OCSP-загрузчик не сверял заявленный
+  `Content-Length`, ответ не-200 мог накапливаться в памяти.
+
+  Стало: срок от 1 мс до 10 минут и предел размера больше нуля
+  проверяются в конструкторе всех четырёх (`IllegalArgumentException`,
+  несовместимое изменение); GET следует 301, 302, 303, 307, 308, POST
+  только 307 и 308, не более 5 запросов, SSRF и схема проверяются на
+  каждом переходе, понижение `https` до `http` запрещено, OCSP принимает
+  только `http://`; `Content-Length` сверяется до чтения тела для обоих
+  видов; тело ответа не-200 не читается. Общий код вынесен из четырёх
+  классов в пакет `org.rssys.gost.pkix.internal.net`; он публичен только
+  технически (его используют пакеты jsse `ocsp` и `crl` и пакет pkix
+  `tsp`), не является публичным API и может меняться без предупреждения,
+  как и `CrlCache.LoadSkippedException`.
+
+- **\[OPS\] Адреса OCSP и CDP в журнале и сообщениях исключений
+  выводятся без учётных данных и параметров запроса.**
+
+  Было: адрес из сертификата (`user:pass@`, `?token=`) попадал в журнал
+  и сообщения загрузчиков, `CrlCache` и менеджера доверия как есть.
+
+  Стало: выводится только `схема://хост:порт/путь`; не разбираемый адрес
+  заменяется на `<malformed URI>`. Запрос по-прежнему идёт на полный
+  адрес.
+
+- **\[SECURITY:P2\] Менеджер доверия ограничивает загрузки отзыва: не
+  более 3 адресов каждого вида на сертификат и бюджет 30 с на проверку
+  цепочки.**
+
+  Было: адреса OCSP и CDP задаёт сертификат (их могло быть сколько
+  угодно), и срок загрузчика умножался на число адресов и на длину
+  цепочки.
+
+  Стало: пробуются первые 3 адреса каждого вида на сертификат; на
+  проверку цепочки (`validateChainWithOcsp`, `validateClientChain`)
+  выделен бюджет 30 с: первая загрузка всегда разрешена, после
+  исчерпания новых загрузок нет ни для текущего, ни для следующих
+  сертификатов (каждая считается неудачной, решает политика отзыва),
+  попадание в кэш бюджет не расходует. Потолок: бюджет плюс срок одной
+  загрузки (по умолчанию 5 с для OCSP и 30 с для CRL); ожидание чужой
+  загрузки того же CRL ограничено остатком того же бюджета и отдельного
+  срока не добавляет. Изменение поведения: при `CrlPolicy.REQUIRE`
+  сертификат с четырьмя зеркалами, где первые три отдают непригодный
+  CRL, получает отказ; при `IF_CDP_PRESENT` проверка пропускается;
+  медленный УЦ на первом сертификате цепочки лишает загрузки следующие.
+  Отказ загрузки по бюджету не портит проверку других соединений, ждущих
+  тот же CRL (`CrlCache.LoadSkippedException`).
+
+- **\[CHANGE\] `AlertMapper` отображает алерты по таблице JDK
+  (`sun.security.ssl.Alert`).**
+
+  Было: сертификатные алерты давали `SSLPeerUnverifiedException`,
+  протокольные алерты рукопожатия (`decrypt_error`, `illegal_parameter`,
+  `decode_error` и др.) - `SSLProtocolException`.
+
+  Стало: алерты рукопожатия, в том числе сертификатные, -
+  `SSLHandshakeException`; `unexpected_message` и неизвестный код -
+  `SSLProtocolException`; `bad_record_mac`, `record_overflow`,
+  `internal_error` и прочие - `SSLException`. Приложение, ловящее
+  `SSLHandshakeException` при неудачном рукопожатии, снова видит ошибки
+  проверки `Finished`, подписи и PSK binder. `AlertMapper.toException`
+  принимает исходное исключение стека третьим параметром и прикладывает
+  его как причину (`getCause()`), как это делает JDK; раньше трасса
+  `TlsException` терялась и по исключению нельзя было понять, где
+  нарушен протокол.
+
+- **\[CHANGE!\] `GostSSLEngine.wasResumed()` бросает
+  `IllegalStateException` до завершения рукопожатия.**
+
+  Было: до завершения метод возвращал `false`, и это нельзя было
+  отличить от полного рукопожатия.
+
+  Стало: до завершения `IllegalStateException`, после - итог рукопожатия
+  (в том числе после закрытия); поведение совпадает с
+  `TlsSession.wasResumed()`.
+
+- **\[CHANGE\] `GostX509TrustManager.validateChainWithOcsp` возвращает
+  цепочку границы доверия; `saveNewSessionTicket` принимает
+  `validUntil`.**
+
+  Было: `validateChainWithOcsp` возвращал `void`;
+  `GostSSLSessionContext.saveNewSessionTicket` не знал о сроке
+  сертификатов.
+
+  Стало: `validateChainWithOcsp` возвращает `List<GostCertificate>` -
+  проверенную цепочку без локального якоря, срок которого не учитывается
+  (для `insecureTrustAll` - один leaf), а `saveNewSessionTicket`
+  получает параметр `validUntil`.
+
+- **\[CHANGE\] Общий контекст сессий: клиент и сервер не должны его
+  делить, разные менеджеры доверия возобновления не получают.**
+
+  Было: `GostSslContextBuilder.sessionContext` и `redirectToSharedState`
+  описывались как способ разделить PSK между клиентом и сервером.
+
+  Стало: клиентская и серверная записи с одним тикетом имеют разные
+  привязки, а ключ хранилища - байты тикета, поэтому в общем контексте
+  они затирают друг друга, и возобновление молча отключается (движок
+  такую ошибку не обнаруживает). Общий контекст между клиентскими
+  контекстами с разными менеджерами доверия возобновления не даёт, это
+  намеренно. Тест Netty переведён на раздельные контексты и теперь
+  проверяет, что возобновление действительно произошло.
+
+- **\[CHANGE!\] Кэш CRL хранит проверенный CRL и загружает его одним
+  потоком; API `CrlCache` и `fromTrustAnchors` меняются.**
+
+  Ранее кэш хранил сырой DER, а каждое соединение заново считало хэш и
+  подпись и разбирало все записи (≈0,84 с и ≈400 МиБ мусора на 800 000
+  записей), и параллельные соединения умножали память на число проверок.
+  Кэш не ограничивал память, а вытеснение сбрасывало защиту от отката
+  `cRLNumber`.
+
+  Стало: `CrlCache` хранит `VerifiedCrl` по ключу «адрес CRL +
+  сертификат издателя»; CRL загружает и проверяет один поток, остальные
+  ждут и проверяют по нему свои сертификаты. Бюджет `crlCacheMaxBytes`
+  (по умолчанию 512 МиБ, `0` — не хранить) общий для разобранных и сырых
+  записей: CRL, не помещающийся как разобранный, хранится сырым DER, не
+  помещающийся вовсе — загружается заново на каждом соединении.
+  Последний `cRLNumber` хранится отдельно и не теряется при истечении и
+  вытеснении. Сроки и область CRL проверяются на каждом соединении.
+  Подлинный CRL, не покрывающий данный сертификат, теперь кэшируется.
+  Прерывание потока при загрузке даёт отказ проверки, а не переход к
+  следующему зеркалу. Сверка issuer DN идёт после подписи. Ломающие
+  изменения (0.x): `CrlCache.lookup/put/CrlCacheEntry` заменены на
+  `CrlCache.get`; девятиаргументный
+  `GostX509TrustManager.fromTrustAnchors` заменён десятиаргументным
+  (`crlCacheMaxBytes` после `maxRevokedEntries`). Кэш принадлежит
+  менеджеру доверия, у каждого `SSLContext` своя копия. `CrlFetcher`
+  обязан ограничивать время загрузки.
+
+- **\[CHANGE!\] Предел размера ответа загрузчика CRL согласован с
+  `maxCrlSize` и проверяется при построении.**
+
+  Ранее загрузчик с пределом меньше `maxCrlSize` работал для небольших
+  CRL и молча обходил проверку отзыва для больших.
+
+  Стало: `CrlFetcher.maxResponseSize()` (по умолчанию «неизвестен») не
+  может быть меньше `maxCrlSize`; несоответствие при включённой проверке
+  CRL даёт `IllegalArgumentException` в
+  `GostX509TrustManager.fromTrustAnchors` и
+  `GostTrustManagerParameters.Builder.build()` и `IllegalStateException`
+  в `GostSslBuilder`. Конструкторы `JdkHttpCrlFetcher` и
+  `UrlConnectionCrlFetcher` отвергают предел 0 и меньше, а также
+  отсутствующий, нулевой, отрицательный таймаут (для
+  `UrlConnectionCrlFetcher` ещё и вне диапазона от 1 мс до
+  `Integer.MAX_VALUE` мс). Миграция: для CRL крупнее 64 МиБ поднять
+  `maxCrlSize`, `maxRevokedEntries` и предел загрузчика согласованно
+  (рецепт в README модуля).
+
+- **\[SECURITY:P1\] TLS: CRL, который нельзя использовать, равносилен
+  недоступному адресу CDP; отзыв определяется по причине ошибки.**
+
+  Ранее любая `PkixException` при проверке CRL рвала соединение (в том
+  числе indirect CRL), а подстрока «revoked» в тексте ошибки разбора
+  записей выдавалась за «сертификат отозван». CRL, не покрывающий
+  сертификат, давал «не отозван».
+
+  Стало: CRL с неизвестным critical-расширением, indirect CRL и CRL, не
+  покрывающий сертификат, пропускаются, проверка продолжается со
+  следующего адреса CDP. После исчерпания адресов при
+  `CrlPolicy.REQUIRE` отказ («no usable CRL from any CDP mirror»), при
+  `IF_CDP_PRESENT` соединение проходит без проверки отзыва, с
+  предупреждением. Delta CRL по адресу CDP остаётся фатальной ошибкой.
+  Отзыв определяется по `PkixException.Reason.REVOKED`; подлинный CRL
+  кэшируется независимо от того, покрывает ли он данный сертификат
+  (область проверяется на каждом соединении).
+
+- **\[CHANGE!\] `GostX509TrustManager.fromTrustAnchors` (полная
+  перегрузка) получила параметр `Duration maxThisUpdateAge`.**
+
+  Старая полная сигнатура заменена: после `maxOcspAgeMs` добавлен
+  `Duration maxThisUpdateAge` (`null` - не задан). Сокращённые
+  перегрузки не менялись. Неверное значение отвергается при создании
+  `TrustManager`, а не при рукопожатии.
+
+- **\[SECURITY:P2\] `SSLContext.init` отвергает несколько разных
+  `GostX509TrustManager`.**
+
+  Ранее использовался первый менеджер, остальные молча отбрасывались
+  вместе со своими доверенными якорями.
+
+  Стало: два разных экземпляра дают `KeyManagementException`; один и тот
+  же экземпляр дважды допустим.
+
+- **\[OPS\] `GostTrustManagerFactory.init(KeyStore)` описывает и
+  логирует фиксированную политику отзыва.**
+
+  Ранее при инициализации из KeyStore молча использовались
+  `OcspPolicy.IF_PRESENT`, без CRL и без сетевых запросов; настроить
+  отзыв этим путём нельзя, и пользователь об этом не знал.
+
+  Стало: политика описана в Javadoc `GostTrustManagerFactorySpi`, при
+  каждом `init(KeyStore)` пишется предупреждение с указанием
+  `GostTrustManagerParameters` для строгой проверки. Поведение не
+  изменилось.
+
+- **\[CHANGE\] `ocsp(true)` вместе с `ocspFetcher` включает запрос
+  статуса по сети.**
+
+  Ранее `ocspFetcher` в `GostSslBuilder` молча не использовался: фасад
+  выбирал только `STAPLING_REQUIRED` или `IF_PRESENT`.
+
+  Стало: `ocsp(true)` с fetcher даёт `OcspPolicy.STAPLING_OR_FETCH`
+  (staple, а при его отсутствии запрос по сети; недоступность
+  ответчика - отказ). `ocspFetcher` без `ocsp(true)` и `trustAll()`
+  вместе с `ocsp(true)` или `ocspFetcher` отклоняются при сборке
+  контекста (`IllegalStateException`).
+
+- **\[CHANGE\] `trustAll()` несовместим с `crlPolicy` и `crlFetcher`.**
+
+  Ранее `trustAll()` вместе с `CrlPolicy.REQUIRE` или `crlFetcher` молча
+  игнорировал CRL: отзыв не проверялся, хотя настройка выглядела
+  действующей.
+
+  Стало: такая комбинация отклоняется при сборке контекста
+  (`IllegalStateException`); допустимы только `CrlPolicy.DISABLED` и
+  `crlFetcher(null)`.
+
+- **\[CHANGE\] Запрос OCSP для клиентских сертификатов требует
+  `ClientOcspPolicy`, отличную от `OFF`.**
+
+  Ранее при `OcspPolicy.STAPLING_OR_FETCH` сервер выполнял запрос по AIA
+  из клиентского сертификата, не запросив OCSP у клиента и не имея
+  отдельной политики для клиентской цепочки.
+
+  Стало: при `OFF` исходящих запросов нет; запрос выполняется при
+  `REQUEST` (при `REQUIRE` сначала проверяется наличие присланного
+  staple).
+
+- **\[CHANGE!\] `GostSslBuilder.trustCa(pfx, pwd)` заменён на
+  `trustCaChain(pfx, pwd)` и `trustCaBundle(pfx, pwd)` (breaking
+  change).**
+
+  Ранее набор якорей зависел от содержимого контейнера: у CA-бандла
+  якорями становились все сертификаты, у контейнера со смешанным
+  составом - только цепочка ключа.
+
+  Стало: `trustCaChain` берёт CA цепочки ключа контейнера;
+  `trustCaBundle` берёт все сертификаты контейнера и отвергает не-CA
+  сертификат (`IllegalArgumentException`), а не отбрасывает его молча.
+  Оба метода требуют проверенного MAC.
+
+- **\[CHANGE!\] `OcspRequestBuilder`: nonce запроса - 32 байта.**
+
+  Ранее генерировалось 16 байт.
+
+  Стало: 32 байта, как требует RFC 8954 для клиентов;
+  `OcspRequest.nonce()` содержит сырые байты значения `Nonce`.
+
+- **\[CHANGE!\] `GostX509TrustManager`: только сертификаты-якоря
+  (breaking change).**
+
+  Ранее конструкторы принимали `PublicKeyParameters` или их список, а
+  `null`/пустой список создавали trust-all с WARNING.
+
+  Стало: key-конструкторы удалены; используйте
+  `GostX509TrustManager.fromTrustAnchors(...)`. Для разработки остаётся
+  `GostX509TrustManager.insecureTrustAll()`, который отключает только
+  проверку цепочки. `GostTrustManagerParameters.Builder.build()` требует
+  непустые `trustAnchors`.
+
+- **\[CHANGE!\] `GostTrustManagerParameters`: удалён key-only путь.**
+
+  `GostTrustManagerParameters.getCaPublicKeys()`,
+  `GostTrustManagerParameters.Builder.caPublicKeys()` и ключи в
+  параметрах удалены. Остались `trustAnchors`, `Builder.trustAnchors()`
+  и `getTrustAnchors()`.
+
+- **\[CHANGE!\] `GostSSLEngine`: сбой проверки записи - alert
+  `bad_record_mac` и `SSLException`.**
+
+  Было: подделанная запись отвергалась с кодом `decrypt_error`, а
+  `AlertMapper` превращал его в `SSLHandshakeException`.
+
+  Стало: код `bad_record_mac` (20) и `SSLException`, как в JDK; для
+  ошибок рукопожатия (CertificateVerify, Finished, binder PSK)
+  `decrypt_error` и `SSLHandshakeException` не изменились.
+
+- **\[OPS\] `GostSSLEngine.getConnectionLabel()`: диагностическая метка
+  `conn#N` для журнала.**
+
+  Метка выдаётся один раз при создании движка рукопожатия и не является
+  идентификатором сессии; до `beginHandshake()` метод возвращает `null`.
+  Нужна сокету и другим обёрткам, чтобы писать записи с тем же
+  префиксом.
+
+- **\[CHANGE\] `GostSSLEngine`: окно частоты KeyUpdate пира ведёт
+  `TlsHandshakeEngine`.**
+
+  Было: собственная проверка частоты стояла после обработки сообщения
+  движком (11-й KeyUpdate успевал сдвинуть ключи до отказа), а движок
+  отдельно считал обновления за всё соединение.
+
+  Стало: окно (10 за секунду) проверяется в движке до вывода новых
+  ключей, для `TlsSession` и `GostSSLEngine` одинаково; проверка в
+  `GostSSLEngine` и её константы удалены. Превышение по-прежнему
+  `SSLException` с кодом `unexpected_message`, отвергнутый KeyUpdate
+  ключи не сдвигает.
+
+- **\[CHANGE!\] Режим проверки имени узла: `EndpointIdentificationMode`
+  вместо флага `setEndpointIdentificationDisabled` (breaking change).**
+
+  Было: отключение проверки задавал булев флаг
+  `GostSSLSessionContext.setEndpointIdentificationDisabled`; клиентский
+  движок без узла проверял имя молча (только предупреждение), а
+  предупреждение об отключённой проверке писалось на каждое соединение и
+  советовало метод, которого нет в Netty.
+
+  Стало: `setEndpointIdentificationMode` с режимами `DEFAULT`, `STRICT`
+  и `DISABLED`; тем, кто вызывал
+  `setEndpointIdentificationDisabled(true)`, нужен `DISABLED`. В
+  `STRICT` (его включает адаптер Netty) HTTPS включён всегда, `null` в
+  `SSLParameters` его не снимает, а клиентский движок без узла
+  отказывает на `beginHandshake()` до ClientHello. Предупреждение об
+  отключении пишется один раз на контекст при включении `DISABLED`,
+  текст не привязан к конкретному API. Поведение `GostSslBuilder` и
+  сокетов не меняется.
+
+### Добавлено
+
+- **\[FEATURE\] Имя SNI из `SSLParameters.setServerNames` (движок и
+  сокет).**
+
+  Было: имя в SNI всегда бралось из `peerHost`.
+
+  Стало: переопределение заменяет только SNI; сертификат сверяется и
+  тикет привязывается по-прежнему по `peerHost`. Пустой список отключает
+  SNI, имена не типа `host_name` игнорируются, `getSSLParameters()`
+  возвращает заданные имена.
+
+- **\[FEATURE\] Условный запрос `If-Modified-Since` для перепроверки
+  CRL: `CrlFetcher.fetchConditional`, `CrlFetchResult`.**
+
+  Перепроверка записи кэша CRL (см. `crlMaxAge`) шла полной загрузкой:
+  для CRL ФНС это около 40 МБ, разбор и проверка подписи на каждой
+  перепроверке.
+
+  Теперь `CrlFetcher.fetchConditional(uri, lastModified)` (метод по
+  умолчанию: полная загрузка через `fetch`, лямбды и пользовательские
+  загрузчики работают как раньше) возвращает `CrlFetchResult`: тело, «не
+  изменился» (ответ 304) или отсутствие данных. Стандартные загрузчики
+  `JdkHttpCrlFetcher` и `UrlConnectionCrlFetcher` посылают
+  `If-Modified-Since` со значением `Last-Modified` прошлого ответа
+  строкой как есть (`If-None-Match` не посылается) и только на исходный
+  адрес, до перенаправлений. `Last-Modified` хранится вместе с записью
+  кэша; допустим только короткий, печатный, разбираемый как HTTP-дата;
+  ответ 200 без него очищает валидатор. 304 принимается только на наш
+  условный запрос и только для живой записи: возраст записи
+  сбрасывается, срок (`nextUpdate`) не меняется. Валидатор двигает
+  только ответ 200, где тело и дата согласованы: дата `Last-Modified` из
+  ответа 304 не учитывается (более ранняя откатила бы валидатор, более
+  поздняя противоречит RFC 9110 и увела бы его вперёд без тела, и новый
+  CRL перестал бы приходить до `nextUpdate`). Ответ 304 не подписан:
+  атакующий на http-CDP может прятать обновление до `nextUpdate`.
+  Проверка на большом CRL ФНС: 304 приходит без тела; за адресом
+  несколько узлов с разной датой файла, поэтому при нескольких узлах 304
+  означает «на этом узле не новее», а не «нового CRL нет», и на одну
+  публикацию CRL приходится не больше двух полных загрузок (после ответа
+  более нового узла валидатор даёт 304 на всех).
+
+- **\[FEATURE\] Настройка `crlMaxAge`: предельный возраст записи кэша
+  CRL до перепроверки.**
+
+  Параметр `crlMaxAge` (`Duration`) в `GostSslBuilder`,
+  `GostTrustManagerParameters.Builder`, `GostSsl` и
+  `GostX509TrustManager.fromTrustAnchors`. `Duration.ZERO` выключает
+  перепроверку, иначе от 1 минуты до 30 суток, `null` и значения вне
+  границ дают `IllegalArgumentException`. Для повышенных требований
+  безопасности разумны 1-6 часов.
+
+- **\[FEATURE\] `GostSSLSocket.wasResumed()`.**
+
+  Делегирует в `GostSSLEngine.wasResumed()`; до этого у сокета способа
+  узнать о возобновлении не было.
+
+- **\[FEATURE\] `GostSSLEngine.wasResumed()` и
+  `GostX509TrustManager.bindingId()`.**
+
+  `wasResumed()` сообщает, завершилось ли рукопожатие возобновлением по
+  PSK (симметрично `TlsSession.wasResumed()`). `bindingId()` отдаёт
+  случайный 128-битный идентификатор экземпляра менеджера доверия: он
+  входит в привязку PSK-тикетов, чтобы тикет не переходил между
+  менеджерами с разными якорями, политиками и загрузчиками отзыва.
+
+- **\[FEATURE\] `GostSslBuilder.crlCacheMaxBytes(long)` и
+  `GostTrustManagerParameters.Builder.crlCacheMaxBytes(long)`: бюджет
+  кэша проверенных CRL.**
+
+  Было: размер кэша CRL ничем не ограничивался, кроме лимита в 100
+  записей.
+
+  Стало: бюджет в байтах оценки удержания (около шести байт кучи на байт
+  DER), по умолчанию `CrlCache.DEFAULT_MAX_BYTES` (512 МиБ);
+  отрицательное значение отвергается, `0` отключает хранение.
+
+- **\[FEATURE\] `GostSslBuilder.maxThisUpdateAge(Duration)` и
+  `GostTrustManagerParameters.Builder.maxThisUpdateAge(Duration)`:
+  необязательный предел возраста `thisUpdate` OCSP-ответа.**
+
+  Было: ответ со старым `thisUpdate` и далёким `nextUpdate` принимался;
+  кэш держал такой ответ до `nextUpdate`.
+
+  Стало: предел действует на все ответы (клиентская и серверная сборка),
+  `null` - не задан (по умолчанию); срок записи кэша ограничен значением
+  `thisUpdate` плюс предел, чтобы кэш не отдавал ответ, который проверка
+  отклонит; с `trustAll()` предел несовместим (`IllegalStateException`).
+  Предел должен быть больше интервала обновления ответов у службы.
+
+- **\[FEATURE\] `GostSslBuilder.wantClientAuth(boolean)`.**
+
+  Ранее в билдере был только `needClientAuth`, хотя `GostSSLEngine`
+  необязательную аутентификацию клиента поддерживал.
+
+  Стало: `wantClientAuth(true)` запрашивает сертификат клиента, но не
+  требует его; предъявленный сертификат проверяется в полном объёме. При
+  совместном вызове с `needClientAuth(true)` действует обязательный
+  режим. Флаг хранится в `GostSSLSessionContext`.
+
+- **\[FEATURE\] OCSP-staple клиентского сертификата при mTLS:
+  `ClientOcspPolicy` в JSSE.**
+
+  Ранее сервер на `GostSSLEngine` не запрашивал OCSP у клиента, а
+  присланный staple отвергался (`unsupported_extension`); валидация шла
+  через JCA-конверсию, которая теряла присланный ответ.
+
+  Стало: `GostSslBuilder.clientOcspPolicy(OFF | REQUEST | REQUIRE)` и
+  `GostSSLSessionContext.setClientOcspPolicy` включают запрос
+  `status_request` в `CertificateRequest`; клиент задаёт staple через
+  `GostSSLEngine.setOcspResponse` (для обеих ролей). Присланный staple
+  проверяется всегда, при `REQUIRE` его отсутствие даёт
+  `bad_certificate`; ответ, полученный сервером по сети, обязательность
+  не выполняет.
+  `GostX509TrustManager.validateClientChain(chain, policy)` проверяет
+  цепочку без потери staple. По умолчанию `OFF`, поведение прежнее.
+  Политика без аутентификации клиента даёт `SSLException` при
+  `beginHandshake()`, вместе с `trustAll()` — `IllegalStateException`.
+  Сокеты задавать staple не умеют.
+
+- **\[FEATURE\] Якоря-сертификаты в JSSE.**
+
+  Ранее `GostTrustManagerFactorySpi` и `GostSsl` извлекали из
+  сертификатов только открытые ключи, а `GostX509TrustManager` принимал
+  только список ключей.
+
+  Стало: KeyStore и `trustCa()` сохраняют сертификаты как якоря;
+  `GostX509TrustManager.fromTrustAnchors()` и
+  `GostTrustManagerParameters.Builder.trustAnchors()` принимают
+  `TrustAnchors`; `pathLen` и `NameConstraints` корня применяются,
+  включая опущенный корень.
+
+- **\[FEATURE\] `GostSSLSession.exportKeyingMaterialData` и
+  `exportKeyingMaterialKey`: экспорт ключевого материала (RFC 8446
+  §7.5).**
+
+  Было: привязка к каналу была невозможна, на JDK 25 вызов
+  `ExtendedSSLSession.exportKeyingMaterial*` давал
+  `UnsupportedOperationException`.
+
+  Стало: два метода с сигнатурами JDK 25 без `@Override` (сборка под JDK
+  21 и Android 14): на JDK 25 они переопределяют стандартные. Исключения
+  как у JDK (`NullPointerException` для `label` и `keyAlg`,
+  `IllegalArgumentException` для длины, метки 1-249 байт, контекста до
+  255 байт и пустого `keyAlg`, `IllegalStateException` до рукопожатия).
+  Отличие от JDK: после закрытия соединения экспорт недоступен (секрет
+  живёт в движке и затирается при закрытии), `invalidate()` его не
+  отключает.
+
+## Модуль crypto-gost-netty
+
+### Исправлено
+
+- **\[SECURITY:P1\] `GostSslContextBuilder` отвергает неподдерживаемый
+  `TrustManager`.**
+
+  Ранее произвольный `TrustManager` передавался в `SSLContext`, где
+  молча заменялся на trust-all.
+
+  Стало: клиент и сервер с mTLS требуют непустой массив
+  `GostX509TrustManager`; `null`-элементы и сторонние реализации
+  отвергаются с `SSLException`. Сервер без mTLS по-прежнему может
+  работать без `TrustManager`.
+
+- **\[SECURITY:P1\] Netty-клиент проверяет имя узла в сертификате
+  сервера.**
+
+  Ранее Netty при настройке engine передавал
+  `endpointIdentificationAlgorithm = null`, `GostSSLEngine` применял его
+  по контракту JSSE и снимал HTTPS, выставленный при создании engine:
+  клиент проверял цепочку, но принимал сертификат любого доверенного УЦ
+  для любого узла.
+
+  Стало: клиентский контекст `GostSslContextBuilder` работает в строгом
+  режиме проверки имени (`EndpointIdentificationMode.STRICT`): `null` в
+  `SSLParameters` проверку не снимает.
+
+- **\[SECURITY:P1\] Клиент Netty без имени узла отказывает в рукопожатии
+  (fail-closed).**
+
+  Было: клиентский обработчик, созданный через `newHandler(alloc)` без
+  узла, принимал сертификат любого доверенного УЦ для любого узла, в
+  журнал уходило только предупреждение.
+
+  Стало: рукопожатие отказывает до отправки ClientHello с понятным
+  сообщением, пока проверка не отключена через
+  `withoutHostnameVerification()`; создавайте обработчик через
+  `newHandler(alloc, host, port)`. Серверные обработчики без узла
+  работают как прежде. Предупреждение об отключении проверки пишется
+  один раз на контекст.
+
+- **\[BUGFIX\] ALPN: рукопожатие не падает с `NullPointerException`,
+  несовпадение протоколов даёт алерт 120.**
+
+  Было: сервер с ALPN при клиенте без ALPN и клиент с ALPN при сервере
+  без ALPN падали с `NullPointerException` или `AssertionError` внутри
+  Netty, а отказ селектора превращался в успешное рукопожатие.
+
+  Стало: приоритет у списка сервера; если списки есть у обеих сторон и
+  общего протокола нет, сервер завершает рукопожатие алертом
+  `no_application_protocol` (120); если ALPN настроен только у одной
+  стороны, рукопожатие проходит, `applicationProtocol()` равен `null`.
+
+### Изменено
+
+- **\[SECURITY:P1!\] Проверка имени узла в Netty-клиенте включена по
+  умолчанию и не зависит от глобальных настроек Netty (breaking
+  change).**
+
+  Ранее поведение определяло системное свойство
+  `io.netty.handler.ssl.defaultEndpointVerificationAlgorithm`: `NONE`
+  отключал проверку без изменений в коде.
+
+  Стало: `NONE` и `LDAP` игнорируются; отключить проверку можно только
+  вызовом нового `GostSslContextBuilder.withoutHostnameVerification()`
+  (на сервере бросает `IllegalStateException`). Тем, кто задавал
+  `-D...=NONE` на весь процесс, после обновления нужно вызвать этот
+  метод. Решение действует на уровне контекста.
+
+- **\[CHANGE!\] `GostSslContextBuilder`: узкие типы менеджеров, единый
+  контракт `null`, проверки роли (breaking change).**
+
+  Было: перегрузки принимали любой `KeyManager` и `TrustManager` (в том
+  числе массивом), `null` обрабатывался пятью способами (ошибка при
+  сборке, `NullPointerException`, молчаливое отключение), `clientAuth`
+  на клиентском builder молча игнорировался, `sessionCacheSize` принимал
+  `long` и молча обрезал его до `int`, документация утверждала «0 -
+  значение по умолчанию».
+
+  Стало: `trustManager(GostX509TrustManager)`,
+  `keyManager(GostX509KeyManager)`, `forServer(GostX509KeyManager)` плюс
+  перегрузки с фабриками; `null` в любой точке входа или сеттере даёт
+  `IllegalArgumentException` с именем метода; значимый `clientAuth` и
+  `clientOcspPolicy` на клиенте дают `IllegalStateException`;
+  `clientOcspPolicy` на сервере без клиентской аутентификации даёт
+  `SSLException` при сборке; `sessionCacheSize(int)` и
+  `sessionTimeout(int)` проверяют `>= 0` в сеттере (0 снимает предел, по
+  умолчанию 20 480); имена ALPN проверяются сразу; неинициализированные
+  фабрики дают `SSLException` с понятным текстом. Тип менеджеров из
+  фабрик проверяет `SSLContext.init`. Внешний `sessionContext` подменяет
+  только сторону своего builder, а его границы описаны в javadoc.
+
+- **\[CHANGE!\] `GostSslContext`: упрощён конструктор, убран мёртвый
+  код.**
+
+  Было: конструктор принимал пять постоянных параметров, в builder
+  остались `PASSTHROUGH_FILTER`, `verifyCipherSuites` и недостижимая
+  проверка на `null`.
+
+  Стало: конструктор
+  `(SSLContext, isClient, ClientAuth, alpnProtocols)`,
+  `IdentityCipherSuiteFilter`.
+
+- **\[OPS\] Netty 4.2.20.Final и общая BOM для Netty и gRPC на весь
+  реактор.**
+
+  Было: `netty.version` 4.2.13.Final, версии `netty-handler` задавались
+  отдельно.
+
+  Стало: `netty.version` 4.2.20.Final, в `dependencyManagement`
+  родительского `pom.xml` подключены `netty-bom` и `grpc-bom` (gRPC
+  1.85.1), поэтому `netty-codec-http2` gRPC не смешивается с
+  `netty-handler` проекта. Версия Netty доходит до пользователей
+  `crypto-gost-netty` (`netty-handler` в области compile). Обновление
+  включает исправления безопасности Netty, выпущенные после 4.2.13:
+  `netty-handler` в 4.2.15 (GHSA-c653-97m9-rcg9, GHSA-x4gw-5cx5-pgmh,
+  GHSA-3qp7-7mw8-wx86) и в 4.2.17 (GHSA-fccg-mwvh-qqg4,
+  GHSA-c4c3-7fpv-j4q5); `netty-codec-http2`, на котором работает HTTP/2,
+  в 4.2.15 (GHSA-563q-j3cm-6jxm, GHSA-c2gf-v879-257j,
+  GHSA-5x3r-wrvg-rp6q) и в 4.2.16 (GHSA-93wv-jw9v-4972,
+  GHSA-c69g-56f8-xwqj).
+
+### Добавлено
+
+- **\[FEATURE\] `newHandler(...)` отдаёт обработчик над исходным
+  `GostSSLEngine`, в том числе при ALPN.**
+
+  Было: при ALPN Netty скрывал движок в закрытой обёртке, и
+  `((GostSSLEngine) handler.engine())` падал с `ClassCastException`;
+  клиентский OCSP-staple (`setOcspResponse`), `initiateKeyUpdate` и
+  другие методы движка были недоступны, а сочетание HTTP/2, mTLS и
+  обязательного клиентского staple невозможно.
+
+  Стало: `GostSslHandler` держит исходный движок,
+  `applicationProtocol()` отдаёт согласованный протокол (пустая строка
+  движка превращается в `null`). Настройку движка (наборы шифров,
+  протоколы, режим, `ClientAuth`, проверка имени, ALPN) повторяет код
+  адаптера, расхождение с путём `newEngine` ловит тест. Метод
+  `newEngine(...)` в Netty `final`: он по-прежнему возвращает обёртку
+  Netty, и при ALPN доступа к `GostSSLEngine` через него нет. Вызывайте
+  методы движка до добавления обработчика в канал.
+
+- **\[FEATURE\] `GostSslContextBuilder.clientOcspPolicy` и
+  `interopAcceptGostBaseSigScheme`.**
+
+  Было: обе настройки были у `GostSSLSessionContext`, но через builder
+  Netty недоступны.
+
+  Стало: `clientOcspPolicy(ClientOcspPolicy)` (политика сервера к
+  OCSP-staple клиентского сертификата) и
+  `interopAcceptGostBaseSigScheme(boolean)`.
+
+- **\[FEATURE\] HTTP/2 и gRPC поверх `GostSslContext`: тесты настоящих
+  кадров HTTP/2, примеры и описание ограничений.**
+
+  Было: проверялось только согласование ALPN со строкой `h2`, ни тест,
+  ни пример не говорили по HTTP/2, про gRPC ничего не было.
+
+  Стало: `GostSslContextHttp2Test` (сервер и клиент на
+  `Http2FrameCodec`, запрос и ответ по потоку HTTP/2, в том числе с mTLS
+  и обязательным клиентским OCSP-staple); в `examples/jsse` примеры
+  `Http2EchoServer` и `GrpcEchoServer`, тесты OkHttp &lt;→ Netty и
+  OkHttp &lt;→ Jetty по HTTP/2 (`Http2Clients`), тест `GrpcTest`
+  (нешейденный `grpc-netty`: унарный вызов, серверный поток, mTLS).
+  Пример `GostServerALPNProcessor` для Jetty 12: стандартный
+  ALPN-процессор Jetty отвергает `GostSSLEngine`, свой процессор и
+  регистрация через ServiceLoader описаны в README. Ограничения записаны
+  в README: gRPC идёт через `newEngine` (движок в обёртке Netty,
+  `GostSSLEngine` и OCSP-staple недоступны), нужен ALPN `h2` на обоих
+  контекстах, `grpc-netty-shaded` не подходит, Undertow из-за проверки
+  `TLSv1.2` и набора `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256` отвечает по
+  HTTP/1.1, Tomcat не проверялся.
+
+## Android
+
+### Изменено
+
+- **\[OPS!\] Минимальная версия Android повышена до 14 (API 34).**
+
+  Ранее документация и Gradle-конфигурация декларировали Android 12+
+  (`minSdk = 31`), но AAR-артефакты использовали `VarHandle` и
+  `Stream.toList()`, отсутствующие в runtime Android 12, поэтому на API
+  31 библиотека падала с `VerifyError` и `NoSuchMethodError`.
+
+  Стало: `minSdk = 34` во всех Android-модулях и демонстрационном
+  приложении; документация приведена к Android 14+.
+
+### Исправлено
+
+- **\[DOCS\] Исправлено ошибочное утверждение о поддержке Android 12+.**
+
+  Артефакты версии 0.7.1 фактически требуют Android 14 (API 34); запись
+  в разделе 0.7.1 приведена в соответствие.
+
+## Тесты кросс-валидации
+
+### Изменено
+
+- **\[TESTS\] Кросс-валидация CSR: атрибуты `challengePassword` и
+  произвольные, в обе стороны.**
+
+  Добавлено: CSR библиотеки с паролем и атрибутом проходит
+  `openssl req -verify -text`; CSR от `openssl req` с
+  `challengePassword` (OpenSSL кодирует его как UTF8String) читается
+  разборщиком. `CryptoproCsrInteropTest` проверяет строгий разбор
+  запроса, созданного `cryptcp -createrqst`; идёт только с
+  `-Dcrossval.cryptopro.containers=true`.
+
+- **\[TESTS\] `crossValidateGenToGost` действительно сверяет открытый
+  ключ с OpenSSL; TC26-A-256 включена в сверку ключей.**
+
+  Ранее тест вычислял `Q = d·G` и ничего с ним не сравнивал, а
+  TC26-A-256 исключалась из-за предположения, что в gost-engine нет её
+  набора параметров: он называется `TCA`, а не `D`.
+
+  Стало: `Q` сравнивается с открытым ключом, выданным
+  `openssl pkey -pubout`, и с кривой ключа; генерация и чтение ключа
+  проверяются на всех 7 кривых. `CryptoproKeysetInteropTest` теперь
+  фиксирует кривые, которые провайдер выбирает по умолчанию (CryptoPro-A
+  для 256 бит, TC26-A-512 для 512 бит).
+
+- **\[TESTS\] Тесты с контейнерами КриптоПро выполняются только по
+  явному запросу.**
+
+  Ранее каждый запуск crossval создавал контейнеры КриптоПро, и датчик
+  случайных чисел открывал окно «поводите мышью»; без оператора
+  `csptest` упирался в таймаут 60 с, и `CryptoproKeysetInteropTest`
+  падал случайным образом.
+
+  Стало: такие тесты пропускаются, пока не задан
+  `-Dcrossval.cryptopro.containers=true` (или
+  `CROSSVAL_CRYPTOPRO_CONTAINERS=true`). Добавлены цели `make crossval`
+  и `make crossval-full` (с контейнерами, для запуска перед релизом).
+
+- **\[TESTS\] OCSP: проверка nonce против BC и OpenSSL.**
+
+  Ранее вспомогательный код BC клал nonce в `extnValue` одним уровнем,
+  как и библиотека, поэтому расхождение с RFC 8954 не обнаруживалось.
+
+  Стало: BC кодирует nonce двойной обёрткой, новые сценарии OpenSSL
+  (запрос с nonce и ответ библиотеки с nonce) сверяют точное значение
+  через `-text`.
+
+- **\[TESTS\] Кросс-версионный тест Kuznyechik ускорен в 22 раза.**
+
+  Ранее JVM предыдущей версии поднималась на каждый вызов — 430 стартов,
+  ≈59 с на класс.
+
+  Стало: один долгоживущий worker на тестовый класс с бинарным
+  протоколом через pipe, время класса ≈2.6 с.
+
+### Добавлено
+
+- **\[TESTS\] Плотная кросс-валидация Стрибога с BC и OpenSSL.**
+
+  Новые тесты `BcStreebogDenseCrossValidationTest` и
+  `OpenSslStreebogDenseCrossValidationTest`: длины 0…300 и окрестности
+  384, 512, 1024, три набора данных (счётчик, псевдослучайный, все
+  `0xFF`); вход подаётся целиком, по байту, кусками по 1, 17, 53 и 64
+  байта и с пустыми вызовами, один объект используется для всех подач,
+  между ними `destroy()` посреди потока. HMAC-Стрибог проверяется с
+  ключами 0, 32, 63, 64, 65 и 128 байт против BC. OpenSSL получает
+  разреженный набор длин и все три набора данных.
+
+- **\[TESTS\] Выбор клиентского сертификата по `CertificateRequest`:
+  `TlsSession` (явный селектор) и `GostSSLEngine` против
+  `s_server -Verify 1 -client_sigalgs`.**
+
+  Сервер с 256-битным сертификатом просит клиентскую подпись только
+  схемой 512; у клиента сертификаты 256 и 512 бит (256-битный первым).
+  Проверяется, что уходит и принимается именно 512-битный сертификат, а
+  список CA доходит до селектора при `-CAfile` и пуст при
+  `-no_ca_names`.
+
+- **\[TESTS\] Кросс-тесты `GostSSLEngine`-сервера против `s_client`:
+  чужая схема подписи и клиент TLS 1.2.**
+
+  Новые тесты `OpenSslJsseCrossValidationTest`: клиент OpenSSL
+  предлагает только схему подписи другой кривой, и приложение сервера
+  получает исключение с настоящим кодом alert пира
+  (`alert 40 from peer`); `s_client -tls1_2` (ClientHello без
+  `supported_versions`) получает `protocol_version`. Помощник
+  `OpenSslJsseHelper` после ошибки `unwrap` забирает alert через
+  `wrap()` и отправляет его пиру, как это делает приложение.
+
+- **\[TESTS\] Чтение CRL библиотеки программой КриптоПро `certmgr`.**
+
+  Новый условный тест `CertmgrCrlReadCrossValidationTest` (при наличии
+  `certmgr`, контейнеры не создаются): `certmgr -list -crl -file`
+  разбирает CRL, выпущенный `GostCrlBuilder` (издатель, номер CRL, число
+  записей). Это проверка разбора, подпись `certmgr -list` не проверяет.
+
+- **\[TESTS\] Все 7 кривых против КриптоПро:
+  `CryptoproCurvesInteropTest`.**
+
+  `CryptoproKeysetInteropTest` кривую не задавал и проверял только две
+  умолчательные. Новый тест создаёт ключ на каждой кривой явно
+  (`csptest -signoid`) и проверяет два условия вместе: OID в сертификате
+  КриптоПро даёт именно наш зарегистрированный экземпляр, и подпись
+  КриптоПро проверяется нашими параметрами (p, a, b, G, n); по
+  отдельности условия недостаточны. На кривых с кофактором 4 открытый
+  ключ КриптоПро проходит и проверку подгруппы. Создание ключей
+  открывает окно датчика случайных чисел, поэтому тест идёт только с
+  `-Dcrossval.cryptopro.containers=true`.
+
+- **\[TESTS\] Кросс-валидация TLS на кривых с кофактором 4: GC256A и
+  GC512C.**
+
+  Прежде матрицы КриптоПро и OpenSSL содержали только кривые с `h = 1`
+  (GC256B, GC512A, GC512B), а `CryptoproTlsInteropTest` исключал эти две
+  кривые как «несовместимые», поэтому отсутствие кофактора в ECDHE не
+  обнаруживалось. Теперь `CryptoproTlsInteropTest` (14 случаев),
+  `OpenSslTls13CrossValidationTest` и `OpenSslJsseCrossValidationTest`
+  проверяют GC256A (`gost2012_256 paramset:TCA`) и GC512C
+  (`gost2012_512 paramset:C`); на прежнем коде они падают.
+
+- **\[TESTS\] Сверка JCA-шифра Кузнечика с OpenSSL при разной нарезке
+  входа.**
+
+  `OpenSslJcaChunkingCrossValidationTest`: CTR, CFB, OFB и CBC (PKCS7)
+  через JCA порциями по 1, 5, 16, 17 и 31 байту, через
+  `CipherOutputStream` и `CipherInputStream` сверяются с OpenSSL
+  (`gost-engine`) за один вызов в обе стороны. Прежняя сверка шла через
+  `api.Cipher`, который использует те же классы режимов, и ошибки
+  потокового `update` не обнаруживала. КриптоПро CSP для этой сверки не
+  применим: `csptest -lowenc` работает только на уровне CMS.
+
+- **\[TESTS\] Сверка Кузнечика-MGM с OpenSSL.**
+
+  `OpenSslMgmCrossValidationTest`: JCA `Kuznyechik/MGM/NoPadding` и
+  `MgmCipher.sealWithIcn` сверяются с OpenSSL (`gost-engine`) на AAD из
+  0, 1, 15, 16, 17, 41 и 100 байт и открытом тексте из 0, 1, 16, 17 и 67
+  байт: шифртекст и тег совпадают байт в байт, пакеты расшифровываются в
+  обе стороны; порции `updateAAD` и `update` по 1, 7 и 16 байт дают тот
+  же результат; искажение тега, шифртекста и AAD отвергается обеими
+  сторонами. Прежде MGM проверялся только векторами RFC 9058 и внутри
+  TLS (AAD из 5 байт). `openssl enc` AEAD не поддерживает, поэтому
+  эталоном служит C-хелпер на EVP API (`mgm_tool.c`), который тест
+  собирает `gcc`; без `gcc`, заголовков и `libcrypto` OpenSSL,
+  `gostprov.so` или при каталоге временных файлов с `noexec` тест
+  пропускается. Расхождений с нашей реализацией нет; у gost-engine
+  (v3.0.3-85) найден дефект расшифрования без AAD, хелпер его обходит
+  (описано в `kuznyechik-cross-validation.adoc`).
+
+- **\[TESTS\] Кросс-тесты Netty: клиент `GostSslContext` против
+  `s_server -alpn` и сервер против `csptest -tlsc -alpn h2`.**
+
+  Новые тесты `OpenSslNettyCrossValidationTest` и
+  `CryptoproNettyAlpnInteropTest`: ALPN `h2` согласуется с OpenSSL и
+  КриптоПро, обмен данными проходит; при несовпадении протоколов
+  `s_server` отвечает алертом 120, и клиент Netty получает его как отказ
+  рукопожатия. Сетевой обмен идёт между `EmbeddedChannel` и сокетом,
+  поэтому проверяются именно `SslHandler` и `GostSSLEngine` под ним.
+
+- **\[TESTS\] Кросс-тест HTTP/2: внешний клиент `curl` (nghttp2) поверх
+  внешнего ГОСТ TLS против сервера Netty.**
+
+  Новый модуль `x-validation-tests/http2`, тест
+  `ExternalHttp2ChainTest`: `curl --http2-prior-knowledge` → `socat` →
+  `openssl s_client -alpn h2 -nocommands` (ГОСТ-сборка OpenSSL) → сервер
+  Netty с `GostSslContext`. Проверяются версия протокола
+  (`curl -w %{http_version}` равна 2), тело ответа и согласованный ALPN
+  `h2` на сервере. Тест пропускается при отсутствии `curl` с HTTP/2,
+  `socat` или ГОСТ-провайдера OpenSSL. Обратное направление (клиент
+  Netty против внешнего сервера HTTP/2) не покрыто: на машине нет
+  внешнего сервера HTTP/2.
+
 # \[0.7.1\] - 18-07-2026
 
 Данная ветка релизов 0.7.хх целиком посвящена повышению уровня
@@ -6,7 +7369,7 @@
 Инфортекс, Контур, КриптоПро, angie и других, которые можно найти и
 протестировать хотя бы демо режиме.
 
-Теперь crypto-gost работает на платформе Android 12+.
+Теперь crypto-gost работает на платформе Android 14+ (API 34).
 
 ## Инфраструктура сборки
 
@@ -418,9 +7781,9 @@
   дублировал проверку `isValidPublicKey`, уже выполненную в конструкторе
   `PublicKeyParameters`.
 
-  После исправления full-handshake throughput восстановлен с 57.8k до
-  95.5k ops/s (95% от прежнего уровня, майский замер). mutualAuth
-  восстановлен с 41.5k до 58.8k ops/s (77% от прежнего уровня, майский
+  После исправления full-handshake throughput восстановлен с 57,8 до
+  95,5 ops/s (95% от прежнего уровня, майский замер). mutualAuth
+  восстановлен с 41,5 до 58,8 ops/s (77% от прежнего уровня, майский
   замер); оставшийся разрыв (двойная валидация сертификата пира при
   взаимной аутентификации) подтверждён JFR-профилированием и является
   необходимым расходом корректности.
@@ -3098,6 +10461,14 @@ change**, но он был необходим.
 
 ## Модуль crypto-gost-tls13
 
+Записи этого релиза о кофакторе ECDHE (удаление кофактора, «RFC 9367
+§4.1 требует обычный ECDH», «при `h = 1` все TLS-кривые кроме GC512C»,
+«ECDHE с кофактором 1 корректен для всех TLS-кривых») и пункты «GC256A»
+и «GC512C» в известных ограничениях неверны. RFC 9367 §6.1.1.1 (шаг 6) и
+§6.1.1.2 (шаг 5) требуют `(h·d)·Q`; кофактор 4 у GC256A и GC512C.
+Причиной сбоев с КриптоПро была ошибка crypto-gost, исправлена в 0.8.0
+(см. «Модуль crypto-gost-tls13», «Исправлено»).
+
 ### Исправлено
 
 - **`TlsMessageBuilder.buildHelloRetryRequest` — корректный wire-формат
@@ -3264,7 +10635,8 @@ crypto-gost и КриптоПРО CSP 5.0 (curl 8.19.0-CPRO / csptest), вклю
 - ClientHello CSP предлагает 6 cipher suites (включая Магму
   0xC104/0xC106) и 7 ГОСТ-схем подписи (все кривые RFC 9367).
 
-- ECDHE с кофактором 1 — корректен для всех TLS-кривых.
+- ECDHE на кривых с кофактором 1 корректен; для GC256A и GC512C (h=4)
+  требуется `(h·d)·Q`, исправлено в 0.8.0.
 
 - S-mode (0xC105) совместим с HRR — подтверждено на GC512A и GC512B.
 
@@ -3283,14 +10655,15 @@ crypto-gost и КриптоПРО CSP 5.0 (curl 8.19.0-CPRO / csptest), вклю
 
 - `GC256A (0x0022)`: CSP (Schannel) не кладёт key\_share для этой группы
   в ClientHello, ожидая HRR от сервера. При прямом ECDHE (сервер
-  отвечает GC256A key\_share) — ошибка `SEC_E_MESSAGE_ALTERED`.
-  Ограничение клиента CSP; crypto-gost обрабатывает группу корректно.
-  Рабочий сценарий: сервер на GC256B/C/D/GC512A/B → HRR → CSP
-  переключается на запрошенную группу.
+  отвечает GC256A key\_share) была ошибка `SEC_E_MESSAGE_ALTERED`.
+  Причина - ошибка ECDHE без кофактора в crypto-gost, а не ограничение
+  CSP; исправлено в 0.8.0, после исправления GC256A работает с CSP.
+  Остальные группы согласуются через HRR: сервер на GC256B/C/D/GC512A/B
+  → HRR → CSP переключается на запрошенную группу.
 
-- `GC512C (0x0028)`: кофактор h=4, ECDHE на этой кривой расходится на
-  уровне самой группы. В TLS 1.3 не используется — RFC 9367 разрешает
-  только кривые с h=1.
+- `GC512C (0x0028)`: кофактор h=4. RFC 9367 поддерживает GC512C и
+  требует кофактор в ECDHE (`(h·d)·Q`); расхождение было ошибкой
+  crypto-gost, исправлено в 0.8.0.
 
 - PSK session resumption: CSP (Schannel) не реализует повторное
   использование сессии TLS 1.3 — при повторном подключении выполняется

@@ -4,11 +4,16 @@ import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.Duration;
+import java.time.Instant;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.GostDnParser;
+import org.rssys.gost.pkix.cert.GostOcspResponse;
+import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
+import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
@@ -19,11 +24,10 @@ import org.rssys.gost.signature.PublicKeyParameters;
  * кросс-валидации CAdES с КриптоПро (флаги -cadesbes/-cadest).
  *
  * <p>ПОЧЕМУ фиксированные ключи: флаги {@code -cadesbes/-cadest} требуют, чтобы
- * цепочка подписанта строилась до доверенного корня в хранилище КриптоПро.
- * Установка корня в {@code uRoot} требует ручного подтверждения thumbprint
- * через GUI. Чтобы устанавливать корень ОДИН раз (а не при каждом запуске тестов
- * со случайными ключами), CA-сертификат должен иметь стабильный отпечаток —
- * значит, детерминированный ключ.
+ * цепочка подписанта строилась до доверенного корня в хранилище КриптоПро. Корень ставится в
+ * {@code uRoot} только на время прогона ({@code TrustedRootSession}, свойство
+ * {@code crossval.cryptopro.trustRoot}) и опознаётся по {@code keyid} и точному DER. Постоянно он
+ * в доверенном хранилище стоять не должен: его закрытый ключ лежит в репозитории.
  *
  * <p>Запуск (на ВМ или локально):
  * <pre>
@@ -37,16 +41,19 @@ public final class CryptoproFixtureGenerator {
 
     // Тестовые приватные ключи (256-бит, tc26a256). НЕ секретны — только для
     // кросс-валидации. Фиксированы для стабильного thumbprint CA.
-    private static final BigInteger CA_D = new BigInteger(
-            "0A5C3E9F1B2D4A6C8E0F1234567890ABCDEF0123456789ABCDEF0123456789AB", 16);
-    private static final BigInteger LEAF_D = new BigInteger(
-            "0F2E3D4C5B6A79880F1E2D3C4B5A69780F1E2D3C4B5A69780F1E2D3C4B5A6978", 16);
-    private static final BigInteger TSA_D = new BigInteger(
-            "0B1C2D3E4F5A69780B1C2D3E4F5A69780B1C2D3E4F5A69780B1C2D3E4F5A6978", 16);
+    private static final BigInteger CA_D =
+            new BigInteger("0A5C3E9F1B2D4A6C8E0F1234567890ABCDEF0123456789ABCDEF0123456789AB", 16);
+    private static final BigInteger LEAF_D =
+            new BigInteger("0F2E3D4C5B6A79880F1E2D3C4B5A69780F1E2D3C4B5A69780F1E2D3C4B5A6978", 16);
+    private static final BigInteger TSA_D =
+            new BigInteger("0B1C2D3E4F5A69780B1C2D3E4F5A69780B1C2D3E4F5A69780B1C2D3E4F5A6978", 16);
+    private static final BigInteger OCSP_D =
+            new BigInteger("0C2D3E4F5A6B78890C2D3E4F5A6B78890C2D3E4F5A6B78890C2D3E4F5A6B7889", 16);
 
     static final String CA_DN = "CN=Crossval Test Root CA,O=crypto-gost,C=RU";
     static final String LEAF_DN = "CN=Crossval Test Leaf,O=crypto-gost,C=RU";
     static final String TSA_DN = "CN=Crossval Test TSA,O=crypto-gost,C=RU";
+    static final String OCSP_DN = "CN=Crossval Test OCSP Responder,O=crypto-gost,C=RU";
 
     static final String CA_NOT_BEFORE = "20250101000000Z";
     static final String CA_NOT_AFTER = "20450101000000Z";
@@ -56,7 +63,7 @@ public final class CryptoproFixtureGenerator {
     private CryptoproFixtureGenerator() {}
 
     /** Выводит открытый ключ Q = d·G из приватного (как в KeyGenerator). */
-    private static PublicKeyParameters derivePublic(PrivateKeyParameters key) {
+    static PublicKeyParameters derivePublic(PrivateKeyParameters key) {
         ECParameters p = key.getParams();
         ECPoint q = ECPoint.affine(p.gx, p.gy, p).multiply(key.getD()).normalize();
         return new PublicKeyParameters(q, p);
@@ -68,15 +75,19 @@ public final class CryptoproFixtureGenerator {
         PrivateKeyParameters caKey = new PrivateKeyParameters(CA_D, p);
         PublicKeyParameters caPub = derivePublic(caKey);
         byte[] caDn = GostDnParser.encodeDn(CA_DN);
-        GostCertificate caCert = GostCertificateBuilder.create(p, caDn)
-                .publicKey(caPub)
-                .notBefore(CA_NOT_BEFORE)
-                .notAfter(CA_NOT_AFTER)
-                .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
-                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                .basicConstraints(true, null)
-                .serial(BigInteger.valueOf(1))
-                .sign(caKey);
+        GostCertificate caCert =
+                GostCertificateBuilder.create(p, caDn)
+                        .publicKey(caPub)
+                        .notBefore(CA_NOT_BEFORE)
+                        .notAfter(CA_NOT_AFTER)
+                        .keyUsage(
+                                GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                                GostCertificateBuilder.KeyUsage.CRL_SIGN,
+                                GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .basicConstraints(true, null)
+                        .ski()
+                        .serial(BigInteger.valueOf(1))
+                        .sign(caKey);
         return new Fixture(caKey, caPub, caCert);
     }
 
@@ -87,14 +98,19 @@ public final class CryptoproFixtureGenerator {
         PublicKeyParameters leafPub = derivePublic(leafKey);
         byte[] leafDn = GostDnParser.encodeDn(LEAF_DN);
         byte[] caDn = GostDnParser.encodeDn(CA_DN);
-        GostCertificate leafCert = GostCertificateBuilder.create(p, leafDn)
-                .publicKey(leafPub)
-                .issuerDn(caDn)
-                .notBefore(LEAF_NOT_BEFORE)
-                .notAfter(LEAF_NOT_AFTER)
-                .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                .serial(BigInteger.valueOf(2))
-                .sign(ca.key());
+        GostCertificate leafCert =
+                GostCertificateBuilder.create(p, leafDn)
+                        .publicKey(leafPub)
+                        .issuerDn(caDn)
+                        .notBefore(LEAF_NOT_BEFORE)
+                        .notAfter(LEAF_NOT_AFTER)
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        // SKI нужен, чтобы после прогона убрать сертификат из uMy по keyid, а не по
+                        // имени
+                        .ski()
+                        .aki(ca.cert().getPublicKey())
+                        .serial(BigInteger.valueOf(2))
+                        .sign(ca.key());
         return new Fixture(leafKey, leafPub, leafCert);
     }
 
@@ -112,16 +128,66 @@ public final class CryptoproFixtureGenerator {
         PublicKeyParameters tsaPub = derivePublic(tsaKey);
         byte[] tsaDn = GostDnParser.encodeDn(TSA_DN);
         byte[] caDn = GostDnParser.encodeDn(CA_DN);
-        GostCertificate tsaCert = GostCertificateBuilder.create(p, tsaDn)
-                .publicKey(tsaPub)
-                .issuerDn(caDn)
-                .notBefore(LEAF_NOT_BEFORE)
-                .notAfter(LEAF_NOT_AFTER)
-                .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                .extendedKeyUsage(true, GostOids.EXT_TIME_STAMPING)
-                .serial(BigInteger.valueOf(3))
-                .sign(ca.key());
+        GostCertificate tsaCert =
+                GostCertificateBuilder.create(p, tsaDn)
+                        .publicKey(tsaPub)
+                        .issuerDn(caDn)
+                        .notBefore(LEAF_NOT_BEFORE)
+                        .notAfter(LEAF_NOT_AFTER)
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .extendedKeyUsage(true, GostOids.EXT_TIME_STAMPING)
+                        .ski()
+                        .aki(ca.cert().getPublicKey())
+                        .serial(BigInteger.valueOf(3))
+                        .sign(ca.key());
         return new Fixture(tsaKey, tsaPub, tsaCert);
+    }
+
+    /**
+     * Восстанавливает пару делегированного OCSP-ответчика, выпущенную CA.
+     *
+     * <p>ПОЧЕМУ делегированный ответчик с {@code id-pkix-ocsp-nocheck}: в режиме
+     * {@code -xlongtype1} КриптоПро проверяет отзыв сертификата подписанта только по
+     * OCSP-ответу и требует, чтобы сертификат ответчика имел EKU OCSPSigning и
+     * расширение ocsp-nocheck (иначе: «NoCheck is required but missing»).
+     */
+    static Fixture buildOcspResponder(Fixture ca) {
+        ECParameters p = ECParameters.tc26a256();
+        PrivateKeyParameters key = new PrivateKeyParameters(OCSP_D, p);
+        PublicKeyParameters pub = derivePublic(key);
+        GostCertificate cert =
+                GostCertificateBuilder.create(p, GostDnParser.encodeDn(OCSP_DN))
+                        .publicKey(pub)
+                        .issuerDn(ca.cert().getSubjectDnBytes())
+                        .notBefore(LEAF_NOT_BEFORE)
+                        .notAfter(LEAF_NOT_AFTER)
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .extendedKeyUsage(true, GostOids.EXT_OCSP_SIGNING)
+                        .ocspNoCheck()
+                        .ski()
+                        .aki(ca.cert().getPublicKey())
+                        .serial(BigInteger.valueOf(4))
+                        .sign(ca.key());
+        return new Fixture(key, pub, cert);
+    }
+
+    /**
+     * Строит OCSP-ответ «good» о сертификате {@code subject}, подписанный
+     * делегированным ответчиком (его сертификат встроен в ответ).
+     */
+    static GostOcspResponse buildOcsp(Fixture ca, Fixture responder, GostCertificate subject)
+            throws PkixException {
+        Instant now = Instant.now();
+        byte[] der =
+                GostOcspResponseBuilder.create(subject.getSerialNumber())
+                        .issuerDn(ca.cert().getSubjectDnBytes())
+                        .caPublicKey(ca.cert().getPublicKey())
+                        .good()
+                        .thisUpdate(now)
+                        .nextUpdate(now.plus(Duration.ofDays(30)))
+                        .withDelegatedCerts(responder.cert().getEncoded())
+                        .sign(responder.key());
+        return new GostOcspResponse(der);
     }
 
     /**
@@ -141,8 +207,8 @@ public final class CryptoproFixtureGenerator {
     }
 
     public static void main(String[] args) throws Exception {
-        Path outDir = Paths.get(args.length > 0 ? args[0]
-                : "src/test/resources/cryptopro-fixtures");
+        Path outDir =
+                Paths.get(args.length > 0 ? args[0] : "src/test/resources/cryptopro-fixtures");
         Files.createDirectories(outDir);
 
         Fixture ca = buildCa();
@@ -159,6 +225,5 @@ public final class CryptoproFixtureGenerator {
         System.out.println("Written: " + outDir.resolve("ca.crl"));
     }
 
-    record Fixture(PrivateKeyParameters key, PublicKeyParameters pub,
-                   GostCertificate cert) {}
+    record Fixture(PrivateKeyParameters key, PublicKeyParameters pub, GostCertificate cert) {}
 }

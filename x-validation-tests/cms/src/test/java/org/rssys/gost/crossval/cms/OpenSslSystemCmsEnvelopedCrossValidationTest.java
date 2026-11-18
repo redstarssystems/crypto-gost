@@ -12,12 +12,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.rssys.gost.crossval.util.TempDirUtils;
 import org.rssys.gost.jca.spec.GostDerCodec;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cms.CmsContentInfo;
 import org.rssys.gost.pkix.cms.CmsEnvelopedDataBuilder;
 import org.rssys.gost.pkix.cms.CmsEnvelopedDataDecryptor;
-import org.rssys.gost.pkix.cms.Kexp15CmsKeyWrap;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.CryptoRandom;
+import org.rssys.gost.util.DerCodec;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -52,6 +55,11 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
     private static final String CIPHER_KUZ_CTR_ACPKM_OMAC = "-kuznyechik-ctr-acpkm-omac";
     private static final String ALG_GOST_2012_256 = "gost2012_256";
     private static final String PKEYOPT_PARAMSET_XA = "paramset:XA";
+    // Получателю задан KeyUsage явно, чтобы тест не зависел от openssl.cnf на машине:
+    // сертификат без назначения ключа принимался бы всегда, а с ним проверяется и новое правило
+    private static final String ADDEXT_OPT = "-addext";
+    private static final String RECIPIENT_KEY_USAGE =
+            "keyUsage=critical,keyEncipherment,dataEncipherment";
 
     private static final byte[] SHORT = "Привет, мир!\n".getBytes(StandardCharsets.UTF_8);
 
@@ -100,8 +108,14 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
             GostCertificate recipientCert =
                     GostCertificate.fromPemOrDer(Files.readAllBytes(rcpt.certDer()));
 
+            // Обычный режим без имитовставки: именно его принимает OpenSSL как non-OMAC контейнер
             byte[] enveloped =
-                    CmsEnvelopedDataBuilder.create().data(SHORT).addRecipient(recipientCert).build();
+                    CmsEnvelopedDataBuilder.create()
+                            .data(SHORT)
+                            .addRecipient(recipientCert)
+                            .withoutIntegrity()
+                            .build();
+            assertPlainContainer(enveloped);
             Path p7e = dir.resolve("cg-enc.p7e");
             Files.write(p7e, enveloped);
 
@@ -148,9 +162,23 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
             PrivateKeyParameters priv =
                     GostDerCodec.decodePrivateKey(Files.readAllBytes(rcpt.keyDer()));
 
+            // Контейнер OpenSSL без имитовставки строгий decrypt не принимает
+            byte[] opensslContainer = Files.readAllBytes(p7e);
+            PkixException strictRefusal =
+                    assertThrows(
+                            PkixException.class,
+                            () ->
+                                    CmsEnvelopedDataDecryptor.decrypt(
+                                            opensslContainer, priv, recipientCert),
+                            "строгий decrypt должен отвергать контейнер OpenSSL без OMAC");
+            assertEquals(
+                    PkixException.Reason.INTEGRITY_REQUIRED,
+                    strictRefusal.reason(),
+                    "причина отказа строгого decrypt для контейнера OpenSSL");
+
             byte[] decrypted =
-                    CmsEnvelopedDataDecryptor.decrypt(
-                            Files.readAllBytes(p7e), priv, recipientCert, new Kexp15CmsKeyWrap());
+                    CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(
+                            Files.readAllBytes(p7e), priv, recipientCert);
 
             assertArrayEquals(
                     SHORT,
@@ -177,8 +205,8 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
                     CmsEnvelopedDataBuilder.create()
                             .data(SHORT)
                             .addRecipient(recipientCert)
-                            .withOmac()
                             .build();
+            assertOmacContainer(enveloped);
             Path p7e = dir.resolve("cg-enc-omac.p7e");
             Files.write(p7e, enveloped);
 
@@ -222,7 +250,7 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
 
             byte[] decrypted =
                     CmsEnvelopedDataDecryptor.decrypt(
-                            Files.readAllBytes(p7e), priv, recipientCert, new Kexp15CmsKeyWrap());
+                            Files.readAllBytes(p7e), priv, recipientCert);
 
             assertArrayEquals(
                     SHORT,
@@ -273,8 +301,8 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
                     GostDerCodec.decodePrivateKey(Files.readAllBytes(rcpt.keyDer()));
 
             byte[] decrypted =
-                    CmsEnvelopedDataDecryptor.decrypt(
-                            Files.readAllBytes(p7e), priv, recipientCert, new Kexp15CmsKeyWrap());
+                    CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(
+                            Files.readAllBytes(p7e), priv, recipientCert);
 
             assertArrayEquals(
                     large,
@@ -309,7 +337,7 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
 
             byte[] decrypted =
                     CmsEnvelopedDataDecryptor.decrypt(
-                            Files.readAllBytes(p7e), priv, recipientCert, new Kexp15CmsKeyWrap());
+                            Files.readAllBytes(p7e), priv, recipientCert);
 
             assertArrayEquals(
                     large,
@@ -332,11 +360,25 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
 
             byte[] large = randomLargeData(300 * 1024);
             byte[] enveloped =
-                    CmsEnvelopedDataBuilder.create().data(large).addRecipient(recipientCert).build();
+                    CmsEnvelopedDataBuilder.create()
+                            .data(large)
+                            .addRecipient(recipientCert)
+                            .withoutIntegrity()
+                            .build();
+            assertPlainContainer(enveloped);
+            PkixException strictRefusal =
+                    assertThrows(
+                            PkixException.class,
+                            () -> CmsEnvelopedDataDecryptor.decrypt(enveloped, priv, recipientCert),
+                            "строгий decrypt должен отвергать контейнер без имитовставки");
+            assertEquals(
+                    PkixException.Reason.INTEGRITY_REQUIRED,
+                    strictRefusal.reason(),
+                    "причина отказа строгого decrypt");
 
             byte[] decrypted =
-                    CmsEnvelopedDataDecryptor.decrypt(
-                            enveloped, priv, recipientCert, new Kexp15CmsKeyWrap());
+                    CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(
+                            enveloped, priv, recipientCert);
 
             assertArrayEquals(
                     large,
@@ -362,17 +404,16 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
                     CmsEnvelopedDataBuilder.create()
                             .data(large)
                             .addRecipient(recipientCert)
-                            .withOmac()
                             .build();
 
             byte[] decrypted =
                     CmsEnvelopedDataDecryptor.decrypt(
-                            enveloped, priv, recipientCert, new Kexp15CmsKeyWrap());
+                            enveloped, priv, recipientCert);
 
             assertArrayEquals(
                     large,
                     decrypted,
-                    "crypto-gost саморасшифровка 300 КБ с OMAC должна быть байт-в-байт (builder.withOmac())");
+                    "crypto-gost саморасшифровка 300 КБ с OMAC должна быть байт-в-байт (OMAC по умолчанию)");
             return null;
         });
     }
@@ -398,6 +439,7 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
                 SYS_OPENSSL, "req", ENGINE_OPT, ENGINE_GOST, "-new", "-x509",
                 "-key", keyPem.toString(), MD_GOST_2012_256,
                 "-subj", "/CN=OpenSSL GOST Recipient/O=crossval/C=RU",
+                ADDEXT_OPT, RECIPIENT_KEY_USAGE,
                 "-days", "3650", "-out", certPem.toString());
         runOk(SYS_OPENSSL, "x509", "-in", certPem.toString(), "-outform", "DER", "-out", certDer.toString());
         runOk(
@@ -455,5 +497,40 @@ class OpenSslSystemCmsEnvelopedCrossValidationTest {
             throw new IllegalStateException(
                     "команда завершилась с кодом " + c.exit() + ": " + String.join(" ", cmd) + "\n" + c.output());
         }
+    }
+
+    /**
+     * Проверяет, что контейнер собран с имитовставкой: OID OMAC-шифра и атрибут unprotectedAttrs.
+     * OpenSSL расшифрует контейнер любого режима, поэтому сам успех расшифрования не доказывает,
+     * что построитель по умолчанию выдаёт OMAC.
+     */
+    private static void assertOmacContainer(byte[] enveloped) throws PkixException {
+        CmsContentInfo contentInfo = CmsContentInfo.decode(enveloped);
+        byte[][] envParts = DerCodec.parseSequenceContents(contentInfo.content(), 0);
+        byte[][] eciParts = DerCodec.parseSequenceContents(envParts[2], 0);
+        byte[][] algParts = DerCodec.parseSequenceContents(eciParts[1], 0);
+        assertEquals(
+                GostOids.KUZ_CTR_ACPKM_OMAC,
+                DerCodec.parseOid(algParts[0], 0),
+                "OID шифра по умолчанию должен быть точно kuznyechik-ctr-acpkm-omac");
+        assertEquals(4, envParts.length, "OMAC-контейнер должен содержать unprotectedAttrs");
+    }
+
+    /**
+     * Проверяет, что контейнер собран без имитовставки: OID обычного шифра и нет unprotectedAttrs.
+     * Без этого тест «обычного режима» прошёл бы и на OMAC-контейнере, если бы
+     * {@code withoutIntegrity()} перестал действовать.
+     */
+    private static void assertPlainContainer(byte[] enveloped) throws PkixException {
+        CmsContentInfo contentInfo = CmsContentInfo.decode(enveloped);
+        byte[][] envParts = DerCodec.parseSequenceContents(contentInfo.content(), 0);
+        byte[][] eciParts = DerCodec.parseSequenceContents(envParts[2], 0);
+        byte[][] algParts = DerCodec.parseSequenceContents(eciParts[1], 0);
+        assertEquals(
+                GostOids.KUZ_CTR_ACPKM,
+                DerCodec.parseOid(algParts[0], 0),
+                "OID шифра обычного режима должен быть точно kuznyechik-ctr-acpkm");
+        assertEquals(
+                3, envParts.length, "обычный контейнер не должен содержать unprotectedAttrs");
     }
 }

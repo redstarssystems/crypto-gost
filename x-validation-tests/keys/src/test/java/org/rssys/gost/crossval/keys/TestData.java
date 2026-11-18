@@ -9,7 +9,8 @@ import java.util.function.Supplier;
  *
  * Каждая кривая описывается именем, разрядностью, фабрикой параметров
  * и флагами совместимости с OpenSSL.
- * TC26-A-256 отфильтрован — engine gost не имеет paramset D.
+ * TC26-A-256 в engine gost называется paramset TCA (имя D не существует); ECDH на ней
+ * с OpenSSL здесь не проверяется: кофактор 4 покрыт в кросс-валидации TLS.
  */
 public final class TestData {
 
@@ -25,7 +26,8 @@ public final class TestData {
     }
 
     public static final CurveSpec[] CURVES = {
-        new CurveSpec("TC26-A-256",  "256", ECParameters::tc26a256,   false, false, false, null, null),
+        new CurveSpec("TC26-A-256",  "256", ECParameters::tc26a256,   true,  true,  false,
+                "gost2012_256", "TCA"),
         new CurveSpec("CryptoPro-A", "256", ECParameters::cryptoProA, true,  true,  true,
                 "gost2012_256", "A"),
         new CurveSpec("CryptoPro-B", "256", ECParameters::cryptoProB, true,  true,  true,

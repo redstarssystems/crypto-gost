@@ -3,6 +3,7 @@ package org.rssys.gost.crossval.kuznyechik;
 import org.bouncycastle.crypto.engines.GOST3412_2015Engine;
 import org.bouncycastle.crypto.modes.CBCBlockCipher;
 import org.bouncycastle.crypto.modes.CFBBlockCipher;
+import org.bouncycastle.crypto.modes.G3413CFBBlockCipher;
 import org.bouncycastle.crypto.modes.OFBBlockCipher;
 import org.bouncycastle.crypto.modes.SICBlockCipher;
 import org.bouncycastle.crypto.paddings.PKCS7Padding;
@@ -84,6 +85,20 @@ public final class BcHelper {
     public static byte[] bcCfb(byte[] data, byte[] key, byte[] iv, boolean encrypt) {
         if (data.length == 0) return new byte[0];
         CFBBlockCipher blockCipher = new CFBBlockCipher(new GOST3412_2015Engine(), 128);
+        blockCipher.init(encrypt, new ParametersWithIV(new KeyParameter(key), iv));
+        byte[] output = new byte[data.length];
+        blockCipher.processBytes(data, 0, data.length, output, 0);
+        return output;
+    }
+
+    /**
+     * BC CFB по ГОСТ Р 34.13-2015 с коротким сегментом (G3413CFBBlockCipher): регистр сдвига
+     * длиной с синхропосылку, сегмент {@code segmentBits} бит.
+     */
+    public static byte[] bcCfbSegment(
+            byte[] data, byte[] key, byte[] iv, boolean encrypt, int segmentBits) {
+        G3413CFBBlockCipher blockCipher =
+                new G3413CFBBlockCipher(new GOST3412_2015Engine(), segmentBits);
         blockCipher.init(encrypt, new ParametersWithIV(new KeyParameter(key), iv));
         byte[] output = new byte[data.length];
         blockCipher.processBytes(data, 0, data.length, output, 0);

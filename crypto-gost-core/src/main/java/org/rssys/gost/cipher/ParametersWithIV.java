@@ -1,6 +1,8 @@
 package org.rssys.gost.cipher;
 
-public class ParametersWithIV implements CipherParameters {
+import java.util.Arrays;
+
+public final class ParametersWithIV implements CipherParameters {
     private CipherParameters parameters;
     private byte[] iv;
 
@@ -19,7 +21,7 @@ public class ParametersWithIV implements CipherParameters {
      * Мутация возвращённого массива не влияет на внутреннее состояние.
      */
     public byte[] getIV() {
-        return java.util.Arrays.copyOf(iv, iv.length);
+        return Arrays.copyOf(iv, iv.length);
     }
 
     public CipherParameters getParameters() {

@@ -7,7 +7,7 @@ package org.rssys.gost.pkix.cms;
  * {@link CmsEnvelopedDataDecryptor} для обёртывания CEK
  * с помощью KEK, полученного через VKO.
  */
-public interface CmsKeyWrap {
+interface CmsKeyWrap {
 
     /**
      * Оборачивает ключ содержимого.

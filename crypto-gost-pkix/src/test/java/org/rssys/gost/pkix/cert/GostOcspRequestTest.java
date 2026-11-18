@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cert;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Arrays;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.util.DerCodec;
 
 /**
  * Модульные тесты {@link GostOcspRequest}: разбор OCSP-запроса.
@@ -281,5 +283,39 @@ class GostOcspRequestTest {
         encoded[0] = 0;
         assertArrayEquals(
                 der, req.getEncoded(), "мутация возвращённого массива не должна менять состояние");
+    }
+
+    @Test
+    @DisplayName("Подпись запроса неверной длины -> PkixException(SIGNATURE_INVALID), не IAE")
+    void testTruncatedSignatureGivesPkixException() throws Exception {
+        KeyPair signKp = KeyGenerator.generateKeyPair(params256);
+        byte[] der =
+                GostOcspRequestBuilder.create()
+                        .targetCert(certs256.leaf.getEncoded())
+                        .issuerCert(certs256.ca.getEncoded())
+                        .signKey(signKp.getPrivate())
+                        .params(params256)
+                        .build();
+
+        // OCSPRequest ::= SEQUENCE { tbsRequest, optionalSignature [0] EXPLICIT Signature },
+        // Signature ::= SEQUENCE { signatureAlgorithm, signature BIT STRING, certs [0] OPTIONAL }
+        byte[][] request = DerCodec.parseSequenceContents(der, 0);
+        int[] explicitLen = DerCodec.decodeLength(request[1], 1);
+        byte[][] signature = DerCodec.parseSequenceContents(request[1], 1 + explicitLen[1]);
+        byte[] signatureBits = DerCodec.parseBitString(signature[1], 0);
+        signature[1] =
+                DerCodec.encodeBitString(Arrays.copyOf(signatureBits, signatureBits.length - 1));
+        byte[] tampered =
+                DerCodec.encodeSequence(
+                        request[0],
+                        DerCodec.encodeContextConstructed(0, DerCodec.encodeSequence(signature)));
+
+        GostOcspRequest parsed = GostOcspRequest.fromDer(tampered);
+        PkixException e =
+                assertThrows(
+                        PkixException.class,
+                        () -> parsed.verifySignature(signKp.getPublic()),
+                        "подпись неверной длины должна давать PkixException");
+        assertEquals(PkixException.Reason.SIGNATURE_INVALID, e.reason(), "причина - подпись");
     }
 }

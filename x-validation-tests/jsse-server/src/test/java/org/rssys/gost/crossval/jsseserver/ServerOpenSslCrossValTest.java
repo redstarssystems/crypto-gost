@@ -9,6 +9,7 @@ import org.rssys.gost.crossval.util.OpenSslChecker;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 
 import javax.net.ssl.SSLContext;
@@ -38,7 +39,7 @@ class ServerOpenSslCrossValTest {
                 ServerOpenSslHelper.createServerPki(params);
         GostX509KeyManager km = ServerOpenSslHelper.createKeyManager(
                 pki.cert(), pki.caCert(), pki.priv());
-        GostX509TrustManager tm = new GostX509TrustManager(pki.caPub(), false);
+        GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(pki.caCert()));
         SSLContext sslContext = ServerOpenSslHelper.createSslContext(km, tm);
 
         int port = ServerOpenSslHelper.findFreePort();
@@ -80,7 +81,7 @@ class ServerOpenSslCrossValTest {
                 ServerOpenSslHelper.createServerPki(params);
         GostX509KeyManager km = ServerOpenSslHelper.createKeyManager(
                 pki.cert(), pki.caCert(), pki.priv());
-        GostX509TrustManager tm = new GostX509TrustManager(pki.caPub(), false);
+        GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(pki.caCert()));
         SSLContext sslContext = ServerOpenSslHelper.createSslContext(km, tm);
 
         int port = ServerOpenSslHelper.findFreePort();

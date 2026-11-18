@@ -86,7 +86,8 @@ OpenSSL `s_server` — в роли сервера, crypto-gost — в роли �
 <tr>
 <td style="text-align: left;"><p>все кривые</p></td>
 <td style="text-align: left;"><p>handshake</p></td>
-<td style="text-align: left;"><p>GC256B, GC512A, GC512B</p></td>
+<td style="text-align: left;"><p>GC256B, GC512A, GC512B, GC256A,
+GC512C</p></td>
 <td style="text-align: left;"><p>L</p></td>
 <td style="text-align: left;"></td>
 </tr>
@@ -157,7 +158,8 @@ handshake</p></td>
 <tr>
 <td style="text-align: left;"><p>все кривые</p></td>
 <td style="text-align: left;"><p>handshake</p></td>
-<td style="text-align: left;"><p>GC256B, GC512A, GC512B</p></td>
+<td style="text-align: left;"><p>GC256B, GC512A, GC512B, GC256A,
+GC512C</p></td>
 <td style="text-align: left;"><p>L</p></td>
 <td style="text-align: left;"></td>
 </tr>
@@ -241,11 +243,54 @@ handshake</p></td>
 </tbody>
 </table>
 
+## Возобновление по PSK
+
+Тесты проверяют, что второе соединение возобновляется по тикету
+(`GostSSLEngine.wasResumed()`), с обменом данными. Для обоих наборов
+шифров (L и S).
+
+- `OpenSslJsseResumptionCrossValidationTest`: клиент `GostSSLEngine` с
+  общим для двух соединений `GostSSLSessionContext` и менеджером
+  доверия, сервер `s_server`. Кривые GC256B (группа клиента по
+  умолчанию) и GC256A (клиент начинает с группы сервера через
+  `setClientNamedGroup`, иначе каждое соединение идёт через
+  HelloRetryRequest). Отдельный тест: тикет из рукопожатия с
+  HelloRetryRequest возобновляется без него (проверка расчёта resumption
+  master secret после HelloRetryRequest).
+
+- `OpenSslJsseServerResumptionCrossValidationTest`: сервер
+  `GostSSLEngine`, клиент `s_client` (`-sess_out`/`-sess_in`), кривые
+  GC256B и GC256A. Отдельный тест: `s_client` предлагает `key_share`
+  только для GC256A, сервер выбирает GC256B, оба соединения идут через
+  HelloRetryRequest (по трассе `-msg` два ClientHello) и второе
+  возобновляется.
+
+- `CryptoproJsseServerResumptionCrossValidationTest`: сервер
+  `GostSSLEngine`, клиент КриптоПро
+  (`csptest -tlsc -proto 7 -reconnects 3 -checkreuse -checksessionticket`),
+  кривая GC256A; сервер выбирает группу GC256A, как единственную в
+  `key_share` `csptest`. Отдельный тест: сервер выбирает GC256B, а
+  `csptest` присылает `key_share` только для GC256A, поэтому соединения
+  должны идти через HelloRetryRequest. Это ожидание, а не измерение:
+  число ClientHello тест не считает, и при смене поведения `csptest` он
+  перестанет проверять HelloRetryRequest. Строгая проверка со счётчиком
+  ClientHello - в tls13-тесте
+  `CryptoproTlsResumptionTest.serverResumesCryptoproClientThroughHrr`.
+  Второе и третье соединения возобновляются.
+
+Binder второго ClientHello считается по RFC 8446 §4.2.11.2, внешняя
+сторона проверяет его независимо.
+
 # Покрытие
 
-- 23 тестовых сценария (22 активных + 1 @Disabled KeyUpdate)
+- Проверки возобновления по PSK: клиент jsse с `s_server` (5), сервер
+  jsse с `s_client` (6, из них 2 через HelloRetryRequest), сервер jsse с
+  `csptest -tlsc` (4, из них 2 через HelloRetryRequest по ожиданию);
+  остальное - `OpenSslJsseCrossValidationTest`
 
-- 3 кривые: GC256B (CryptoPro-A), GC512A (TC26-512A), GC512B (TC26-512B)
+- 5 кривых: GC256B (CryptoPro-A), GC512A (TC26-512A), GC512B
+  (TC26-512B), GC256A (TC26-256A, кофактор 4), GC512C (TC26-512C,
+  кофактор 4)
 
 - 2 cipher suites: L и S
 
@@ -257,7 +302,10 @@ handshake</p></td>
 
 - Group mismatch (fallback)
 
-- KeyUpdate (@Disabled до подтверждения OpenSSL)
+- Возобновление по PSK: клиент и сервер jsse, OpenSSL и КриптоПро,
+  наборы L и S, с HelloRetryRequest и без него
+
+- KeyUpdate после handshake (сервер `GostSSLEngine` с `s_client`)
 
 # Требования к окружению
 

@@ -8,11 +8,15 @@ import java.util.Arrays;
  * Сервер включает в CertificateRequest список таких фильтров — пар
  * {OID расширения, допустимые значения}. Клиент выбирает сертификат,
  * удовлетворяющий всем фильтрам, или отправляет пустой certificate_list.
+ * Запись неизменяема: конструктор копирует массивы, а аксессоры отдают копии.
  *
  * @param extensionOid     DER-кодированный OID расширения (RFC 5280),
  *                         без тега и длины, только value
- * @param extensionValues  допустимые значения (может быть пустым —
- *                         достаточно присутствия расширения в сертификате)
+ * @param extensionValues  значение фильтра - DER значения расширения (extnValue):
+ *                         SEQUENCE OID для ExtendedKeyUsage и CertificatePolicies, BIT STRING
+ *                         целиком для KeyUsage; для прочих известных расширений сравнивается
+ *                         побайтно. Может быть пустым - достаточно присутствия расширения
+ *                         в сертификате
  */
 public record OIDFilter(byte[] extensionOid, byte[] extensionValues) {
 
@@ -23,6 +27,19 @@ public record OIDFilter(byte[] extensionOid, byte[] extensionValues) {
         if (extensionValues == null) {
             throw new IllegalArgumentException("extensionValues must not be null");
         }
+        // Массивы изменяемы: без копии вызывающий код мог бы менять фильтр уже после создания
+        extensionOid = extensionOid.clone();
+        extensionValues = extensionValues.clone();
+    }
+
+    @Override
+    public byte[] extensionOid() {
+        return extensionOid.clone();
+    }
+
+    @Override
+    public byte[] extensionValues() {
+        return extensionValues.clone();
     }
 
     @Override

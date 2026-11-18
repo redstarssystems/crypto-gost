@@ -2,9 +2,13 @@ package org.rssys.gost.crossval.kuznyechik;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.rssys.gost.api.Cipher;
+import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
+import org.rssys.gost.cipher.mode.Cfb;
 import org.rssys.gost.crossval.util.CrossValUtils;
 import org.rssys.gost.util.CryptoRandom;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -51,6 +55,36 @@ class BcCrossValidationTest {
         assertArrayEquals(plaintext, decryptedBc,
                 () -> "Ошибка расшифрования шифртекста ГОСТ: mode=" + mode + " size=" + size + " "
                         + CrossValUtils.diffContext(plaintext, decryptedBc) + " " + kv);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"8, 16", "8, 32", "24, 16", "24, 32", "64, 16", "64, 32", "128, 16", "128, 32"})
+    @DisplayName("BC-кросс-валидация CFB с коротким сегментом (G3413CFBBlockCipher)")
+    void crossValidateCfbShortSegment(int segmentBits, int registerLen) {
+        byte[] key = new byte[32];
+        CryptoRandom.INSTANCE.nextBytes(key);
+        byte[] iv = new byte[registerLen];
+        CryptoRandom.INSTANCE.nextBytes(iv);
+        byte[] plaintext = TestData.randomBytes(96, CryptoRandom.INSTANCE);
+        String kv = keyIv(key, iv);
+
+        Cfb encryptor = new Cfb(new Kuznyechik(), segmentBits);
+        encryptor.init(true, new ParametersWithIV(new SymmetricKey(key), iv));
+        byte[] ciphertextGost = new byte[plaintext.length];
+        encryptor.processBytes(plaintext, 0, plaintext.length, ciphertextGost, 0);
+        byte[] ciphertextBc = BcHelper.bcCfbSegment(plaintext, key, iv, true, segmentBits);
+
+        assertArrayEquals(ciphertextBc, ciphertextGost,
+                () -> "Несовпадение шифртекста CFB ГОСТ/BC: сегмент=" + segmentBits + " m=" + registerLen
+                        + " " + CrossValUtils.diffContext(ciphertextBc, ciphertextGost) + " " + kv);
+
+        Cfb decryptor = new Cfb(new Kuznyechik(), segmentBits);
+        decryptor.init(false, new ParametersWithIV(new SymmetricKey(key), iv));
+        byte[] decrypted = new byte[plaintext.length];
+        decryptor.processBytes(ciphertextBc, 0, ciphertextBc.length, decrypted, 0);
+        assertArrayEquals(plaintext, decrypted,
+                () -> "Ошибка расшифрования шифртекста BC: сегмент=" + segmentBits + " m=" + registerLen
+                        + " " + kv);
     }
 
     @ParameterizedTest

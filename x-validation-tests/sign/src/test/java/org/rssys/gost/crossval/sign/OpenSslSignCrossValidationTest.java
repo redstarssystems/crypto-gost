@@ -121,6 +121,36 @@ class OpenSslSignCrossValidationTest {
 
     @ParameterizedTest
     @MethodSource("opensslCurveParams")
+    @DisplayName("OpenSSL: по умолчанию два раза подписали одно сообщение - подписи разные, openssl принимает обе")
+    void crossValidateDefaultIsHedged(TestData.CurveSpec spec) throws Exception {
+        // OpenSSL гибридно по этому черновику не подписывает, он только проверяет
+        OpenSslCtx c = ctx.get(spec);
+        byte[][] msgs = TestData.randomMessages(3, TestData.MSG_SIZE);
+
+        CrossValAssertions.assertForEachMessage(msgs, msg -> {
+            byte[] first = Signature.sign(msg, c.priv);
+            byte[] second = Signature.sign(msg, c.priv);
+            assertTrue(!java.util.Arrays.equals(first, second),
+                    spec.name() + ": подпись по умолчанию детерминирована");
+            TempDirUtils.withTempDir("ossl-hedged-", tmpDir -> {
+                Path msgFile = tmpDir.resolve("msg.bin");
+                Path pubFile = tmpDir.resolve("pub.der");
+                Files.write(msgFile, msg);
+                Files.write(pubFile, c.derPub);
+                int index = 0;
+                for (byte[] sig : new byte[][] {first, second}) {
+                    Path sigFile = tmpDir.resolve("sig" + index++ + ".bin");
+                    Files.write(sigFile, sig);
+                    assertTrue(runOpensslVerify(pubFile, sigFile, msgFile, spec.rolen()),
+                            spec.name() + ": OpenSSL не принял гибридную подпись");
+                }
+                return null;
+            });
+        });
+    }
+
+    @ParameterizedTest
+    @MethodSource("opensslCurveParams")
     @DisplayName("OpenSSL tamper: испорченная подпись отклоняется openssl")
     void crossValidateTamper(TestData.CurveSpec spec) throws Exception {
         OpenSslCtx c = ctx.get(spec);

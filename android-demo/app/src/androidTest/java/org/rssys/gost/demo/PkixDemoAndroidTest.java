@@ -1,5 +1,9 @@
 package org.rssys.gost.demo;
 
+import org.rssys.gost.pkix.cms.CAdESVerifier;
+import org.rssys.gost.pkix.cms.VerifyOptions;
+import org.rssys.gost.pkix.cms.SignerSelection;
+import org.rssys.gost.pkix.cms.Revocation;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -18,6 +22,7 @@ import org.junit.runner.RunWith;
 import org.junit.runners.MethodSorters;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.GostSigner;
+import org.rssys.gost.signature.NonceMode;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.RssysGostProvider;
@@ -49,18 +54,17 @@ import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.pkix.cert.ReasonCode;
 import org.rssys.gost.pkix.cert.RevokedEntry;
 import org.rssys.gost.pkix.cert.SingleOcspResponse;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.cms.CAdESExtender;
 import org.rssys.gost.pkix.cms.CAdESSignerResult;
 import org.rssys.gost.pkix.cms.CAdESXLongData;
 import org.rssys.gost.pkix.cms.CertChainBuilder;
 import org.rssys.gost.pkix.cms.CmsEnvelopedDataBuilder;
 import org.rssys.gost.pkix.cms.CmsEnvelopedDataDecryptor;
-import org.rssys.gost.pkix.cms.CmsKeyWrap;
 import org.rssys.gost.pkix.cms.CmsSignedAndEnvelopedData;
 import org.rssys.gost.pkix.cms.CmsSignedDataBuilder;
 import org.rssys.gost.pkix.cms.CmsSignedDataVerifier;
 import org.rssys.gost.pkix.cms.GostPkcs7;
-import org.rssys.gost.pkix.cms.Kexp15CmsKeyWrap;
 import org.rssys.gost.pkix.cms.VerifiedCAdESData;
 import org.rssys.gost.pkix.cms.VerifiedSignedData;
 import org.rssys.gost.pkix.tsp.TspRequest;
@@ -99,6 +103,22 @@ public final class PkixDemoAndroidTest {
     // ========================================================================
 
     private static final ECParameters PARAMS = ECParameters.tc26a256();
+
+    /**
+     * Сертификат демо-УЦ с заданным серийным номером. CrlVerifier проверяет сам сертификат:
+     * область CRL зависит от признака CA и от CDP, поэтому пары «номер + издатель» мало.
+     */
+    private static GostCertificate certWithSerial(byte[] serial) {
+        byte[] tbs =
+                GostCertificateBuilder.create(PARAMS, "CN=demo.example.com,O=DemoOrg,C=RU")
+                        .publicKey(leafCert.getPublicKey())
+                        .notBefore("250601000000Z")
+                        .notAfter("270601000000Z")
+                        .serial(new java.math.BigInteger(1, serial))
+                        .issuerDn("CN=Demo Root CA,O=DemoOrg,C=RU")
+                        .buildTbs();
+        return GostCertificateBuilder.sign(tbs, GostSigner.of(caKey));
+    }
     private static final int DEMO_FILE_SIZE = 65536;
 
     private static PrivateKeyParameters caKey;
@@ -535,14 +555,19 @@ public final class PkixDemoAndroidTest {
         section("§5 ChainValidator: валидация цепочки CA->leaf");
 
         List<GostCertificate> chain = List.of(leafCert, caCert);
-        List<PublicKeyParameters> trustedKeys = List.of(caPubKey);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(caCert);
 
-        ChainValidator.validateChain(chain, trustedKeys);
+        ChainValidator.validateChain(chain, anchors);
         assertTrue("validateChain(leaf->CA) — цепочка валидна", true);
 
         try {
+            var wrongKp = KeyGenerator.generateKeyPair(PARAMS);
+            GostCertificate wrongRoot =
+                    makeSelfSignedCert(
+                            wrongKp.getPrivate(), wrongKp.getPublic(), BigInteger.valueOf(1000));
             List<GostCertificate> leafOnly = List.of(leafCert);
-            ChainValidator.validateChain(leafOnly, List.of(leafPubKey));
+            ChainValidator.validateChain(
+                    leafOnly, TrustAnchors.ofCertificate(wrongRoot));
             fail("Цепочка без доверенного издателя должна падать");
         } catch (PkixException e) {
             assertTrue("Цепочка без доверенного корня корректно отвергнута: " + e.reason(), true);
@@ -557,7 +582,7 @@ public final class PkixDemoAndroidTest {
                     .issuerDn(caCert.getIssuerDnBytes())
                     .buildTbs();
             GostCertificate expiredCert = GostCertificateBuilder.sign(badTbs, GostSigner.of(caKey));
-            ChainValidator.validateChain(List.of(expiredCert, caCert), trustedKeys);
+            ChainValidator.validateChain(List.of(expiredCert, caCert), anchors);
             fail("Просроченный сертификат должен вызывать ошибку");
         } catch (PkixException e) {
             assertEquals("Просроченный сертификат: reason = EXPIRED",
@@ -577,13 +602,13 @@ public final class PkixDemoAndroidTest {
 
         byte[] serial = leafCert.getSerialNumberBigInt().toByteArray();
         List<GostCertificate> chain = List.of(leafCert, caCert);
-        List<PublicKeyParameters> trustedKeys = List.of(caPubKey);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(caCert);
 
         byte[] crlDer = GostCrlBuilder.create("CN=Demo Root CA,O=DemoOrg,C=RU")
                 .nextUpdate("270801120000Z")
                 .sign(caKey);
         ChainValidator.validateChainWithRevocation(
-                chain, trustedKeys, Arrays.asList(new CertRevocationData(null, crlDer), null));
+                chain, anchors, Arrays.asList(new CertRevocationData(null, crlDer), null));
         assertTrue("validateChainWithRevocation(CRL) — leaf не отозван, успешно", true);
 
         byte[] ocspGood = GostOcspResponseBuilder.create(serial)
@@ -591,11 +616,11 @@ public final class PkixDemoAndroidTest {
                 .good()
                 .sign(caKey);
         ChainValidator.validateChainWithRevocation(
-                chain, trustedKeys, Arrays.asList(new CertRevocationData(ocspGood, null), null));
+                chain, anchors, Arrays.asList(new CertRevocationData(ocspGood, null), null));
         assertTrue("validateChainWithRevocation(OCSP) — leaf good, успешно", true);
 
         ChainValidator.validateChainWithRevocation(
-                chain, trustedKeys, Arrays.asList(new CertRevocationData(ocspGood, crlDer), null));
+                chain, anchors, Arrays.asList(new CertRevocationData(ocspGood, crlDer), null));
         assertTrue("validateChainWithRevocation(OCSP+CRL) — OCSP приоритет, успешно", true);
 
         System.out.println("  OK: валидация цепочки с проверкой отзыва");
@@ -620,7 +645,7 @@ public final class PkixDemoAndroidTest {
         assertTrue("CRL построен, размер " + crlDer.length + " байт", crlDer.length > 0);
 
         try {
-            CrlVerifier.verify(crlDer, serial, caPubKey, caCert.getSubjectDnBytes());
+            CrlVerifier.verify(crlDer, certWithSerial(serial), caCert);
             fail("Отозванный сертификат должен вызывать PkixException");
         } catch (PkixException e) {
             assertEquals("Отозванный сертификат: reason = REVOKED",
@@ -700,7 +725,7 @@ public final class PkixDemoAndroidTest {
                 .build();
         assertTrue("SignedData построен, размер " + signed.length + " байт", signed.length > 0);
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signed, cmsCert);
+        VerifiedSignedData result = CmsSignedDataVerifier.verify(signed, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()));
         assertArrayEquals("Данные после верификации совпадают", demoData, result.data());
         assertNotNull("Сертификат подписанта извлечён", result.signerCertificate());
 
@@ -710,15 +735,19 @@ public final class PkixDemoAndroidTest {
                 .addSigner(cmsKey, cmsCert)
                 .detached(true)
                 .build();
-        VerifiedSignedData detResult = CmsSignedDataVerifier.verifyAny(detachedSigned, cmsCert);
-        assertNull("Detached: данных в CMS нет (data == null)", detResult.data());
+        VerifiedSignedData detResult =
+                CmsSignedDataVerifier.verify(detachedSigned, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()).detached(detachedData));
+        assertArrayEquals(
+                "Detached: возвращённый документ совпадает с исходным",
+                detachedData,
+                detResult.data());
 
         byte[] chainSigned = CmsSignedDataBuilder.create()
                 .data(demoData)
                 .addSigner(cmsKey, cmsCert)
                 .addCertificate(caCert)
                 .build();
-        VerifiedSignedData chainResult = CmsSignedDataVerifier.verifyAny(chainSigned, cmsCert);
+        VerifiedSignedData chainResult = CmsSignedDataVerifier.verify(chainSigned, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()));
 
         List<GostCertificate> p7bCerts = GostPkcs7.extractCertificates(chainSigned);
         boolean caPresent = p7bCerts.stream().anyMatch(
@@ -747,13 +776,13 @@ public final class PkixDemoAndroidTest {
                 .addSignedAttribute(GostOids.ATTR_SIGNING_TIME,
                         DerCodec.encodeTime("260601120000Z"))
                 .build();
-        VerifiedSignedData attrResult = CmsSignedDataVerifier.verifyAny(attrSigned, cmsCert);
+        VerifiedSignedData attrResult = CmsSignedDataVerifier.verify(attrSigned, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()));
 
         var wrongKp = KeyGenerator.generateKeyPair(PARAMS);
         GostCertificate wrongCert = makeSelfSignedCert(
                 wrongKp.getPrivate(), wrongKp.getPublic(), BigInteger.valueOf(999));
         try {
-            CmsSignedDataVerifier.verifyAny(signed, wrongCert);
+            CmsSignedDataVerifier.verify(signed, VerifyOptions.trusting(TrustAnchors.ofCertificates(wrongCert), SignerSelection.ANY, Revocation.none()));
             fail("Верификация чужим сертификатом: ожидался PkixException");
         } catch (PkixException e) {
             assertTrue("Верификация чужим сертификатом: провал (как и ожидалось)", true);
@@ -762,7 +791,7 @@ public final class PkixDemoAndroidTest {
         byte[] tampered = Arrays.copyOf(signed, signed.length);
         tampered[signed.length / 2] ^= 0xFF;
         try {
-            CmsSignedDataVerifier.verifyAny(tampered, cmsCert);
+            CmsSignedDataVerifier.verify(tampered, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()));
             fail("Подмена данных: ожидался PkixException");
         } catch (PkixException e) {
             assertTrue("Подмена данных: верификация провалена", true);
@@ -777,24 +806,21 @@ public final class PkixDemoAndroidTest {
 
     @Test
     public void test09_cmsEnvelopedData() throws Exception {
-        section("§9 CMS EnvelopedData: шифрование и расшифровка файла (ktri)");
-
-        CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
+        section("§9 CMS EnvelopedData: шифрование и расшифровка файла (ktri, с имитовставкой)");
 
         byte[] enveloped = CmsEnvelopedDataBuilder.create()
                 .data(demoData)
                 .addRecipient(cmsCert)
-                .keyWrap(keyWrap)
                 .build();
         assertTrue("EnvelopedData построен, размер " + enveloped.length + " байт",
                 enveloped.length > 0);
 
-        byte[] decrypted = CmsEnvelopedDataDecryptor.decrypt(enveloped, cmsKey, cmsCert, keyWrap);
+        byte[] decrypted = CmsEnvelopedDataDecryptor.decrypt(enveloped, cmsKey, cmsCert);
         assertArrayEquals("Расшифрованные данные совпадают с оригиналом (" + decrypted.length + " байт)",
                 demoData, decrypted);
 
         try {
-            byte[] badDecrypt = CmsEnvelopedDataDecryptor.decrypt(enveloped, caKey, caCert, keyWrap);
+            byte[] badDecrypt = CmsEnvelopedDataDecryptor.decrypt(enveloped, caKey, caCert);
             assertFalse("Расшифрование чужим ключом: данные не совпадают или падает",
                     Arrays.equals(demoData, badDecrypt));
         } catch (Exception e) {
@@ -811,31 +837,44 @@ public final class PkixDemoAndroidTest {
 
     @Test
     public void test09_1_cmsEnvelopedDataOmac() throws Exception {
-        section("§9.1 CMS EnvelopedData (ktri+OMAC): шифрование с имитовставкой");
-
-        CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
+        section("§9.1 CMS EnvelopedData (ktri): имитовставка по умолчанию и режим без неё");
 
         byte[] enveloped = CmsEnvelopedDataBuilder.create()
                 .data(demoData)
                 .addRecipient(cmsCert)
-                .keyWrap(keyWrap)
-                .withOmac()
                 .build();
         assertTrue("EnvelopedData+OMAC построен, размер " + enveloped.length + " байт",
                 enveloped.length > 0);
 
-        byte[] decrypted = CmsEnvelopedDataDecryptor.decrypt(enveloped, cmsKey, cmsCert, keyWrap);
+        byte[] decrypted = CmsEnvelopedDataDecryptor.decrypt(enveloped, cmsKey, cmsCert);
         assertArrayEquals("Расшифрованные данные OMAC совпадают с оригиналом",
                 demoData, decrypted);
 
         byte[] tampered = Arrays.copyOf(enveloped, enveloped.length);
         tampered[enveloped.length / 2] ^= 0xFF;
         try {
-            CmsEnvelopedDataDecryptor.decrypt(tampered, cmsKey, cmsCert, keyWrap);
+            CmsEnvelopedDataDecryptor.decrypt(tampered, cmsKey, cmsCert);
             fail("OMAC подмена: ожидался PkixException");
         } catch (PkixException e) {
             assertTrue("OMAC подмена: fail-closed — MAC проверка отклонила поддельные данные", true);
         }
+
+        // Режим без имитовставки — только явный выбор; строгий decrypt его не принимает
+        byte[] plain = CmsEnvelopedDataBuilder.create()
+                .data(demoData)
+                .addRecipient(cmsCert)
+                .withoutIntegrity()
+                .build();
+        try {
+            CmsEnvelopedDataDecryptor.decrypt(plain, cmsKey, cmsCert);
+            fail("Контейнер без OMAC: ожидался отказ");
+        } catch (PkixException e) {
+            assertTrue("Контейнер без OMAC: decrypt требует имитовставку (INTEGRITY_REQUIRED)",
+                    e.reason() == PkixException.Reason.INTEGRITY_REQUIRED);
+        }
+        assertArrayEquals("Контейнер без OMAC читается только через decryptAllowingNoIntegrity",
+                demoData,
+                CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(plain, cmsKey, cmsCert));
 
         System.out.println("  OK: CMS EnvelopedData + OMAC — шифрование с имитовставкой и fail-closed");
     }
@@ -906,12 +945,12 @@ public final class PkixDemoAndroidTest {
         assertNull("getCertificatePolicies() — null (расширение отсутствует)", policies);
 
         List<GostCertificate> chain = List.of(leafCert, caCert);
-        List<PublicKeyParameters> trustedKeys = List.of(caPubKey);
-        ChainValidator.validateChain(chain, trustedKeys);
+        TrustAnchors anchors = TrustAnchors.ofCertificate(caCert);
+        ChainValidator.validateChain(chain, anchors);
         assertTrue("validateChain без политик — валидно", true);
 
         try {
-            ChainValidator.validateChain(chain, trustedKeys, GostOids.POLICY_KC1);
+            ChainValidator.validateChain(chain, anchors, GostOids.POLICY_KC1);
             fail("Ожидалась POLICY_VIOLATION");
         } catch (PkixException e) {
             assertEquals("POLICY_VIOLATION: leaf без CertificatePolicies — reject",
@@ -940,11 +979,11 @@ public final class PkixDemoAndroidTest {
         GostCertificate policyLeaf = GostCertificateBuilder.sign(tbs, GostSigner.of(caKey));
 
         List<GostCertificate> chain2 = List.of(policyLeaf, caCert);
-        ChainValidator.validateChain(chain2, trustedKeys, GostOids.POLICY_KC1);
+        ChainValidator.validateChain(chain2, anchors, GostOids.POLICY_KC1);
         assertTrue("validateChain с KC1 — leaf содержит KC1, валидно", true);
 
         try {
-            ChainValidator.validateChain(chain2, trustedKeys, GostOids.POLICY_KC2);
+            ChainValidator.validateChain(chain2, anchors, GostOids.POLICY_KC2);
             fail("Ожидалась POLICY_VIOLATION");
         } catch (PkixException e) {
             assertEquals("POLICY_VIOLATION: leaf с KC1, required=KC2 — reject",
@@ -991,7 +1030,7 @@ public final class PkixDemoAndroidTest {
         assertNull("certificatePolicyInfos: вторая политика без CPS", cpsInfos[1].cpsUri());
 
         List<GostCertificate> chain3 = List.of(cpsLeaf, caCert);
-        ChainValidator.validateChain(chain3, trustedKeys, GostOids.POLICY_KC1);
+        ChainValidator.validateChain(chain3, anchors, GostOids.POLICY_KC1);
         assertTrue("validateChain с KC1 через fluent API — валидно", true);
 
         System.out.println("  OK: Fluent-API certificatePolicies / certificatePolicyInfos");
@@ -1060,7 +1099,7 @@ public final class PkixDemoAndroidTest {
         assertTrue("CRL с 2 записями построен, размер " + crlDer.length + " байт", crlDer.length > 0);
 
         try {
-            CrlVerifier.verify(crlDer, serial1, caPubKey, caCert.getSubjectDnBytes());
+            CrlVerifier.verify(crlDer, certWithSerial(serial1), caCert);
             fail("serial1 должен быть отозван");
         } catch (PkixException e) {
             assertEquals("serial1 отозван", PkixException.Reason.REVOKED, e.reason());
@@ -1088,8 +1127,10 @@ public final class PkixDemoAndroidTest {
         assertTrue("Detached SignedData построен, размер " + detachedSigned.length + " байт",
                 detachedSigned.length > 0);
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(detachedSigned, cmsCert);
-        assertNull("Detached: data == null (данные вне CMS)", result.data());
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(detachedSigned, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()).detached(demoData));
+        assertArrayEquals(
+                "Detached: возвращённый документ совпадает с исходным", demoData, result.data());
 
         System.out.println("  OK: CMS SignedData — отсоединённая подпись");
     }
@@ -1108,7 +1149,7 @@ public final class PkixDemoAndroidTest {
                 .addCertificate(caCert)
                 .build();
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signed, cmsCert);
+        VerifiedSignedData result = CmsSignedDataVerifier.verify(signed, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()));
         assertArrayEquals("Данные совпадают", demoData, result.data());
 
         System.out.println("  OK: SignedData с дополнительными сертификатами");
@@ -1126,20 +1167,17 @@ public final class PkixDemoAndroidTest {
         GostCertificate bobCert = makeSelfSignedCert(
                 bobKp.getPrivate(), bobKp.getPublic(), BigInteger.TWO);
 
-        CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
-
         byte[] enveloped = CmsEnvelopedDataBuilder.create()
                 .data(demoData)
                 .addRecipient(cmsCert)
                 .addRecipient(bobCert)
-                .keyWrap(keyWrap)
                 .build();
 
-        byte[] cmsData = CmsEnvelopedDataDecryptor.decrypt(enveloped, cmsKey, cmsCert, keyWrap);
+        byte[] cmsData = CmsEnvelopedDataDecryptor.decrypt(enveloped, cmsKey, cmsCert);
         assertArrayEquals("cmsKey расшифровал успешно", demoData, cmsData);
 
         byte[] bobData = CmsEnvelopedDataDecryptor.decrypt(
-                enveloped, bobKp.getPrivate(), bobCert, keyWrap);
+                enveloped, bobKp.getPrivate(), bobCert);
         assertArrayEquals("Bob расшифровал успешно", demoData, bobData);
 
         System.out.println("  OK: CMS EnvelopedData — несколько получателей");
@@ -1190,7 +1228,7 @@ public final class PkixDemoAndroidTest {
                 .build();
         assertTrue("CAdES-BES подпись создана", cadesBes.length > 0);
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdESBES(cadesBes, cmsCert);
+        VerifiedCAdESData result = CAdESVerifier.verifyBES(cadesBes, TrustAnchors.ofCertificates(cmsCert));
         assertArrayEquals("CAdES-BES данные совпадают", data, result.data());
         assertEquals("CAdES-BES один подписант", 1, result.signers().size());
         assertNotNull("Сертификат подписанта извлечён",
@@ -1200,7 +1238,7 @@ public final class PkixDemoAndroidTest {
         GostCertificate wrongCert = makeSelfSignedCert(
                 wrongKp.getPrivate(), wrongKp.getPublic(), BigInteger.valueOf(100));
         try {
-            CAdESExtender.verifyCAdESBES(cadesBes, wrongCert);
+            CAdESVerifier.verifyBES(cadesBes, TrustAnchors.ofCertificates(wrongCert));
             fail("CAdES-BES: чужая верификация должна падать");
         } catch (PkixException e) {
             assertTrue("CAdES-BES: чужая верификация отвергнута: " + e.reason(), true);
@@ -1436,6 +1474,7 @@ public final class PkixDemoAndroidTest {
         assertTrue("Base CRL построен, cRLNumber=1", baseCrl.length > 0);
 
         byte[] deltaCrl = GostCrlBuilder.create("CN=Demo Root CA,O=DemoOrg,C=RU")
+                .nextUpdate("270801120000Z")
                 .withCrlNumber(2)
                 .withDeltaCrlIndicator(1)
                 .addRevoked(List.of(new RevokedEntry(
@@ -1477,11 +1516,11 @@ public final class PkixDemoAndroidTest {
                     e.getMessage().contains("delta CRL not supported"));
         }
 
-        CrlVerifier.verify(baseCrl, deltaCrl, serial1, caPubKey, caCert.getSubjectDnBytes());
+        CrlVerifier.verify(baseCrl, deltaCrl, certWithSerial(serial1), caCert);
         System.out.println("  serial1 прошёл — удалён из CRL через REMOVE_FROM_CRL");
 
         try {
-            CrlVerifier.verify(baseCrl, deltaCrl, serial2, caPubKey, caCert.getSubjectDnBytes());
+            CrlVerifier.verify(baseCrl, deltaCrl, certWithSerial(serial2), caCert);
             fail("serial2 должен быть отозван");
         } catch (PkixException e) {
             assertEquals("serial2 отозван в base CRL, delta не удаляла",
@@ -1520,7 +1559,7 @@ public final class PkixDemoAndroidTest {
                 .build();
         assertTrue("SignedData с CRL построен", signedData.length > 0);
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, cmsCert);
+        VerifiedSignedData result = CmsSignedDataVerifier.verify(signedData, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()));
         assertArrayEquals("Данные совпадают", data, result.data());
         assertFalse("embeddedCrls доступны в результате", result.embeddedCrls().isEmpty());
         assertEquals("CRL issuer DN после round-trip совпадает",
@@ -1553,7 +1592,7 @@ public final class PkixDemoAndroidTest {
                 .build();
 
         VerifiedSignedData cleanResult =
-                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(cleanSigned, caCert);
+                CmsSignedDataVerifier.verify(cleanSigned, VerifyOptions.trusting(TrustAnchors.ofCertificates(caCert), SignerSelection.ANY, Revocation.required(List.of())));
         assertArrayEquals("Сертификат не в CRL — верификация прошла с проверкой отзыва",
                 data, cleanResult.data());
 
@@ -1572,10 +1611,10 @@ public final class PkixDemoAndroidTest {
                 .build();
 
         try {
-            CmsSignedDataVerifier.verifyAnyWithRevocationCheck(revokedSigned, caCert);
+            CmsSignedDataVerifier.verify(revokedSigned, VerifyOptions.trusting(TrustAnchors.ofCertificates(caCert), SignerSelection.ANY, Revocation.required(List.of())));
             fail("Отозванный сертификат должен быть отклонён");
         } catch (PkixException e) {
-            assertEquals("verifyAnyWithRevocationCheck отклонил отозванный: " + e.reason(),
+            assertEquals("Revocation.required отклонил отозванный: " + e.reason(),
                     PkixException.Reason.REVOKED, e.reason());
         }
 
@@ -1587,8 +1626,7 @@ public final class PkixDemoAndroidTest {
                 .build();
 
         try {
-            CmsSignedDataVerifier.verifyAnyWithRevocationCheck(
-                    noCrlSigned, List.of(revokingCrl), caCert);
+            CmsSignedDataVerifier.verify(noCrlSigned, VerifyOptions.trusting(TrustAnchors.ofCertificates(caCert), SignerSelection.ANY, Revocation.required(List.of(revokingCrl))));
             fail("Внешний CRL с отозванным сертификатом должен отклонить");
         } catch (PkixException e) {
             assertEquals("Внешний CRL отклонил отозванный: " + e.reason(),
@@ -1616,15 +1654,14 @@ public final class PkixDemoAndroidTest {
         assertTrue("CRL подписан делегированным ключом, размер " + crlDer.length, crlDer.length > 0);
 
         try {
-            CrlVerifier.verify(crlDer, serial, caPubKey, caCert.getSubjectDnBytes());
+            CrlVerifier.verify(crlDer, certWithSerial(serial), caCert);
             fail("CA-ключ не должен верифицировать делегированный CRL");
         } catch (PkixException e) {
             assertEquals("CA-ключ не верифицирует — SIGNATURE_INVALID, fallback к подписанту",
                     PkixException.Reason.SIGNATURE_INVALID, e.reason());
         }
 
-        CrlVerifier.verifyDelegated(crlDer, serial, caPubKey,
-                caCert.getSubjectDnBytes(), caCert, List.of(signerCertDer));
+        CrlVerifier.verifyDelegated(crlDer, certWithSerial(serial), caCert, List.of(signerCertDer));
         assertTrue("verifyDelegated принял CRL от делегированного подписанта", true);
 
         byte[] revokedCrlDer = GostCrlBuilder.create(caCert.getSubjectDnBytes())
@@ -1633,8 +1670,7 @@ public final class PkixDemoAndroidTest {
                 .addRevoked(serial, "260801120000Z")
                 .sign(crlSignerKey);
         try {
-            CrlVerifier.verifyDelegated(revokedCrlDer, serial, caPubKey,
-                    caCert.getSubjectDnBytes(), caCert, List.of(signerCertDer));
+            CrlVerifier.verifyDelegated(revokedCrlDer, certWithSerial(serial), caCert, List.of(signerCertDer));
             fail("Отозванный сертификат должен быть отклонён verifyDelegated");
         } catch (PkixException e) {
             assertEquals("verifyDelegated отклонил отозванный через делегированный CRL: " + e.reason(),
@@ -1649,8 +1685,7 @@ public final class PkixDemoAndroidTest {
                 .nextUpdate("270801120000Z")
                 .sign(leafKey);
         try {
-            CrlVerifier.verifyDelegated(badCrl, serial, caPubKey,
-                    caCert.getSubjectDnBytes(), caCert, List.of(signerCertDer));
+            CrlVerifier.verifyDelegated(badCrl, certWithSerial(serial), caCert, List.of(signerCertDer));
             fail("CRL подписанный leaf-ключом не должен приниматься");
         } catch (PkixException e) {
             assertEquals("CRL от leaf-ключа (без cRLSign): SIGNATURE_INVALID",
@@ -1697,8 +1732,7 @@ public final class PkixDemoAndroidTest {
                 cadesBes, csKp.getPrivate(), csCert);
         assertTrue("Countersignature создана", countersigned.length > 0);
 
-        VerifiedCAdESData result = CAdESExtender.verifyCountersignature(
-                countersigned, cmsCert, csCert);
+        VerifiedCAdESData result = CAdESVerifier.verifyCountersignature(countersigned, TrustAnchors.ofCertificates(cmsCert, csCert));
         assertArrayEquals("Данные countersignature совпадают", data, result.data());
         assertEquals("Один подписант", 1, result.signers().size());
         assertEquals("Одна countersignature у подписанта",
@@ -1712,14 +1746,14 @@ public final class PkixDemoAndroidTest {
         GostCertificate wrongCert = makeSelfSignedCert(
                 wrongKp.getPrivate(), wrongKp.getPublic(), BigInteger.valueOf(707));
         try {
-            CAdESExtender.verifyCountersignature(countersigned, wrongCert, csCert);
+            CAdESVerifier.verifyCountersignature(countersigned, TrustAnchors.ofCertificates(wrongCert, csCert));
             fail("Countersignature: чужой сертификат подписанта должен давать ошибку");
         } catch (PkixException e) {
             assertTrue("Countersignature: чужая верификация подписанта отвергнута: " + e.reason(), true);
         }
 
         try {
-            CAdESExtender.verifyCountersignature(countersigned, cmsCert);
+            CAdESVerifier.verifyCountersignature(countersigned, TrustAnchors.ofCertificates(cmsCert));
             fail("Countersignature: countersigner не в trusted должна быть ошибка");
         } catch (PkixException e) {
             assertTrue("Countersignature: countersigner не в trusted отвергнут: " + e.reason(), true);
@@ -1751,9 +1785,14 @@ public final class PkixDemoAndroidTest {
         assertTrue("cert через GostSigner.of(priv) верифицируется",
                 certViaMem.verifySignature(caPubKey));
 
-        GostCertificate certViaPriv = GostCertificateBuilder.sign(tbs, GostSigner.of(caKey));
-        assertArrayEquals("GostSigner.of(priv) и путь priv совпадают байт-в-байт",
-                certViaMem.getEncoded(), certViaPriv.getEncoded());
+        // Нонс по умолчанию гибридный: подпись одного TBS каждый раз разная, поэтому побайтовое
+        // совпадение проверяем в детерминированном режиме - это и есть контракт воспроизводимости
+        GostCertificate certViaDet1 = GostCertificateBuilder.sign(
+                tbs, GostSigner.of(caKey, NonceMode.DETERMINISTIC));
+        GostCertificate certViaDet2 = GostCertificateBuilder.sign(
+                tbs, GostSigner.of(caKey, NonceMode.DETERMINISTIC));
+        assertArrayEquals("Детерминированный нонс: подпись одного TBS воспроизводится байт-в-байт",
+                certViaDet1.getEncoded(), certViaDet2.getEncoded());
 
         GostSigner hsm = new DemoHsmSigner(caKey);
         GostCertificate certViaHsm = GostCertificateBuilder.sign(tbs, hsm);
@@ -1768,10 +1807,14 @@ public final class PkixDemoAndroidTest {
         new GostCrl(crlDer).verify(caPubKey);
         assertTrue("CRL через внешний подписант верифицируется", true);
 
+        // У CA KeyUsage ограничен keyCertSign/cRLSign, поэтому для CMS нужен
+        // отдельный сертификат подписанта: иначе fail-closed проверка KeyUsage
+        // справедливо отклонит подпись.
+        GostSigner cmsHsm = new DemoHsmSigner(cmsKey);
         byte[] cmsPayload = "Hello GostSigner CMS".getBytes(StandardCharsets.UTF_8);
         byte[] cmsViaHsm = CmsSignedDataBuilder.create()
-                .data(cmsPayload).addSigner(hsm, caCert).build();
-        VerifiedSignedData vsd = CmsSignedDataVerifier.verifyAny(cmsViaHsm, caCert);
+                .data(cmsPayload).addSigner(cmsHsm, cmsCert).build();
+        VerifiedSignedData vsd = CmsSignedDataVerifier.verify(cmsViaHsm, VerifyOptions.trusting(TrustAnchors.ofCertificates(cmsCert), SignerSelection.ANY, Revocation.none()));
         assertArrayEquals("CMS SignedData через GostSigner: данные восстановлены",
                 cmsPayload, vsd.data());
 
@@ -1886,6 +1929,24 @@ public final class PkixDemoAndroidTest {
                 .build();
         assertTrue("CAdES-BES подпись создана", cadesBes.length > 0);
 
+        // CAdES-C строится на CAdES-T. Один cadesT на все варианты, чтобы
+        // побайтовое сравнение C-перегрузок не зависело от разных меток.
+        TspTransport localTsp =
+                (req, url) -> {
+                    try {
+                        return TspResponseBuilder.create(req)
+                                .signer(tsaKey, tsaCert)
+                                .policyOid("1.3.6.1.4.1.4146.1.2.1")
+                                .serialNumber(BigInteger.valueOf(1))
+                                .withCAdES()
+                                .buildGranted();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                };
+        byte[] cadesT = CAdESExtender.addTimestamp(cadesBes, "local://tsa", localTsp, tsaCert);
+        assertTrue("CAdES-T больше BES (добавлена метка)", cadesT.length > cadesBes.length);
+
         byte[] crlDer = GostCrlBuilder.create(caCert.getSubjectDnBytes())
                 .thisUpdateNow()
                 .nextUpdateDays(30)
@@ -1899,18 +1960,18 @@ public final class PkixDemoAndroidTest {
         List<GostOcspResponse> ocspForChain = Arrays.asList(null, null);
 
         byte[] cadesC = CAdESExtender.embedCompleteRefs(
-                cadesBes, chain, crlsForChain, ocspForChain);
+                cadesT, chain, crlsForChain, ocspForChain);
         assertTrue("CAdES-C подпись создана", cadesC.length > 0);
-        assertTrue("CAdES-C больше BES (добавлены C-атрибуты)",
-                cadesC.length > cadesBes.length);
+        assertTrue("CAdES-C больше T (добавлены C-атрибуты)",
+                cadesC.length > cadesT.length);
 
         List<CertRevocationData> revData = Arrays.asList(
                 new CertRevocationData(null, crlDer), null);
-        byte[] cadesCFromCRD = CAdESExtender.embedCompleteRefs(cadesBes, chain, revData);
+        byte[] cadesCFromCRD = CAdESExtender.embedCompleteRefs(cadesT, chain, revData);
         assertArrayEquals("CertRevocationData-перегрузка даёт идентичный результат",
                 cadesC, cadesCFromCRD);
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdESC(cadesC, caCert);
+        VerifiedCAdESData result = CAdESVerifier.verifyC(cadesC, TrustAnchors.ofCertificates(caCert, tsaCert));
         assertEquals("CAdES-C: один подписант", 1, result.signers().size());
         assertNotNull("CAdES-C: completeCertificateRefs не null",
                 result.signers().get(0).completeCertRefs());
@@ -1918,10 +1979,10 @@ public final class PkixDemoAndroidTest {
                 result.signers().get(0).completeRevocRefs().isEmpty());
 
         try {
-            CAdESExtender.verifyCAdESC(cadesBes, caCert);
-            fail("CAdES-C без C-атрибутов должен падать");
+            CAdESVerifier.verifyC(cadesT, TrustAnchors.ofCertificates(caCert, tsaCert));
+            fail("CAdES-T без C-атрибутов должен падать");
         } catch (PkixException e) {
-            assertTrue("CAdES-C без C-атрибутов отвергнут: " + e.reason(), true);
+            assertTrue("CAdES-T без C-атрибутов отвергнут: " + e.reason(), true);
         }
 
         byte[] revokingCrlDer = GostCrlBuilder.create(caCert.getSubjectDnBytes())
@@ -1935,9 +1996,8 @@ public final class PkixDemoAndroidTest {
 
         List<GostCrl> revokingCrlsForChain = Arrays.asList(revokingCrl, null);
         byte[] cadesCRevoked = CAdESExtender.embedCompleteRefs(
-                cadesBes, chain, revokingCrlsForChain, Arrays.asList(null, null));
-        VerifiedCAdESData revokedResult = CAdESExtender.verifyCAdESC(
-                cadesCRevoked, caCert);
+                cadesT, chain, revokingCrlsForChain, Arrays.asList(null, null));
+        VerifiedCAdESData revokedResult = CAdESVerifier.verifyC(cadesCRevoked, TrustAnchors.ofCertificates(caCert, tsaCert));
         assertEquals("CAdES-C с отозванным сертификатом — верификация прошла (так и задумано)",
                 1, revokedResult.signers().size());
 
@@ -1991,12 +2051,11 @@ public final class PkixDemoAndroidTest {
         List<GostCrl> crlsForChain = Arrays.asList(crl, null);
         List<GostOcspResponse> ocspForChain = Arrays.asList(null, null);
         byte[] cadesXLong = CAdESExtender.embedXLongType1(
-                cadesT, chain, crlsForChain, ocspForChain, null, null);
+                cadesT, chain, crlsForChain, ocspForChain, "local://tsa", localTsp, tsaCert);
         assertTrue("CAdES-X Long больше CAdES-T", cadesXLong.length > cadesT.length);
         System.out.println("  Размер CAdES-X Long: " + cadesXLong.length + " байт");
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdESXLong(
-                cadesXLong, caCert, tsaCert);
+        VerifiedCAdESData result = CAdESVerifier.verifyXLong(cadesXLong, TrustAnchors.ofCertificates(caCert, tsaCert));
         assertEquals("CAdES-X Long: один подписант", 1, result.signers().size());
         assertArrayEquals("CAdES-X Long: данные совпадают", data, result.data());
 
@@ -2020,10 +2079,9 @@ public final class PkixDemoAndroidTest {
         GostCrl revokedCrl = new GostCrl(revokedCrlDer);
 
         List<GostCrl> revokedCrlList = Arrays.asList(revokedCrl, null);
-        byte[] cadesXLongRevoked = CAdESExtender.embedXLongType1(
-                cadesT, chain, revokedCrlList, ocspForChain, null, null);
         try {
-            CAdESExtender.verifyCAdESXLong(cadesXLongRevoked, caCert, tsaCert);
+            CAdESExtender.embedXLongType1(
+                    cadesT, chain, revokedCrlList, ocspForChain, "local://tsa", localTsp, tsaCert);
             fail("CAdES-X Long с отозванным сертификатом должен падать");
         } catch (PkixException e) {
             assertTrue("CAdES-X Long: отозванный сертификат отвергнут: " + e.reason(), true);

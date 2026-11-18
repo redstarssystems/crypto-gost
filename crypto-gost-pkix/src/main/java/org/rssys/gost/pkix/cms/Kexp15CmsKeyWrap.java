@@ -5,8 +5,8 @@ import org.rssys.gost.api.KeyExport;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.kdf.KdfTreeGostR3411_2012_256;
 import org.rssys.gost.pkix.GostOids;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Реализация {@link CmsKeyWrap} через KExp15/KImp15 (RFC 9189 §8.2.1).
@@ -16,7 +16,7 @@ import org.rssys.gost.pkix.util.GostLogger.Level;
  * KDF_TREE_256(K_in=VKO, label="kdf tree", seed=UKM[16..24], R=1) -> K_MAC || K_ENC.
  * KExp15: CEK_MAC = CMAC(K_MAC, IV||CEK), wrapped = CTR-Encrypt(K_ENC, IV, CEK||CEK_MAC).
  */
-public final class Kexp15CmsKeyWrap implements CmsKeyWrap {
+final class Kexp15CmsKeyWrap implements CmsKeyWrap {
 
     private static final GostLogger LOG =
             GostLogger.getLogger("org.rssys.gost.pkix.cms.Kexp15CmsKeyWrap");
@@ -30,19 +30,18 @@ public final class Kexp15CmsKeyWrap implements CmsKeyWrap {
     private static final int KDF_SEED_LENGTH = 8;
     private static final int KEK_LENGTH = 32;
 
-    public Kexp15CmsKeyWrap() {}
-
     @Override
     public byte[] wrap(byte[] cek, byte[] kek, byte[] ukm, byte[] iv) {
         LOG.log(Level.DEBUG, "KExp15: wrapping CEK");
         byte[][] keys = deriveKeys(kek, ukm);
-        SymmetricKey kMac = new SymmetricKey(keys[0]);
-        SymmetricKey kEnc = new SymmetricKey(keys[1]);
+        SymmetricKey kMac = null;
+        SymmetricKey kEnc = null;
         try {
+            kMac = new SymmetricKey(keys[0]);
+            kEnc = new SymmetricKey(keys[1]);
             return KeyExport.kExp15(cek, kMac, kEnc, iv);
         } finally {
-            kMac.destroy();
-            kEnc.destroy();
+            wipeDerivedKeys(keys, kMac, kEnc);
         }
     }
 
@@ -50,14 +49,32 @@ public final class Kexp15CmsKeyWrap implements CmsKeyWrap {
     public byte[] unwrap(byte[] wrappedCek, byte[] kek, byte[] ukm, byte[] iv) {
         LOG.log(Level.DEBUG, "KExp15: unwrapping CEK");
         byte[][] keys = deriveKeys(kek, ukm);
-        SymmetricKey kMac = new SymmetricKey(keys[0]);
-        SymmetricKey kEnc = new SymmetricKey(keys[1]);
+        SymmetricKey kMac = null;
+        SymmetricKey kEnc = null;
         try {
+            kMac = new SymmetricKey(keys[0]);
+            kEnc = new SymmetricKey(keys[1]);
             return KeyExport.kImp15(wrappedCek, kMac, kEnc, iv);
         } catch (org.rssys.gost.util.AuthenticationException e) {
             throw new IllegalArgumentException("Invalid MAC during CEK unwrap", e);
         } finally {
+            wipeDerivedKeys(keys, kMac, kEnc);
+        }
+    }
+
+    /**
+     * Затирает K_MAC и K_ENC на любом пути выхода. {@link SymmetricKey} копирует переданный
+     * массив, поэтому {@code destroy()} стирает только копию, а исходные массивы из
+     * {@code deriveKeys} остались бы в памяти и при успехе, и при отказе проверки MAC.
+     */
+    private static void wipeDerivedKeys(byte[][] keys, SymmetricKey kMac, SymmetricKey kEnc) {
+        for (byte[] key : keys) {
+            Arrays.fill(key, (byte) 0);
+        }
+        if (kMac != null) {
             kMac.destroy();
+        }
+        if (kEnc != null) {
             kEnc.destroy();
         }
     }
@@ -78,7 +95,7 @@ public final class Kexp15CmsKeyWrap implements CmsKeyWrap {
      * @param ukm полный UKM (не менее 16 байт)
      * @return целочисленный множитель для VKO
      */
-    public static java.math.BigInteger kegVkoUkm(byte[] ukm) {
+    static java.math.BigInteger kegVkoUkm(byte[] ukm) {
         byte[] first16 = Arrays.copyOfRange(ukm, 0, 16);
         boolean allZero = true;
         for (byte b : first16) {

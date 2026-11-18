@@ -48,7 +48,10 @@ class TlsPskHelperTest {
 
         // build PSK pre_shared_key extension (must be last)
         int bLen = 2 + 1 + hashLen; // binder list(2) + entry(1) + binder(hashLen)
-        int pskExtSize = 2 + pskId.length + 4 + bLen; // ext body: id_list + age + binders
+        // ext body: identities list(2) + identity len(2) + identity + age(4) + binders;
+        // без префикса длины identity фикстура была короче записываемой структуры на 2 байта,
+        // как и сборщик, поэтому не ловила дефект
+        int pskExtSize = 2 + 2 + pskId.length + 4 + bLen;
         byte[] pskExt = new byte[2 + 2 + pskExtSize]; // type(2) + len(2) + body
         pskExt[0] = (byte) (TlsConstants.EXT_PRE_SHARED_KEY >>> 8);
         pskExt[1] = (byte) TlsConstants.EXT_PRE_SHARED_KEY;
@@ -108,12 +111,14 @@ class TlsPskHelperTest {
 
         // Верификация на полном фрейме — должна пройти
         assertTrue(
-                TlsPskHelper.verifyBinder(chFrame, psk, HL),
+                TlsPskHelper.verifyBinder(
+                        chFrame, vectorOffset(chFrame), binderOffset(chFrame), psk, HL),
                 "binder должен верифицироваться на полном handshake-фрейме");
 
         // Верификация на теле без заголовка — должна РАСХОДИТЬСЯ
         assertFalse(
-                TlsPskHelper.verifyBinder(chBody, psk, HL),
+                TlsPskHelper.verifyBinder(
+                        chBody, vectorOffset(chBody), binderOffset(chBody), psk, HL),
                 "binder должен расходиться на теле без 4-байтового заголовка");
     }
 
@@ -141,9 +146,7 @@ class TlsPskHelperTest {
         byte[] earlySecret = HkdfStreebog.extract(zero, psk, HL);
         byte[] emptyHash = new byte[HL];
         HkdfStreebog.newDigest(HL).doFinal(emptyHash, 0);
-        byte[] binderKey =
-                HkdfStreebog.deriveSecret(
-                        earlySecret, HkdfStreebog.PREFIXED_RES_BINDER, emptyHash, HL);
+        byte[] binderKey = HkdfStreebog.deriveSecret(earlySecret, "res binder", emptyHash, HL);
         TlsUtils.wipeArray(earlySecret);
         TlsUtils.wipeArray(emptyHash);
 
@@ -169,12 +172,7 @@ class TlsPskHelperTest {
 
         // Правильная формула: finished_key -> HMAC(finished_key, chHash)
         byte[] finishedKey =
-                HkdfStreebog.expandLabel(
-                        binderKey,
-                        HkdfStreebog.PREFIXED_FINISHED,
-                        HkdfStreebog.EMPTY_CONTEXT,
-                        HL,
-                        HL);
+                HkdfStreebog.expandLabel(binderKey, "finished", HkdfStreebog.EMPTY_CONTEXT, HL, HL);
         Hmac correctHmac = HkdfStreebog.newHmac(HL);
         correctHmac.init(finishedKey);
         correctHmac.update(chHash, 0, chHash.length);
@@ -187,34 +185,161 @@ class TlsPskHelperTest {
                 correctBinder, actualBinder, "binder через finished_key должен совпадать с actual");
     }
 
-    /**
-     * HRR: computeBinderForHrr / verifyBinderForHrr.
-     */
+    /** Независимый от продакшен-кода Streebog-256 над склейкой частей. */
+    private static byte[] streebog256(byte[]... parts) {
+        Digest d = HkdfStreebog.newDigest(HL);
+        for (byte[] part : parts) {
+            d.update(part, 0, part.length);
+        }
+        byte[] out = new byte[HL];
+        d.doFinal(out, 0);
+        return out;
+    }
+
+    /** Эталон binder: HMAC(finished_key, transcriptHash), ключи из PSK по RFC 8446 §7.1. */
+    private static byte[] referenceBinder(byte[] psk, byte[] transcriptHash) {
+        byte[] earlySecret = HkdfStreebog.extract(new byte[HL], psk, HL);
+        byte[] binderKey = HkdfStreebog.deriveSecret(earlySecret, "res binder", streebog256(), HL);
+        byte[] finishedKey =
+                HkdfStreebog.expandLabel(binderKey, "finished", HkdfStreebog.EMPTY_CONTEXT, HL, HL);
+        Hmac hmac = HkdfStreebog.newHmac(HL);
+        hmac.init(finishedKey);
+        hmac.update(transcriptHash, 0, transcriptHash.length);
+        byte[] binder = new byte[HL];
+        hmac.doFinal(binder, 0);
+        return binder;
+    }
+
+    /** Префикс транскрипта: message_hash(CH1) || HRR, собранный вручную по RFC 8446 §4.4.1. */
+    private static byte[] referencePrefix(byte[] ch1Frame, byte[] hrrFrame) {
+        byte[] messageHash = new byte[4 + HL];
+        messageHash[0] = TlsConstants.HT_MESSAGE_HASH;
+        messageHash[3] = (byte) HL;
+        System.arraycopy(streebog256(ch1Frame), 0, messageHash, 4, HL);
+        byte[] prefix = new byte[messageHash.length + hrrFrame.length];
+        System.arraycopy(messageHash, 0, prefix, 0, messageHash.length);
+        System.arraycopy(hrrFrame, 0, prefix, messageHash.length, hrrFrame.length);
+        return prefix;
+    }
+
+    /** Смещение вектора binders в кадре с единственным binder в хвосте: длина списка, длина binder, binder. */
+    private static int vectorOffset(byte[] frame) {
+        return frame.length - (3 + HL);
+    }
+
+    /** Смещение значения единственного binder в хвосте кадра. */
+    private static int binderOffset(byte[] frame) {
+        return frame.length - HL;
+    }
+
+    private static byte[] randomBytes(int length) {
+        byte[] bytes = new byte[length];
+        CryptoRandom.INSTANCE.nextBytes(bytes);
+        return bytes;
+    }
+
     @Test
-    @DisplayName("HRR binder с полным фреймом: round-trip")
-    void hrrBinderFrameVsBody() {
-        byte[] psk = new byte[HL];
-        CryptoRandom.INSTANCE.nextBytes(psk);
-        byte[] pskId = new byte[8];
-        CryptoRandom.INSTANCE.nextBytes(pskId);
-        byte[] hrrPrefix = new byte[HL];
-        CryptoRandom.INSTANCE.nextBytes(hrrPrefix);
+    @DisplayName(
+            "binder после HRR: один хэш от message_hash || HRR || усечённый CH2 (RFC 8446 §4.2.11.2)")
+    void binderAfterHrrMatchesIndependentReference() {
+        byte[] psk = randomBytes(HL);
+        byte[] ch1Frame = randomBytes(120);
+        byte[] hrrFrame = randomBytes(60);
+        byte[] prefix = referencePrefix(ch1Frame, hrrFrame);
 
-        byte[] chBody = buildChBodyWithPsk(pskId, HL);
-        byte[] chFrame = new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, chBody).encode();
+        byte[] ch2Body = buildChBodyWithPsk(randomBytes(8), HL);
+        byte[] ch2Frame = new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, ch2Body).encode();
+        byte[] truncated = Arrays.copyOf(ch2Frame, ch2Frame.length - (3 + HL));
 
-        byte[] binder = TlsPskHelper.computeBinderForHrr(hrrPrefix, chFrame, psk, HL);
-        assertNotNull(binder);
-        assertEquals(HL, binder.length);
+        byte[] expected = referenceBinder(psk, streebog256(prefix, truncated));
+        byte[] actual = TlsPskHelper.computeBinderAfterHrr(prefix, ch2Frame, psk, HL);
 
-        System.arraycopy(binder, 0, chBody, chBody.length - HL, HL);
-        chFrame = new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, chBody).encode();
+        assertArrayEquals(expected, actual, "binder должен совпасть с независимым расчётом");
+
+        // Вложенный вариант Hash(Hash(prefix) || trunc) - прежняя ошибка - даёт другой binder
+        byte[] nested = referenceBinder(psk, streebog256(streebog256(prefix), truncated));
+        assertFalse(Arrays.equals(nested, actual), "вложенный хэш не должен совпадать с binder");
+    }
+
+    @Test
+    @DisplayName(
+            "binder после HRR: проверка принимает верный и отвергает подмену префикса, binder и усечение")
+    void verifyBinderAfterHrrRejectsTampering() {
+        byte[] psk = randomBytes(HL);
+        byte[] prefix = referencePrefix(randomBytes(120), randomBytes(60));
+        byte[] ch2Body = buildChBodyWithPsk(randomBytes(8), HL);
+        byte[] ch2Frame = new TlsHandshakeMessage(TlsConstants.HT_CLIENT_HELLO, ch2Body).encode();
+        byte[] binder = TlsPskHelper.computeBinderAfterHrr(prefix, ch2Frame, psk, HL);
+        System.arraycopy(binder, 0, ch2Frame, ch2Frame.length - HL, HL);
 
         assertTrue(
-                TlsPskHelper.verifyBinderForHrr(hrrPrefix, chFrame, psk, HL),
-                "HRR binder должен верифицироваться на полном фрейме");
+                TlsPskHelper.verifyBinderAfterHrr(
+                        prefix, ch2Frame, vectorOffset(ch2Frame), binderOffset(ch2Frame), psk, HL),
+                "верный binder должен приниматься");
+
+        byte[] otherPrefix = prefix.clone();
+        otherPrefix[otherPrefix.length - 1] ^= 1;
         assertFalse(
-                TlsPskHelper.verifyBinderForHrr(hrrPrefix, chBody, psk, HL),
-                "HRR binder должен расходиться на теле без заголовка");
+                TlsPskHelper.verifyBinderAfterHrr(
+                        otherPrefix,
+                        ch2Frame,
+                        vectorOffset(ch2Frame),
+                        binderOffset(ch2Frame),
+                        psk,
+                        HL),
+                "подменённый префикс транскрипта должен отвергаться");
+
+        byte[] tamperedBinder = ch2Frame.clone();
+        tamperedBinder[tamperedBinder.length - 1] ^= 1;
+        assertFalse(
+                TlsPskHelper.verifyBinderAfterHrr(
+                        prefix,
+                        tamperedBinder,
+                        vectorOffset(tamperedBinder),
+                        binderOffset(tamperedBinder),
+                        psk,
+                        HL),
+                "подменённый binder должен отвергаться");
+
+        byte[] tamperedBody = ch2Frame.clone();
+        tamperedBody[10] ^= 1;
+        assertFalse(
+                TlsPskHelper.verifyBinderAfterHrr(
+                        prefix,
+                        tamperedBody,
+                        vectorOffset(tamperedBody),
+                        binderOffset(tamperedBody),
+                        psk,
+                        HL),
+                "подмена усечённой части ClientHello должна отвергаться");
+
+        byte[] cutFrame = Arrays.copyOf(ch2Frame, ch2Frame.length - 1);
+        assertFalse(
+                TlsPskHelper.verifyBinderAfterHrr(
+                        prefix, cutFrame, vectorOffset(cutFrame), binderOffset(cutFrame), psk, HL),
+                "обрезанный на байт фрейм должен отвергаться");
+
+        assertFalse(
+                TlsPskHelper.verifyBinderAfterHrr(
+                        prefix,
+                        ch2Frame,
+                        vectorOffset(ch2Frame),
+                        binderOffset(ch2Frame),
+                        randomBytes(HL),
+                        HL),
+                "чужой PSK должен отвергаться");
+
+        byte[] tooShort = new byte[HL];
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        TlsPskHelper.verifyBinderAfterHrr(
+                                prefix,
+                                tooShort,
+                                vectorOffset(tooShort),
+                                binderOffset(tooShort),
+                                psk,
+                                HL),
+                "фрейм короче списка binders должен отвергаться исключением");
     }
 }

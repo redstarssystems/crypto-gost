@@ -6,7 +6,6 @@ import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
-import java.security.Security;
 import java.util.Arrays;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.BadPaddingException;
@@ -14,6 +13,7 @@ import javax.crypto.Cipher;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.JcaTestSupport;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.jca.RssysGostProvider;
@@ -42,9 +42,9 @@ class GostMgmCipherSpiFuzzTest {
     private static final GostSecretKey FIXED_KEY;
 
     static {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
+        // Статические поля ниже создаются при загрузке класса, раньше жизненного цикла JUnit и
+        // раньше запуска под Jazzer: провайдер должен быть зарегистрирован уже здесь
+        JcaTestSupport.ensureProvider();
         SymmetricKey kp = KeyGenerator.generateSymmetricKey();
         FIXED_KEY = new GostSecretKey("Kuznyechik", kp);
     }

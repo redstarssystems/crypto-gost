@@ -13,7 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.cipher.SymmetricKey;
 
-@DisplayName("Cipher Tests")
+@DisplayName("Cipher: тесты")
 class CipherTest {
 
     private SymmetricKey key;

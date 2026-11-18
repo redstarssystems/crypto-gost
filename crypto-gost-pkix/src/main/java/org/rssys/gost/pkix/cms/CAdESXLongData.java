@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import org.rssys.gost.pkix.cert.CrlLimits;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
@@ -123,13 +124,15 @@ public final class CAdESXLongData {
         List<GostOcspResponse> nonNullOcsps = new ArrayList<>();
         for (GostOcspResponse ocsp : ocspResponses) {
             if (ocsp != null) {
+                // Ответ без responseBytes (tryLater и т.п.) не имеет значения для RevocationValues
+                CAdESSupport.requireSuccessfulOcsp(ocsp);
                 nonNullOcsps.add(ocsp);
             }
         }
         if (!nonNullOcsps.isEmpty()) {
             byte[][] ocspDerList = new byte[nonNullOcsps.size()][];
             for (int i = 0; i < nonNullOcsps.size(); i++) {
-                ocspDerList[i] = nonNullOcsps.get(i).getEncoded();
+                ocspDerList[i] = nonNullOcsps.get(i).getRevocationValueDer();
             }
             byte[] ocspSeqOf = DerCodec.encodeSequence(ocspDerList);
             parts.add(DerCodec.encodeContextConstructed(1, ocspSeqOf));
@@ -158,6 +161,19 @@ public final class CAdESXLongData {
      * @throws PkixException при ошибке DER или превышении лимитов
      */
     public static List<GostCertificate> decodeCertificateValues(byte[] der) throws PkixException {
+        // certificate-values — неподписанный атрибут, DER приходит от кого угодно: структурная
+        // ошибка (IllegalArgumentException из разбора DER и сертификата) обязана стать
+        // PkixException, иначе она пройдёт мимо обработчиков проверяющих методов.
+        try {
+            return decodeCertificateValuesUnchecked(der);
+        } catch (RuntimeException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR, "CertificateValues: malformed DER", e);
+        }
+    }
+
+    private static List<GostCertificate> decodeCertificateValuesUnchecked(byte[] der)
+            throws PkixException {
         if (der == null || der.length == 0) {
             return List.of();
         }
@@ -193,6 +209,36 @@ public final class CAdESXLongData {
      * @throws PkixException при ошибке DER или превышении лимитов
      */
     public static RevocationValuesDecoded decodeRevocationValues(byte[] der) throws PkixException {
+        return decodeRevocationValues(der, CrlLimits.DEFAULT);
+    }
+
+    /**
+     * То же, что {@link #decodeRevocationValues(byte[])}, с заданными пределами CRL. Превышение
+     * размера одного CRL даёт {@code PkixException} с причиной {@code CRL_LIMIT_EXCEEDED}; число
+     * записей проверяется позже, при проверке отзыва.
+     *
+     * @param der    DER RevocationValues
+     * @param limits пределы размера и числа записей CRL (не null)
+     * @return результат с CRL и OCSP-ответами
+     * @throws PkixException при ошибке DER или превышении лимитов
+     * @throws NullPointerException если {@code limits} равен null
+     */
+    public static RevocationValuesDecoded decodeRevocationValues(byte[] der, CrlLimits limits)
+            throws PkixException {
+        Objects.requireNonNull(limits, "limits must not be null");
+        // revocation-values — неподписанный атрибут (см. decodeCertificateValues): оборачивается
+        // всё тело, а не только new GostCrl(...), потому что DerCodec тоже бросает
+        // IllegalArgumentException вне любого try.
+        try {
+            return decodeRevocationValuesUnchecked(der, limits);
+        } catch (RuntimeException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR, "RevocationValues: malformed DER", e);
+        }
+    }
+
+    private static RevocationValuesDecoded decodeRevocationValuesUnchecked(
+            byte[] der, CrlLimits limits) throws PkixException {
         if (der == null || der.length == 0) {
             return RevocationValuesDecoded.EMPTY;
         }
@@ -218,7 +264,7 @@ public final class CAdESXLongData {
                     throw new PkixException("duplicate [0] crlVals in RevocationValues");
                 }
                 crlSeen = true;
-                crls = decodeCrlVals(part);
+                crls = decodeCrlVals(part, limits);
             } else if (tag == DerCodec.TAG_CTX_CONSTRUCTED_1) {
                 if (ocspSeen) {
                     throw new PkixException("duplicate [1] ocspVals in RevocationValues");
@@ -231,7 +277,7 @@ public final class CAdESXLongData {
         return new RevocationValuesDecoded(crls, ocspResponses);
     }
 
-    private static List<GostCrl> decodeCrlVals(byte[] der) throws PkixException {
+    private static List<GostCrl> decodeCrlVals(byte[] der, CrlLimits limits) throws PkixException {
         int[] lenInfo = DerCodec.decodeLength(der, 1);
         int contentOff = 1 + lenInfo[1];
         byte[][] crlParts = DerCodec.parseSequenceContents(der, contentOff);
@@ -246,7 +292,8 @@ public final class CAdESXLongData {
 
         List<GostCrl> crls = new ArrayList<>(crlParts.length);
         for (byte[] crlDer : crlParts) {
-            crls.add(new GostCrl(crlDer));
+            limits.requireSize(crlDer);
+            crls.add(new GostCrl(crlDer, limits));
         }
         return Collections.unmodifiableList(crls);
     }
@@ -266,7 +313,11 @@ public final class CAdESXLongData {
 
         List<GostOcspResponse> responses = new ArrayList<>(ocspParts.length);
         for (byte[] ocspDer : ocspParts) {
-            responses.add(new GostOcspResponse(ocspDer));
+            if (ocspDer.length > 0 && (ocspDer[0] & 0xFF) == 0x0A) {
+                responses.add(new GostOcspResponse(ocspDer));
+            } else {
+                responses.add(GostOcspResponse.fromBasicResponse(ocspDer));
+            }
         }
         return Collections.unmodifiableList(responses);
     }

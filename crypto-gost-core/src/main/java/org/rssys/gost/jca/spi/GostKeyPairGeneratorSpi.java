@@ -1,6 +1,7 @@
 package org.rssys.gost.jca.spi;
 
 import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidParameterException;
 import java.security.KeyPair;
 import java.security.KeyPairGeneratorSpi;
 import java.security.SecureRandom;
@@ -95,7 +96,7 @@ public final class GostKeyPairGeneratorSpi extends KeyPairGeneratorSpi {
         } else if (keysize == 512) {
             this.curveParams = ECParameters.tc26a512();
         } else {
-            throw new java.security.InvalidParameterException(
+            throw new InvalidParameterException(
                     "ECGOST3410-2012 supports key sizes 256 and 512, got " + keysize);
         }
         this.random = (random != null) ? random : CryptoRandom.INSTANCE;

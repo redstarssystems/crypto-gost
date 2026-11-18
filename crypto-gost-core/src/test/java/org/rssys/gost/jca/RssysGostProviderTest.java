@@ -2,24 +2,21 @@ package org.rssys.gost.jca;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.security.NoSuchAlgorithmException;
 import java.security.Provider;
 import java.security.Security;
-import org.junit.jupiter.api.BeforeAll;
+import javax.crypto.Cipher;
+import javax.crypto.KeyAgreement;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.rssys.gost.JcaTestSupport;
 
 @DisplayName("RssysGostProvider — регистрация провайдера")
+@ExtendWith(JcaTestSupport.class)
 class RssysGostProviderTest {
-
-    @BeforeAll
-    static void registerProvider() {
-        // Регистрируем только если ещё не зарегистрирован
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
-    }
 
     @Test
     @DisplayName("провайдер зарегистрирован и доступен через Security.getProvider")
@@ -112,5 +109,40 @@ class RssysGostProviderTest {
                 java.security.MessageDigest.getInstance(
                         "1.2.643.7.1.1.2.3", RssysGostProvider.PROVIDER_NAME);
         assertNotNull(md);
+    }
+
+    @Test
+    @DisplayName("ложный алиас по OID 1.2.643.7.1.1.5.1 (дуга Magma) не регистрируется")
+    void falseOidAliasesAreNotRegistered() {
+        assertThrows(
+                NoSuchAlgorithmException.class,
+                () -> Cipher.getInstance("1.2.643.7.1.1.5.1", RssysGostProvider.PROVIDER_NAME),
+                "5.1 — дуга Magma, не Kuznyechik-MGM");
+
+        // Настоящие алиасы и имена на месте
+        assertDoesNotThrow(
+                () -> Cipher.getInstance("Kuznyechik-MGM", RssysGostProvider.PROVIDER_NAME));
+        assertDoesNotThrow(
+                () -> Cipher.getInstance("1.2.643.7.1.1.5.2.1", RssysGostProvider.PROVIDER_NAME),
+                "Kuznyechik CTR-ACPKM");
+        assertDoesNotThrow(
+                () -> Cipher.getInstance("1.2.643.7.1.1.5.2.2", RssysGostProvider.PROVIDER_NAME),
+                "Kuznyechik CTR-ACPKM-OMAC");
+        assertDoesNotThrow(
+                () ->
+                        KeyAgreement.getInstance(
+                                "1.2.643.7.1.1.6.1", RssysGostProvider.PROVIDER_NAME),
+                "VKO 256 по OID agreement");
+        assertDoesNotThrow(
+                () ->
+                        KeyAgreement.getInstance(
+                                "1.2.643.7.1.1.6.2", RssysGostProvider.PROVIDER_NAME),
+                "VKO 512 по OID agreement");
+        assertThrows(
+                NoSuchAlgorithmException.class,
+                () -> KeyAgreement.getInstance("ECDHGOST2012-512", RssysGostProvider.PROVIDER_NAME),
+                "у сырого ECDH нет вариантов и алиасов по OID");
+        assertDoesNotThrow(
+                () -> KeyAgreement.getInstance("ECDHGOST2012", RssysGostProvider.PROVIDER_NAME));
     }
 }

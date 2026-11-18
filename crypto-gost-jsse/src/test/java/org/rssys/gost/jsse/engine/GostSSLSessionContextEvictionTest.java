@@ -13,13 +13,19 @@ import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
+import org.rssys.gost.tls13.message.TlsMessageParser;
+import org.rssys.gost.tls13.psk.PskBinding;
+import org.rssys.gost.tls13.psk.PskEntry;
 import org.rssys.gost.util.CryptoRandom;
 
 /**
- * T-7: Eviction-тесты для GostSSLSessionContext.
+ * Eviction-тесты для GostSSLSessionContext.
  * Проверяют LRU-вытеснение sessions и identityByHost.
  */
+@DisplayName("GostSSLSessionContext: вытеснение сессий")
 class GostSSLSessionContextEvictionTest {
+
+    private static final PskBinding TEST_BINDING = new PskBinding("test.example", "test-id");
 
     private static final TlsCiphersuite CS =
             TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
@@ -32,7 +38,7 @@ class GostSSLSessionContextEvictionTest {
 
     @BeforeEach
     void setUp() {
-        ctx = new GostSSLSessionContext(CS, 32);
+        ctx = new GostSSLSessionContext(CS);
     }
 
     @Test
@@ -60,10 +66,35 @@ class GostSSLSessionContextEvictionTest {
         }
         assertEquals(5, idList.size(), "После вытеснения должно остаться только 5 сессий");
 
+        java.util.Set<String> survivingHosts = new java.util.TreeSet<>();
         for (byte[] id : idList) {
             SSLSession s = ctx.getSession(id);
             assertNotNull(s);
+            survivingHosts.add(s.getPeerHost());
         }
+        assertEquals(
+                new java.util.TreeSet<>(
+                        java.util.List.of("host5", "host6", "host7", "host8", "host9")),
+                survivingHosts,
+                "вытесняются самые старые сессии, остаются пять последних");
+    }
+
+    @Test
+    @DisplayName(
+            "Предел кэша по умолчанию 20 480 у нового контекста и у обоих контекстов SSLContext")
+    void defaultCacheLimitForClientAndServer() throws Exception {
+        assertEquals(20_480, new GostSSLSessionContext(CS).getSessionCacheSize());
+
+        javax.net.ssl.SSLContext context =
+                javax.net.ssl.SSLContext.getInstance(
+                        org.rssys.gost.jsse.GostJsseConstants.PROTOCOL_TLS_1_3,
+                        org.rssys.gost.jsse.GostJsseConstants.PROVIDER_NAME);
+        context.init(null, null, null);
+        assertEquals(
+                20_480,
+                context.getServerSessionContext().getSessionCacheSize(),
+                "серверный кэш без предела рос бы с каждым полным рукопожатием");
+        assertEquals(20_480, context.getClientSessionContext().getSessionCacheSize());
     }
 
     @Test
@@ -134,13 +165,37 @@ class GostSSLSessionContextEvictionTest {
         byte[] nstBodyD =
                 TlsMessageBuilder.buildNewSessionTicket(3600, 0, new byte[8], new byte[] {4});
 
-        ctx.saveNewSessionTicket("a", 443, rms, nstBodyA);
-        ctx.saveNewSessionTicket("b", 443, rms, nstBodyB);
-        ctx.saveNewSessionTicket("c", 443, rms, nstBodyC);
+        ctx.saveNewSessionTicket(
+                "a",
+                443,
+                rms,
+                TlsMessageParser.parseNewSessionTicket(nstBodyA),
+                TEST_BINDING,
+                PskEntry.NO_CERTIFICATE_BOUND);
+        ctx.saveNewSessionTicket(
+                "b",
+                443,
+                rms,
+                TlsMessageParser.parseNewSessionTicket(nstBodyB),
+                TEST_BINDING,
+                PskEntry.NO_CERTIFICATE_BOUND);
+        ctx.saveNewSessionTicket(
+                "c",
+                443,
+                rms,
+                TlsMessageParser.parseNewSessionTicket(nstBodyC),
+                TEST_BINDING,
+                PskEntry.NO_CERTIFICATE_BOUND);
         // size=3, вытеснения ещё нет
         assertEquals(3, ctx.getPskStore().size(), "3 PSK до эвикции");
 
-        ctx.saveNewSessionTicket("d", 443, rms, nstBodyD);
+        ctx.saveNewSessionTicket(
+                "d",
+                443,
+                rms,
+                TlsMessageParser.parseNewSessionTicket(nstBodyD),
+                TEST_BINDING,
+                PskEntry.NO_CERTIFICATE_BOUND);
         // size=4 > maxIdentityEntries=3: один host:port вытеснен из identityByHost.
         // Вытесненный даст null при getForClientResumption (identity не найден).
         // Остальные 3 — дадут не-null (PSK ещё не потреблены, т.к. единственный
@@ -149,10 +204,18 @@ class GostSSLSessionContextEvictionTest {
         // один раз для каждого (host, port), то есть каждую запись потребляем
         // ровно один раз — как и должно быть по RFC 8446 §8.1.
         int count = 0;
-        if (ctx.getForClientResumption("a", 443) != null) count++;
-        if (ctx.getForClientResumption("b", 443) != null) count++;
-        if (ctx.getForClientResumption("c", 443) != null) count++;
-        if (ctx.getForClientResumption("d", 443) != null) count++;
+        if (ctx.getForClientResumption("a", 443, TEST_BINDING) != null) count++;
+        if (ctx.getForClientResumption("b", 443, TEST_BINDING) != null) count++;
+        if (ctx.getForClientResumption("c", 443, TEST_BINDING) != null) count++;
+        if (ctx.getForClientResumption("d", 443, TEST_BINDING) != null) count++;
         assertEquals(3, count, "ровно 3 entry после вытеснения");
+    }
+
+    @Test
+    @DisplayName("Предел привязок: значение меньше единицы отвергается")
+    void identityLimitMustBePositive() {
+        assertThrows(IllegalArgumentException.class, () -> ctx.setMaxIdentityEntries(0));
+        assertThrows(IllegalArgumentException.class, () -> ctx.setMaxIdentityEntries(-1));
+        ctx.setMaxIdentityEntries(1);
     }
 }

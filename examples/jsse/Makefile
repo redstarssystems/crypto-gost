@@ -12,7 +12,7 @@ NATIVE ?= $(or \
              if [ -n "$$BIN" ] && $$BIN --version 2>/dev/null | grep -q 'GraalVM 2[5-9]'; then echo "$$BIN"; fi) \
 )
 
-.PHONY: netty jetty undertow tomcat springboot test all compile compile-sb clean \
+.PHONY: netty http2 grpc jetty undertow tomcat springboot test all compile compile-sb clean \
         test-integration test-concurrent test-stress test-undertow-stress test-keymanager test-int-all \
         gost-curl gost-curl-jar gost-curl-native test-server pfx-server
 
@@ -25,6 +25,14 @@ compile-sb: compile
 netty:
 	@$(MVN) install exec:java $(Q) -am $(SKIP) \
 		-Dexec.mainClass="$(CLS).netty.NettyEchoServer" $(FILTER)
+
+http2:
+	@$(MVN) install exec:java $(Q) -am $(SKIP) \
+		-Dexec.mainClass="$(CLS).netty.Http2EchoServer" $(FILTER)
+
+grpc:
+	@$(MVN) install exec:java $(Q) -am $(SKIP) \
+		-Dexec.mainClass="$(CLS).grpc.GrpcEchoServer" $(FILTER)
 
 jetty:
 	@$(MVN) install exec:java $(Q) -am $(SKIP) \
@@ -39,7 +47,7 @@ tomcat:
 		-Dexec.mainClass="$(CLS).tomcat.TomcatEchoServer" $(FILTER)
 
 all:
-	@for ex in netty jetty undertow tomcat; do \
+	@for ex in netty http2 grpc jetty undertow tomcat; do \
 		echo "=== $$ex ==="; \
 		$(MAKE) $$ex; \
 	done

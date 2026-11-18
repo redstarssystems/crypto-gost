@@ -1,156 +1,106 @@
 package org.rssys.gost.pkix.tsp;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
-import org.rssys.gost.pkix.util.SsrfGuard;
+import java.util.function.Predicate;
+import org.rssys.gost.pkix.internal.net.FetchRequest;
+import org.rssys.gost.pkix.internal.net.JdkHttpFetch;
+import org.rssys.gost.pkix.util.Deadline;
 
 /**
  * Реализация {@link TspTransport} через {@link java.net.http.HttpClient} (JDK 11+).
  *
- * <p>Отправляет HTTP POST с Content-Type {@code application/timestamp-query}
- * и принимает ответ с типом {@code application/timestamp-reply}.
- * <p>JVM only. Для Android используйте {@link UrlConnectionTspTransport}.</p>
- * <p>vthread-совместимость не валидирована JFR.</p>
+ * <p>Отправляет HTTP POST с Content-Type {@code application/timestamp-query} и принимает ответ с
+ * типом {@code application/timestamp-reply}. JVM only. Для Android используйте {@link
+ * UrlConnectionTspTransport}. vthread-совместимость не валидирована JFR.
  *
- * <p><b>Остаточный риск SSRF (простыми словами):</b> адрес проверяется до
- * запроса, но само соединение делает {@code HttpClient}, который заново
- * обращается к DNS — между этими моментами атакующий с контролем DNS может
- * подменить публичный адрес на внутренний (DNS-rebinding TOCTOU). Штатными
- * средствами HttpClient не закрывается. TSA-URL обычно задаётся доверенным
- * вызывающим кодом, поэтому практический риск ограничен. Полное закрытие требует
- * ручного HTTP (raw socket + SNI), которое мы пока не планируем делать.
- * Подробнее — {@link org.rssys.gost.pkix.util.SsrfGuard}.
+ * <p><b>Срок.</b> Один общий срок на весь запрос: соединение, заголовки, тело и перенаправления
+ * (по умолчанию 30 с). Запрос идёт асинхронно, вызывающий поток ждёт не дольше остатка срока, по
+ * истечении запрос отменяется и соединение закрывается. Медленный сервер, присылающий тело по
+ * байту, срок не продлевает.
+ *
+ * <p><b>Перенаправления</b> выполняются вручную, а не клиентом: {@code POST} следует только за 307
+ * и 308 (301, 302 и 303 клиенты превращают в {@code GET}, что для запроса штампа недопустимо), не
+ * более 5 запросов, схема ({@code http} или {@code https}) и SSRF проверяются на каждом переходе,
+ * понижение {@code https} до {@code http} запрещено. Поэтому клиент, переданный в конструктор,
+ * обязан быть создан с {@code Redirect.NEVER}.
+ *
+ * <p><b>Ответ.</b> Принимается только 200 с типом {@code application/timestamp-reply}
+ * (параметры и регистр не учитываются), не больше 1 МБ. При отказе сервера в сообщении исключения
+ * приводится код статуса и начало тела ответа (до 128 знаков, только печатные ASCII).
+ *
+ * <p><b>Остаточный риск SSRF:</b> адрес проверяется до запроса, но само соединение делает {@code
+ * HttpClient}, который заново обращается к DNS, поэтому атакующий с контролем DNS может подменить
+ * публичный адрес на внутренний (DNS-rebinding). Штатными средствами {@code HttpClient} не
+ * закрывается; адрес TSA обычно задаёт доверенный вызывающий код, поэтому риск ограничен. Само
+ * разрешение имени в срок не входит. Подробнее - {@link org.rssys.gost.pkix.util.SsrfGuard}.
  */
 public final class JdkHttpTspTransport implements TspTransport {
 
-    private static final GostLogger LOG =
-            GostLogger.getLogger("org.rssys.gost.pkix.tsp.JdkHttpTspTransport");
+    private final JdkHttpFetch engine;
+    private final Duration timeout;
+    private final Predicate<URI> blockedTarget;
 
-    private static final String REQUEST_CONTENT_TYPE = "application/timestamp-query";
-    private static final String RESPONSE_CONTENT_TYPE = "application/timestamp-reply";
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
-
-    /**
-     * Максимальный размер TSP-ответа — защита от Memory DoS.
-     * 1 МБ с запасом: типичный TSP-ответ содержит подпись, её цепочку сертификатов
-     * и метаданные (единицы КБ).
-     *
-     * <p>Осознанное отличие от {@code JdkHttpOcspFetcher}: там превышение лимита
-     * возвращает {@code null} (soft-fail — OCSP-проверка опциональна).
-     * Здесь — fail-closed через {@code IOException}: TSP-верификация детерминирована,
-     * урезанный ответ не должен маскироваться как «TSP недоступен».</p>
-     */
-    private static final int MAX_TSP_RESPONSE_SIZE = 1_048_576; // 1 МБ
-
-    private final HttpClient httpClient;
-
-    /** Создаёт транспорт с HTTP-клиентом по умолчанию (followRedirects=NORMAL). */
+    /** Создаёт транспорт со сроком 30 с и клиентом по умолчанию без автоперенаправлений. */
     public JdkHttpTspTransport() {
-        this(
-                HttpClient.newBuilder()
-                        .followRedirects(HttpClient.Redirect.NORMAL)
-                        .connectTimeout(DEFAULT_TIMEOUT)
-                        .build());
+        this(TspFetchSupport.DEFAULT_TIMEOUT);
     }
 
-    /** Создаёт транспорт с заданным HTTP-клиентом. */
+    /**
+     * Создаёт транспорт с заданным сроком и клиентом по умолчанию.
+     *
+     * @param timeout общий срок запроса, от 1 мс до {@link Deadline#MAX_FETCH_TIMEOUT}
+     * @throws IllegalArgumentException если срок недопустим
+     */
+    public JdkHttpTspTransport(Duration timeout) {
+        this(defaultClient(timeout), timeout, FetchRequest.BLOCK_PRIVATE_ADDRESSES);
+    }
+
+    /**
+     * Создаёт транспорт с заданным клиентом и сроком 30 с.
+     *
+     * @param httpClient клиент, созданный с {@code Redirect.NEVER}
+     * @throws IllegalArgumentException если клиент сам следует перенаправлениям: он обошёл бы
+     *                                  проверку адреса и общий срок на переходах
+     */
     public JdkHttpTspTransport(HttpClient httpClient) {
-        this.httpClient = httpClient;
+        this(httpClient, TspFetchSupport.DEFAULT_TIMEOUT);
+    }
+
+    /**
+     * @param httpClient клиент, созданный с {@code Redirect.NEVER}
+     * @param timeout    общий срок запроса, от 1 мс до {@link Deadline#MAX_FETCH_TIMEOUT}
+     * @throws IllegalArgumentException если клиент сам следует перенаправлениям или срок
+     *                                  недопустим
+     */
+    public JdkHttpTspTransport(HttpClient httpClient, Duration timeout) {
+        this(httpClient, timeout, FetchRequest.BLOCK_PRIVATE_ADDRESSES);
+    }
+
+    /** Для тестов: собственная проверка адреса ({@code true} - заблокировать). */
+    JdkHttpTspTransport(Duration timeout, Predicate<URI> blockedTarget) {
+        this(defaultClient(timeout), timeout, blockedTarget);
+    }
+
+    private JdkHttpTspTransport(
+            HttpClient httpClient, Duration timeout, Predicate<URI> blockedTarget) {
+        this.timeout = Deadline.requireValidTimeout(timeout);
+        this.engine = new JdkHttpFetch(httpClient);
+        this.blockedTarget = blockedTarget;
+    }
+
+    private static HttpClient defaultClient(Duration timeout) {
+        // connectTimeout - запасной ограничитель: общий срок держит сам движок
+        return HttpClient.newBuilder()
+                .followRedirects(HttpClient.Redirect.NEVER)
+                .connectTimeout(Deadline.requireValidTimeout(timeout))
+                .build();
     }
 
     @Override
     public byte[] send(byte[] tspRequestDer, String tsaUrl) throws IOException {
-        URI uri = URI.create(tsaUrl);
-        String scheme = uri.getScheme();
-        if (scheme == null
-                || (!scheme.equalsIgnoreCase("https") && !scheme.equalsIgnoreCase("http"))) {
-            throw new IOException("Unsupported TSP URL scheme: " + scheme);
-        }
-        if (SsrfGuard.isPrivateAddress(uri)) {
-            LOG.log(
-                    Level.WARNING,
-                    "TSP request skipped: private/reserved IP resolved from {0}",
-                    tsaUrl);
-            throw new IOException("TSP URL resolves to private address: " + tsaUrl);
-        }
-        try {
-            HttpRequest request =
-                    HttpRequest.newBuilder()
-                            .uri(uri)
-                            .timeout(DEFAULT_TIMEOUT)
-                            .header("Content-Type", REQUEST_CONTENT_TYPE)
-                            .header("Accept", RESPONSE_CONTENT_TYPE)
-                            .POST(HttpRequest.BodyPublishers.ofByteArray(tspRequestDer))
-                            .build();
-
-            HttpResponse<InputStream> response =
-                    httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-
-            int statusCode = response.statusCode();
-            if (statusCode != 200) {
-                byte[] errorBody = readLimited(response.body(), 128);
-                throw new IOException(
-                        "TSA returned HTTP "
-                                + statusCode
-                                + " for "
-                                + tsaUrl
-                                + (errorBody.length > 0
-                                        ? ": "
-                                                + new String(
-                                                        errorBody,
-                                                        java.nio.charset.StandardCharsets.UTF_8)
-                                        : ""));
-            }
-
-            String contentType = response.headers().firstValue("Content-Type").orElse("");
-            if (!contentType.toLowerCase().contains(RESPONSE_CONTENT_TYPE)) {
-                response.body().close();
-                throw new IOException(
-                        "Unexpected Content-Type from TSA: '"
-                                + contentType
-                                + "', expected '"
-                                + RESPONSE_CONTENT_TYPE
-                                + "'");
-            }
-
-            return readLimited(response.body(), MAX_TSP_RESPONSE_SIZE);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("TSP request interrupted for " + tsaUrl, e);
-        }
-    }
-
-    /**
-     * Читает InputStream с ограничением размера.
-     *
-     * @param is       входной поток (закрывается вызывающей стороной или внутри метода)
-     * @param maxBytes максимальный размер в байтах
-     * @return прочитанные байты
-     * @throws IOException при превышении лимита или ошибке чтения
-     */
-    private static byte[] readLimited(InputStream is, int maxBytes) throws IOException {
-        try (is;
-                ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-            byte[] buf = new byte[4096];
-            int total = 0;
-            int n;
-            while ((n = is.read(buf)) != -1) {
-                if (total > maxBytes - n) {
-                    throw new IOException(
-                            "TSP response exceeds maximum size of " + maxBytes + " bytes");
-                }
-                total += n;
-                baos.write(buf, 0, n);
-            }
-            return baos.toByteArray();
-        }
+        return TspFetchSupport.send(tspRequestDer, tsaUrl, timeout, blockedTarget, engine::execute);
     }
 }

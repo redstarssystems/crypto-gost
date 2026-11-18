@@ -198,19 +198,33 @@ class GostOcspRequestBuilderTest {
         byte[] nonce = builder.getNonce();
 
         assertNotNull(nonce, "Nonce должен быть сгенерирован");
-        assertEquals(16, nonce.length, "Nonce должен быть 16 байт");
+        assertEquals(32, nonce.length, "Nonce должен быть 32 байта (RFC 8954)");
 
         // Проверяем наличие nonce в requestExtensions [2]
         int[] outer = GostDerParser.readTlv(request, 0);
         int[] tbsReq = GostDerParser.readTlv(request, outer[0]);
         int afterReqList = findAfterRequestList(request, tbsReq[0]);
-        if (afterReqList < tbsReq[1]) {
-            int tag = request[afterReqList] & 0xFF;
-            assertEquals(
-                    DerCodec.TAG_CTX_BASE | 2,
-                    tag,
-                    "После requestList должен быть requestExtensions [2]");
-        }
+        assertTrue(afterReqList < tbsReq[1], "После requestList должен быть requestExtensions");
+        assertEquals(
+                DerCodec.TAG_CTX_BASE | 2,
+                request[afterReqList] & 0xFF,
+                "После requestList должен быть requestExtensions [2]");
+
+        // Extension -> OID -> extnValue: 04 22 04 20 <32 байта> (RFC 8954 §2.1, двойная обёртка)
+        int[] extExplTlv = GostDerParser.readTlv(request, afterReqList);
+        int[] extSeq = GostDerParser.parseSequence(request, extExplTlv[0]);
+        int[] extTlv = GostDerParser.parseSequence(request, extSeq[0]);
+        int[] oidTlv = GostDerParser.readTlv(request, extTlv[0]);
+        byte[] expectedExtnValue = new byte[4 + nonce.length];
+        expectedExtnValue[0] = 0x04;
+        expectedExtnValue[1] = (byte) (2 + nonce.length);
+        expectedExtnValue[2] = 0x04;
+        expectedExtnValue[3] = (byte) nonce.length;
+        System.arraycopy(nonce, 0, expectedExtnValue, 4, nonce.length);
+        assertArrayEquals(
+                expectedExtnValue,
+                Arrays.copyOfRange(request, oidTlv[1], extTlv[1]),
+                "extnValue должен содержать вложенный OCTET STRING с nonce (двойная обёртка)");
     }
 
     @Test

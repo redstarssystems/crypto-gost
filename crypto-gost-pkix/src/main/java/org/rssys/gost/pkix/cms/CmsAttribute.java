@@ -16,14 +16,28 @@ public final class CmsAttribute {
 
     private final String attrType;
     private final byte[][] attrValues;
+    private final byte[] encoded;
 
-    private CmsAttribute(String attrType, byte[][] attrValues) {
+    private CmsAttribute(String attrType, byte[][] attrValues, byte[] encoded) {
         this.attrType = attrType;
         this.attrValues = attrValues;
+        this.encoded = encoded;
     }
 
     public String attrType() {
         return attrType;
+    }
+
+    /**
+     * Исходный DER атрибута (SEQUENCE с attrType и attrValues).
+     *
+     * <p>Нужен для хеш-входа {@code escTimeStamp}: RFC 5126 §6.3.5 требует
+     * хешировать именно исходное кодирование, а не перекодированное значение.</p>
+     *
+     * @return защитная копия исходного DER
+     */
+    public byte[] encoded() {
+        return encoded.clone();
     }
 
     public byte[][] attrValues() {
@@ -67,6 +81,6 @@ public final class CmsAttribute {
             values.add(java.util.Arrays.copyOfRange(setData, pos, pos + childTotal));
             pos += childTotal;
         }
-        return new CmsAttribute(oid, values.toArray(new byte[0][]));
+        return new CmsAttribute(oid, values.toArray(new byte[0][]), der.clone());
     }
 }

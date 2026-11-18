@@ -20,11 +20,16 @@ import javax.security.auth.Destroyable;
  *       в памяти; после вызова объект непригоден для использования.</li>
  * </ul>
  *
+ * <p><b>Потокобезопасность.</b> Объект не синхронизирован: {@link #destroy()} не должен
+ * пересекаться ни с одной операцией над ключом ({@link #getKey()}, шифрование, вычисление MAC).
+ * Параллельное уничтожение дало бы частично обнулённую копию ключа. Уничтожайте ключ после
+ * завершения всех операций.
+ *
  * <p>Для использования через JCA/JCE предназначен {@link org.rssys.gost.jca.key.GostSecretKey},
  * который реализует {@link javax.crypto.SecretKey} и содержит метод
  * {@code toSymmetricKey()} для конвертации в этот тип.
  */
-public class SymmetricKey implements CipherParameters, Destroyable {
+public final class SymmetricKey implements CipherParameters, Destroyable {
 
     private byte[] key;
     private boolean destroyed = false;

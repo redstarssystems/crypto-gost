@@ -1,8 +1,8 @@
 package org.rssys.gost.tls13;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.rssys.gost.tls13.TlsTestHelper.hex;
-import static org.rssys.gost.tls13.TlsTestHelper.hexStr;
+import static org.rssys.gost.pkix.cert.PkixCertTestHelper.hex;
+import static org.rssys.gost.pkix.cert.PkixCertTestHelper.hexStr;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -32,7 +32,7 @@ public class TlsKATLTest {
     // Вспомогательные методы
     // ========================================================================
 
-    // hex/hexStr утилиты вынесены в TlsTestHelper
+    // hex/hexStr утилиты вынесены в PkixCertTestHelper
 
     // ========================================================================
     // Константы cipher suite L

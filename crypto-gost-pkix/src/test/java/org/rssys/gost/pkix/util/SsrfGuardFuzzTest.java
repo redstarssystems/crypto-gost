@@ -39,16 +39,7 @@ class SsrfGuardFuzzTest {
         try {
             SsrfGuard.isPrivateAddress(uri);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

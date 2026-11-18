@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -54,7 +55,8 @@ class UrlConnectionTspTransportTest {
     @DisplayName("200 + application/timestamp-reply -> возвращает тело")
     void testSendSuccess() throws Exception {
         startMock(SENTINEL, 200, "application/timestamp-reply");
-        UrlConnectionTspTransport transport = new UrlConnectionTspTransport(true);
+        UrlConnectionTspTransport transport =
+                new UrlConnectionTspTransport(Duration.ofSeconds(5), uri -> false);
         byte[] result = transport.send(REQUEST, "http://localhost:" + port);
         assertArrayEquals(SENTINEL, result, "Transport должен вернуть тело ответа");
     }
@@ -63,7 +65,8 @@ class UrlConnectionTspTransportTest {
     @DisplayName("HTTP 500 -> IOException")
     void testSendServerError() throws Exception {
         startMock(SENTINEL, 500, "text/plain");
-        UrlConnectionTspTransport transport = new UrlConnectionTspTransport(true);
+        UrlConnectionTspTransport transport =
+                new UrlConnectionTspTransport(Duration.ofSeconds(5), uri -> false);
         assertThrows(
                 java.io.IOException.class,
                 () -> transport.send(REQUEST, "http://localhost:" + port));
@@ -73,7 +76,8 @@ class UrlConnectionTspTransportTest {
     @DisplayName("200 + неверный Content-Type -> IOException")
     void testSendWrongContentType() throws Exception {
         startMock(SENTINEL, 200, "text/html");
-        UrlConnectionTspTransport transport = new UrlConnectionTspTransport(true);
+        UrlConnectionTspTransport transport =
+                new UrlConnectionTspTransport(Duration.ofSeconds(5), uri -> false);
         assertThrows(
                 java.io.IOException.class,
                 () -> transport.send(REQUEST, "http://localhost:" + port));
@@ -116,7 +120,8 @@ class UrlConnectionTspTransportTest {
         server.start();
         port = server.getAddress().getPort();
 
-        UrlConnectionTspTransport transport = new UrlConnectionTspTransport(true);
+        UrlConnectionTspTransport transport =
+                new UrlConnectionTspTransport(Duration.ofSeconds(5), uri -> false);
         byte[] result = transport.send(REQUEST, "http://localhost:" + port + "/first");
         assertArrayEquals(SENTINEL, result, "Transport должен пройти редирект");
     }
@@ -127,7 +132,8 @@ class UrlConnectionTspTransportTest {
         // Создаём ответ размером 2 МБ — превышает лимит
         byte[] largeResponse = new byte[2 * 1024 * 1024];
         startMock(largeResponse, 200, "application/timestamp-reply");
-        UrlConnectionTspTransport transport = new UrlConnectionTspTransport(true);
+        UrlConnectionTspTransport transport =
+                new UrlConnectionTspTransport(Duration.ofSeconds(5), uri -> false);
         assertThrows(
                 java.io.IOException.class,
                 () -> transport.send(REQUEST, "http://localhost:" + port));

@@ -35,6 +35,13 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-pkix</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
@@ -74,9 +81,6 @@
                 <configuration>
                     <forkCount>1</forkCount>
                     <forkNode implementation="org.apache.maven.plugin.surefire.extensions.SurefireForkNodeFactory"/>
-                    <excludes>
-                        <exclude>**/SeedGeneratorTest.java</exclude>
-                    </excludes>
                 </configuration>
             </plugin>
         </plugins>

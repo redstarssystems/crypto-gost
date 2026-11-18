@@ -9,9 +9,9 @@ import org.junit.jupiter.api.Test;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostPbes2;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 @DisplayName("GostSsl.loadPrivateKey: загрузка закрытых ключей")
 class GostSslTest {
@@ -30,7 +30,7 @@ class GostSslTest {
     @DisplayName("loadPrivateKey: PEM и DER дают одинаковый ключ")
     void testLoadPrivateKeyPlain() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
         byte[] der = GostDerCodec.encodePrivateKey(bundle.priv);
         byte[] pem = pemEncode(der, "PRIVATE KEY").getBytes(StandardCharsets.US_ASCII);
 
@@ -42,10 +42,34 @@ class GostSslTest {
     }
 
     @Test
+    @DisplayName("loadPrivateKey: маскированный ключ RFC 9548 отвергается, а не усекается")
+    void testLoadPrivateKeyRejectsMasked() {
+        ECParameters params = ECParameters.tc26a256();
+        byte[] template =
+                GostDerCodec.encodePrivateKey(
+                        new PrivateKeyParameters(java.math.BigInteger.valueOf(0x1234567L), params));
+        byte[][] outer = org.rssys.gost.util.DerCodec.parseSequenceContents(template, 0);
+        int n = (params.n.bitLength() + 7) / 8;
+        byte[] content = new byte[2 * n];
+        content[0] = 0x67;
+        java.util.Arrays.fill(content, n, content.length, (byte) 0x11);
+        byte[] masked =
+                org.rssys.gost.util.DerCodec.encodeSequence(
+                        outer[0],
+                        outer[1],
+                        org.rssys.gost.util.DerCodec.encodeOctetString(content));
+
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> GostSsl.loadPrivateKey(masked),
+                "loadPrivateKey не должен молча возвращать K_M вместо ключа");
+    }
+
+    @Test
     @DisplayName("loadPrivateKey: зашифрованный ключ расшифровывается корректно")
     void testLoadPrivateKeyEncrypted() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
         byte[] passwordBytes = toUtf8Bytes("secret".toCharArray());
 
         byte[] encryptedDer =
@@ -63,10 +87,22 @@ class GostSslTest {
     }
 
     @Test
+    @DisplayName("loadPrivateKey: данные не ключ - исключение о формате, а не молчаливый сбой")
+    void testLoadPrivateKeyRejectsGarbage() {
+        byte[] garbage = {1, 2, 3, 4, 5};
+
+        assertThrows(RuntimeException.class, () -> GostSsl.loadPrivateKey(garbage));
+        assertThrows(
+                RuntimeException.class,
+                () -> GostSsl.loadPrivateKey(garbage, "пароль".toCharArray()),
+                "с паролем разбор как EncryptedPrivateKeyInfo не должен скрывать причину отказа");
+    }
+
+    @Test
     @DisplayName("loadPrivateKey: plain ключ с не-null паролем — пароль игнорируется")
     void testLoadPrivateKeyPlainWithPassword() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle bundle = PkixCertTestHelper.createCertWithKey(params);
         byte[] der = GostDerCodec.encodePrivateKey(bundle.priv);
         byte[] pem = pemEncode(der, "PRIVATE KEY").getBytes(StandardCharsets.US_ASCII);
 

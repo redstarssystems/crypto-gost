@@ -11,8 +11,9 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
@@ -74,8 +75,8 @@ class NettyConcurrentTest {
         serverCtx = GostSslContextBuilder.forServer(km).trustManager(tm).build();
         clientCtx = GostSslContextBuilder.forClient().trustManager(tm).build();
 
-        bossGroup = new NioEventLoopGroup(1);
-        workerGroup = new NioEventLoopGroup();
+        bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        workerGroup = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
 
         ServerBootstrap sb = new ServerBootstrap();
         sb.group(bossGroup, workerGroup)
@@ -119,7 +120,9 @@ class NettyConcurrentTest {
             Thread t =
                     new Thread(
                             () -> {
-                                EventLoopGroup g = new NioEventLoopGroup(1);
+                                EventLoopGroup g =
+                                        new MultiThreadIoEventLoopGroup(
+                                                1, NioIoHandler.newFactory());
                                 try {
                                     allStart.await();
 
@@ -192,7 +195,7 @@ class NettyConcurrentTest {
         int n = 20;
         for (int i = 0; i < n; i++) {
             final int clientIdx = i;
-            EventLoopGroup g = new NioEventLoopGroup(1);
+            EventLoopGroup g = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
             try {
                 CountDownLatch done = new CountDownLatch(1);
                 AtomicReference<String> err = new AtomicReference<>(null);

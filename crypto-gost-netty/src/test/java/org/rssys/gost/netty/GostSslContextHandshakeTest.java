@@ -23,8 +23,9 @@ import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.engine.GostSSLEngine;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.util.CryptoRandom;
 
 /**
@@ -38,19 +39,17 @@ class GostSslContextHandshakeTest {
     private static GostSslContext clientCtx;
     private static GostSslContext serverMtlsCtx;
     private static GostSslContext clientMtlsCtx;
-    private static GostSslContext serverAlpnCtx;
-    private static GostSslContext clientAlpnCtx;
 
-    private static TlsTestHelper.CertBundle rootCa;
+    private static PkixCertTestHelper.CertBundle rootCa;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         ECParameters params = ECParameters.tc26a256();
 
-        rootCa = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle serverCert =
-                TlsTestHelper.createCertSignedBy(
+        rootCa = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle serverCert =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         rootCa.cert.getPublicKey(),
@@ -62,8 +61,8 @@ class GostSslContextHandshakeTest {
                         null,
                         false,
                         null);
-        TlsTestHelper.CertBundle clientCert =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle clientCert =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         rootCa.cert.getPublicKey(),
@@ -83,8 +82,9 @@ class GostSslContextHandshakeTest {
                 serverCert.priv);
         serverCtx = GostSslContextBuilder.forServer(serverKm).build();
 
-        GostX509TrustManager trustAll = new GostX509TrustManager(rootCa.cert.getPublicKey(), false);
-        clientCtx = GostSslContextBuilder.forClient().trustManager(trustAll).build();
+        GostX509TrustManager trustRootCa =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(rootCa.cert));
+        clientCtx = GostSslContextBuilder.forClient().trustManager(trustRootCa).build();
 
         GostX509KeyManager clientKm = new GostX509KeyManager();
         clientKm.addKeyEntry(
@@ -94,30 +94,23 @@ class GostSslContextHandshakeTest {
 
         serverMtlsCtx =
                 GostSslContextBuilder.forServer(serverKm)
-                        .trustManager(new GostX509TrustManager(rootCa.cert.getPublicKey(), false))
+                        .trustManager(
+                                GostX509TrustManager.fromTrustAnchors(
+                                        TrustAnchors.ofCertificate(rootCa.cert)))
                         .clientAuth(io.netty.handler.ssl.ClientAuth.REQUIRE)
                         .build();
         clientMtlsCtx =
                 GostSslContextBuilder.forClient()
-                        .trustManager(trustAll)
+                        .trustManager(trustRootCa)
                         .keyManager(clientKm)
-                        .build();
-
-        serverAlpnCtx =
-                GostSslContextBuilder.forServer(serverKm)
-                        .applicationProtocols("h2", "http/1.1")
-                        .build();
-        clientAlpnCtx =
-                GostSslContextBuilder.forClient()
-                        .trustManager(trustAll)
-                        .applicationProtocols("h2", "http/1.1")
                         .build();
     }
 
     @Test
     @DisplayName("Embedded: отправка данных после рукопожатия")
     void testSendData() throws Exception {
-        SslHandler clientSsl = clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT);
+        SslHandler clientSsl =
+                clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         SslHandler serverSsl =
                 serverCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         EmbeddedChannel clientCh = new EmbeddedChannel(clientSsl);
@@ -139,80 +132,50 @@ class GostSslContextHandshakeTest {
     }
 
     @Test
-    @DisplayName("ALPN: h2 согласован между клиентом и сервером")
-    void testAlpnNegotiation() throws Exception {
-        GostX509KeyManager skm = new GostX509KeyManager();
-        TlsTestHelper.CertBundle sc =
-                TlsTestHelper.createCertSignedBy(
-                        ECParameters.tc26a256(),
-                        rootCa.priv,
-                        rootCa.cert.getPublicKey(),
-                        rootCa.subjectDn,
-                        "20240501120000Z",
-                        "21060101120000Z",
-                        new String[] {"localhost"},
-                        new byte[] {(byte) 0x80},
-                        null,
-                        false,
-                        null);
-        skm.addKeyEntry("default", CertificateBridge.toJca(List.of(sc.cert, rootCa.cert)), sc.priv);
+    @DisplayName("mTLS через Netty: взаимная аутентификация и обмен данными")
+    void testMtlsHandshakeAndData() throws Exception {
+        SslHandler clientSsl =
+                clientMtlsCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
+        SslHandler serverSsl =
+                serverMtlsCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
+        EmbeddedChannel clientCh = new EmbeddedChannel(clientSsl);
+        EmbeddedChannel serverCh = new EmbeddedChannel(serverSsl);
+        doHandshake(clientSsl, serverSsl, clientCh, serverCh);
 
-        GostSslContext srv =
-                GostSslContextBuilder.forServer(skm).applicationProtocols("h2").build();
-        GostSslContext cli =
-                GostSslContextBuilder.forClient()
-                        .trustManager(new GostX509TrustManager(rootCa.cert.getPublicKey(), false))
-                        .applicationProtocols("h2")
-                        .build();
+        assertTrue(
+                clientSsl.engine().getSession().getPeerCertificates().length > 0,
+                "клиент должен получить сертификат сервера");
 
-        SslHandler cs = cli.newHandler(UnpooledByteBufAllocator.DEFAULT);
-        SslHandler ss = srv.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
-        doHandshake(cs, ss);
+        clientCh.writeOutbound(
+                Unpooled.wrappedBuffer(
+                        "mtls-client".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        ByteBuf clientOut = clientCh.readOutbound();
+        assertNotNull(clientOut, "клиент должен отправить данные");
+        serverCh.writeInbound(clientOut.retain());
+        clientOut.release();
+        ByteBuf fromClient = serverCh.readInbound();
+        assertNotNull(fromClient, "сервер должен принять данные клиента");
+        assertEquals("mtls-client", fromClient.toString(java.nio.charset.StandardCharsets.UTF_8));
+        fromClient.release();
 
-        assertEquals("h2", cs.applicationProtocol(), "клиентский протокол должен быть h2");
-        assertEquals("h2", ss.applicationProtocol(), "серверный протокол должен быть h2");
-    }
-
-    @Test
-    @DisplayName("Несовпадение ALPN: Netty 4.2+ кидает SSLHandshakeException")
-    void testAlpnMismatch() throws Exception {
-        GostX509KeyManager skm = new GostX509KeyManager();
-        TlsTestHelper.CertBundle sc =
-                TlsTestHelper.createCertSignedBy(
-                        ECParameters.tc26a256(),
-                        rootCa.priv,
-                        rootCa.cert.getPublicKey(),
-                        rootCa.subjectDn,
-                        "20240501120000Z",
-                        "21060101120000Z",
-                        new String[] {"localhost"},
-                        new byte[] {(byte) 0x80},
-                        null,
-                        false,
-                        null);
-        skm.addKeyEntry("default", CertificateBridge.toJca(List.of(sc.cert, rootCa.cert)), sc.priv);
-
-        GostSslContext srv =
-                GostSslContextBuilder.forServer(skm).applicationProtocols("http/1.1").build();
-        GostSslContext cli =
-                GostSslContextBuilder.forClient()
-                        .trustManager(new GostX509TrustManager(rootCa.cert.getPublicKey(), false))
-                        .applicationProtocols("h2")
-                        .build();
-
-        SslHandler cs = cli.newHandler(UnpooledByteBufAllocator.DEFAULT);
-        SslHandler ss = srv.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
-
-        assertThrows(
-                Exception.class,
-                () -> doHandshake(cs, ss),
-                "рукопожатие при несовпадении ALPN падает в Netty 4.2+");
+        serverCh.writeOutbound(
+                Unpooled.wrappedBuffer(
+                        "mtls-server".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        ByteBuf serverOut = serverCh.readOutbound();
+        assertNotNull(serverOut, "сервер должен отправить данные");
+        clientCh.writeInbound(serverOut.retain());
+        serverOut.release();
+        ByteBuf fromServer = clientCh.readInbound();
+        assertNotNull(fromServer, "клиент должен принять данные сервера");
+        assertEquals("mtls-server", fromServer.toString(java.nio.charset.StandardCharsets.UTF_8));
+        fromServer.release();
     }
 
     @Test
     @DisplayName("Embedded: 256 KB обратимость через SslHandler")
     void testLargePayloadRoundTrip() throws Exception {
-        SslHandler clientSsl = clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT);
+        SslHandler clientSsl =
+                clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         SslHandler serverSsl =
                 serverCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         EmbeddedChannel clientCh = new EmbeddedChannel(clientSsl);
@@ -251,13 +214,16 @@ class GostSslContextHandshakeTest {
     @Test
     @DisplayName("Embedded: рукопожатие с неверным CA — SSLException")
     void testInvalidCertRejected() throws Exception {
-        TlsTestHelper.CertBundle otherCa = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        PkixCertTestHelper.CertBundle otherCa =
+                PkixCertTestHelper.createRootCA(ECParameters.tc26a256());
         GostSslContext wrongClient =
                 GostSslContextBuilder.forClient()
-                        .trustManager(new GostX509TrustManager(otherCa.cert.getPublicKey(), false))
+                        .trustManager(
+                                GostX509TrustManager.fromTrustAnchors(
+                                        TrustAnchors.ofCertificate(otherCa.cert)))
                         .build();
 
-        SslHandler cs = wrongClient.newHandler(UnpooledByteBufAllocator.DEFAULT);
+        SslHandler cs = wrongClient.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         SslHandler ss = serverCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
 
         // assertThrows(Exception.class) слишком широк — поймал бы NPE
@@ -277,7 +243,8 @@ class GostSslContextHandshakeTest {
     @Test
     @DisplayName("Embedded: частичная доставка TLS-записи (2+3+N байт)")
     void testPartialRecordDelivery() throws Exception {
-        SslHandler clientSsl = clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT);
+        SslHandler clientSsl =
+                clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         SslHandler serverSsl =
                 serverCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         EmbeddedChannel clientCh = new EmbeddedChannel(clientSsl);
@@ -317,7 +284,8 @@ class GostSslContextHandshakeTest {
     @Test
     @DisplayName("Embedded: KeyUpdate через SslHandler — данные доходят")
     void testKeyUpdateThroughNetty() throws Exception {
-        SslHandler clientSsl = clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT);
+        SslHandler clientSsl =
+                clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         SslHandler serverSsl =
                 serverCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
         EmbeddedChannel clientCh = new EmbeddedChannel(clientSsl);
@@ -356,14 +324,6 @@ class GostSslContextHandshakeTest {
     // ========================================================================
     // Утилиты
     // ========================================================================
-
-    private static void doHandshake(GostSslContext serverCtx, GostSslContext clientCtx)
-            throws Exception {
-        SslHandler clientSsl = clientCtx.newHandler(UnpooledByteBufAllocator.DEFAULT);
-        SslHandler serverSsl =
-                serverCtx.newHandler(UnpooledByteBufAllocator.DEFAULT, "localhost", 0);
-        doHandshake(clientSsl, serverSsl);
-    }
 
     private static void doHandshake(SslHandler clientSsl, SslHandler serverSsl) throws Exception {
         EmbeddedChannel clientCh = new EmbeddedChannel(clientSsl);

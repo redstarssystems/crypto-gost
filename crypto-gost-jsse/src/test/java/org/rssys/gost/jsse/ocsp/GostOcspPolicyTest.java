@@ -18,27 +18,27 @@ import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.pkix.cert.CertIdHasher;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsTestHelper;
+import org.rssys.gost.tls13.config.ClientOcspPolicy;
 
 /**
  * Тесты OcspPolicy и кэша.
  */
+@DisplayName("GostX509TrustManager: политики OCSP")
 class GostOcspPolicyTest {
 
-    private static TlsTestHelper.CertBundle root;
+    private static PkixCertTestHelper.CertBundle root;
     private static ECParameters params;
-    private static TlsCiphersuite cs;
 
     private HttpServer mockServer;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         params = ECParameters.tc26a256();
-        root = TlsTestHelper.createRootCA(params);
+        root = PkixCertTestHelper.createRootCA(params);
     }
 
     @AfterEach
@@ -49,38 +49,43 @@ class GostOcspPolicyTest {
     @Test
     @DisplayName("STAPLING_OR_FETCH + fetcher=null + нет OCSP -> fail-closed")
     void testStaplingOrFetchNoFetcher() throws Exception {
-        TlsTestHelper.CertBundle leaf = createLeaf();
+        PkixCertTestHelper.CertBundle leaf = createLeaf();
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
 
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, null);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert), OcspPolicy.STAPLING_OR_FETCH, null);
 
         assertThrows(
                 CertificateException.class,
                 () -> tm.validateChainWithOcsp(chain, null, false),
-                "STAPLING_OR_FETCH без fetcher и без OCSP должно падать");
+                "STAPLING_OR_FETCH без staple и без fetcher должен отклоняться");
+        assertThrows(
+                CertificateException.class,
+                () -> tm.validateChainWithOcsp(chain, null, true),
+                "явный requireOcsp без staple должен отклоняться");
     }
 
     @Test
     @DisplayName("IF_PRESENT + нет OCSP -> success (OCSP не обязателен)")
     void testIfPresentNoOcsp() throws Exception {
-        TlsTestHelper.CertBundle leaf = createLeaf();
+        PkixCertTestHelper.CertBundle leaf = createLeaf();
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
 
         GostX509TrustManager tm =
-                new GostX509TrustManager(root.cert.getPublicKey(), OcspPolicy.IF_PRESENT, null);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert), OcspPolicy.IF_PRESENT, null);
 
         tm.validateChainWithOcsp(chain, null, false);
     }
 
     @Test
-    @DisplayName("STAPLING_OR_FETCH + stapled OCSP -> success")
+    @DisplayName("STAPLING_OR_FETCH с приложенным OCSP-ответом: успех")
     void testStaplingOrFetchStapled() throws Exception {
-        TlsTestHelper.CertBundle leaf = createLeaf();
+        PkixCertTestHelper.CertBundle leaf = createLeaf();
 
         byte[] ocspResp =
-                TlsTestHelper.buildOcspResponse(
+                PkixCertTestHelper.buildOcspResponse(
                         leaf.cert.getSerialNumber(), root.priv,
                         root.cert.getPublicKey(), root.subjectDn);
         leaf.cert.setOcspResponse(ocspResp);
@@ -88,8 +93,8 @@ class GostOcspPolicyTest {
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
 
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, null);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert), OcspPolicy.STAPLING_OR_FETCH, null);
 
         tm.validateChainWithOcsp(chain, null, false);
     }
@@ -101,16 +106,16 @@ class GostOcspPolicyTest {
         int port = mockServer.getAddress().getPort();
 
         String ocspUri = "http://localhost:" + port + "/ocsp";
-        byte[] aiaExt = TlsTestHelper.buildAiaOcspExtension(ocspUri);
+        byte[] aiaExt = PkixCertTestHelper.buildAiaOcspExtension(ocspUri);
 
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         root.priv,
                         root.cert.getPublicKey(),
                         root.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         (String[]) null,
                         (byte[]) null,
@@ -135,8 +140,10 @@ class GostOcspPolicyTest {
 
         JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, fetcher);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert),
+                        OcspPolicy.STAPLING_OR_FETCH,
+                        fetcher);
 
         List<GostCertificate> chain = List.of(leaf.cert, root.cert);
         tm.validateChainWithOcsp(chain, null, false);
@@ -156,15 +163,15 @@ class GostOcspPolicyTest {
         int port = mockServer.getAddress().getPort();
 
         String ocspUri = "http://localhost:" + port + "/ocsp";
-        byte[] aiaExt = TlsTestHelper.buildAiaOcspExtension(ocspUri);
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        byte[] aiaExt = PkixCertTestHelper.buildAiaOcspExtension(ocspUri);
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         root.priv,
                         root.cert.getPublicKey(),
                         root.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         (String[]) null,
                         (byte[]) null,
@@ -189,8 +196,10 @@ class GostOcspPolicyTest {
 
         JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, fetcher);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert),
+                        OcspPolicy.STAPLING_OR_FETCH,
+                        fetcher);
         tm.setOcspCacheTtlMs(60_000);
 
         // Первый вызов — новый объект сертификата, fetch сходит на сервер
@@ -209,21 +218,76 @@ class GostOcspPolicyTest {
     }
 
     @Test
+    @DisplayName("Клиентский OCSP: два checkClientTrusted из одного DER -> один HTTP fetch")
+    void testClientOcspCacheSingleFetch() throws Exception {
+        mockServer = HttpServer.create(new InetSocketAddress(0), 0);
+        int port = mockServer.getAddress().getPort();
+        String ocspUri = "http://localhost:" + port + "/ocsp";
+        byte[] aiaExt = PkixCertTestHelper.buildAiaOcspExtension(ocspUri);
+        PkixCertTestHelper.CertBundle client =
+                PkixCertTestHelper.createCertSignedBy(
+                        params,
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "240501120000Z",
+                        "21060101120000Z",
+                        (String[]) null,
+                        (String[]) null,
+                        new byte[] {(byte) 0x80},
+                        new String[] {org.rssys.gost.pkix.GostOids.EXT_CLIENT_AUTH},
+                        false,
+                        null,
+                        aiaExt);
+
+        AtomicInteger counter = new AtomicInteger();
+        byte[] clientDer = client.cert.getEncoded();
+        mockServer.createContext(
+                "/ocsp",
+                ex -> {
+                    counter.incrementAndGet();
+                    byte[] req = ex.getRequestBody().readAllBytes();
+                    byte[] ocspResp = buildOcspResponseEchoingNonce(req, client, root);
+                    ex.sendResponseHeaders(200, ocspResp.length);
+                    ex.getResponseBody().write(ocspResp);
+                    ex.getResponseBody().close();
+                });
+        mockServer.start();
+
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
+        GostX509TrustManager tm =
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert),
+                        OcspPolicy.STAPLING_OR_FETCH,
+                        fetcher);
+        tm.setOcspCacheTtlMs(60_000);
+
+        // Клиентский fetch включается явно: при ClientOcspPolicy.OFF исходящих запросов нет.
+        tm.validateClientChain(
+                List.of(new GostCertificate(clientDer), root.cert), ClientOcspPolicy.REQUEST);
+        assertEquals(1, counter.get(), "первый клиентский вызов должен сделать HTTP-запрос");
+
+        tm.validateClientChain(
+                List.of(new GostCertificate(clientDer), root.cert), ClientOcspPolicy.REQUEST);
+        assertEquals(1, counter.get(), "повторный клиентский вызов должен попасть в кэш");
+    }
+
+    @Test
     @DisplayName("OCSP cache expiry — fetch повторяется после TTL")
     void testOcspCacheExpiry() throws Exception {
         mockServer = HttpServer.create(new InetSocketAddress(0), 0);
         int port = mockServer.getAddress().getPort();
 
         String ocspUri = "http://localhost:" + port + "/ocsp";
-        byte[] aiaExt = TlsTestHelper.buildAiaOcspExtension(ocspUri);
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        byte[] aiaExt = PkixCertTestHelper.buildAiaOcspExtension(ocspUri);
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         root.priv,
                         root.cert.getPublicKey(),
                         root.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         (String[]) null,
                         (byte[]) null,
@@ -248,8 +312,10 @@ class GostOcspPolicyTest {
 
         JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, fetcher);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert),
+                        OcspPolicy.STAPLING_OR_FETCH,
+                        fetcher);
         tm.setOcspCacheTtlMs(100);
 
         List<GostCertificate> chain1 = List.of(new GostCertificate(leafDer), root.cert);
@@ -273,14 +339,14 @@ class GostOcspPolicyTest {
     @DisplayName("Полная цепочка 3-deep, OCSP на leaf и промежуточный")
     void testIntermediateChainFull() throws Exception {
         // Создаём промежуточный CA, подписанный root
-        TlsTestHelper.CertBundle intermediate =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle intermediate =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         root.priv,
                         root.cert.getPublicKey(),
                         root.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         (String[]) null,
                         (String[]) null,
                         new byte[] {(byte) 0x04},
@@ -289,14 +355,14 @@ class GostOcspPolicyTest {
                         null);
 
         // Создаём leaf, подписанный промежуточным
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         intermediate.priv,
                         intermediate.cert.getPublicKey(),
                         intermediate.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         (String[]) null,
                         (byte[]) null,
@@ -304,36 +370,35 @@ class GostOcspPolicyTest {
                         false,
                         null);
 
-        // Diagnostic assertions (P1-P2)
         // DN издателя промежуточного совпадает с subject DN корневого
         assertArrayEquals(
                 intermediate.cert.getIssuerDnBytes(),
                 root.subjectDn,
-                "getIssuerDnBytes(intermediate) != subjectDN(root)");
+                "DN издателя промежуточного должен совпадать с subject DN корневого");
         // hashIssuerName(root) == digest(getIssuerDnBytes(intermediate))
         assertArrayEquals(
                 CertIdHasher.hashIssuerName(root.cert.getEncoded()),
                 Digest.digest256(intermediate.cert.getIssuerDnBytes()),
-                "hashIssuerName(root) != digest(getIssuerDnBytes(intermediate))");
+                "хэш имени издателя корневого должен совпадать с хэшем DN издателя промежуточного");
 
         // Стаплинг для leaf: OCSP-ответ, подписанный промежуточным
         byte[] leafOcsp =
-                TlsTestHelper.buildOcspResponse(
+                PkixCertTestHelper.buildOcspResponse(
                         leaf.cert.getSerialNumber(), intermediate.priv,
                         intermediate.cert.getPublicKey(), intermediate.subjectDn);
         leaf.cert.setOcspResponse(leafOcsp);
 
         // Стаплинг для промежуточного: OCSP-ответ, подписанный корневым
         byte[] intOcsp =
-                TlsTestHelper.buildOcspResponse(
+                PkixCertTestHelper.buildOcspResponse(
                         intermediate.cert.getSerialNumber(), root.priv,
                         root.cert.getPublicKey(), root.subjectDn);
         intermediate.cert.setOcspResponse(intOcsp);
 
         List<GostCertificate> chain = List.of(leaf.cert, intermediate.cert, root.cert);
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, null);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert), OcspPolicy.STAPLING_OR_FETCH, null);
         tm.validateChainWithOcsp(chain, null, false);
     }
 
@@ -341,14 +406,14 @@ class GostOcspPolicyTest {
     @DisplayName("Промежуточный без OCSP — best-effort не падает")
     void testIntermediateOcspMissing() throws Exception {
         // Создаём промежуточный CA без OCSP (нет stapling, нет AIA)
-        TlsTestHelper.CertBundle intermediate =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle intermediate =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         root.priv,
                         root.cert.getPublicKey(),
                         root.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         (String[]) null,
                         (String[]) null,
                         new byte[] {(byte) 0x04},
@@ -360,16 +425,16 @@ class GostOcspPolicyTest {
         mockServer = HttpServer.create(new InetSocketAddress(0), 0);
         int port = mockServer.getAddress().getPort();
         String ocspUri = "http://localhost:" + port + "/ocsp";
-        byte[] aiaExt = TlsTestHelper.buildAiaOcspExtension(ocspUri);
+        byte[] aiaExt = PkixCertTestHelper.buildAiaOcspExtension(ocspUri);
 
-        TlsTestHelper.CertBundle leaf =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         intermediate.priv,
                         intermediate.cert.getPublicKey(),
                         intermediate.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         (String[]) null,
                         (byte[]) null,
@@ -391,8 +456,10 @@ class GostOcspPolicyTest {
 
         JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
         GostX509TrustManager tm =
-                new GostX509TrustManager(
-                        root.cert.getPublicKey(), OcspPolicy.STAPLING_OR_FETCH, fetcher);
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert),
+                        OcspPolicy.STAPLING_OR_FETCH,
+                        fetcher);
 
         List<GostCertificate> chain = List.of(leaf.cert, intermediate.cert, root.cert);
         tm.validateChainWithOcsp(chain, null, false);
@@ -401,6 +468,128 @@ class GostOcspPolicyTest {
         assertFalse(
                 intermediate.cert.hasOcspResponse(),
                 "Промежуточный сертификат не должен иметь OCSP (нет AIA, нет stapling)");
+    }
+
+    @Test
+    @DisplayName("OCSP-ответ с чужой подписью не попадает в кэш: следующий handshake идёт в сеть")
+    void testOcspResponseWithForeignSignatureIsNotCached() throws Exception {
+        mockServer = HttpServer.create(new InetSocketAddress(0), 0);
+        int port = mockServer.getAddress().getPort();
+        byte[] aiaExt =
+                PkixCertTestHelper.buildAiaOcspExtension("http://localhost:" + port + "/ocsp");
+        PkixCertTestHelper.CertBundle leaf =
+                PkixCertTestHelper.createCertSignedBy(
+                        params,
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "240501120000Z",
+                        "21060101120000Z",
+                        new String[] {"localhost"},
+                        (String[]) null,
+                        (byte[]) null,
+                        (String[]) null,
+                        false,
+                        null,
+                        aiaExt);
+        // Ответ подписан чужим ключом: подпись не сойдётся с ключом доверенного издателя.
+        PkixCertTestHelper.CertBundle foreignRoot = PkixCertTestHelper.createRootCA(params);
+
+        AtomicInteger requests = new AtomicInteger();
+        mockServer.createContext(
+                "/ocsp",
+                ex -> {
+                    // Первый ответ подписан чужим ключом, дальше - легитимный responder.
+                    boolean foreignSigned = requests.getAndIncrement() == 0;
+                    byte[] req = ex.getRequestBody().readAllBytes();
+                    byte[] resp =
+                            buildOcspResponseEchoingNonce(
+                                    req, leaf, foreignSigned ? foreignRoot : root);
+                    ex.sendResponseHeaders(200, resp.length);
+                    ex.getResponseBody().write(resp);
+                    ex.getResponseBody().close();
+                });
+        mockServer.start();
+
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
+        GostX509TrustManager tm =
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert),
+                        OcspPolicy.STAPLING_OR_FETCH,
+                        fetcher);
+        tm.setOcspCacheTtlMs(60_000);
+        byte[] leafDer = leaf.cert.getEncoded();
+
+        assertThrows(
+                CertificateException.class,
+                () ->
+                        tm.validateChainWithOcsp(
+                                List.of(new GostCertificate(leafDer), root.cert), null, false),
+                "ответ с неверной подписью должен отклоняться");
+
+        // Свежий объект сертификата: иначе hasOcspResponse() сам замкнёт fetch, и тест не
+        // отличил бы отравленный кэш от чистого.
+        tm.validateChainWithOcsp(List.of(new GostCertificate(leafDer), root.cert), null, false);
+        assertEquals(
+                2,
+                requests.get(),
+                "после отказа ответ с чужой подписью не должен попасть в кэш: второй handshake идёт в сеть");
+    }
+
+    @Test
+    @DisplayName(
+            "Клиентский OCSP: OFF не делает исходящих запросов, REQUIRE без staple - отказ до сети")
+    void testClientFetchGatedByClientOcspPolicy() throws Exception {
+        mockServer = HttpServer.create(new InetSocketAddress(0), 0);
+        int port = mockServer.getAddress().getPort();
+        PkixCertTestHelper.CertBundle client =
+                PkixCertTestHelper.createCertSignedBy(
+                        params,
+                        root.priv,
+                        root.cert.getPublicKey(),
+                        root.subjectDn,
+                        "240501120000Z",
+                        "21060101120000Z",
+                        (String[]) null,
+                        (String[]) null,
+                        new byte[] {(byte) 0x80},
+                        new String[] {org.rssys.gost.pkix.GostOids.EXT_CLIENT_AUTH},
+                        false,
+                        null,
+                        PkixCertTestHelper.buildAiaOcspExtension(
+                                "http://localhost:" + port + "/ocsp"));
+        AtomicInteger requests = new AtomicInteger();
+        mockServer.createContext(
+                "/ocsp",
+                ex -> {
+                    requests.incrementAndGet();
+                    ex.sendResponseHeaders(500, -1);
+                    ex.close();
+                });
+        mockServer.start();
+
+        JdkHttpOcspFetcher fetcher = new JdkHttpOcspFetcher(Duration.ofSeconds(5), 65536, true);
+        GostX509TrustManager tm =
+                GostX509TrustManager.fromTrustAnchors(
+                        TrustAnchors.ofCertificate(root.cert),
+                        OcspPolicy.STAPLING_OR_FETCH,
+                        fetcher);
+        byte[] clientDer = client.cert.getEncoded();
+
+        // OFF: сертификат принимается без OCSP, сервер по AIA клиента не ходит.
+        tm.validateClientChain(
+                List.of(new GostCertificate(clientDer), root.cert), ClientOcspPolicy.OFF);
+        assertEquals(0, requests.get(), "при OFF исходящих OCSP-запросов быть не должно");
+
+        // REQUIRE без staple: отказ происходит до сетевого запроса.
+        assertThrows(
+                CertificateException.class,
+                () ->
+                        tm.validateClientChain(
+                                List.of(new GostCertificate(clientDer), root.cert),
+                                ClientOcspPolicy.REQUIRE),
+                "REQUIRE без присланного staple должен отклонять сертификат");
+        assertEquals(0, requests.get(), "отказ по REQUIRE не должен доходить до сети");
     }
 
     // ========================================================================
@@ -416,11 +605,13 @@ class GostOcspPolicyTest {
      * @param signer     bundle подписанта ответа (ключ + issuer DN)
      */
     private static byte[] buildOcspResponseEchoingNonce(
-            byte[] requestDer, TlsTestHelper.CertBundle target, TlsTestHelper.CertBundle signer)
+            byte[] requestDer,
+            PkixCertTestHelper.CertBundle target,
+            PkixCertTestHelper.CertBundle signer)
             throws java.io.IOException {
-        byte[] nonce = TlsTestHelper.extractOcspRequestNonce(requestDer);
+        byte[] nonce = PkixCertTestHelper.extractOcspRequestNonce(requestDer);
         try {
-            return TlsTestHelper.buildOcspResponseWithNonce(
+            return PkixCertTestHelper.buildOcspResponseWithNonce(
                     target.cert.getSerialNumber(),
                     signer.priv,
                     signer.cert.getPublicKey(),
@@ -431,14 +622,14 @@ class GostOcspPolicyTest {
         }
     }
 
-    private static TlsTestHelper.CertBundle createLeaf() throws Exception {
-        return TlsTestHelper.createCertSignedBy(
+    private static PkixCertTestHelper.CertBundle createLeaf() throws Exception {
+        return PkixCertTestHelper.createCertSignedBy(
                 params,
                 root.priv,
                 root.cert.getPublicKey(),
                 root.subjectDn,
                 "240501120000Z",
-                "290501120000Z",
+                "21060101120000Z",
                 new String[] {"localhost"},
                 null,
                 (String[]) null,

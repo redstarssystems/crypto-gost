@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 
 /**
  * Fuzz-тест для {@link GostCsrParser#fromDer}.
@@ -13,9 +14,6 @@ import com.code_intelligence.jazzer.junit.FuzzTest;
  * ПОЧЕМУ ловим RuntimeException: конструктор не валидирует границы
  * DER-массива. На битом DER может выбросить любое непроверяемое исключение
  * (AIOOBE, IllegalArgumentException), как документировано в Javadoc класса.
- * <p>
- * ПОЧЕМУ rethrowIfBug локально, а не import из org.rssys.gost.util:
- * crypto-gost-core не публикует test-jar — кросс-модульный импорт невозможен.
  */
 class GostCsrParserFuzzTest {
 
@@ -26,20 +24,7 @@ class GostCsrParserFuzzTest {
         try {
             GostCsrParser.fromDer(der);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    /**
-     * Перебрасывает RuntimeException, если это баг (AIOOBE, NPE,
-     * NegativeArraySizeException). Иначе — проглатывает.
-     */
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

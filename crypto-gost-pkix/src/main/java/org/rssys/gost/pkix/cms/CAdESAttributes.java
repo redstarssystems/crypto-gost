@@ -44,12 +44,12 @@ public final class CAdESAttributes {
         int keySize = signerCert.getKeySize();
         String digestOid = GostSignatureHelper.keySizeToDigestOid(keySize);
 
-        // hashAlgorithm: AlgorithmIdentifier с NULL-параметрами.
-        // Правило NULL присуще самому OID id-tc26-gost3411-2012-256/512
-        // (Р 1323565.1.025 §4). Эмпирика: эталонный openssl gost-engine кодирует
-        // ESSCertIDv2.hashAlgorithm с NULL (asn1parse: NULL сразу за OID Стрибога);
-        // КриптоПро -cadesbes принимает эту форму. Единообразно с digestAlgorithm.
-        byte[] hashAlgId = CmsAlgorithmIdentifier.encode(digestOid);
+        // hashAlgorithm: AlgorithmIdentifier только с OID, без NULL.
+        // КриптоПро кодирует ESSCertIDv2.hashAlgorithm без параметров и строго
+        // проверяет штамп времени; лишний NULL приводил к отказу
+        // «В сообщении не найден действительный штамп времени на подпись».
+        // Декодер принимает оба варианта, поэтому совместимость сохраняется.
+        byte[] hashAlgId = CmsAlgorithmIdentifier.encodeOnlyOid(digestOid);
 
         // certHash: hash(certificate DER)
         byte[] certHash = GostSignatureHelper.digestByOid(digestOid, certDer);

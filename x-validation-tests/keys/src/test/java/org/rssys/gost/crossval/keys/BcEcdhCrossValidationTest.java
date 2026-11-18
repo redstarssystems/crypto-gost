@@ -120,7 +120,7 @@ class BcEcdhCrossValidationTest {
     }
 
     private static ECPublicKeyParameters toBcPub(PublicKeyParameters gostPub, ECDomainParameters domain) {
-        ECPoint q = gostPub.getQ().normalize();
+        ECPoint q = gostPub.getQ();
         org.bouncycastle.math.ec.ECPoint bcQ = domain.getCurve().createPoint(q.getX(), q.getY());
         return new ECPublicKeyParameters(bcQ, domain);
     }

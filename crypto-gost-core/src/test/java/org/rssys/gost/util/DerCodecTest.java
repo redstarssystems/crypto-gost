@@ -96,7 +96,7 @@ class DerCodecTest {
     // ========================================================================
 
     @Test
-    @DisplayName("Roundtrip INTEGER: encodeInteger -> parseInteger")
+    @DisplayName("Обратное преобразование INTEGER: encodeInteger -> parseInteger")
     void roundtripInteger() {
         BigInteger[] values = {
             BigInteger.ZERO,
@@ -118,7 +118,7 @@ class DerCodecTest {
     // ========================================================================
 
     @Test
-    @DisplayName("Roundtrip BIT STRING: encodeBitString -> parseBitString")
+    @DisplayName("Обратное преобразование BIT STRING: encodeBitString -> parseBitString")
     void roundtripBitString() {
         byte[][] inputs = {
             new byte[] {}, new byte[] {0x01}, new byte[] {0x00, 0x01, 0x02, 0x03},
@@ -136,7 +136,7 @@ class DerCodecTest {
     // ========================================================================
 
     @Test
-    @DisplayName("Roundtrip SEQUENCE: encodeSequence -> parseSequenceContents")
+    @DisplayName("Обратное преобразование SEQUENCE: encodeSequence -> parseSequenceContents")
     void roundtripSequence() {
         byte[] elem1 = DerCodec.encodeInteger(42);
         byte[] elem2 = DerCodec.encodeOid("1.2.643.7.1.1.1.1");
@@ -200,21 +200,21 @@ class DerCodecTest {
     @Test
     @DisplayName("decodeTag: корректный разбор однобайтовых тегов")
     void decodeTagValidSingleByte() {
-        int[][] cases = {
-            {0x02, 1, 0x02}, // INTEGER
-            {0x04, 1, 0x04}, // OCTET STRING
-            {0x06, 1, 0x06}, // OID
-            {0x30, 1, 0x30}, // SEQUENCE
-            {0x31, 1, 0x31}, // SET
-            {0xA0, 1, 0xA0}, // CTX CONSTRUCTED [0]
-            {0x80, 1, 0x80}, // CTX PRIMITIVE [0]
-            {0x1E, 1, 0x1E}, // UNIVERSAL 30 (максимальный однобайтовый тег)
+        int[] tags = {
+            0x02, // INTEGER
+            0x04, // OCTET STRING
+            0x06, // OID
+            0x30, // SEQUENCE
+            0x31, // SET
+            0xA0, // CTX CONSTRUCTED [0]
+            0x80, // CTX PRIMITIVE [0]
+            0x1E, // UNIVERSAL 30 (максимальный однобайтовый тег)
         };
-        for (int[] c : cases) {
-            byte[] data = {(byte) c[0]};
-            int[] result = DerCodec.decodeTag(data, 0);
-            assertEquals(c[2], result[0], "tag value для 0x" + Integer.toHexString(c[0]));
-            assertEquals(c[1], result[1], "tag byte count для 0x" + Integer.toHexString(c[0]));
+        for (int tag : tags) {
+            assertEquals(
+                    tag,
+                    DerCodec.decodeTag(new byte[] {(byte) tag}, 0),
+                    "значение тега 0x" + Integer.toHexString(tag));
         }
     }
 
@@ -423,6 +423,66 @@ class DerCodecTest {
                 new byte[] {(byte) 0xA1, (byte) 0x80, 0x04, 0x01, 0x42, 0x00, 0x00},
                 parts[0],
                 "Часть 0: EXPLICIT [1] с EOC");
+    }
+
+    @Test
+    @DisplayName("parseSetContents и parseSequenceContents: сообщения об ошибках называют свой тип")
+    void parseContentsErrorMessagesNameTheirType() {
+        // длина содержимого 5, а данных после заголовка только 1 байт
+        byte[] truncatedSet = {0x31, 0x05, 0x04};
+        byte[] truncatedSequence = {0x30, 0x05, 0x04};
+        // дочерний элемент заявляет 9 байт при 1 оставшемся в SET/SEQUENCE
+        byte[] badChildSet = {0x31, 0x03, 0x04, 0x09, 0x00};
+        byte[] badChildSequence = {0x30, 0x03, 0x04, 0x09, 0x00};
+
+        assertTrue(
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> DerCodec.parseSetContents(truncatedSet, 0))
+                        .getMessage()
+                        .startsWith("SET at offset 0"),
+                "ошибка длины SET называет SET");
+        assertTrue(
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> DerCodec.parseSequenceContents(truncatedSequence, 0))
+                        .getMessage()
+                        .startsWith("SEQUENCE at offset 0"),
+                "ошибка длины SEQUENCE называет SEQUENCE");
+        assertTrue(
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> DerCodec.parseSetContents(badChildSet, 0))
+                        .getMessage()
+                        .startsWith("SET at offset 0"),
+                "ошибка дочернего элемента SET называет SET");
+        assertTrue(
+                assertThrows(
+                                IllegalArgumentException.class,
+                                () -> DerCodec.parseSequenceContents(badChildSequence, 0))
+                        .getMessage()
+                        .startsWith("SEQUENCE at offset 0"),
+                "ошибка дочернего элемента SEQUENCE называет SEQUENCE");
+    }
+
+    @Test
+    @DisplayName("parseSetContents не принимает SEQUENCE, parseSequenceContents не принимает SET")
+    void parseContentsRejectsOtherType() {
+        byte[] set = {0x31, 0x03, 0x04, 0x01, 0x42};
+        byte[] sequence = {0x30, 0x03, 0x04, 0x01, 0x42};
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.parseSetContents(sequence, 0),
+                "SEQUENCE не разбирается как SET");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> DerCodec.parseSequenceContents(set, 0),
+                "SET не разбирается как SEQUENCE");
+        assertEquals(1, DerCodec.parseSetContents(set, 0).length, "SET с одним элементом");
+        assertEquals(
+                1,
+                DerCodec.parseSequenceContents(sequence, 0).length,
+                "SEQUENCE с одним элементом");
     }
 
     // ========================================================================
@@ -759,7 +819,7 @@ class DerCodecTest {
     // ========================================================================
 
     @Test
-    @DisplayName("parseOid: INDEFINITE_LENGTH -> reject, а не усечённый OID")
+    @DisplayName("parseOid: INDEFINITE_LENGTH -> отказ, а не усечённый OID")
     void parseOidThrowsOnIndefiniteLength() {
         // Ранее: contentEnd = contentOff-1 -> цикл arc не выполнялся -> тихо возвращался
         // усечённый OID. OID матчит algorithm/extension — мис-парсинг security-значим.
@@ -771,7 +831,7 @@ class DerCodecTest {
     }
 
     @Test
-    @DisplayName("parseBoolean: INDEFINITE_LENGTH -> reject, а не чтение постороннего байта")
+    @DisplayName("parseBoolean: INDEFINITE_LENGTH -> отказ, а не чтение постороннего байта")
     void parseBooleanThrowsOnIndefiniteLength() {
         // Ранее: читался data[contentOff] без проверки длины — байт следующей структуры
         // интерпретировался как значение (critical/cA-флаги BasicConstraints).
@@ -783,7 +843,7 @@ class DerCodecTest {
     }
 
     @Test
-    @DisplayName("parseInteger: INDEFINITE_LENGTH -> reject")
+    @DisplayName("parseInteger: INDEFINITE_LENGTH -> отказ")
     void parseIntegerThrowsOnIndefiniteLength() {
         byte[] data = {0x02, (byte) 0x80, 0x01, 0x00, 0x00};
         assertThrows(
@@ -793,7 +853,7 @@ class DerCodecTest {
     }
 
     @Test
-    @DisplayName("parseOctetString: INDEFINITE_LENGTH -> reject")
+    @DisplayName("parseOctetString: INDEFINITE_LENGTH -> отказ")
     void parseOctetStringThrowsOnIndefiniteLength() {
         byte[] data = {0x04, (byte) 0x80, 0x01, 0x02, 0x00, 0x00};
         assertThrows(
@@ -803,7 +863,7 @@ class DerCodecTest {
     }
 
     @Test
-    @DisplayName("parseBitString: INDEFINITE_LENGTH -> reject")
+    @DisplayName("parseBitString: INDEFINITE_LENGTH -> отказ")
     void parseBitStringThrowsOnIndefiniteLength() {
         byte[] data = {0x03, (byte) 0x80, 0x00, 0x01, 0x00, 0x00};
         assertThrows(
@@ -817,7 +877,7 @@ class DerCodecTest {
     // ========================================================================
 
     @Test
-    @DisplayName("collectImplicitOctets: primitive OCTET STRING (0x04) definite")
+    @DisplayName("collectImplicitOctets: простой OCTET STRING (0x04) с определённой длиной")
     void collectImplicitOctetsPrimitive() {
         byte[] data = {0x04, 0x03, 0x0A, 0x0B, 0x0C};
         assertArrayEquals(
@@ -890,7 +950,7 @@ class DerCodecTest {
     }
 
     @Test
-    @DisplayName("collectImplicitOctets: constructed [0] definite-length")
+    @DisplayName("collectImplicitOctets: составной [0] с определённой длиной")
     void collectImplicitOctetsContextDefinite() {
         // A0 06 04 04 <4 байта> — constructed context [0] с definite длиной
         byte[] data = {(byte) 0xA0, 0x06, 0x04, 0x04, 0x01, 0x02, 0x03, 0x04};

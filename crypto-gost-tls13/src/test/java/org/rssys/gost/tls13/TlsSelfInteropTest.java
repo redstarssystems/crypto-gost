@@ -11,6 +11,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -46,12 +48,12 @@ class TlsSelfInteropTest {
     private static final class MtlsCerts {
         final GostCertificate cert;
         final PrivateKeyParameters priv;
-        final PublicKeyParameters caPub;
+        final GostCertificate caCert;
 
-        MtlsCerts(GostCertificate cert, PrivateKeyParameters priv, PublicKeyParameters caPub) {
+        MtlsCerts(GostCertificate cert, PrivateKeyParameters priv, GostCertificate caCert) {
             this.cert = cert;
             this.priv = priv;
-            this.caPub = caPub;
+            this.caCert = caCert;
         }
     }
 
@@ -59,12 +61,12 @@ class TlsSelfInteropTest {
     // каждая сторона доверяет сертификату пира без external CA
     private static PlainCerts createPlainCerts() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle b = TlsTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle b = PkixCertTestHelper.createCertWithKey(params);
         return new PlainCerts(b.cert, b.priv);
     }
 
     // Для mTLS нужен единый CA: сертификаты сервера и клиента подписываются
-    // одним корнем, обе стороны валидируют цепочку через caPublicKey.
+    // одним корнем, обе стороны валидируют цепочку по сертификату-якорю.
     // createMtlsCertsFor возвращает entity cert + priv + общий caPub.
     // createMtlsCertsPair однократно создаёт общий CA и возвращает оба entity certа.
     private static final class MtlsCertPair {
@@ -81,10 +83,11 @@ class TlsSelfInteropTest {
             ECParameters params,
             PrivateKeyParameters caPriv,
             PublicKeyParameters caPub,
+            GostCertificate caCert,
             byte[] caDn)
             throws Exception {
-        TlsTestHelper.CertBundle entity =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle entity =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         caPriv,
                         caPub,
@@ -96,16 +99,16 @@ class TlsSelfInteropTest {
                         null,
                         false,
                         null);
-        return new MtlsCerts(entity.cert, entity.priv, caPub);
+        return new MtlsCerts(entity.cert, entity.priv, caCert);
     }
 
     private static MtlsCertPair createMtlsCertsPair() throws Exception {
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle ca = TlsTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle ca = PkixCertTestHelper.createRootCA(params);
         PublicKeyParameters caPub = ca.cert.getPublicKey();
         byte[] caDn = ca.subjectDn;
-        MtlsCerts server = createMtlsCertsFor(params, ca.priv, caPub, caDn);
-        MtlsCerts client = createMtlsCertsFor(params, ca.priv, caPub, caDn);
+        MtlsCerts server = createMtlsCertsFor(params, ca.priv, caPub, ca.cert, caDn);
+        MtlsCerts client = createMtlsCertsFor(params, ca.priv, caPub, ca.cert, caDn);
         return new MtlsCertPair(server, client);
     }
 
@@ -142,7 +145,9 @@ class TlsSelfInteropTest {
                                                                 Collections.singletonList(
                                                                         sCerts.cert),
                                                                 sCerts.priv)
-                                                        .withCaPublicKey(sCerts.caPub);
+                                                        .needClientAuth(
+                                                                TrustAnchors.ofCertificate(
+                                                                        sCerts.caCert));
                                     } else {
                                         sc =
                                                 new TlsServerConfig(
@@ -183,15 +188,18 @@ class TlsSelfInteropTest {
                                         TlsClientConfig cc =
                                                 new TlsClientConfig(
                                                                 cs,
-                                                                mTls
-                                                                        ? cCerts.caPub
-                                                                        : plain.cert.getPublicKey())
+                                                                TrustAnchors.ofCertificate(
+                                                                        mTls
+                                                                                ? cCerts.caCert
+                                                                                : plain.cert))
                                                         .withoutHostnameVerification();
                                         if (mTls) {
                                             cc =
                                                     cc.withClientCertificateChain(cCerts.cert)
                                                             .withClientPrivateKey(cCerts.priv)
-                                                            .withCaPublicKey(cCerts.caPub);
+                                                            .withTrustAnchors(
+                                                                    TrustAnchors.ofCertificate(
+                                                                            cCerts.caCert));
                                         }
                                         TlsSession client = TlsSession.createClient(cc, ct);
 
@@ -231,7 +239,7 @@ class TlsSelfInteropTest {
     @DisplayName("L + non-mTLS: самоподписанный сертификат, полный handshake + E2E write/read")
     void testL_NonMtls() throws Exception {
         TlsCiphersuite cs = TlsCiphersuite.byId(0xC103);
-        assert cs != null : "L ciphersuite not found";
+        assertNotNull(cs, "набор шифров L не найден");
         runSelfInterop(cs, false);
     }
 
@@ -239,7 +247,7 @@ class TlsSelfInteropTest {
     @DisplayName("L + mTLS: CA-подписанные сертификаты, двухсторонняя аутентификация")
     void testL_Mtls() throws Exception {
         TlsCiphersuite cs = TlsCiphersuite.byId(0xC103);
-        assert cs != null : "L ciphersuite not found";
+        assertNotNull(cs, "набор шифров L не найден");
         runSelfInterop(cs, true);
     }
 
@@ -250,7 +258,7 @@ class TlsSelfInteropTest {
     @DisplayName("S + non-mTLS: самоподписанный сертификат, полный handshake + E2E write/read")
     void testS_NonMtls() throws Exception {
         TlsCiphersuite cs = TlsCiphersuite.byId(0xC105);
-        assert cs != null : "S ciphersuite not found";
+        assertNotNull(cs, "набор шифров S не найден");
         runSelfInterop(cs, false);
     }
 
@@ -258,7 +266,7 @@ class TlsSelfInteropTest {
     @DisplayName("S + mTLS: CA-подписанные сертификаты, двухсторонняя аутентификация")
     void testS_Mtls() throws Exception {
         TlsCiphersuite cs = TlsCiphersuite.byId(0xC105);
-        assert cs != null : "S ciphersuite not found";
+        assertNotNull(cs, "набор шифров S не найден");
         runSelfInterop(cs, true);
     }
 
@@ -266,7 +274,7 @@ class TlsSelfInteropTest {
     @DisplayName("L + non-mTLS + cross-group: клиент GC256A / сервер GC512C")
     void testL_NonMtls_CrossGroup() throws Exception {
         TlsCiphersuite cs = TlsCiphersuite.byId(0xC103);
-        assert cs != null : "L ciphersuite not found";
+        assertNotNull(cs, "набор шифров L не найден");
         // Сертификаты GC256A, а ECDHE — на GC512C (RFC 8446: независимы)
         runSelfInterop(cs, false, TlsConstants.GRP_GC512C);
     }

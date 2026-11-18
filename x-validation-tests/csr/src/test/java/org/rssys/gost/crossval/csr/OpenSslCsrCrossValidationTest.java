@@ -13,6 +13,7 @@ import org.rssys.gost.pkix.cert.GostCsrBuilder;
 import org.rssys.gost.pkix.cert.GostCsrParser;
 import org.rssys.gost.pkix.cert.GostExtensionParser;
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.util.DerCodec;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -268,6 +269,95 @@ class OpenSslCsrCrossValidationTest {
                     "Вывод openssl должен содержать 'Requested Extensions'");
             assertTrue(output.contains("libsan.example.com"),
                     "Вывод openssl должен содержать SAN dNSName 'libsan.example.com'");
+            return null;
+        });
+    }
+
+    // ========================================================================
+    // Сценарий 7: библиотека строит CSR с challengePassword и произвольным атрибутом
+    // ========================================================================
+
+    @Test
+    @EnabledIf("opensslAvailable")
+    @DisplayName("Сценарий 7: CSR с challengePassword и атрибутом -> openssl req -verify -text")
+    void testLibraryCsrWithAttributesVerifiedByOpensslText() throws Exception {
+        TempDirUtils.withTempDir("csr-libattr-", dir -> {
+            KeyPair kp = KeyGenerator.generateKeyPair(PARAMS_256);
+
+            // unstructuredName (PKCS#9 §5.2.1) — известный OpenSSL атрибут, он печатает его по имени
+            byte[] csrDer =
+                    GostCsrBuilder.create("CN=LibAttrTest", kp.getPublic())
+                            .sanDns("libattr.example.com")
+                            .attribute("1.2.840.113549.1.9.2", DerCodec.encodeUTF8String("Hello"))
+                            .sign(kp.getPrivate(), "Secret123".toCharArray());
+
+            Path csrPath = dir.resolve("libattr.der");
+            Files.write(csrPath, csrDer);
+
+            String[] cmd = CrossValUtils.concat(
+                    new String[]{opensslBinary(), "req", "-verify", "-text", "-noout"},
+                    engineFlags(),
+                    new String[]{"-in", csrPath.toString(), "-inform", "DER"}
+            );
+            String output = OpenSslChecker.runAndCapture(cmd);
+            assertTrue(output.contains("challengePassword"),
+                    "Вывод openssl должен содержать атрибут challengePassword");
+            assertTrue(output.contains("Secret123"),
+                    "Вывод openssl должен содержать значение пароля");
+            assertTrue(output.contains("unstructuredName") && output.contains("Hello"),
+                    "Вывод openssl должен содержать произвольный атрибут");
+            assertTrue(output.contains("libattr.example.com"),
+                    "extensionRequest не должен потеряться рядом с другими атрибутами");
+            return null;
+        });
+    }
+
+    // ========================================================================
+    // Сценарий 8: openssl строит CSR с challengePassword -> библиотека читает
+    // ========================================================================
+
+    @Test
+    @EnabledIf("opensslAvailable")
+    @DisplayName("Сценарий 8: openssl req с challengePassword -> библиотека читает атрибуты")
+    void testOpensslCsrWithChallengePasswordParsed() throws Exception {
+        TempDirUtils.withTempDir("csr-osslattr-", dir -> {
+            Path keyPath = dir.resolve("attrkey.pem");
+            genKey(dir, keyPath, PARAMS_256);
+
+            Path config = dir.resolve("req.cnf");
+            Files.writeString(config, String.join("\n",
+                    "[req]",
+                    "prompt = no",
+                    "distinguished_name = dn",
+                    "attributes = attrs",
+                    "[dn]",
+                    "CN = OsslPw",
+                    "[attrs]",
+                    "challengePassword = Secret456",
+                    "unstructuredName = Hello",
+                    ""));
+
+            Path csrPath = dir.resolve("osslattr.der");
+            String[] cmd = CrossValUtils.concat(
+                    new String[]{opensslBinary(), "req", "-new"},
+                    engineFlags(),
+                    new String[]{"-key", keyPath.toString(),
+                            "-out", csrPath.toString(),
+                            "-outform", "DER",
+                            "-config", config.toString()}
+            );
+            OpenSslChecker.exec(cmd);
+
+            GostCsrParser parsed = GostCsrParser.fromDer(Files.readAllBytes(csrPath));
+            assertTrue(parsed.verifySelf(), "proof-of-possession: CSR должен быть самоподписан");
+            assertEquals(2, parsed.getAttributes().size());
+            assertEquals("Secret456", new String(parsed.getChallengePassword().orElseThrow()));
+            // OpenSSL кодирует значение как UTF8String, а не PrintableString
+            int tag = parsed.getAttribute("1.2.840.113549.1.9.7").orElseThrow()
+                    .valuesDer().get(0)[0] & 0xFF;
+            assertEquals(DerCodec.TAG_UTF8_STRING, tag, "ожидался UTF8String");
+            assertTrue(parsed.getAttribute("1.2.840.113549.1.9.2").isPresent(),
+                    "произвольный атрибут должен быть доступен через getAttributes()");
             return null;
         });
     }

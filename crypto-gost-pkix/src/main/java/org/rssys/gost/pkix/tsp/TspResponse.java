@@ -11,14 +11,19 @@ import java.util.List;
 import java.util.Objects;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostDerParser;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.cms.CmsContentInfo;
 import org.rssys.gost.pkix.cms.CmsSignedDataVerifier;
-import org.rssys.gost.pkix.cms.MultiSignerVerifiedData;
+import org.rssys.gost.pkix.cms.Revocation;
 import org.rssys.gost.pkix.cms.SignerResult;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
+import org.rssys.gost.pkix.cms.SignerSelection;
+import org.rssys.gost.pkix.cms.VerifiedSignedData;
+import org.rssys.gost.pkix.cms.VerifyOptions;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Разбор и валидация TimeStampResp (RFC 3161 §2.4.2).
@@ -94,7 +99,20 @@ public final class TspResponse {
      */
     public static TspResponse fromDer(byte[] tspResponseDer) throws PkixException {
         Objects.requireNonNull(tspResponseDer, "tspResponseDer must not be null");
+        // Ответ приходит от недоверенной TSA: ошибка DER-парсера (IllegalArgumentException) - это
+        // битый вход, а не программная ошибка, поэтому наружу выходит PkixException, как и у
+        // CmsContentInfo.decode. Перехват узкий: NPE и прочие ошибки программы не маскируются.
+        try {
+            return parseResponse(tspResponseDer);
+        } catch (IllegalArgumentException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "Malformed TimeStampResp: " + e.getMessage(),
+                    e);
+        }
+    }
 
+    private static TspResponse parseResponse(byte[] tspResponseDer) throws PkixException {
         // TimeStampResp ::= SEQUENCE { status PKIStatusInfo, timeStampToken TimeStampToken OPTIONAL
         // }
         byte[][] parts = DerCodec.parseSequenceContents(tspResponseDer, 0);
@@ -110,7 +128,9 @@ public final class TspResponse {
             throw new PkixException(
                     PkixException.Reason.PARSE_ERROR, "PKIStatusInfo has no status");
         }
-        int status = DerCodec.parseInteger(statusParts[0], 0).intValue();
+        // PKIStatus - небольшое неотрицательное число: знак и неминимальная запись отвергаются
+        int status =
+                GostDerParser.readStrictNonNegativeInt(statusParts[0], 0, statusParts[0].length)[0];
         String statusString = null;
         int idx = 1;
         // statusString: RFC 4210 определяет PKIFreeText как SEQUENCE OF UTF8String,
@@ -172,6 +192,17 @@ public final class TspResponse {
      * Извлекает TSTInfo из TimeStampToken (CMS SignedData с eContent id-ct-TSTInfo).
      */
     private static TstInfo parseTstInfo(byte[] timeStampTokenDer) throws PkixException {
+        try {
+            return parseTstInfoChecked(timeStampTokenDer);
+        } catch (IllegalArgumentException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "Malformed TimeStampToken: " + e.getMessage(),
+                    e);
+        }
+    }
+
+    private static TstInfo parseTstInfoChecked(byte[] timeStampTokenDer) throws PkixException {
         CmsContentInfo contentInfo = CmsContentInfo.decode(timeStampTokenDer);
         if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
             throw new PkixException(
@@ -199,28 +230,38 @@ public final class TspResponse {
             throw new PkixException(
                     PkixException.Reason.OTHER, "TimeStampToken encapContentInfo missing eContent");
         }
+        // EncapsulatedContentInfo токена - ровно eContentType и eContent; третий элемент не
+        // читается и не должен молча приниматься
+        if (encapParts.length > 2) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "TimeStampToken encapContentInfo has unexpected extra elements");
+        }
 
-        // eContent: [0] EXPLICIT с OCTET STRING внутри
-        byte[] eContentField = encapParts[1];
-        // Снимаем обёртку [0] EXPLICIT
-        int[] outerLen = DerCodec.decodeLength(eContentField, 1);
-        int innerOff = 1 + outerLen[1];
-        byte[] octetField =
-                java.util.Arrays.copyOfRange(eContentField, innerOff, eContentField.length);
-        // Снимаем обёртку OCTET STRING (примитивная 0x04 или BER-constructed 0x24)
-        int octetTag = octetField[0] & 0xFF;
-        byte[] tstInfoDer;
-        if (octetTag == DerCodec.TAG_OCTET_STRING_CONSTRUCTED) {
-            int[] conLen = DerCodec.decodeLength(octetField, 1);
-            int innerOff2 = 1 + conLen[1];
-            tstInfoDer = DerCodec.parseOctetString(octetField, innerOff2);
-        } else if (octetTag == DerCodec.TAG_OCTET_STRING) {
-            tstInfoDer = DerCodec.parseOctetString(octetField, 0);
-        } else {
+        // Токен с иным типом содержимого не должен читаться как TSTInfo: тип сверяется до
+        // разбора eContent (RFC 3161 §2.4.2, id-ct-TSTInfo)
+        String eContentType = DerCodec.parseOid(encapParts[0], 0);
+        if (!GostOids.TST_INFO.equals(eContentType)) {
             throw new PkixException(
                     PkixException.Reason.OTHER,
-                    "Unexpected tag in eContent: 0x" + Integer.toHexString(octetTag));
+                    "TimeStampToken eContentType is not id-ct-TSTInfo: " + eContentType);
         }
+
+        // eContent: [0] EXPLICIT { OCTET STRING }. Токены КриптоПро приходят в BER (неопределённая
+        // длина, составной OCTET STRING из сегментов): сегменты склеиваются, как и при проверке
+        // подписи в CmsSignedDataVerifier, чтобы читалось ровно то, что подписано. Пустой или
+        // усечённый элемент, хвост и чужой тег дают IllegalArgumentException (PARSE_ERROR).
+        int explicitTag = encapParts[1][0] & 0xFF;
+        if (explicitTag != DerCodec.TAG_CTX_CONSTRUCTED_0) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "Unexpected tag in eContent: 0x" + Integer.toHexString(explicitTag));
+        }
+        if (GostDerParser.isEmptyConstructed(encapParts[1])) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR, "TimeStampToken eContent is empty");
+        }
+        byte[] tstInfoDer = DerCodec.collectImplicitOctets(encapParts[1], 0);
 
         // Парсим TSTInfo
         return parseTstInfoBody(tstInfoDer);
@@ -279,19 +320,24 @@ public final class TspResponse {
             if (aIdx < accParts.length
                     && accParts[aIdx].length > 0
                     && (accParts[aIdx][0] & 0xFF) == DerCodec.TAG_INTEGER) {
-                accuracySec = DerCodec.parseInteger(accParts[aIdx], 0).intValue();
+                // Точность отдаётся наружу как число: отрицательное значение и обрезка через
+                // intValue() не допускаются
+                accuracySec =
+                        GostDerParser.readStrictNonNegativeInt(
+                                accParts[aIdx], 0, accParts[aIdx].length)[0];
                 aIdx++;
             }
             // millis: [0] IMPLICIT INTEGER (примитивный контекстный тег 0x80)
             if (aIdx < accParts.length
                     && accParts[aIdx].length > 0
                     && (accParts[aIdx][0] & 0xFF) == DerCodec.TAG_CTX_PRIMITIVE_0) {
-                int[] millisLen = DerCodec.decodeLength(accParts[aIdx], 1);
-                int millisOff = 1 + millisLen[1];
                 byte[] millisVal =
-                        java.util.Arrays.copyOfRange(
-                                accParts[aIdx], millisOff, millisOff + millisLen[0]);
-                accuracyMillis = new BigInteger(millisVal).intValue();
+                        GostDerParser.exactTlvContent(
+                                accParts[aIdx], DerCodec.TAG_CTX_PRIMITIVE_0, "accuracy millis");
+                byte[] millisInteger = DerCodec.encodeTlv(DerCodec.TAG_INTEGER, millisVal);
+                accuracyMillis =
+                        GostDerParser.readStrictNonNegativeInt(
+                                millisInteger, 0, millisInteger.length)[0];
                 aIdx++;
             }
             // micros: [1] IMPLICIT INTEGER — игнорируем
@@ -367,8 +413,9 @@ public final class TspResponse {
      * @param expectedHash       ожидаемый хэш (для сверки с messageImprint)
      * @param expectedHashAlgOid OID алгоритма хэширования
      * @param expectedNonce      ожидаемый nonce (null — не проверять)
-     * @param tsaTrustedCerts    доверенные корневые сертификаты TSA
+     * @param tsaTrustedCerts    доверенные корневые сертификаты TSA (не пустой)
      * @throws PkixException при любой ошибке верификации
+     * @throws IllegalArgumentException если {@code tsaTrustedCerts} пуст или содержит null
      */
     public void verify(
             byte[] expectedHash,
@@ -376,23 +423,49 @@ public final class TspResponse {
             BigInteger expectedNonce,
             GostCertificate... tsaTrustedCerts)
             throws PkixException {
+        verify(expectedHash, expectedHashAlgOid, expectedNonce, List.of(), tsaTrustedCerts);
+    }
+
+    /**
+     * Как {@link #verify(byte[], String, BigInteger, GostCertificate...)}, но с пулом
+     * недоверенных кандидатов для поиска сертификата TSA и промежуточных УЦ.
+     *
+     * <p>Нужен для токенов КриптоПро: цепочка TSA лежит не в самом токене, а во
+     * вложенном certificate-values соседнего штампа. Кандидаты доверия не создают:
+     * якорями служат только {@code tsaTrustedCerts}. Если сертификат TSA найден
+     * только среди кандидатов, он обязан быть назван в {@code signingCertificateV2}
+     * токена (совпавший certHash), иначе отказ.</p>
+     *
+     * @param untrustedCandidates недоверенные сертификаты (не null, без null внутри)
+     * @throws IllegalArgumentException если {@code tsaTrustedCerts} пуст либо кандидаты
+     *         или якоря содержат null
+     */
+    public void verify(
+            byte[] expectedHash,
+            String expectedHashAlgOid,
+            BigInteger expectedNonce,
+            List<GostCertificate> untrustedCandidates,
+            GostCertificate... tsaTrustedCerts)
+            throws PkixException {
         Objects.requireNonNull(expectedHash, "expectedHash must not be null");
         Objects.requireNonNull(expectedHashAlgOid, "expectedHashAlgOid must not be null");
+        if (tsaTrustedCerts == null || tsaTrustedCerts.length == 0) {
+            throw new IllegalArgumentException("tsaTrustedCerts must not be empty");
+        }
+        for (GostCertificate cert : tsaTrustedCerts) {
+            if (cert == null) {
+                throw new IllegalArgumentException("tsaTrustedCerts must not contain null");
+            }
+        }
 
         // 1. Сверка messageImprint
         if (!MessageDigest.isEqual(tstInfo.messageImprintHash(), expectedHash)) {
-            LOG.log(Level.WARNING, "TSP verification: messageImprint mismatch");
             throw new PkixException(
                     PkixException.Reason.OTHER, "TSP messageImprint does not match expected hash");
         }
 
         // 2. Сверка алгоритма хэширования
         if (!expectedHashAlgOid.equals(tstInfo.messageImprintAlgOid())) {
-            LOG.log(
-                    Level.WARNING,
-                    "TSP verification: hashAlgorithm mismatch, expected={0}, got={1}",
-                    expectedHashAlgOid,
-                    tstInfo.messageImprintAlgOid());
             throw new PkixException(
                     PkixException.Reason.OTHER,
                     "TSP messageImprint hashAlgorithm mismatch: expected "
@@ -405,10 +478,6 @@ public final class TspResponse {
         long genTimeMs = parseGeneralizedTimeToMs(tstInfo.genTime());
         long nowMs = System.currentTimeMillis();
         if (genTimeMs > nowMs + GostOids.CLOCK_SKEW_MS) {
-            LOG.log(
-                    Level.WARNING,
-                    "TSP verification: genTime in the future: {0}",
-                    tstInfo.genTime());
             throw new PkixException(
                     PkixException.Reason.OTHER,
                     "TSP genTime is in the future: " + tstInfo.genTime());
@@ -417,36 +486,48 @@ public final class TspResponse {
         // 4. Проверка nonce (если передан)
         if (expectedNonce != null) {
             if (tstInfo.nonce() == null) {
-                LOG.log(Level.WARNING, "TSP verification: nonce missing");
                 throw new PkixException(
                         PkixException.Reason.OTHER,
                         "TSP response missing nonce, but nonce was expected");
             }
             if (!MessageDigest.isEqual(
                     expectedNonce.toByteArray(), tstInfo.nonce().toByteArray())) {
-                LOG.log(Level.WARNING, "TSP verification: nonce mismatch");
                 throw new PkixException(PkixException.Reason.OTHER, "TSP nonce mismatch");
             }
         }
 
         // 5. Проверка подписи TimeStampToken (CMS SignedData)
         if (timeStampTokenDer == null) {
-            LOG.log(Level.WARNING, "TSP verification: no TimeStampToken");
             throw new PkixException(PkixException.Reason.OTHER, "No TimeStampToken to verify");
         }
         List<GostCertificate> trustedList = List.of(tsaTrustedCerts);
         List<GostCertificate> flattenedTrustedList = new ArrayList<>(trustedList);
-        MultiSignerVerifiedData tsResult =
-                CmsSignedDataVerifier.verifyAll(
-                        timeStampTokenDer, flattenedTrustedList.toArray(new GostCertificate[0]));
+        VerifiedSignedData tsResult =
+                CmsSignedDataVerifier.verify(
+                        timeStampTokenDer,
+                        VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(flattenedTrustedList),
+                                        SignerSelection.ALL,
+                                        Revocation.none())
+                                .untrustedCandidates(untrustedCandidates));
 
         // Проверяем EKU id-kp-timeStamping у каждого подписанта TimeStampToken
         for (SignerResult sr : tsResult.signers()) {
             if (!sr.signerCertificate().isTimeStamping()) {
+                // Только серийный номер: сертификат службы штампов выдаёт внешний УЦ, и DN
+                // в предупреждении (включено по умолчанию) нельзя считать свободным от
+                // персональных данных. DN усечённым доступен на DEBUG
                 LOG.log(
                         Level.WARNING,
-                        "TSP verification: signer missing id-kp-timeStamping EKU, subject={0}",
-                        sr.signerCertificate().getSubjectDn());
+                        "TSP verification: signer missing id-kp-timeStamping EKU, serial=0x{0}",
+                        sr.signerCertificate().getSerialNumberBigInt().toString(16));
+                if (LOG.isLoggable(Level.DEBUG)) {
+                    LOG.log(
+                            Level.DEBUG,
+                            "TSP verification: signer missing id-kp-timeStamping EKU, subject={0}",
+                            sr.signerCertificate()
+                                    .getSubjectDnForLog(GostCertificate.DN_LOG_MAX_CHARS));
+                }
                 throw new PkixException(
                         PkixException.Reason.OTHER,
                         "TSA certificate does not have id-kp-timeStamping EKU");

@@ -23,9 +23,9 @@ class CmsKariOmacTc26InteropTest {
 
     @Test
     // Ранее был @Disabled с формулировкой «проблема в разборе контейнера, а не в KEG».
-    // Причина KImp15 MAC mismatch — неверный кофактор TC26_A_256 (1 вместо 4) в ECParameters,
-    // исправленный в рамках плана 257. Кофактор влияет на VKO_256 в computeVko, т.е. именно
-    // на криптографию KEG, а не на парсинг.
+    // Причина KImp15 MAC mismatch — неверный кофактор TC26_A_256 (1 вместо 4) в ECParameters.
+    // Кофактор влияет на VKO_256 в computeVko, т.е. именно на криптографию KEG,
+    // а не на парсинг.
     @DisplayName(
             "a231 (ktri, kuznyechik-ctr-acpkm, 256 бит): расшифровка эталонного ktri-вектора TC26")
     void decryptTc26KtriA231() throws PkixException, IOException {
@@ -36,9 +36,10 @@ class CmsKariOmacTc26InteropTest {
                 GostCertificate.fromPemOrDer(rawResource("tc26_cms/recipient256_cert.pem"));
         byte[] expectedPlain = rawResource("tc26_cms/text_decrypted.plain");
 
+        // Эталонный вектор TC26 без имитовставки: строгий decrypt его отвергает по политике
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        envelopedDer, recipientKey, recipientCert, new Kexp15CmsKeyWrap());
+                CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(
+                        envelopedDer, recipientKey, recipientCert);
 
         assertArrayEquals(
                 expectedPlain,
@@ -57,8 +58,7 @@ class CmsKariOmacTc26InteropTest {
         byte[] expectedPlain = rawResource("tc26_cms/text_decrypted.plain");
 
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        envelopedDer, recipientKey, recipientCert, new Kexp15CmsKeyWrap());
+                CmsEnvelopedDataDecryptor.decrypt(envelopedDer, recipientKey, recipientCert);
 
         // Эталонный plaintext — точный вывод openssl gost-engine `cms -decrypt` (47 байт).
         // Исходный tc26_cms/text_decrypted.plain из gost-engine несёт лишний завершающий LF

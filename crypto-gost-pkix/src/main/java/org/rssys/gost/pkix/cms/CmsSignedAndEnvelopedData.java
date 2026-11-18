@@ -1,9 +1,11 @@
 package org.rssys.gost.pkix.cms;
 
+import java.util.Objects;
 import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.PrivateKeyParameters;
 
 /**
@@ -23,7 +25,14 @@ import org.rssys.gost.signature.PrivateKeyParameters;
  * друг в друга (§1), content-type signed-атрибут совпадает с eContentType (§5.6),
  * версия SignedData — 3 при eContentType != id-data (§5.1).
  *
- * <p>Для детального контроля (выбор алгоритмов дайджеста, key wrap,
+ * <p>Шифрование выполняется с имитовставкой (OMAC) по умолчанию. При разборе допускается и
+ * контейнер без имитовставки ({@link CmsEnvelopedDataDecryptor#decryptAllowingNoIntegrity}):
+ * целостность обеспечивает подпись. При sign-then-encrypt подмена шифртекста или режима даёт
+ * содержимое, не проходящее разбор SignedData и проверку подписи; при encrypt-then-sign подпись
+ * проверяется над EnvelopedData до расшифрования, поэтому изменить OID шифра или удалить
+ * атрибуты, не сломав подпись, нельзя.
+ *
+ * <p>Для детального контроля (выбор алгоритмов дайджеста,
  * detached-режим, пользовательские signed-атрибуты) используйте
  * {@link CmsSignedDataBuilder} и {@link CmsEnvelopedDataBuilder} напрямую.
  */
@@ -43,6 +52,10 @@ public final class CmsSignedAndEnvelopedData {
      * @param recipients сертификаты получателей (один и более)
      * @return DER-байты ContentInfo(id-envelopedData), содержащего
      *         зашифрованный ContentInfo(id-signedData)
+     * @throws NullPointerException если {@code recipients == null}
+     * @throws IllegalArgumentException если список получателей пуст или KeyUsage сертификата
+     *         получателя не допускает управление ключами, см.
+     *         {@link CmsEnvelopedDataBuilder#addRecipient}
      */
     public static byte[] signThenEncrypt(
             byte[] data,
@@ -50,19 +63,18 @@ public final class CmsSignedAndEnvelopedData {
             GostCertificate signerCert,
             GostCertificate... recipients) {
 
+        // Получателей проверяем до подписи: подпись - обращение к ключу (токен, HSM, PIN,
+        // запись в журнале подписей), и отказ из-за плохого получателя не должен её тратить
+        CmsEnvelopedDataBuilder envBuilder =
+                CmsEnvelopedDataBuilder.create().encryptedContentType(GostOids.CMS_SIGNED_DATA);
+        addRecipients(envBuilder, recipients);
+
         // Шаг 1: SignedData
         byte[] signedDer =
                 CmsSignedDataBuilder.create().data(data).addSigner(signer, signerCert).build();
 
         // Шаг 2: EnvelopedData(SignedData)
-        CmsEnvelopedDataBuilder envBuilder =
-                CmsEnvelopedDataBuilder.create()
-                        .data(signedDer)
-                        .encryptedContentType(GostOids.CMS_SIGNED_DATA);
-        for (GostCertificate recipient : recipients) {
-            envBuilder.addRecipient(recipient);
-        }
-        return envBuilder.build();
+        return envBuilder.data(signedDer).build();
     }
 
     /**
@@ -73,6 +85,10 @@ public final class CmsSignedAndEnvelopedData {
      * @param signerCert сертификат подписанта
      * @param recipients сертификаты получателей (один и более)
      * @return DER-байты ContentInfo(id-envelopedData)
+     * @throws NullPointerException если {@code recipients == null}
+     * @throws IllegalArgumentException если список получателей пуст или KeyUsage сертификата
+     *         получателя не допускает управление ключами, см.
+     *         {@link CmsEnvelopedDataBuilder#addRecipient}
      */
     public static byte[] signThenEncrypt(
             byte[] data,
@@ -95,6 +111,10 @@ public final class CmsSignedAndEnvelopedData {
      * @param recipients сертификаты получателей (один и более)
      * @return DER-байты ContentInfo(id-signedData), содержащего
      *         ContentInfo(id-envelopedData)
+     * @throws NullPointerException если {@code recipients == null}
+     * @throws IllegalArgumentException если список получателей пуст или KeyUsage сертификата
+     *         получателя не допускает управление ключами, см.
+     *         {@link CmsEnvelopedDataBuilder#addRecipient}
      */
     public static byte[] encryptThenSign(
             byte[] data,
@@ -104,9 +124,7 @@ public final class CmsSignedAndEnvelopedData {
 
         // Шаг 1: EnvelopedData
         CmsEnvelopedDataBuilder envBuilder = CmsEnvelopedDataBuilder.create().data(data);
-        for (GostCertificate recipient : recipients) {
-            envBuilder.addRecipient(recipient);
-        }
+        addRecipients(envBuilder, recipients);
         byte[] envelopedDer = envBuilder.build();
 
         // Шаг 2: SignedData(EnvelopedData)
@@ -125,6 +143,10 @@ public final class CmsSignedAndEnvelopedData {
      * @param signerCert сертификат подписанта
      * @param recipients сертификаты получателей (один и более)
      * @return DER-байты ContentInfo(id-signedData)
+     * @throws NullPointerException если {@code recipients == null}
+     * @throws IllegalArgumentException если список получателей пуст или KeyUsage сертификата
+     *         получателя не допускает управление ключами, см.
+     *         {@link CmsEnvelopedDataBuilder#addRecipient}
      */
     public static byte[] encryptThenSign(
             byte[] data,
@@ -154,13 +176,15 @@ public final class CmsSignedAndEnvelopedData {
             GostCertificate... trustedCerts)
             throws PkixException {
 
+        CmsSignedDataVerifier.requireTrustedCerts(trustedCerts);
+
         // Шаг 1: расшифровываем EnvelopedData -> получаем SignedData
         byte[] signedDer =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        combinedDer, recipientKey, recipientCert, new Kexp15CmsKeyWrap());
+                CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(
+                        combinedDer, recipientKey, recipientCert);
 
         // Шаг 2: верифицируем SignedData -> получаем исходные данные
-        return CmsSignedDataVerifier.verifyAny(signedDer, trustedCerts);
+        return CmsSignedDataVerifier.verify(signedDer, trustingAny(trustedCerts));
     }
 
     /**
@@ -183,9 +207,11 @@ public final class CmsSignedAndEnvelopedData {
             GostCertificate... trustedCerts)
             throws PkixException {
 
+        CmsSignedDataVerifier.requireTrustedCerts(trustedCerts);
+
         // Шаг 1: верифицируем SignedData -> извлекаем EnvelopedData
         VerifiedSignedData verifyResult =
-                CmsSignedDataVerifier.verifyAny(combinedDer, trustedCerts);
+                CmsSignedDataVerifier.verify(combinedDer, trustingAny(trustedCerts));
 
         byte[] envelopedDer = verifyResult.data();
         if (envelopedDer == null) {
@@ -196,12 +222,30 @@ public final class CmsSignedAndEnvelopedData {
 
         // Шаг 2: расшифровываем EnvelopedData -> получаем исходные данные
         byte[] decrypted =
-                CmsEnvelopedDataDecryptor.decrypt(
-                        envelopedDer, recipientKey, recipientCert, new Kexp15CmsKeyWrap());
+                CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(
+                        envelopedDer, recipientKey, recipientCert);
         return new VerifiedSignedData(
-                decrypted,
-                verifyResult.signerCertificate(),
-                verifyResult.unsignedAttributes(),
-                verifyResult.embeddedCrls());
+                decrypted, verifyResult.signers(), verifyResult.embeddedCrls());
+    }
+
+    /**
+     * Добавляет получателей в построитель. Проверка и порядок вызовов здесь общие для обоих
+     * методов, чтобы один и тот же неверный аргумент давал одно и то же исключение.
+     */
+    private static void addRecipients(
+            CmsEnvelopedDataBuilder envBuilder, GostCertificate[] recipients) {
+        Objects.requireNonNull(recipients, "recipients");
+        if (recipients.length == 0) {
+            throw new IllegalArgumentException("recipients must not be empty");
+        }
+        for (GostCertificate recipient : recipients) {
+            envBuilder.addRecipient(recipient);
+        }
+    }
+
+    /** Проверка по доверенным сертификатам, один валидный подписант, без проверки отзыва. */
+    private static VerifyOptions trustingAny(GostCertificate[] trustedCerts) {
+        return VerifyOptions.trusting(
+                TrustAnchors.ofCertificates(trustedCerts), SignerSelection.ANY, Revocation.none());
     }
 }

@@ -8,6 +8,7 @@ import java.util.List;
 import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
@@ -105,14 +106,12 @@ class CrlVerifierDelegatedFuzzTest {
         try {
             CrlVerifier.verifyDelegated(
                     crlDer,
-                    certSerial,
-                    CA_KP.getPublic(),
-                    CA_ISSUER_DN,
+                    CrlTestCerts.certFor(certSerial, CA_ISSUER_DN),
                     CA_CERT,
                     signerCerts,
                     null,
-                    GostCrl.DEFAULT_MAX_CRL_SIZE,
-                    GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+                    new CrlLimits(
+                            GostCrl.DEFAULT_MAX_CRL_SIZE, GostCrl.DEFAULT_MAX_REVOKED_ENTRIES));
         } catch (PkixException e) {
             // fail-closed: битый DER или невалидная подпись → ок
         }
@@ -143,27 +142,16 @@ class CrlVerifierDelegatedFuzzTest {
 
             CrlVerifier.verifyDelegated(
                     crlDer,
-                    LEAF_SERIAL,
-                    CA_KP.getPublic(),
-                    CA_ISSUER_DN,
+                    CrlTestCerts.certFor(LEAF_SERIAL, CA_ISSUER_DN),
                     CA_CERT,
                     signerCerts,
                     null,
-                    GostCrl.DEFAULT_MAX_CRL_SIZE,
-                    GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+                    new CrlLimits(
+                            GostCrl.DEFAULT_MAX_CRL_SIZE, GostCrl.DEFAULT_MAX_REVOKED_ENTRIES));
         } catch (PkixException e) {
             // Ожидаемо: CER (SIGNATURE_INVALID, PARSE_ERROR, REVOKED), expired и т.д.
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

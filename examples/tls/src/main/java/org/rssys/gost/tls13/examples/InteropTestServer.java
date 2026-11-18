@@ -7,6 +7,7 @@ import java.nio.file.Paths;
 import java.util.*;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -219,11 +220,10 @@ public final class InteropTestServer {
                     }
                     if (clientCaFile != null) {
                         byte[] clientCaDer = Files.readAllBytes(Paths.get(clientCaFile));
-                        PublicKeyParameters clientCaPub =
-                                new GostCertificate(clientCaDer).getPublicKey();
-                        config.withCaPublicKey(clientCaPub);
+                        GostCertificate clientCaCert = new GostCertificate(clientCaDer);
+                        config.needClientAuth(TrustAnchors.ofCertificate(clientCaCert));
                     } else if (mtls) {
-                        config.withCaPublicKey(caCert.getPublicKey());
+                        config.needClientAuth(TrustAnchors.ofCertificate(caCert));
                     }
                     try (SocketTlsTransport transport = new SocketTlsTransport(socket);
                             TlsSession server = TlsSession.createServer(config, transport)) {

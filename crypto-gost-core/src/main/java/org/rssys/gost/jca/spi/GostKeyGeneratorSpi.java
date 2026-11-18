@@ -1,11 +1,13 @@
 package org.rssys.gost.jca.spi;
 
 import java.security.InvalidAlgorithmParameterException;
+import java.security.InvalidParameterException;
 import java.security.SecureRandom;
 import java.security.spec.AlgorithmParameterSpec;
 import javax.crypto.KeyGeneratorSpi;
 import javax.crypto.SecretKey;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.jca.key.GostSecretKey;
 import org.rssys.gost.util.CryptoRandom;
 
@@ -56,6 +58,12 @@ public final class GostKeyGeneratorSpi extends KeyGeneratorSpi {
                         + "Key size is fixed at 256 bits");
     }
 
+    /**
+     * Инициализирует генератор длиной ключа в битах.
+     *
+     * @throws InvalidParameterException если длина не равна 256 бит (контракт
+     *     {@link javax.crypto.KeyGenerator#init(int)})
+     */
     @Override
     protected void engineInit(int keysize, SecureRandom random) {
         if (keysize != KEY_SIZE_BITS) {
@@ -72,12 +80,12 @@ public final class GostKeyGeneratorSpi extends KeyGeneratorSpi {
      */
     @Override
     protected SecretKey engineGenerateKey() {
-        return new GostSecretKey("Kuznyechik", KeyGenerator.generateSymmetricKey(random));
-    }
-
-    private static final class InvalidParameterException extends RuntimeException {
-        InvalidParameterException(String msg) {
-            super(msg);
+        SymmetricKey symmetricKey = KeyGenerator.generateSymmetricKey(random);
+        try {
+            return new GostSecretKey(GostSecretKey.KUZNYECHIK, symmetricKey);
+        } finally {
+            // GostSecretKey взял собственную копию: промежуточный ключ уничтожаем
+            symmetricKey.destroy();
         }
     }
 }

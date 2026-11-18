@@ -155,4 +155,101 @@ class GeneralNameCodecTest {
         assertEquals(0x30, gnSeq[0], "SEQUENCE OF GeneralName начинается с 0x30");
         assertTrue(gnSeq.length > 50, "должно быть >50 байт для 6 имён");
     }
+
+    // ========================================================================
+    // Строгое кодирование: литералы без DNS, A-label, ASCII
+    // ========================================================================
+
+    private static byte[] value(byte[] generalName) {
+        return java.util.Arrays.copyOfRange(generalName, 2, generalName.length);
+    }
+
+    private static String dnsValue(byte[] generalName) {
+        return new String(value(generalName), java.nio.charset.StandardCharsets.US_ASCII);
+    }
+
+    @Test
+    @DisplayName("encodeIpAddress: IPv4 и IPv6 кодируются 4 и 16 байтами")
+    void ipAddressLengths() {
+        assertArrayEquals(
+                new byte[] {10, 0, 0, 1}, value(GeneralNameCodec.encodeIpAddress("10.0.0.1")));
+        assertEquals(16, value(GeneralNameCodec.encodeIpAddress("2001:db8::1")).length);
+        assertEquals(16, value(GeneralNameCodec.encodeIpAddress("[2001:db8::1]")).length);
+    }
+
+    @Test
+    @DisplayName("encodeIpAddress: IPv4-mapped литерал кодируется как IPv4 (4 байта)")
+    void ipv4MappedLiteralEncodedAsIpv4() {
+        assertArrayEquals(
+                new byte[] {10, 0, 0, 1},
+                value(GeneralNameCodec.encodeIpAddress("::ffff:10.0.0.1")));
+        assertArrayEquals(
+                new byte[] {10, 0, 0, 1}, value(GeneralNameCodec.encodeIpAddress("::ffff:a00:1")));
+    }
+
+    @Test
+    @DisplayName(
+            "encodeIpAddress: не литерал (имя хоста) и адрес с зоной - IllegalArgumentException")
+    void nonLiteralIpAddressRejected() {
+        for (String bad : new String[] {"localhost", "example.com", "10.0.0", "fe80::1%eth0", ""}) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> GeneralNameCodec.encodeIpAddress(bad),
+                    "Не IP-литерал должен отвергаться без обращения к DNS: " + bad);
+        }
+    }
+
+    @Test
+    @DisplayName("encodeIpConstraint: mapped CIDR /104 становится IPv4 10.0.0.0/8")
+    void mappedCidrEncodedAsIpv4() {
+        assertArrayEquals(
+                new byte[] {10, 0, 0, 0, (byte) 0xFF, 0, 0, 0},
+                value(GeneralNameCodec.encodeIpConstraint("::ffff:10.0.0.0/104")));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GeneralNameCodec.encodeIpConstraint("::ffff:0:0/80"),
+                "Префикс короче /96 в 4 байтах не выразим");
+        assertEquals(32, value(GeneralNameCodec.encodeIpConstraint("2001:db8::/32")).length);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GeneralNameCodec.encodeIpConstraint("example.com/24"));
+    }
+
+    @Test
+    @DisplayName("encodeDnsName: регистр, завершающая точка, wildcard и IDN приводятся к A-label")
+    void dnsNameNormalized() {
+        assertEquals("example.com", dnsValue(GeneralNameCodec.encodeDnsName("Example.COM.")));
+        assertEquals("*.example.com", dnsValue(GeneralNameCodec.encodeDnsName("*.Example.com")));
+        assertEquals(
+                "xn--e1afmkfd.xn--p1ai",
+                dnsValue(GeneralNameCodec.encodeDnsName("пример.рф")),
+                "Unicode-имя кодируется как punycode, а не заменой символов на '?'");
+    }
+
+    @Test
+    @DisplayName("encodeDnsName: пустое имя и пустая метка отвергаются")
+    void invalidDnsNameRejected() {
+        for (String bad : new String[] {"", "a..b", "example.com..", "*.", "exa mple.com"}) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> GeneralNameCodec.encodeDnsName(bad),
+                    "Некорректное dNSName должно отвергаться: " + bad);
+        }
+    }
+
+    @Test
+    @DisplayName("encodeRfc822Name и encodeUri: не-ASCII отвергается, а не заменяется на '?'")
+    void nonAsciiRejected() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GeneralNameCodec.encodeRfc822Name("юзер@example.com"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GeneralNameCodec.encodeUri("https://пример.рф/"));
+        assertEquals(
+                "user@example.com",
+                new String(
+                        value(GeneralNameCodec.encodeRfc822Name("user@example.com")),
+                        java.nio.charset.StandardCharsets.US_ASCII));
+    }
 }

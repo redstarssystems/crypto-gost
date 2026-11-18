@@ -7,15 +7,31 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.util.CryptoRandom;
 
 @DisplayName("TlsMessageParser: парсинг handshake-сообщений")
 class TlsMessageParserTest {
+
+    /** Типы расширений ClientHello, на которые тест якобы получает ответ в ServerHello. */
+    private static final Set<Integer> SERVER_RESPONSE_TYPES_SENT =
+            Set.of(
+                    TlsConstants.EXT_SUPPORTED_VERSIONS,
+                    TlsConstants.EXT_KEY_SHARE,
+                    TlsConstants.EXT_PRE_SHARED_KEY);
+
+    /** Типы ответных расширений EE, на которые клиент якобы отправил запрос. */
+    private static final Set<Integer> ALL_RESPONSE_TYPES_SENT =
+            Set.of(
+                    TlsConstants.EXT_APPLICATION_LAYER_PROTOCOL_NEGOTIATION,
+                    TlsConstants.EXT_MAX_FRAGMENT_LENGTH,
+                    TlsConstants.EXT_SERVER_NAME);
 
     // =======================================================================
     // Тесты parseKeyShareEntry
@@ -81,7 +97,7 @@ class TlsMessageParserTest {
         //      parseServerHello не отличает HRR от обычного SH на этапе
         //      парсинга — он возвращает пустой ecdhePublicKeyRaw и group=0,
         //      а caller (receiveServerHello) решает, HRR это или нет.
-        byte[] body = new byte[2 + 32 + 1 + 2 + 1 + 2];
+        byte[] body = new byte[2 + 32 + 1 + 2 + 1 + 2 + 6];
         int pos = 0;
         body[pos++] = 0x03;
         body[pos++] = 0x03;
@@ -90,11 +106,19 @@ class TlsMessageParserTest {
         body[pos++] = (byte) 0xC1;
         body[pos++] = 0x03;
         body[pos++] = 0x00;
+        // единственное расширение - supported_versions с TLS 1.3 (без него разбор отвергает
+        // ServerHello): длина блока 6 = тип(2) + длина(2) + selected_version(2)
         body[pos++] = 0x00;
+        body[pos++] = 0x06;
         body[pos++] = 0x00;
+        body[pos++] = 0x2B;
+        body[pos++] = 0x00;
+        body[pos++] = 0x02;
+        body[pos++] = 0x03;
+        body[pos++] = 0x04;
 
         TlsMessageParser.ParsedServerHello parsed =
-                TlsMessageParser.parseServerHello(body, TlsConstants.GRP_GC256A);
+                TlsMessageParser.parseServerHello(body, SERVER_RESPONSE_TYPES_SENT);
         assertEquals(
                 0,
                 parsed.ecdhePublicKeyRaw.length,
@@ -115,6 +139,10 @@ class TlsMessageParserTest {
         ks.write(dummyPoint, 0, dummyPoint.length);
 
         java.io.ByteArrayOutputStream ext = new java.io.ByteArrayOutputStream();
+        // supported_versions обязателен в ServerHello (RFC 8446 §4.2.1)
+        TlsEncoding.encodeUint16(ext, TlsConstants.EXT_SUPPORTED_VERSIONS);
+        TlsEncoding.encodeUint16(ext, 2);
+        TlsEncoding.encodeUint16(ext, TlsConstants.PROTOCOL_TLS_1_3);
         TlsEncoding.encodeUint16(ext, TlsConstants.EXT_KEY_SHARE);
         TlsEncoding.encodeUint16(ext, ks.size());
         ext.write(ks.toByteArray(), 0, ks.size());
@@ -132,7 +160,7 @@ class TlsMessageParserTest {
         body.write(ext.toByteArray(), 0, ext.size());
 
         TlsMessageParser.ParsedServerHello result =
-                TlsMessageParser.parseServerHello(body.toByteArray(), TlsConstants.GRP_GC256A);
+                TlsMessageParser.parseServerHello(body.toByteArray(), SERVER_RESPONSE_TYPES_SENT);
         assertEquals(TlsConstants.GRP_GC256B, result.actualGroup);
         assertArrayEquals(dummyPoint, result.ecdhePublicKeyRaw);
     }
@@ -147,7 +175,7 @@ class TlsMessageParserTest {
         TlsException e =
                 assertThrows(
                         TlsException.class,
-                        () -> TlsMessageParser.parseServerHello(body, TlsConstants.GRP_GC256A));
+                        () -> TlsMessageParser.parseServerHello(body, SERVER_RESPONSE_TYPES_SENT));
         assertEquals(TlsConstants.ALERT_DECODE_ERROR, e.getAlertCode());
     }
 
@@ -175,7 +203,10 @@ class TlsMessageParserTest {
                         ksExt(TlsConstants.GRP_GC256A));
         TlsMessageParser.ParsedKeyShare result =
                 TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A);
-        assertNotNull(result);
+        assertEquals(TlsConstants.GRP_GC256A, result.actualGroup, "Группа из key_share");
+        assertTrue(result.keySharePresent, "Расширение key_share должно быть замечено");
+        assertNotNull(result.ecdhePublicKeyRaw, "Публичный ключ ECDHE выделен");
+        assertEquals(1, result.keyShareEntries.size(), "В ClientHello одна запись key_share");
     }
 
     @Test
@@ -228,9 +259,9 @@ class TlsMessageParserTest {
     }
 
     @Test
-    @DisplayName("parseClientHello: нет supported_versions")
-    // supported_versions — обязательное расширение TLS 1.3 (RFC 8446, sec 4.2.1).
-    // Без него сервер не может определить, что клиент хочет TLS 1.3.
+    @DisplayName("parseClientHello: нет supported_versions -> protocol_version")
+    // Клиент без supported_versions предлагает TLS 1.2 или ниже (RFC 8446 §4.2.1), а сервер,
+    // умеющий только TLS 1.3, отвечает protocol_version (§6.2), а не missing_extension.
     void testParseClientHelloMissingSv() throws Exception {
         byte[] body =
                 buildClientHelloBody(
@@ -244,7 +275,7 @@ class TlsMessageParserTest {
                 assertThrows(
                         TlsException.class,
                         () -> TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A));
-        assertEquals(TlsConstants.ALERT_MISSING_EXTENSION, e.getAlertCode());
+        assertEquals(TlsConstants.ALERT_PROTOCOL_VERSION, e.getAlertCode());
     }
 
     @Test
@@ -268,24 +299,142 @@ class TlsMessageParserTest {
     }
 
     @Test
-    @DisplayName("parseClientHello: нет key_share")
-    // key_share — обязательное расширение (RFC 8446). Без ECDHE
-    // параметров сервер не может установить общий секрет.
+    @DisplayName("parseClientHello: нет key_share - парсер сообщает об отсутствии, решает движок")
+    // key_share обязателен для CH1 (missing_extension) и ровно одна запись для CH2 после HRR
+    // (illegal_parameter): оба решения принимает движок, парсер лишь описывает ClientHello.
     void testParseClientHelloMissingKs() throws Exception {
         byte[] body =
                 buildClientHelloBody(
                         0x0303, new byte[0], csBytes(0xC103), new byte[] {0x00}, svExt(), saExt());
-        TlsException e =
-                assertThrows(
-                        TlsException.class,
-                        () -> TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A));
-        assertEquals(TlsConstants.ALERT_MISSING_EXTENSION, e.getAlertCode());
+
+        TlsMessageParser.ParsedKeyShare parsed =
+                TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A);
+
+        assertFalse(parsed.keySharePresent, "расширения key_share нет");
+        assertTrue(parsed.keyShareEntries.isEmpty());
+        assertNull(parsed.ecdhePublicKeyRaw);
     }
 
     @Test
-    @DisplayName("parseClientHello: supported_versions без 0x0304")
-    // supported_versions ДОЛЖЕН содержать 0x0304 (TLS 1.3).
-    // Без него клиент не поддерживает TLS 1.3 — соединение невозможно.
+    @DisplayName("parseClientHello: пустой список key_share - расширение есть, записей нет")
+    void testParseClientHelloEmptyKeyShareList() throws Exception {
+        byte[] emptyKs = encodeExt(TlsConstants.EXT_KEY_SHARE, new byte[] {0x00, 0x00});
+        byte[] body =
+                buildClientHelloBody(
+                        0x0303,
+                        new byte[0],
+                        csBytes(0xC103),
+                        new byte[] {0x00},
+                        svExt(),
+                        saExt(),
+                        emptyKs);
+
+        TlsMessageParser.ParsedKeyShare parsed =
+                TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A);
+
+        assertTrue(parsed.keySharePresent);
+        assertTrue(parsed.keyShareEntries.isEmpty());
+    }
+
+    @Test
+    @DisplayName("parseClientHello: все записи key_share сохраняются в порядке следования")
+    void testParseClientHelloKeepsAllKeyShareEntries() throws Exception {
+        ByteArrayOutputStream entries = new ByteArrayOutputStream();
+        for (int group : new int[] {0xAAAA, TlsConstants.GRP_GC256B}) {
+            byte[] point = new byte[64];
+            TlsEncoding.encodeUint16(entries, group);
+            TlsEncoding.encodeUint16(entries, point.length);
+            entries.write(point);
+        }
+        ByteArrayOutputStream ks = new ByteArrayOutputStream();
+        TlsEncoding.encodeUint16(ks, entries.size());
+        ks.write(entries.toByteArray());
+        byte[] body =
+                buildClientHelloBody(
+                        0x0303,
+                        new byte[0],
+                        csBytes(0xC103),
+                        new byte[] {0x00},
+                        svExt(),
+                        saExt(),
+                        encodeExt(TlsConstants.EXT_KEY_SHARE, ks.toByteArray()));
+
+        TlsMessageParser.ParsedKeyShare parsed =
+                TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256B);
+
+        assertEquals(2, parsed.keyShareEntries.size());
+        assertEquals(0xAAAA, parsed.keyShareEntries.get(0).group());
+        assertEquals(TlsConstants.GRP_GC256B, parsed.keyShareEntries.get(1).group());
+        assertFalse(parsed.supportedGroupsDeclared, "supported_groups в ClientHello не было");
+    }
+
+    private static byte[] keyShareList(int[] groups, int lastEntryKeyLenOverride) throws Exception {
+        ByteArrayOutputStream entries = new ByteArrayOutputStream();
+        for (int i = 0; i < groups.length; i++) {
+            byte[] point = new byte[64];
+            TlsEncoding.encodeUint16(entries, groups[i]);
+            boolean last = i == groups.length - 1;
+            TlsEncoding.encodeUint16(
+                    entries,
+                    last && lastEntryKeyLenOverride >= 0 ? lastEntryKeyLenOverride : point.length);
+            entries.write(point);
+        }
+        ByteArrayOutputStream ks = new ByteArrayOutputStream();
+        TlsEncoding.encodeUint16(ks, entries.size());
+        ks.write(entries.toByteArray());
+        return encodeExt(TlsConstants.EXT_KEY_SHARE, ks.toByteArray());
+    }
+
+    @Test
+    @DisplayName(
+            "parseClientHello: ожидаемая группа ПЕРВОЙ, хвостовая запись после неё сохраняется")
+    void testParseClientHelloExpectedGroupFirstKeepsTrailingEntry() throws Exception {
+        byte[] body =
+                buildClientHelloBody(
+                        0x0303,
+                        new byte[0],
+                        csBytes(0xC103),
+                        new byte[] {0x00},
+                        svExt(),
+                        saExt(),
+                        keyShareList(
+                                new int[] {TlsConstants.GRP_GC256B, TlsConstants.GRP_GC256A}, -1));
+
+        TlsMessageParser.ParsedKeyShare parsed =
+                TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256B);
+
+        assertEquals(2, parsed.keyShareEntries.size(), "обе записи должны быть собраны");
+        assertEquals(TlsConstants.GRP_GC256B, parsed.keyShareEntries.get(0).group());
+        assertEquals(TlsConstants.GRP_GC256A, parsed.keyShareEntries.get(1).group());
+        assertEquals(TlsConstants.GRP_GC256B, parsed.actualGroup, "прежняя семантика поля");
+    }
+
+    @Test
+    @DisplayName("parseClientHello: хвостовая запись key_share с битой длиной -> decode_error")
+    void testParseClientHelloBrokenTrailingKeyShareEntry() throws Exception {
+        byte[] body =
+                buildClientHelloBody(
+                        0x0303,
+                        new byte[0],
+                        csBytes(0xC103),
+                        new byte[] {0x00},
+                        svExt(),
+                        saExt(),
+                        keyShareList(
+                                new int[] {TlsConstants.GRP_GC256B, TlsConstants.GRP_GC256A},
+                                0xFFFF));
+
+        TlsException e =
+                assertThrows(
+                        TlsException.class,
+                        () -> TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256B));
+        assertEquals(TlsConstants.ALERT_DECODE_ERROR, e.getAlertCode());
+    }
+
+    @Test
+    @DisplayName("parseClientHello: supported_versions без 0x0304 -> protocol_version")
+    // Корректный список без 0x0304: клиент не предлагает TLS 1.3, соединение невозможно
+    // (RFC 8446 §6.2).
     void testParseClientHelloSvWrongVersion() throws Exception {
         byte[] svExt =
                 encodeExt(TlsConstants.EXT_SUPPORTED_VERSIONS, new byte[] {0x02, 0x03, 0x02});
@@ -302,7 +451,7 @@ class TlsMessageParserTest {
                 assertThrows(
                         TlsException.class,
                         () -> TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A));
-        assertEquals(TlsConstants.ALERT_MISSING_EXTENSION, e.getAlertCode());
+        assertEquals(TlsConstants.ALERT_PROTOCOL_VERSION, e.getAlertCode());
     }
 
     @Test
@@ -415,7 +564,7 @@ class TlsMessageParserTest {
     // Helpers
     // =======================================================================
 
-    private static byte[] buildClientHelloBody(
+    static byte[] buildClientHelloBody(
             int legacyVersion,
             byte[] sessionId,
             byte[] cipherSuites,
@@ -442,17 +591,17 @@ class TlsMessageParserTest {
         return out.toByteArray();
     }
 
-    private static byte[] svExt() throws Exception {
+    static byte[] svExt() throws Exception {
         return encodeExt(TlsConstants.EXT_SUPPORTED_VERSIONS, new byte[] {0x02, 0x03, 0x04});
     }
 
-    private static byte[] saExt() throws Exception {
+    static byte[] saExt() throws Exception {
         return encodeExt(
                 TlsConstants.EXT_SIGNATURE_ALGORITHMS,
                 new byte[] {0x00, 0x04, 0x07, 0x09, 0x07, 0x0A});
     }
 
-    private static byte[] ksExt(int group) throws Exception {
+    static byte[] ksExt(int group) throws Exception {
         ECParameters params = ECParameters.tc26a256();
         var kp = KeyGenerator.generateKeyPair(params);
         byte[] point = TlsEncoding.encodePoint(kp.getPublic());
@@ -467,14 +616,14 @@ class TlsMessageParserTest {
         return encodeExt(TlsConstants.EXT_KEY_SHARE, ks.toByteArray());
     }
 
-    private static byte[] csBytes(int... ids) throws Exception {
+    static byte[] csBytes(int... ids) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         TlsEncoding.encodeUint16(out, ids.length * 2);
         for (int id : ids) TlsEncoding.encodeUint16(out, id);
         return out.toByteArray();
     }
 
-    private static byte[] encodeExt(int type, byte[] data) {
+    static byte[] encodeExt(int type, byte[] data) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         TlsEncoding.encodeExtension(out, type, data);
         return out.toByteArray();
@@ -498,6 +647,31 @@ class TlsMessageParserTest {
                         TlsException.class,
                         () -> TlsMessageParser.parseNewSessionTicket(malformed));
         assertEquals(TlsConstants.ALERT_DECODE_ERROR, ex.getAlertCode());
+    }
+
+    @Test
+    @DisplayName("parseNewSessionTicket: пустой ticket бросает TlsException(ALERT_DECODE_ERROR)")
+    void testParseNewSessionTicketEmptyTicketThrows() {
+        // RFC 8446 §4.6.1: opaque ticket<1..2^16-1>, пустой тикет недопустим
+        byte[] body = TlsMessageBuilder.buildNewSessionTicket(7200, 1, new byte[8], new byte[0]);
+
+        TlsException ex =
+                assertThrows(
+                        TlsException.class, () -> TlsMessageParser.parseNewSessionTicket(body));
+
+        assertEquals(TlsConstants.ALERT_DECODE_ERROR, ex.getAlertCode());
+    }
+
+    @Test
+    @DisplayName("parseNewSessionTicket: ticket из одного байта принимается (нижняя граница)")
+    void testParseNewSessionTicketMinimalTicketAccepted() throws Exception {
+        byte[] body =
+                TlsMessageBuilder.buildNewSessionTicket(7200, 1, new byte[8], new byte[] {0x42});
+
+        TlsMessageParser.ParsedNewSessionTicket parsed =
+                TlsMessageParser.parseNewSessionTicket(body);
+
+        assertEquals(1, parsed.ticket.length);
     }
 
     // =======================================================================
@@ -534,17 +708,18 @@ class TlsMessageParserTest {
     }
 
     @Test
-    @DisplayName("parseClientHello: SNI с неверным name_type игнорируется")
-    // ServerNameList может содержать name_type отличный от host_name(0).
-    // По RFC 6066 такие записи ДОЛЖНЫ игнорироваться. Сервер не должен
-    // использовать не-host_name записи для выбора сертификата.
+    @DisplayName("parseClientHello: SNI с неверным name_type -> decode_error")
+    // Структура записи с неизвестным name_type не определена: разборщик не знает, где она
+    // кончается, поэтому запись отвергается целиком (RFC 6066 §3), а не пропускается.
+    // Запись минимальной допустимой длины (type + длина имени + один байт имени) со списком,
+    // согласованным с содержимым: тест доходит до проверки name_type, а не падает раньше на
+    // несовпадении длин или слишком короткой записи.
     void testParseServerNameWrongType() throws Exception {
-        // Этот тест использует buildClientHelloBody + svExt/saExt/ksExt
-        // ServerNameList с name_type=1 (не host_name) — должен игнорироваться
         ByteArrayOutputStream sn = new ByteArrayOutputStream();
         TlsEncoding.encodeUint16(sn, 4);
         sn.write(0x01); // name_type != host_name(0)
-        TlsEncoding.encodeUint16(sn, 0); // пустое имя
+        TlsEncoding.encodeUint16(sn, 1);
+        sn.write('a');
         byte[] sniExt = encodeExt(TlsConstants.EXT_SERVER_NAME, sn.toByteArray());
 
         byte[] body =
@@ -557,9 +732,11 @@ class TlsMessageParserTest {
                         saExt(),
                         sniExt,
                         ksExt(TlsConstants.GRP_GC256A));
-        TlsMessageParser.ParsedKeyShare parsed =
-                TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A);
-        assertNull(parsed.serverName, "не host_name -> null");
+        TlsException e =
+                assertThrows(
+                        TlsException.class,
+                        () -> TlsMessageParser.parseClientHello(body, TlsConstants.GRP_GC256A));
+        assertEquals(TlsConstants.ALERT_DECODE_ERROR, e.getAlertCode());
     }
 
     @Test
@@ -598,9 +775,8 @@ class TlsMessageParserTest {
     }
 
     @Test
-    @DisplayName("parseServerNameExtension: пустой host_name -> null")
-    // Пустое имя хоста не несёт полезной информации.
-    // Парсер возвращает null, чтобы сервер не использовал пустую строку.
+    @DisplayName("parseServerNameExtension: пустой host_name -> decode_error")
+    // HostName<1..2^16-1> (RFC 6066 §3): пустое имя нарушает формат.
     void testParseServerNameExtensionEmpty() throws Exception {
         ByteArrayOutputStream buf = new ByteArrayOutputStream();
         TlsEncoding.encodeUint16(buf, 3); // length: type(1) + empty_len(2) = 3
@@ -608,19 +784,24 @@ class TlsMessageParserTest {
         TlsEncoding.encodeUint16(buf, 0); // пустое имя
         byte[] data = buf.toByteArray();
 
-        String result = TlsMessageParser.parseServerNameExtension(data, 0, data.length);
-        assertNull(result);
+        TlsException e =
+                assertThrows(
+                        TlsException.class,
+                        () -> TlsMessageParser.parseServerNameExtension(data, 0, data.length));
+        assertEquals(TlsConstants.ALERT_DECODE_ERROR, e.getAlertCode());
     }
 
     @Test
-    @DisplayName("parseServerNameExtension: список короче 3 байт -> null")
-    // Минимальная запись ServerName — 3 байта (type(1) + length(2)).
-    // Любые данные короче — malformed, возвращаем null вместо
-    // выброса исключения, чтобы не прерывать handshake из-за мусора.
-    void testParseServerNameExtensionTooShort() throws Exception {
+    @DisplayName("parseServerNameExtension: запись короче заголовка -> decode_error")
+    // Минимальная запись ServerName: type(1) + length(2) + один байт имени. Меньшее - битая
+    // структура; молчаливое игнорирование принимало бы ClientHello с мусором в расширении.
+    void testParseServerNameExtensionTooShort() {
         byte[] data = new byte[] {0x00, 0x01, 0x00};
-        String result = TlsMessageParser.parseServerNameExtension(data, 0, data.length);
-        assertNull(result);
+        TlsException e =
+                assertThrows(
+                        TlsException.class,
+                        () -> TlsMessageParser.parseServerNameExtension(data, 0, data.length));
+        assertEquals(TlsConstants.ALERT_DECODE_ERROR, e.getAlertCode());
     }
 
     // =======================================================================
@@ -673,13 +854,16 @@ class TlsMessageParserTest {
     }
 
     @Test
-    @DisplayName("parseClientHelloSni: неверный NameType ≠ host_name(0) -> null")
+    @DisplayName("parseClientHelloSni: неверный NameType ≠ host_name(0) -> decode_error")
     void testParseClientHelloSniWrongNameType() throws Exception {
-        // NameType=1 (не host_name) — RFC 6066: такие записи игнорируются
+        // NameType=1: достоверно разобрать запись неизвестного типа нельзя, она отвергается
+        // целиком.
+        // Запись минимальной длины (4 байта), чтобы проверялся именно name_type
         ByteArrayOutputStream sn = new ByteArrayOutputStream();
         TlsEncoding.encodeUint16(sn, 4);
         sn.write(0x01); // name_type != host_name(0)
-        TlsEncoding.encodeUint16(sn, 0); // пустое имя
+        TlsEncoding.encodeUint16(sn, 1);
+        sn.write('a');
         byte[] sniExt = encodeExt(TlsConstants.EXT_SERVER_NAME, sn.toByteArray());
 
         byte[] body =
@@ -693,13 +877,13 @@ class TlsMessageParserTest {
                         sniExt,
                         ksExt(TlsConstants.GRP_GC256A));
 
-        assertNull(TlsMessageParser.parseClientHelloSni(body));
+        assertSniAlert(TlsConstants.ALERT_DECODE_ERROR, body);
     }
 
     @Test
-    @DisplayName("parseClientHelloSni: пустой ServerNameList -> null")
+    @DisplayName("parseClientHelloSni: пустой ServerNameList -> decode_error")
     void testParseClientHelloSniEmptyList() throws Exception {
-        // ServerNameList общей длины 0 — malformed, должен игнорироваться
+        // ServerNameList общей длины 0 нарушает формат ServerNameList<1..2^16-1>
         byte[] sniExt = encodeExt(TlsConstants.EXT_SERVER_NAME, new byte[] {0x00, 0x00});
         byte[] body =
                 buildClientHelloBody(
@@ -712,11 +896,11 @@ class TlsMessageParserTest {
                         sniExt,
                         ksExt(TlsConstants.GRP_GC256A));
 
-        assertNull(TlsMessageParser.parseClientHelloSni(body));
+        assertSniAlert(TlsConstants.ALERT_DECODE_ERROR, body);
     }
 
     @Test
-    @DisplayName("parseClientHelloSni: malformed extensions (длина не сходится) -> null")
+    @DisplayName("parseClientHelloSni: malformed extensions (длина не сходится) -> decode_error")
     void testParseClientHelloSniMalformedExtensions() throws Exception {
         // Обрезаем тело — extensions list не сойдётся по длине
         byte[] body =
@@ -731,16 +915,25 @@ class TlsMessageParserTest {
         byte[] truncated = new byte[body.length - 3]; // обрезаем часть extensions
 
         System.arraycopy(body, 0, truncated, 0, truncated.length);
-        // После обрезания длина extensions в заголовке не совпадает — парсинг вернёт null
-        assertNull(TlsMessageParser.parseClientHelloSni(truncated));
+        // После обрезания длина extensions в заголовке не совпадает с телом
+        assertSniAlert(TlsConstants.ALERT_DECODE_ERROR, truncated);
     }
 
     @Test
-    @DisplayName("parseClientHelloSni: truncated тело -> null (IndexOutOfBounds)")
+    @DisplayName("parseClientHelloSni: truncated тело -> decode_error, а не исключение Java")
     void testParseClientHelloSniTruncatedBody() {
-        // Слишком короткий body — не может содержать корректных extensions
+        // Тело ещё не проверено полностью: ошибка границ даёт alert, а не null и не
+        // ArrayIndexOutOfBoundsException
         byte[] tooShort = new byte[] {0x03, 0x03, 0x01, 0x02, 0x03};
-        assertNull(TlsMessageParser.parseClientHelloSni(tooShort));
+        assertSniAlert(TlsConstants.ALERT_DECODE_ERROR, tooShort);
+    }
+
+    private static void assertSniAlert(byte expectedAlert, byte[] clientHelloBody) {
+        TlsException e =
+                assertThrows(
+                        TlsException.class,
+                        () -> TlsMessageParser.parseClientHelloSni(clientHelloBody));
+        assertEquals(expectedAlert, e.getAlertCode());
     }
 
     @Test
@@ -775,7 +968,10 @@ class TlsMessageParserTest {
         byte[] malformed = new byte[2];
         TlsException ex =
                 assertThrows(
-                        TlsException.class, () -> TlsMessageParser.parseCertificate(malformed));
+                        TlsException.class,
+                        () ->
+                                TlsMessageParser.parseCertificate(
+                                        malformed, Set.of(TlsConstants.EXT_STATUS_REQUEST)));
         assertTrue(
                 ex.getMessage().contains("Certificate"),
                 "сообщение об ошибке должно содержать Certificate, получено: " + ex.getMessage());
@@ -793,7 +989,7 @@ class TlsMessageParserTest {
     // превратить в ALERT_DECODE_ERROR — чистое закрытие по протоколу вместо необработанного
     // краша в живом handshake. Тест держит эту границу на случай рефакторинга try/catch.
     void testParseCertificateMalformedSanIp() throws Exception {
-        byte[] certDer = TlsTestHelper.malformedSanIpCertDer();
+        byte[] certDer = PkixCertTestHelper.malformedSanIpCertDer();
 
         ByteArrayOutputStream entry = new ByteArrayOutputStream();
         TlsEncoding.encodeUint24(entry, certDer.length);
@@ -809,7 +1005,10 @@ class TlsMessageParserTest {
         TlsException ex =
                 assertThrows(
                         TlsException.class,
-                        () -> TlsMessageParser.parseCertificate(body.toByteArray()));
+                        () ->
+                                TlsMessageParser.parseCertificate(
+                                        body.toByteArray(),
+                                        Set.of(TlsConstants.EXT_STATUS_REQUEST)));
         assertEquals(TlsConstants.ALERT_DECODE_ERROR, ex.getAlertCode());
     }
 
@@ -865,7 +1064,9 @@ class TlsMessageParserTest {
         eeBody[0] = (byte) (extBytes.length >>> 8);
         eeBody[1] = (byte) extBytes.length;
         System.arraycopy(extBytes, 0, eeBody, 2, extBytes.length);
-        assertEquals("h2", TlsMessageParser.parseEncryptedExtensions(eeBody).alpn);
+        assertEquals(
+                "h2",
+                TlsMessageParser.parseEncryptedExtensions(eeBody, ALL_RESPONSE_TYPES_SENT).alpn);
     }
 
     @Test
@@ -874,7 +1075,8 @@ class TlsMessageParserTest {
     // EncryptedExtensions не содержит ALPN-расширения. Парсер возвращает null.
     void testParseEncryptedExtensionsEmpty() throws Exception {
         TlsMessageParser.ParsedEncryptedExtensions parsed =
-                TlsMessageParser.parseEncryptedExtensions(new byte[] {0x00, 0x00});
+                TlsMessageParser.parseEncryptedExtensions(
+                        new byte[] {0x00, 0x00}, ALL_RESPONSE_TYPES_SENT);
         assertNull(parsed.alpn);
         assertEquals(0, parsed.maxFragLen);
     }
@@ -899,7 +1101,9 @@ class TlsMessageParserTest {
         eeBody[0] = (byte) (extBytes.length >>> 8);
         eeBody[1] = (byte) extBytes.length;
         System.arraycopy(extBytes, 0, eeBody, 2, extBytes.length);
-        assertEquals("http/1.1", TlsMessageParser.parseEncryptedExtensions(eeBody).alpn);
+        assertEquals(
+                "http/1.1",
+                TlsMessageParser.parseEncryptedExtensions(eeBody, ALL_RESPONSE_TYPES_SENT).alpn);
     }
 
     @Test
@@ -1013,6 +1217,11 @@ class TlsMessageParserTest {
         byte[] echoedSid = new byte[shSidLen];
         System.arraycopy(sh, 35, echoedSid, 0, shSidLen);
         assertArrayEquals(sid, echoedSid, "ServerHello session_id совпадает с ClientHello");
+        assertArrayEquals(
+                sid,
+                TlsMessageParser.parseServerHello(sh, SERVER_RESPONSE_TYPES_SENT)
+                        .legacySessionIdEcho,
+                "Разбор ServerHello возвращает то же эхо");
     }
 
     private static byte[] encodeAlpnExt(List<String> protocols) throws Exception {
@@ -1035,7 +1244,7 @@ class TlsMessageParserTest {
      * Используется в тестах parseClientHelloSni для построения ClientHello
      * с конкретным SNI.
      */
-    private static byte[] sniExt(String hostname) throws Exception {
+    static byte[] sniExt(String hostname) throws Exception {
         byte[] nameBytes = hostname.getBytes(StandardCharsets.US_ASCII);
         ByteArrayOutputStream sniBody = new ByteArrayOutputStream();
         TlsEncoding.encodeUint16(sniBody, 3 + nameBytes.length); // ServerNameList length

@@ -484,7 +484,10 @@ public final class ExtensionsAccumulator {
         } catch (IOException e) {
             throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
         }
-        return DerCodec.encodeSequence(gs.toByteArray());
+        // RFC 5280 использует IMPLICIT TAGS для [0]/[1] GeneralSubtrees:
+        // содержимое тега — непосредственно последовательность GeneralSubtree
+        // SEQUENCE, без дополнительной обёртки GeneralSubtrees SEQUENCE.
+        return gs.toByteArray();
     }
 
     private static byte[] encodeGeneralSubtree(byte[] baseGeneralName) {

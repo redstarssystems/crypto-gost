@@ -84,36 +84,24 @@ class GostExtensionParserTest {
     // ---------------------------------------------------------------
 
     @Test
-    @DisplayName("Пустая SEQUENCE {} -> ExtensionsResult.empty()")
+    @DisplayName("Пустая SEQUENCE {} -> исключение (Extensions SIZE (1..MAX))")
     void testEmptySequence() {
         byte[] der = DerCodec.encodeSequence();
-        GostExtensionParser.ExtensionsResult r =
-                GostExtensionParser.parseExtensionsFromSequence(der, 0);
-        assertNull(r.sanDnsNames, "пустые расширения -> sanDnsNames=null");
-        assertNull(r.sanIpAddresses);
-        assertFalse(r.isCA);
-        assertEquals(-1, r.pathLen);
-        assertFalse(r.hasUnknownCritical);
-        assertTrue(r.keyUsageValid);
-        assertTrue(r.ekuValid);
-        assertTrue(r.presentExtensionOids.isEmpty());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(der, 0),
+                "Пустая Extensions SEQUENCE должна отклоняться");
     }
 
     @Test
-    @DisplayName("Пустой [3] блок -> ExtensionsResult.empty()")
+    @DisplayName("Пустой [3] блок -> исключение")
     void testEmptyExtBlock() {
         // [3] { SEQUENCE {} } — внутренняя SEQUENCE пустая
         byte[] block = DerCodec.encodeContextConstructed(3, DerCodec.encodeSequence());
-        GostExtensionParser.ExtensionsResult r =
-                GostExtensionParser.parseFromExtensionsBlock(block, 0);
-        assertNull(r.sanDnsNames, "пустой [3] блок -> sanDnsNames=null");
-        assertNull(r.sanIpAddresses);
-        assertFalse(r.isCA);
-        assertEquals(-1, r.pathLen);
-        assertFalse(r.hasUnknownCritical);
-        assertTrue(r.keyUsageValid);
-        assertTrue(r.ekuValid);
-        assertTrue(r.presentExtensionOids.isEmpty());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseFromExtensionsBlock(block, 0, block.length),
+                "Пустой блок [3] должен отклоняться, а не превращаться в «нет расширений»");
     }
 
     // ---------------------------------------------------------------
@@ -150,6 +138,32 @@ class GostExtensionParserTest {
         assertEquals(2, r.sanDnsNames.length);
         assertEquals("host1.org", r.sanDnsNames[0]);
         assertEquals("host2.org", r.sanDnsNames[1]);
+    }
+
+    @Test
+    @DisplayName("SAN: управляющий символ в dNSName отвергается (подделка строки журнала)")
+    void testSanDnsNameControlCharacterRejected() {
+        byte[] sanValue = DerCodec.encodeSequence(dnsName("good.example\r\nFAKE LOG LINE"));
+        byte[] ext = extension(SAN_OID_BYTES, sanValue);
+        byte[] seq = extensionsSeq(ext);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "CR/LF в dNSName должны отвергаться, а не попадать в сообщения и журнал");
+    }
+
+    @Test
+    @DisplayName("SAN: управляющий символ в URI отвергается (подделка строки журнала)")
+    void testSanUriControlCharacterRejected() {
+        byte[] sanValue = DerCodec.encodeSequence(uriName("http://crl.example/\r\nFAKE"));
+        byte[] ext = extension(SAN_OID_BYTES, sanValue);
+        byte[] seq = extensionsSeq(ext);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "CR/LF в SAN URI должны отвергаться");
     }
 
     // ---------------------------------------------------------------
@@ -349,6 +363,57 @@ class GostExtensionParserTest {
         assertTrue(r.keyCertSign, "keyCertSign установлен");
     }
 
+    private static GostExtensionParser.ExtensionsResult parseKeyUsage(
+            int unusedBits, int... bytes) {
+        byte[] content = new byte[1 + bytes.length];
+        content[0] = (byte) unusedBits;
+        for (int i = 0; i < bytes.length; i++) content[1 + i] = (byte) bytes[i];
+        byte[] ext = extension(KU_OID_BYTES, true, DerCodec.encodeTlv(TAG_BIT_STRING, content));
+        return GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+    }
+
+    @Test
+    @DisplayName("KeyUsage: единица в padding-битах (03 02 07 40) -> отказ")
+    // nonRepudiation (0x40) лежит в 7 неиспользуемых битах: значимым остаётся только бит 0.
+    void testKuPaddingBitRejected() {
+        assertThrows(IllegalArgumentException.class, () -> parseKeyUsage(7, 0x40));
+    }
+
+    @Test
+    @DisplayName("KeyUsage: keyCertSign в padding-битах (03 02 03 04) -> отказ")
+    // Иначе обычный сертификат получал бы права CA через мусор в кодировке.
+    void testKuKeyCertSignInPaddingRejected() {
+        assertThrows(IllegalArgumentException.class, () -> parseKeyUsage(3, 0x04));
+    }
+
+    @Test
+    @DisplayName("KeyUsage: unusedBits > 7 -> отказ")
+    void testKuUnusedBitsOutOfRangeRejected() {
+        assertThrows(IllegalArgumentException.class, () -> parseKeyUsage(8, 0x80));
+    }
+
+    @Test
+    @DisplayName("KeyUsage: ненулевой unusedBits при пустом значении -> отказ")
+    void testKuUnusedBitsWithoutValueRejected() {
+        assertThrows(IllegalArgumentException.class, () -> parseKeyUsage(1));
+    }
+
+    @Test
+    @DisplayName("KeyUsage: нулевой padding (03 02 07 80) принимается как digitalSignature")
+    void testKuZeroPaddingAccepted() {
+        GostExtensionParser.ExtensionsResult r = parseKeyUsage(7, 0x80);
+        assertTrue(r.keyUsageValid, "digitalSignature в значимом бите");
+        assertFalse(r.keyCertSign, "keyCertSign не взведён");
+    }
+
+    @Test
+    @DisplayName("KeyUsage: cRLSign и keyCertSign в значимых битах читаются (03 02 01 06)")
+    void testKuCrlSignAndKeyCertSignSignificantBits() {
+        GostExtensionParser.ExtensionsResult r = parseKeyUsage(1, KU_KEY_CERT_SIGN | KU_CRL_SIGN);
+        assertTrue(r.keyCertSign, "keyCertSign — значимый бит 5");
+        assertTrue(r.crlSignValid, "cRLSign — значимый бит 6");
+    }
+
     @Test
     @DisplayName("KeyUsage: отсутствует -> значения по умолчанию (permissive)")
     void testKuAbsent() {
@@ -458,6 +523,47 @@ class GostExtensionParserTest {
 
         assertFalse(r.isCA, "cA=FALSE (по умолчанию)");
         assertEquals(-1, r.pathLen, "pathLen не применим");
+    }
+
+    private static byte[] bcWithRawPathLen(byte... pathLenContent) {
+        byte[] pathLen = DerCodec.encodeTlv(TAG_INTEGER, pathLenContent);
+        return extensionsSeq(
+                extension(BC_OID_BYTES, true, DerCodec.encodeSequence(boolDer(true), pathLen)));
+    }
+
+    @Test
+    @DisplayName(
+            "BasicConstraints: pathLen 02 01 FF (минус один) отклоняется, а не читается как 255")
+    void testBcPathLenMinusOneRejected() {
+        byte[] seq = bcWithRawPathLen((byte) 0xFF);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "Отрицательный pathLen в одном октете должен отвергаться");
+    }
+
+    @Test
+    @DisplayName("BasicConstraints: неминимальная запись pathLen (лишний ведущий 00) отклоняется")
+    void testBcPathLenNonMinimalRejected() {
+        byte[] seq = bcWithRawPathLen((byte) 0x00, (byte) 0x05);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "Неминимальный INTEGER (00 05) должен отвергаться");
+    }
+
+    @Test
+    @DisplayName("BasicConstraints: pathLen 0 и 128 (00 80, ведущий 00 обязателен) принимаются")
+    void testBcPathLenBoundaryValuesAccepted() {
+        assertEquals(
+                0,
+                GostExtensionParser.parseExtensionsFromSequence(bcWithRawPathLen((byte) 0x00), 0)
+                        .pathLen);
+        assertEquals(
+                128,
+                GostExtensionParser.parseExtensionsFromSequence(
+                                bcWithRawPathLen((byte) 0x00, (byte) 0x80), 0)
+                        .pathLen);
     }
 
     @Test
@@ -813,15 +919,13 @@ class GostExtensionParserTest {
     }
 
     @Test
-    @DisplayName("Не-SEQUENCE на входе parseExtensionsFromSequence — возвращает empty()")
+    @DisplayName("Не-SEQUENCE на входе parseExtensionsFromSequence — исключение")
     void testNonSequenceInput() {
         byte[] notSeq = new byte[] {0x01, 0x01, 0x00}; // BOOLEAN
-        GostExtensionParser.ExtensionsResult r =
-                GostExtensionParser.parseExtensionsFromSequence(notSeq, 0);
-        assertSame(
-                GostExtensionParser.ExtensionsResult.empty(),
-                r,
-                "Не-SEQUENCE на входе — возврат пустого результата");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(notSeq, 0),
+                "Не-SEQUENCE на входе должна отклоняться");
     }
 
     // ---------------------------------------------------------------
@@ -845,19 +949,36 @@ class GostExtensionParserTest {
         return DerCodec.encodeSequence(bos.toByteArray());
     }
 
-    /** [0] EXPLICIT permittedSubtrees: A0 LL ... */
-    private static byte[] permittedSubtrees(byte[] generalSubtreesDer) {
-        return DerCodec.encodeContextConstructed(0, generalSubtreesDer);
+    /** [0] IMPLICIT permittedSubtrees: A0 LL <GeneralSubtree>... */
+    private static byte[] permittedSubtrees(byte[] generalSubtreesContent) {
+        return DerCodec.encodeContextConstructed(0, generalSubtreesContent);
     }
 
-    /** [1] EXPLICIT excludedSubtrees: A1 LL ... */
-    private static byte[] excludedSubtrees(byte[] generalSubtreesDer) {
-        return DerCodec.encodeContextConstructed(1, generalSubtreesDer);
+    /** [1] IMPLICIT excludedSubtrees: A1 LL <GeneralSubtree>... */
+    private static byte[] excludedSubtrees(byte[] generalSubtreesContent) {
+        return DerCodec.encodeContextConstructed(1, generalSubtreesContent);
     }
 
-    /** GeneralSubtrees: SEQUENCE OF GeneralSubtree. */
+    /** Содержимое [0]/[1] GeneralSubtrees по RFC 5280 (IMPLICIT TAGS). */
     private static byte[] generalSubtrees(byte[]... generalSubtrees) {
+        return concat(generalSubtrees);
+    }
+
+    /** Legacy EXPLICIT GeneralSubtrees: SEQUENCE OF GeneralSubtree. */
+    private static byte[] legacyGeneralSubtrees(byte[]... generalSubtrees) {
         return DerCodec.encodeSequence(generalSubtrees);
+    }
+
+    private static byte[] concat(byte[]... parts) {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        try {
+            for (byte[] part : parts) {
+                if (part != null) bos.write(part);
+            }
+        } catch (java.io.IOException impossible) {
+            throw new RuntimeException(impossible);
+        }
+        return bos.toByteArray();
     }
 
     /** GeneralSubtree: SEQUENCE { base GeneralName [минимум/максимум] }. */
@@ -866,14 +987,15 @@ class GostExtensionParserTest {
         try {
             bos.write(baseGeneralName);
             if (minimum != null) {
+                // IMPLICIT: примитивный [0], содержимое - тело INTEGER
                 bos.write(
-                        DerCodec.encodeContextConstructed(
-                                0, DerCodec.encodeInteger(BigInteger.valueOf(minimum))));
+                        DerCodec.encodeContextPrimitive(
+                                0, BigInteger.valueOf(minimum).toByteArray()));
             }
             if (maximum != null) {
                 bos.write(
-                        DerCodec.encodeContextConstructed(
-                                1, DerCodec.encodeInteger(BigInteger.valueOf(maximum))));
+                        DerCodec.encodeContextPrimitive(
+                                1, BigInteger.valueOf(maximum).toByteArray()));
             }
         } catch (java.io.IOException impossible) {
             throw new RuntimeException(impossible);
@@ -911,6 +1033,61 @@ class GostExtensionParserTest {
         assertNull(r.nameConstraints.excludedDnsNames);
         assertFalse(r.nameConstraints.hasUnsupportedNameType);
         assertFalse(r.nameConstraints.hasInvalidMinMax);
+    }
+
+    @Test
+    @DisplayName("Элемент Extensions не SEQUENCE отклоняется")
+    void testNonSequenceExtensionRejected() {
+        byte[] notSequence = DerCodec.encodeTlv(TAG_INTEGER, new byte[] {1});
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostExtensionParser.parseExtensionsFromSequence(
+                                extensionsSeq(notSequence), 0));
+    }
+
+    @Test
+    @DisplayName("Extension без OID отклоняется")
+    void testExtensionWithoutOidRejected() {
+        byte[] noOid = DerCodec.encodeSequence(DerCodec.encodeOctetString(new byte[0]));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(noOid), 0));
+    }
+
+    @Test
+    @DisplayName("Дубликат BasicConstraints отклоняется")
+    void testDuplicateBasicConstraintsRejected() {
+        byte[] ext = extension(BC_OID_BYTES, DerCodec.encodeSequence());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext, ext), 0),
+                "Повтор BasicConstraints запрещён RFC 5280 §4.2");
+    }
+
+    @Test
+    @DisplayName("Дубликат NameConstraints отклоняется")
+    void testDuplicateNameConstraintsRejected() {
+        byte[] nc =
+                ncSequence(
+                        permittedSubtrees(generalSubtrees(generalSubtree(dnsName("example.com")))),
+                        null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext, ext), 0),
+                "Повтор NameConstraints запрещён RFC 5280 §4.2");
+    }
+
+    @Test
+    @DisplayName("Дубликат неизвестного некритичного расширения отклоняется")
+    void testDuplicateUnknownExtensionRejected() {
+        byte[] unknownOid = {0x2A, 0x03, 0x04};
+        byte[] ext = extension(unknownOid, new byte[0]);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext, ext), 0),
+                "Повтор OID запрещён независимо от известности расширения");
     }
 
     @Test
@@ -1075,6 +1252,262 @@ class GostExtensionParserTest {
                 "maximum=5 — hasInvalidMinMax должно быть true");
     }
 
+    // GeneralSubtree.minimum/maximum - IMPLICIT, примитивные теги 0x80/0x81 (RFC 5280 §4.2.1.10)
+
+    private static GostExtensionParser.ExtensionsResult parseNameConstraintsWithSubtree(
+            byte[] subtree) {
+        byte[] nc = ncSequence(permittedSubtrees(generalSubtrees(subtree)), null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        return GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+    }
+
+    private static byte[] subtreeWithRaw(byte[] base, byte[] rawDistanceTlv) {
+        java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+        bos.write(base, 0, base.length);
+        bos.write(rawDistanceTlv, 0, rawDistanceTlv.length);
+        return DerCodec.encodeSequence(bos.toByteArray());
+    }
+
+    @Test
+    @DisplayName("NameConstraints: legacy-форма minimum [0] EXPLICIT (0xA0 + INTEGER) -> malformed")
+    void testSubtreeConstructedMinimumMalformed() {
+        byte[] legacy =
+                DerCodec.encodeContextConstructed(
+                        0, DerCodec.encodeInteger(java.math.BigInteger.ZERO));
+        GostExtensionParser.ExtensionsResult r =
+                parseNameConstraintsWithSubtree(subtreeWithRaw(dnsName("example.com"), legacy));
+        assertTrue(r.nameConstraints.hasMalformed, "не-DER форма 0xA0 должна отвергаться");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: minimum = 0 в примитивной форме принимается без флага min/max")
+    // Явный DEFAULT не по DER, но семантически равен отсутствию - безопасно принять.
+    void testSubtreeExplicitZeroMinimumAccepted() {
+        byte[] st = generalSubtree(dnsName("example.com"), 0, null);
+        GostExtensionParser.ExtensionsResult r = parseNameConstraintsWithSubtree(st);
+        assertFalse(r.nameConstraints.hasMalformed, "minimum=0 корректно разобран");
+        assertFalse(r.nameConstraints.hasInvalidMinMax, "minimum=0 не ограничивает дерево");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: обрезанный INTEGER в maximum -> malformed")
+    void testSubtreeTruncatedMaximumMalformed() {
+        // длина содержимого 5 заявлена в заголовке, а в GeneralSubtree остался 1 байт;
+        // следующий GeneralSubtree обеспечивает байты за границей: без привязки к обёртке
+        // значение «съело» бы их
+        byte[] truncated = {(byte) 0x81, 0x05, 0x01};
+        byte[] first = subtreeWithRaw(dnsName("example.com"), truncated);
+        byte[] second = generalSubtree(dnsName("example.org"));
+        byte[] nc = ncSequence(permittedSubtrees(generalSubtrees(first, second)), null);
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+        assertTrue(r.nameConstraints.hasMalformed, "значение не может выходить за GeneralSubtree");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: пустое тело INTEGER и неминимальная кодировка -> malformed")
+    void testSubtreeNonMinimalIntegerMalformed() {
+        for (byte[] bad : new byte[][] {{(byte) 0x81, 0x00}, {(byte) 0x81, 0x02, 0x00, 0x01}}) {
+            GostExtensionParser.ExtensionsResult r =
+                    parseNameConstraintsWithSubtree(subtreeWithRaw(dnsName("example.com"), bad));
+            assertTrue(r.nameConstraints.hasMalformed, "некорректный INTEGER должен отвергаться");
+        }
+    }
+
+    @Test
+    @DisplayName("NameConstraints: отрицательный minimum -> malformed")
+    void testSubtreeNegativeMinimumMalformed() {
+        byte[] negative = {(byte) 0x80, 0x01, (byte) 0xFF};
+        GostExtensionParser.ExtensionsResult r =
+                parseNameConstraintsWithSubtree(subtreeWithRaw(dnsName("example.com"), negative));
+        assertTrue(r.nameConstraints.hasMalformed, "BaseDistance не бывает отрицательным");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: дубль minimum -> malformed")
+    void testSubtreeDuplicateMinimumMalformed() {
+        byte[] twice = {(byte) 0x80, 0x01, 0x03, (byte) 0x80, 0x01, 0x03};
+        GostExtensionParser.ExtensionsResult r =
+                parseNameConstraintsWithSubtree(subtreeWithRaw(dnsName("example.com"), twice));
+        assertTrue(r.nameConstraints.hasMalformed, "повтор minimum недопустим");
+    }
+
+    // Фиксированные DER-векторы NameConstraints (extnValue без OCTET STRING).
+    // IMPLICIT-вектор получен OpenSSL 3:
+    //   -addext nameConstraints=critical,permitted;DNS:example.com
+    private static final byte[] EXTERNAL_IMPLICIT_NC = {
+        0x30,
+        0x11,
+        (byte) 0xA0,
+        0x0F,
+        0x30,
+        0x0D,
+        (byte) 0x82,
+        0x0B,
+        0x65,
+        0x78,
+        0x61,
+        0x6D,
+        0x70,
+        0x6C,
+        0x65,
+        0x2E,
+        0x63,
+        0x6F,
+        0x6D
+    };
+
+    // Тот же набор в legacy EXPLICIT-форме, которую писал старый builder библиотеки.
+    private static final byte[] LEGACY_EXPLICIT_NC = {
+        0x30,
+        0x13,
+        (byte) 0xA0,
+        0x11,
+        0x30,
+        0x0F,
+        0x30,
+        0x0D,
+        (byte) 0x82,
+        0x0B,
+        0x65,
+        0x78,
+        0x61,
+        0x6D,
+        0x70,
+        0x6C,
+        0x65,
+        0x2E,
+        0x63,
+        0x6F,
+        0x6D
+    };
+
+    @Test
+    @DisplayName("NameConstraints: фиксированный IMPLICIT-вектор OpenSSL")
+    void testParseNameConstraintsFixedImplicitVector() {
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, EXTERNAL_IMPLICIT_NC);
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertFalse(
+                r.nameConstraints.hasMalformed, "IMPLICIT-вектор не должен считаться malformed");
+        assertArrayEquals(
+                new String[] {"example.com"},
+                r.nameConstraints.permittedDnsNames,
+                "permitted dNSName должен извлекаться");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: legacy EXPLICIT-вектор всё ещё принимается")
+    void testParseNameConstraintsLegacyExplicitVector() {
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, LEGACY_EXPLICIT_NC);
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertFalse(r.nameConstraints.hasMalformed, "legacy EXPLICIT должен оставаться валидным");
+        assertArrayEquals(new String[] {"example.com"}, r.nameConstraints.permittedDnsNames);
+    }
+
+    @Test
+    @DisplayName("NameConstraints: пустой NC SEQUENCE — malformed")
+    void testParseNameConstraintsEmptyNcMalformed() {
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, ncSequence(null, null));
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertTrue(r.nameConstraints.hasMalformed, "пустой NC без поддеревьев — malformed");
+        assertFalse(r.nameConstraints.isEmpty());
+    }
+
+    @Test
+    @DisplayName("NameConstraints: не-SEQUENCE внутри GeneralSubtrees — malformed")
+    void testParseNameConstraintsNonSequenceSubtreeMalformed() {
+        byte[] ps = permittedSubtrees(new byte[] {0x02, 0x01, 0x00});
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, ncSequence(ps, null));
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertTrue(
+                r.nameConstraints.hasMalformed,
+                "элемент GeneralSubtrees, не являющийся SEQUENCE, должен отклоняться");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: trailing bytes после NC SEQUENCE — malformed")
+    void testParseNameConstraintsTrailingAfterNcMalformed() {
+        byte[] ps = permittedSubtrees(generalSubtrees(generalSubtree(dnsName("example.com"))));
+        byte[] nc = concat(ncSequence(ps, null), new byte[] {0x05, 0x00});
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, nc);
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertTrue(r.nameConstraints.hasMalformed, "trailing bytes — malformed");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: trailing bytes после legacy EXPLICIT-контейнера — malformed")
+    void testParseNameConstraintsLegacyExplicitTrailingMalformed() {
+        byte[] st = generalSubtree(dnsName("example.com"));
+        byte[] ps = permittedSubtrees(concat(legacyGeneralSubtrees(st), new byte[] {0x05, 0x00}));
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, ncSequence(ps, null));
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertTrue(
+                r.nameConstraints.hasMalformed,
+                "legacy EXPLICIT-контейнер должен быть единственным элементом [0]");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: неизвестный trailing tag в GeneralSubtree — malformed")
+    void testParseNameConstraintsUnknownTrailingTagMalformed() {
+        byte[] st =
+                DerCodec.encodeSequence(
+                        dnsName("example.com"), DerCodec.encodeContextConstructed(2, new byte[0]));
+        byte[] ps = permittedSubtrees(generalSubtrees(st));
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, ncSequence(ps, null));
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertTrue(r.nameConstraints.hasMalformed, "неизвестный trailing tag — malformed");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: min не INTEGER — malformed")
+    void testParseNameConstraintsBadMinMalformed() {
+        byte[] st =
+                DerCodec.encodeSequence(
+                        dnsName("example.com"),
+                        DerCodec.encodeContextConstructed(0, boolDer(true)));
+        byte[] ps = permittedSubtrees(generalSubtrees(st));
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, ncSequence(ps, null));
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertTrue(r.nameConstraints.hasMalformed, "min не INTEGER — malformed");
+    }
+
+    @Test
+    @DisplayName("NameConstraints: повторный [0] permittedSubtrees — malformed")
+    void testParseNameConstraintsDuplicatePermittedMalformed() {
+        byte[] ps = permittedSubtrees(generalSubtrees(generalSubtree(dnsName("example.com"))));
+        byte[] ext = extension(NC_OID_BYTES_LOCAL, true, ncSequence(concat(ps, ps), null));
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+
+        assertNotNull(r.nameConstraints);
+        assertTrue(r.nameConstraints.hasMalformed, "повторный [0] — malformed");
+    }
+
     // ========================================================================
     // otherName юнит-тесты: валидный разбор и malformed -> IllegalArgumentException
     // ========================================================================
@@ -1134,6 +1567,25 @@ class GostExtensionParserTest {
                 IllegalArgumentException.class,
                 () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
                 "otherName с OID но без [0] EXPLICIT — fail-closed");
+    }
+
+    @Test
+    @DisplayName(
+            "SAN: otherName с OID нулевой длины -> IllegalArgumentException, а не чтение соседнего байта")
+    void testSanOtherNameZeroLengthOid() {
+        // 06 00 следом за собой имеет [0] EXPLICIT: прежний разбор брал первый байт чужого
+        // элемента как значение OID и возвращал выдуманный идентификатор
+        byte[] value =
+                DerCodec.encodeContextConstructed(0, DerCodec.encodeTlv(0x0C, new byte[] {0x41}));
+        byte[] malformed =
+                DerCodec.encodeTlv(0xA0, DerCodec.concat(new byte[] {0x06, 0x00}, value));
+        byte[] sanValue = DerCodec.encodeSequence(malformed);
+        byte[] seq = extensionsSeq(extension(SAN_OID_BYTES, sanValue));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "OID нулевой длины в otherName — fail-closed");
     }
 
     @Test
@@ -1238,5 +1690,323 @@ class GostExtensionParserTest {
         // Старые поля работают как раньше
         assertNotNull(r.certPolicyOids);
         assertEquals(1, r.certPolicyOids.length);
+    }
+
+    // ---------------------------------------------------------------
+    // Строгий разбор: BOOLEAN critical / cA
+    // ---------------------------------------------------------------
+
+    /** Extension с произвольным (возможно битым) BOOLEAN-элементом. */
+    private static byte[] extensionWithRawBoolean(byte[] oidBytes, byte[] rawBool, byte[] value) {
+        return DerCodec.encodeSequence(
+                DerCodec.encodeTlv(TAG_OID, oidBytes), rawBool, DerCodec.encodeOctetString(value));
+    }
+
+    @Test
+    @DisplayName("critical BOOLEAN: пустой -> исключение, а не FALSE")
+    void testCriticalBooleanEmptyRejected() {
+        byte[] ext =
+                extensionWithRawBoolean(
+                        new byte[] {0x2A, 0x03, 0x04},
+                        new byte[] {0x01, 0x00},
+                        new byte[] {0x05, 0x00});
+        byte[] seq = extensionsSeq(ext);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "пустой critical BOOLEAN скрывал бы неизвестное critical-расширение");
+    }
+
+    @Test
+    @DisplayName("critical BOOLEAN: длина 2 -> исключение")
+    void testCriticalBooleanTwoOctetsRejected() {
+        byte[] ext =
+                extensionWithRawBoolean(
+                        new byte[] {0x2A, 0x03, 0x04},
+                        new byte[] {0x01, 0x02, 0x00, 0x00},
+                        new byte[] {0x05, 0x00});
+        byte[] seq = extensionsSeq(ext);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "critical BOOLEAN длиной 2 — не DER");
+    }
+
+    @Test
+    @DisplayName("critical BOOLEAN: 0x01 -> исключение")
+    void testCriticalBooleanNonDerTrueRejected() {
+        byte[] ext =
+                extensionWithRawBoolean(
+                        new byte[] {0x2A, 0x03, 0x04},
+                        new byte[] {0x01, 0x01, 0x01},
+                        new byte[] {0x05, 0x00});
+        byte[] seq = extensionsSeq(ext);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "critical = 0x01 не является DER-кодировкой TRUE");
+    }
+
+    @Test
+    @DisplayName("critical BOOLEAN: явный FALSE (0x00) принимается")
+    void testCriticalBooleanExplicitFalseAccepted() {
+        byte[] ext =
+                extensionWithRawBoolean(
+                        new byte[] {0x2A, 0x03, 0x04},
+                        new byte[] {0x01, 0x01, 0x00},
+                        new byte[] {0x05, 0x00});
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0);
+        assertFalse(r.hasUnknownCritical, "явный FALSE — не critical");
+    }
+
+    @Test
+    @DisplayName("BasicConstraints cA: 0x01, пустой, длина 2 -> исключение")
+    void testBasicConstraintsCaMalformedBooleanRejected() {
+        byte[][] badBooleans = {
+            {0x01, 0x01, 0x01}, {0x01, 0x00}, {0x01, 0x02, (byte) 0xFF, (byte) 0xFF}
+        };
+        for (byte[] badBool : badBooleans) {
+            byte[] bcValue = DerCodec.encodeSequence(badBool);
+            byte[] seq = extensionsSeq(extension(BC_OID_BYTES, true, bcValue));
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                    "некорректный cA BOOLEAN должен отклоняться");
+        }
+    }
+
+    @Test
+    @DisplayName("BasicConstraints cA: 0xFF -> true, 0x00 -> false")
+    void testBasicConstraintsCaStrictBooleanValues() {
+        byte[] caTrue =
+                extensionsSeq(
+                        extension(BC_OID_BYTES, true, DerCodec.encodeSequence(boolDer(true))));
+        byte[] caFalse =
+                extensionsSeq(
+                        extension(BC_OID_BYTES, true, DerCodec.encodeSequence(boolDer(false))));
+        assertTrue(GostExtensionParser.parseExtensionsFromSequence(caTrue, 0).isCA, "cA=0xFF");
+        assertFalse(GostExtensionParser.parseExtensionsFromSequence(caFalse, 0).isCA, "cA=0x00");
+    }
+
+    @Test
+    @DisplayName("BasicConstraints: лишние байты после pathLen -> исключение")
+    void testBasicConstraintsTrailingDataRejected() {
+        byte[] bcValue =
+                DerCodec.encodeSequence(
+                        boolDer(true),
+                        DerCodec.encodeInteger(BigInteger.ONE),
+                        new byte[] {0x05, 0x00});
+        byte[] seq = extensionsSeq(extension(BC_OID_BYTES, true, bcValue));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "лишние поля в BasicConstraints — повреждённая структура");
+    }
+
+    // ---------------------------------------------------------------
+    // Строгий разбор: границы
+    // ---------------------------------------------------------------
+
+    @Test
+    @DisplayName("Extension выходит за пределы Extensions SEQUENCE -> исключение")
+    void testExtensionOverflowsExtensionsSequence() {
+        byte[] ext = extension(BC_OID_BYTES, true, DerCodec.encodeSequence(boolDer(true)));
+        // Увеличиваем длину Extension на 1 байт: он «съест» первый байт за SEQUENCE
+        byte[] seq = extensionsSeq(ext);
+        byte[] withTail = java.util.Arrays.copyOf(seq, seq.length + 4);
+        withTail[seq.length] = 0x00;
+        int extLenPos = 1 + 1; // 30 LL | 30 LL ...
+        withTail[extLenPos + 1] = (byte) (withTail[extLenPos + 1] + 1);
+        // Extensions SEQUENCE сохранила прежнюю длину, но Extension просит больше
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(withTail, 0, seq.length),
+                "Extension не может выходить за границу Extensions");
+    }
+
+    @Test
+    @DisplayName("Мусор после extnValue внутри Extension -> исключение")
+    void testTrailingBytesAfterExtnValue() {
+        byte[] oidDer = DerCodec.encodeTlv(TAG_OID, BC_OID_BYTES);
+        byte[] ext =
+                DerCodec.encodeSequence(
+                        oidDer,
+                        DerCodec.encodeOctetString(DerCodec.encodeSequence()),
+                        new byte[] {0x05, 0x00});
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0),
+                "после extnValue ничего быть не должно");
+    }
+
+    @Test
+    @DisplayName("Extension без extnValue OCTET STRING -> исключение, SAN не теряется молча")
+    void testExtensionWithoutExtnValueRejected() {
+        byte[] oidDer = DerCodec.encodeTlv(TAG_OID, SAN_OID_BYTES);
+        byte[] ext = DerCodec.encodeSequence(oidDer);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(extensionsSeq(ext), 0),
+                "отсутствие extnValue — повреждённая структура, а не «нет SAN»");
+    }
+
+    @Test
+    @DisplayName("[3] блок не последнее поле TBS -> исключение")
+    void testExtensionsBlockMustBeLastInTbs() {
+        byte[] ext = extension(BC_OID_BYTES, true, DerCodec.encodeSequence(boolDer(true)));
+        byte[] block = extBlock(extensionsSeq(ext));
+        byte[] withTail = java.util.Arrays.copyOf(block, block.length + 2);
+        withTail[block.length] = 0x05;
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseFromExtensionsBlock(withTail, 0, withTail.length),
+                "после [3] в TBS не должно быть неразобранных байт");
+    }
+
+    @Test
+    @DisplayName("[3] с не-SEQUENCE -> исключение")
+    void testExtensionsBlockNonSequenceRejected() {
+        byte[] block = extBlock(new byte[] {0x04, 0x00});
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseFromExtensionsBlock(block, 0, block.length),
+                "содержимое [3] обязано быть SEQUENCE");
+    }
+
+    @Test
+    @DisplayName("SAN: GeneralName длиннее SAN SEQUENCE -> исключение")
+    void testSanGeneralNameOverflowRejected() {
+        // SAN SEQUENCE объявляет 3 байта содержимого, а dNSName внутри просит 5
+        byte[] sanValue = new byte[] {0x30, 0x03, (byte) 0x82, 0x05, 'a', 'b', 'c', 'd', 'e'};
+        byte[] seq = extensionsSeq(extension(SAN_OID_BYTES, sanValue));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "имя не должно выходить за границы SAN SEQUENCE");
+    }
+
+    @Test
+    @DisplayName("SAN: SEQUENCE короче extnValue (хвост) -> исключение")
+    void testSanTrailingBytesRejected() {
+        byte[] sanValue = new byte[] {0x30, 0x02, (byte) 0x82, 0x00, 0x05, 0x00};
+        byte[] seq = extensionsSeq(extension(SAN_OID_BYTES, sanValue));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "SAN SEQUENCE должна ровно заполнять extnValue");
+    }
+
+    @Test
+    @DisplayName("SAN: пустая SEQUENCE и не-SEQUENCE -> исключение")
+    void testSanEmptyAndNonSequenceRejected() {
+        byte[] empty = extensionsSeq(extension(SAN_OID_BYTES, DerCodec.encodeSequence()));
+        byte[] nonSeq = extensionsSeq(extension(SAN_OID_BYTES, new byte[] {0x04, 0x00}));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(empty, 0),
+                "SAN SIZE (1..MAX): пустая SEQUENCE недопустима");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(nonSeq, 0),
+                "SAN обязан быть SEQUENCE");
+    }
+
+    @Test
+    @DisplayName("SAN: неизвестный тег GeneralName -> исключение")
+    void testSanUnknownGeneralNameTagRejected() {
+        byte[] sanValue = DerCodec.encodeSequence(DerCodec.encodeTlv(0x8B, new byte[] {0x01}));
+        byte[] seq = extensionsSeq(extension(SAN_OID_BYTES, sanValue));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "CHOICE GeneralName закрыт девятью альтернативами");
+    }
+
+    @Test
+    @DisplayName("SAN: x400/EDI/registeredID/otherName попадают в sanUnsupportedNameForms")
+    void testSanUnsupportedFormsCollected() {
+        byte[] sanValue =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeTlv(0xA3, new byte[] {0x30, 0x00}),
+                        DerCodec.encodeTlv(0xA5, new byte[] {0x30, 0x00}),
+                        DerCodec.encodeTlv(0x88, new byte[] {0x2B, 0x06}));
+        byte[] seq = extensionsSeq(extension(SAN_OID_BYTES, sanValue));
+        GostExtensionParser.ExtensionsResult r =
+                GostExtensionParser.parseExtensionsFromSequence(seq, 0);
+        assertEquals(
+                java.util.EnumSet.of(
+                        UnsupportedGeneralNameForm.X400_ADDRESS,
+                        UnsupportedGeneralNameForm.EDI_PARTY_NAME,
+                        UnsupportedGeneralNameForm.REGISTERED_ID),
+                r.sanUnsupportedNameForms,
+                "SAN должен фиксировать все неподдерживаемые формы");
+    }
+
+    @Test
+    @DisplayName("Лимит: Extensions выходит за limit охватывающей структуры -> исключение")
+    void testExtensionsSequenceBeyondLimit() {
+        byte[] ext = extension(BC_OID_BYTES, true, DerCodec.encodeSequence(boolDer(true)));
+        byte[] seq = extensionsSeq(ext);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0, seq.length - 1),
+                "SEQUENCE не должна выходить за границы охватывающего SET");
+    }
+
+    @Test
+    @DisplayName("Хвост после Extensions SEQUENCE (двухаргументный вариант) -> исключение")
+    void testTrailingBytesAfterExtensionsSequence() {
+        byte[] seq = extensionsSeq(extension(BC_OID_BYTES, true, DerCodec.encodeSequence()));
+        byte[] withTail = java.util.Arrays.copyOf(seq, seq.length + 2);
+        withTail[seq.length] = 0x05;
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(withTail, 0),
+                "limit — конец охватывающей структуры, хвост недопустим");
+    }
+
+    @Test
+    @DisplayName("BasicConstraints: extnValue не SEQUENCE -> исключение, а не isCA=false")
+    void testBasicConstraintsNonSequenceValueRejected() {
+        byte[] seq = extensionsSeq(extension(BC_OID_BYTES, true, new byte[] {0x04, 0x00}));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "битое значение известного расширения не равно «расширения нет»");
+    }
+
+    @Test
+    @DisplayName("BasicConstraints: хвост после SEQUENCE внутри extnValue -> исключение")
+    void testBasicConstraintsTrailingBytesInExtnValue() {
+        byte[] value = DerCodec.encodeSequence(); // 30 00
+        byte[] withTail = java.util.Arrays.copyOf(value, value.length + 2);
+        withTail[value.length] = 0x05;
+        byte[] seq = extensionsSeq(extension(BC_OID_BYTES, true, withTail));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "extnValue должен ровно заполняться одной структурой");
+    }
+
+    @Test
+    @DisplayName("AuthorityKeyIdentifier: extnValue не SEQUENCE -> исключение")
+    void testAkiNonSequenceValueRejected() {
+        byte[] seq = extensionsSeq(extension(AKI_OID_BYTES, new byte[] {0x04, 0x00}));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "AKI обязан быть SEQUENCE");
+    }
+
+    @Test
+    @DisplayName("Неизвестное расширение: содержимое extnValue не интерпретируется")
+    void testUnknownExtensionValueNotInterpreted() {
+        byte[] seq =
+                extensionsSeq(
+                        extension(new byte[] {0x2A, 0x03, 0x04}, new byte[] {0x05, 0x00, 0x01}));
+        assertDoesNotThrow(
+                () -> GostExtensionParser.parseExtensionsFromSequence(seq, 0),
+                "форма значения проверяется только для известных OID");
     }
 }

@@ -1,9 +1,7 @@
 package org.rssys.gost.pkix.cms;
 
 import java.math.BigInteger;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import org.rssys.gost.api.KeyAgreement;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.mode.AcpkmSectionSize;
@@ -11,12 +9,12 @@ import org.rssys.gost.cipher.mode.CtrAcpkmMode;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Расшифровка CMS EnvelopedData.
@@ -30,6 +28,15 @@ import org.rssys.gost.util.DerCodec;
  * </ul>
  *
  * <p>Формат определяется автоматически по тегу первого байта RecipientInfo.
+ *
+ * <p>Поддерживаемые шифры содержимого: {@link GostOids#KUZ_CTR_ACPKM} (без имитовставки) и
+ * {@link GostOids#KUZ_CTR_ACPKM_OMAC} (с имитовставкой в атрибуте content-mac). Контейнер с любым
+ * другим OID шифра отвергается. {@link #decrypt} принимает только контейнеры с имитовставкой;
+ * контейнеры без неё читает {@link #decryptAllowingNoIntegrity}.
+ *
+ * <p>KeyUsage сертификата получателя здесь намеренно не проверяется: расшифровывает владелец
+ * ключа, и отказ ему ничего не защищает. Назначение ключа проверяет отправитель при
+ * {@link CmsEnvelopedDataBuilder#addRecipient}; не «исправляйте» эту асимметрию.
  */
 public final class CmsEnvelopedDataDecryptor {
 
@@ -38,45 +45,147 @@ public final class CmsEnvelopedDataDecryptor {
 
     private static final int TAG_KARI = 0xA1;
     private static final int TAG_KTRI = 0x30;
+    // originatorInfo [0] IMPLICIT (RFC 5652 §6.1) сдвигает позиции recipientInfos и
+    // encryptedContentInfo; поддержки у библиотеки нет, поэтому такой контейнер отвергается явно.
+    private static final int TAG_ORIGINATOR_INFO = 0xA0;
+    private static final int MIN_ENVELOPED_DATA_PARTS = 3;
+    // version, recipientInfos, encryptedContentInfo, unprotectedAttrs: originatorInfo отвергается
+    private static final int MAX_ENVELOPED_DATA_PARTS = 4;
+    private static final int MIN_ENCRYPTED_CONTENT_INFO_PARTS = 3;
+
+    // Обёртка CEK одна и без состояния: сменная реализация дала бы чужому коду открытые KEK и CEK.
+    private static final CmsKeyWrap KEY_WRAP = new Kexp15CmsKeyWrap();
+
+    /** Режим шифра содержимого, выбранный по OID контейнера. */
+    private enum ContentMode {
+        CTR_ACPKM,
+        CTR_ACPKM_OMAC
+    }
+
+    /**
+     * Проверенные параметры шифра содержимого. Разбираются один раз до перебора получателей,
+     * поэтому контейнер с недопустимым шифром отвергается до операций с закрытым ключом.
+     */
+    private static final class ContentCipher {
+        private final ContentMode mode;
+        private final byte[] ukm;
+        // зашифрованный MAC из content-mac: только для CTR_ACPKM_OMAC
+        private final byte[] encryptedMac;
+        // поле encryptedContent [0] как есть: копирование содержимого откладывается до своего
+        // получателя
+        private final byte[] encryptedContentField;
+
+        private ContentCipher(
+                ContentMode mode, byte[] ukm, byte[] encryptedMac, byte[] encryptedContentField) {
+            this.mode = mode;
+            this.ukm = ukm;
+            this.encryptedMac = encryptedMac;
+            this.encryptedContentField = encryptedContentField;
+        }
+    }
 
     private CmsEnvelopedDataDecryptor() {}
 
     /**
-     * Расшифровывает EnvelopedData.
+     * Расшифровывает EnvelopedData, требуя имитовставку содержимого (OMAC).
+     *
+     * <p>Принимает шифр содержимого {@link GostOids#KUZ_CTR_ACPKM_OMAC}; MAC проверяется до выдачи
+     * данных. Контейнер с {@link GostOids#KUZ_CTR_ACPKM} (без имитовставки) отвергается с причиной
+     * {@link PkixException.Reason#INTEGRITY_REQUIRED}: режим CTR не защищает от подмены, а
+     * замена OID шифра и удаление атрибута content-mac иначе давала бы мусор вместо ошибки.
+     * Контейнеры без имитовставки читает {@link #decryptAllowingNoIntegrity}. Любой другой OID
+     * шифра содержимого отвергается.
      *
      * @param envelopedDataDer DER-кодированный ContentInfo(id-envelopedData)
      * @param recipientKey     закрытый ключ получателя
      * @param recipientCert    сертификат получателя (для поиска в SET OF)
-     * @param keyWrap          алгоритм обёртывания ключа
      * @return расшифрованные данные
-     * @throws PkixException если расшифрование не удалось
+     * @throws PkixException если расшифрование не удалось или контейнер без имитовставки
      */
     public static byte[] decrypt(
             byte[] envelopedDataDer,
             PrivateKeyParameters recipientKey,
-            GostCertificate recipientCert,
-            CmsKeyWrap keyWrap)
+            GostCertificate recipientCert)
             throws PkixException {
-        // 1. ContentInfo -> EnvelopedData
-        CmsContentInfo contentInfo = CmsContentInfo.decode(envelopedDataDer);
-        if (!GostOids.CMS_ENVELOPED_DATA.equals(contentInfo.contentType())) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER, "Invalid contentType: expected id-envelopedData");
-        }
-        byte[] envelopedData = contentInfo.content();
-        if (envelopedData == null)
-            throw new PkixException(
-                    PkixException.Reason.OTHER, "ContentInfo does not contain EnvelopedData");
+        return decrypt(envelopedDataDer, recipientKey, recipientCert, true);
+    }
 
-        byte[][] envParts = DerCodec.parseSequenceContents(envelopedData, 0);
-        byte[] recipientInfosField = envParts[1];
-        byte[] encryptedContentInfo = envParts[2];
+    /**
+     * Расшифровывает EnvelopedData, допуская отсутствие имитовставки содержимого.
+     *
+     * <p>Принимает оба шифра содержимого: {@link GostOids#KUZ_CTR_ACPKM_OMAC} и
+     * {@link GostOids#KUZ_CTR_ACPKM}. Для контейнера с имитовставкой MAC проверяется всегда:
+     * метод допускает отсутствие целостности, но не отключает её проверку. Для контейнера без
+     * имитовставки целостность не гарантируется (CTR допускает целенаправленную подмену
+     * шифртекста), поэтому метод нужен для обмена с узлами, которые шлют контейнеры без OMAC, и
+     * для случаев, когда целостность обеспечивает внешняя подпись. Любой другой OID шифра
+     * содержимого отвергается.
+     *
+     * @param envelopedDataDer DER-кодированный ContentInfo(id-envelopedData)
+     * @param recipientKey     закрытый ключ получателя
+     * @param recipientCert    сертификат получателя (для поиска в SET OF)
+     * @return расшифрованные данные
+     * @throws PkixException если расшифрование не удалось
+     */
+    public static byte[] decryptAllowingNoIntegrity(
+            byte[] envelopedDataDer,
+            PrivateKeyParameters recipientKey,
+            GostCertificate recipientCert)
+            throws PkixException {
+        return decrypt(envelopedDataDer, recipientKey, recipientCert, false);
+    }
 
-        // unprotectedAttrs [1] IMPLICIT SET OF Attribute (присутствуют для OMAC)
-        byte[] unprotectedAttrsField = envParts.length > 3 ? envParts[3] : null;
-
-        // 2. Ищем свой RecipientEncryptedKey в SET OF
+    private static byte[] decrypt(
+            byte[] envelopedDataDer,
+            PrivateKeyParameters recipientKey,
+            GostCertificate recipientCert,
+            boolean requireIntegrity)
+            throws PkixException {
+        // Весь разбор недоверенного входа под одним try: непроверяемое исключение парсера
+        // не должно уходить из публичного метода.
         try {
+            // 1. ContentInfo -> EnvelopedData
+            CmsContentInfo contentInfo = CmsContentInfo.decode(envelopedDataDer);
+            if (!GostOids.CMS_ENVELOPED_DATA.equals(contentInfo.contentType())) {
+                throw new PkixException(
+                        PkixException.Reason.OTHER,
+                        "Invalid contentType: expected id-envelopedData");
+            }
+            byte[] envelopedData = contentInfo.content();
+            if (envelopedData == null)
+                throw new PkixException(
+                        PkixException.Reason.OTHER, "ContentInfo does not contain EnvelopedData");
+
+            byte[][] envParts = DerCodec.parseSequenceContents(envelopedData, 0);
+            if (envParts.length < MIN_ENVELOPED_DATA_PARTS) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "EnvelopedData must contain version, recipientInfos and encryptedContentInfo");
+            }
+            // originatorInfo проверяется раньше числа элементов: с ним контейнер на один элемент
+            // длиннее, и причина отказа должна называть именно его
+            if ((envParts[1][0] & 0xFF) == TAG_ORIGINATOR_INFO) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR, "originatorInfo is not supported");
+            }
+            if (envParts.length > MAX_ENVELOPED_DATA_PARTS) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "EnvelopedData has unexpected trailing element(s), got "
+                                + envParts.length
+                                + " element(s)");
+            }
+            byte[] recipientInfosField = envParts[1];
+
+            // unprotectedAttrs [1] IMPLICIT SET OF Attribute (присутствуют для OMAC)
+            byte[] unprotectedAttrsField = envParts.length > 3 ? envParts[3] : null;
+
+            // 2. Шифр содержимого и политика целостности проверяются до перебора получателей:
+            // отказ дешёвый, а VKO на закрытом ключе над заведомо отвергаемым контейнером не нужен.
+            ContentCipher cipher =
+                    resolveContentCipher(envParts[2], unprotectedAttrsField, requireIntegrity);
+
+            // 3. Ищем свой RecipientEncryptedKey в SET OF
             BigInteger mySerial = recipientCert.getSerialNumberBigInt();
             byte[] myIssuer = recipientCert.getIssuerDnBytes();
 
@@ -86,25 +195,11 @@ public final class CmsEnvelopedDataDecryptor {
 
                 if (tag == TAG_KARI) {
                     byte[] result =
-                            decryptKeyAgree(
-                                    riElem,
-                                    recipientKey,
-                                    mySerial,
-                                    myIssuer,
-                                    encryptedContentInfo,
-                                    unprotectedAttrsField,
-                                    keyWrap);
+                            decryptKeyAgree(riElem, recipientKey, mySerial, myIssuer, cipher);
                     if (result != null) return result;
                 } else if (tag == TAG_KTRI) {
                     byte[] result =
-                            decryptKeyTrans(
-                                    riElem,
-                                    recipientKey,
-                                    mySerial,
-                                    myIssuer,
-                                    encryptedContentInfo,
-                                    unprotectedAttrsField,
-                                    keyWrap);
+                            decryptKeyTrans(riElem, recipientKey, mySerial, myIssuer, cipher);
                     if (result != null) return result;
                 } else {
                     throw new PkixException(
@@ -121,6 +216,86 @@ public final class CmsEnvelopedDataDecryptor {
         }
     }
 
+    /**
+     * Разбирает шифр содержимого и проверяет его согласованность с unprotectedAttrs и политикой.
+     *
+     * <p>Порядок проверок задаёт причину отказа: недопустимый OID -> длина UKM -> согласованность
+     * режима с атрибутом content-mac -> требование имитовставки.
+     */
+    private static ContentCipher resolveContentCipher(
+            byte[] encryptedContentInfo, byte[] unprotectedAttrsField, boolean requireIntegrity)
+            throws PkixException {
+        byte[][] eciParts = DerCodec.parseSequenceContents(encryptedContentInfo, 0);
+        if (eciParts.length < MIN_ENCRYPTED_CONTENT_INFO_PARTS) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "EncryptedContentInfo must contain contentType, algorithm and encryptedContent");
+        }
+        byte[][] algParts = DerCodec.parseSequenceContents(eciParts[1], 0);
+
+        String contentAlgOid = DerCodec.parseOid(algParts[0], 0);
+        ContentMode mode;
+        if (GostOids.KUZ_CTR_ACPKM_OMAC.equals(contentAlgOid)) {
+            mode = ContentMode.CTR_ACPKM_OMAC;
+        } else if (GostOids.KUZ_CTR_ACPKM.equals(contentAlgOid)) {
+            mode = ContentMode.CTR_ACPKM;
+        } else {
+            // Неизвестный OID нельзя обрабатывать как Кузнечик: результатом был бы мусор
+            // вместо ошибки.
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "Unsupported content encryption algorithm: " + contentAlgOid);
+        }
+
+        byte[] ukm = extractContentUkm(algParts);
+
+        // Контейнер, в котором режим и атрибут content-mac противоречат друг другу, подменён или
+        // собран некорректно.
+        byte[] encryptedMac = findEncryptedMac(unprotectedAttrsField);
+        if (mode == ContentMode.CTR_ACPKM_OMAC && encryptedMac == null) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "OMAC container missing content-mac attribute ("
+                            + GostOids.ID_CMS_MAC_ATTR
+                            + ") in unprotectedAttrs");
+        }
+        if (mode == ContentMode.CTR_ACPKM && encryptedMac != null) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "content-mac attribute present, but content encryption algorithm is not OMAC");
+        }
+
+        if (requireIntegrity && mode == ContentMode.CTR_ACPKM) {
+            throw new PkixException(
+                    PkixException.Reason.INTEGRITY_REQUIRED,
+                    "Content integrity (OMAC) required, container uses " + contentAlgOid);
+        }
+        return new ContentCipher(mode, ukm, encryptedMac, eciParts[2]);
+    }
+
+    private static byte[] extractContentUkm(byte[][] algParts) throws PkixException {
+        if (algParts.length > 1 && (algParts[1][0] & 0xFF) == DerCodec.TAG_SEQUENCE) {
+            byte[][] ivSeq = DerCodec.parseSequenceContents(algParts[1], 0);
+            if (ivSeq.length > 0 && (ivSeq[0][0] & 0xFF) == DerCodec.TAG_OCTET_STRING) {
+                byte[] ukm = DerCodec.parseOctetString(ivSeq[0], 0);
+                if (ukm.length != GostOids.CMS_CONTENT_UKM_LEN) {
+                    throw new PkixException(
+                            PkixException.Reason.PARSE_ERROR,
+                            "Content UKM must be "
+                                    + GostOids.CMS_CONTENT_UKM_LEN
+                                    + " bytes, got "
+                                    + ukm.length);
+                }
+                return ukm;
+            }
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "IV/UKM (OCTET STRING) not found in cipher params SEQUENCE");
+        }
+        throw new PkixException(
+                PkixException.Reason.PARSE_ERROR, "Cipher params (SEQUENCE) not found");
+    }
+
     // ========================================================================
     // kari (KeyAgreeRecipientInfo, тег 0xA1)
     // ========================================================================
@@ -130,9 +305,7 @@ public final class CmsEnvelopedDataDecryptor {
             PrivateKeyParameters recipientKey,
             BigInteger mySerial,
             byte[] myIssuer,
-            byte[] encryptedContentInfo,
-            byte[] unprotectedAttrsField,
-            CmsKeyWrap keyWrap)
+            ContentCipher cipher)
             throws PkixException {
 
         int[] kariLen = DerCodec.decodeLength(riElem, 1);
@@ -149,7 +322,7 @@ public final class CmsEnvelopedDataDecryptor {
 
         PublicKeyParameters ephemeralPub = extractEphemeralPublicKey(kaParts[idx++]);
         byte[] ukmBytes = extractUkm(kaParts[idx++]);
-        idx++;
+        byte[] keyEncryptionAlgorithm = kaParts[idx++];
 
         // recipientEncryptedKeys SEQUENCE OF
         byte[][] rekSeq = DerCodec.parseSequenceContents(kaParts[idx], 0);
@@ -164,6 +337,11 @@ public final class CmsEnvelopedDataDecryptor {
                 continue;
             }
 
+            // Алгоритм обёртки сверяется до VKO: закрытый ключ не работает над заведомо
+            // отвергаемым получателем. Вложенный agreement-OID не проверяется: вариант VKO
+            // выбирается по размеру ключа получателя.
+            requireKeyWrapAlgorithm(keyEncryptionAlgorithm, "kari");
+
             byte[] wrappedCek = DerCodec.parseOctetString(rkParts[1], 0);
 
             BigInteger ukm = Kexp15CmsKeyWrap.kegVkoUkm(ukmBytes);
@@ -175,16 +353,26 @@ public final class CmsEnvelopedDataDecryptor {
             // IV = UKM[24..31] (формула ТК26)
             byte[] iv = Arrays.copyOfRange(ukmBytes, 24, 32);
 
-            byte[] cek = keyWrap.unwrap(wrappedCek, kek, ukmBytes, iv);
-            Arrays.fill(kek, (byte) 0);
-            Arrays.fill(iv, (byte) 0);
+            byte[] cek;
+            try {
+                cek = KEY_WRAP.unwrap(wrappedCek, kek, ukmBytes, iv);
+            } finally {
+                // Отказ проверки имитовставки KExp15 (намеренно испорченный wrappedCek) не должен
+                // оставлять KEK и IV в памяти: затирание на любом пути выхода
+                Arrays.fill(kek, (byte) 0);
+                Arrays.fill(iv, (byte) 0);
+            }
 
             try {
-                byte[] decrypted = decryptContent(encryptedContentInfo, unprotectedAttrsField, cek);
-                LOG.log(
-                        Level.INFO,
-                        "EnvelopedData (kari) decrypted successfully for recipient serial 0x{0}",
-                        mySerial.toString(16));
+                byte[] decrypted = decryptContent(cipher, cek);
+                // Серийный номер переводится в строку до проверки уровня внутри log: при
+                // выключенном DEBUG эта работа лишняя на каждой расшифровке
+                if (LOG.isLoggable(Level.DEBUG)) {
+                    LOG.log(
+                            Level.DEBUG,
+                            "EnvelopedData (kari) decrypted successfully for recipient serial 0x{0}",
+                            mySerial.toString(16));
+                }
                 return decrypted;
             } finally {
                 Arrays.fill(cek, (byte) 0);
@@ -202,9 +390,7 @@ public final class CmsEnvelopedDataDecryptor {
             PrivateKeyParameters recipientKey,
             BigInteger mySerial,
             byte[] myIssuer,
-            byte[] encryptedContentInfo,
-            byte[] unprotectedAttrsField,
-            CmsKeyWrap keyWrap)
+            ContentCipher cipher)
             throws PkixException {
 
         // KeyTransRecipientInfo: SEQUENCE { version, rid, keyEncAlg, encryptedKey }
@@ -221,14 +407,7 @@ public final class CmsEnvelopedDataDecryptor {
             return null;
         }
 
-        // Проверка keyEncryptionAlgorithm
-        byte[][] algParts = DerCodec.parseSequenceContents(ktParts[2], 0);
-        String keyAlgOid = DerCodec.parseOid(algParts[0], 0);
-        if (!GostOids.WRAP_KUZNYECHIK_KEXP15.equals(keyAlgOid)) {
-            throw new PkixException(
-                    PkixException.Reason.OTHER,
-                    "Unsupported key encryption algorithm in ktri: " + keyAlgOid);
-        }
+        requireKeyWrapAlgorithm(ktParts[2], "ktri");
 
         // encryptedKey OCTET STRING -> GostR3410-KeyTransport SEQUENCE
         byte[] encKeyDer = DerCodec.parseOctetString(ktParts[3], 0);
@@ -254,16 +433,25 @@ public final class CmsEnvelopedDataDecryptor {
         // IV = UKM[24..31] (формула ТК26: UKM[25..24+n/2] для n=16)
         byte[] iv = Arrays.copyOfRange(ukmBytes, 24, 32);
 
-        byte[] cek = keyWrap.unwrap(wrappedCek, kek, ukmBytes, iv);
-        Arrays.fill(kek, (byte) 0);
-        Arrays.fill(iv, (byte) 0);
+        byte[] cek;
+        try {
+            cek = KEY_WRAP.unwrap(wrappedCek, kek, ukmBytes, iv);
+        } finally {
+            // Отказ проверки имитовставки KExp15 (намеренно испорченный wrappedCek) не должен
+            // оставлять KEK и IV в памяти: затирание на любом пути выхода
+            Arrays.fill(kek, (byte) 0);
+            Arrays.fill(iv, (byte) 0);
+        }
 
         try {
-            byte[] decrypted = decryptContent(encryptedContentInfo, unprotectedAttrsField, cek);
-            LOG.log(
-                    Level.INFO,
-                    "EnvelopedData (ktri) decrypted successfully for recipient serial 0x{0}",
-                    mySerial.toString(16));
+            byte[] decrypted = decryptContent(cipher, cek);
+            // См. комментарий в ветке kari: серийный номер не переводим в строку зря
+            if (LOG.isLoggable(Level.DEBUG)) {
+                LOG.log(
+                        Level.DEBUG,
+                        "EnvelopedData (ktri) decrypted successfully for recipient serial 0x{0}",
+                        mySerial.toString(16));
+            }
             return decrypted;
         } finally {
             Arrays.fill(cek, (byte) 0);
@@ -276,10 +464,32 @@ public final class CmsEnvelopedDataDecryptor {
      * <p>Формат: SEQUENCE { algorithm AlgorithmIdentifier, subjectPublicKey BIT STRING }.
      * Использует тот же кодировщик, что и X.509-сертификаты.
      */
-    private static PublicKeyParameters parseEphemeralPublicKey(byte[] spkiDer)
+    static PublicKeyParameters parseEphemeralPublicKey(byte[] spkiDer) throws PkixException {
+        // Весь элемент приводится к DER: байты после внешней SEQUENCE не должны молча отбрасываться
+        byte[][] spkiParts =
+                DerCodec.parseStrictSequence(DerCodec.normalizeBerSequenceToDer(spkiDer));
+        return decodeEphemeralPublicKey(spkiParts);
+    }
+
+    /**
+     * Собирает DER SubjectPublicKeyInfo из двух элементов эфемерного ключа и декодирует его.
+     * <p>
+     * {@code decodePublicKey} принимает только DER, а КриптоПро кодирует AlgorithmIdentifier
+     * с indefinite-length, поэтому он приводится к определённой длине заранее. BIT STRING
+     * нормализации не требует: он примитивный. Лишний элемент не отбрасывается молча, а
+     * отвергается: иначе одному ключу соответствовало бы несколько кодировок.
+     */
+    private static PublicKeyParameters decodeEphemeralPublicKey(byte[][] spkiParts)
             throws PkixException {
-        byte[][] spkiParts = DerCodec.parseSequenceContents(spkiDer, 0);
-        byte[] spki = DerCodec.encodeSequence(spkiParts[0], spkiParts[1]);
+        if (spkiParts.length != 2) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "Invalid ephemeral public key: expected AlgorithmIdentifier and BIT STRING, got "
+                            + spkiParts.length
+                            + " element(s)");
+        }
+        byte[] algorithm = DerCodec.normalizeBerSequenceToDer(spkiParts[0]);
+        byte[] spki = DerCodec.encodeSequence(algorithm, spkiParts[1]);
         return org.rssys.gost.jca.spec.GostDerCodec.decodePublicKey(spki);
     }
 
@@ -287,7 +497,7 @@ public final class CmsEnvelopedDataDecryptor {
     // Общие методы
     // ========================================================================
 
-    private static PublicKeyParameters extractEphemeralPublicKey(byte[] originatorField)
+    static PublicKeyParameters extractEphemeralPublicKey(byte[] originatorField)
             throws PkixException {
         int[] oLenInfo = DerCodec.decodeLength(originatorField, 1);
         int oStart = 1 + oLenInfo[1];
@@ -301,10 +511,23 @@ public final class CmsEnvelopedDataDecryptor {
             // { algorithm, subjectPublicKey } без внешней обёртки. Возвращаем SEQUENCE-тег
             // на место, чтобы получить корректный SubjectPublicKeyInfo.
             byte[] originatorKey = Arrays.copyOfRange(inner, pkStart, pkStart + pkLen[0]);
-            byte[] spki = DerCodec.encodeSequence(originatorKey);
-            return org.rssys.gost.jca.spec.GostDerCodec.decodePublicKey(spki);
+            byte[][] spkiParts =
+                    DerCodec.parseSequenceContents(DerCodec.encodeSequence(originatorKey), 0);
+            return decodeEphemeralPublicKey(spkiParts);
         }
         throw new PkixException(PkixException.Reason.PARSE_ERROR, "Unsupported originator type");
+    }
+
+    /** Внешний OID keyEncryptionAlgorithm должен быть KExp15 Кузнечика; иное — отказ. */
+    private static void requireKeyWrapAlgorithm(byte[] algorithmIdentifier, String recipientType)
+            throws PkixException {
+        byte[][] algParts = DerCodec.parseSequenceContents(algorithmIdentifier, 0);
+        String keyAlgOid = DerCodec.parseOid(algParts[0], 0);
+        if (!KEY_WRAP.algorithmOid().equals(keyAlgOid)) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "Unsupported key encryption algorithm in " + recipientType + ": " + keyAlgOid);
+        }
     }
 
     private static byte[] extractUkm(byte[] ukmField) {
@@ -313,33 +536,8 @@ public final class CmsEnvelopedDataDecryptor {
         return DerCodec.parseOctetString(ukmField, uStart);
     }
 
-    private static byte[] decryptContent(
-            byte[] encryptedContentInfo, byte[] unprotectedAttrsField, byte[] cek)
-            throws PkixException {
-        byte[][] eciParts = DerCodec.parseSequenceContents(encryptedContentInfo, 0);
-        byte[] paramsDer = eciParts[1];
-        byte[][] algParts = DerCodec.parseSequenceContents(paramsDer, 0);
-
-        // Разбираем OID контентного шифра
-        String contentAlgOid = DerCodec.parseOid(algParts[0], 0);
-        boolean isOmac = GostOids.KUZ_CTR_ACPKM_OMAC.equals(contentAlgOid);
-
-        byte[] ukm;
-        if (algParts.length > 1 && (algParts[1][0] & 0xFF) == DerCodec.TAG_SEQUENCE) {
-            byte[][] ivSeq = DerCodec.parseSequenceContents(algParts[1], 0);
-            if (ivSeq.length > 0 && (ivSeq[0][0] & 0xFF) == DerCodec.TAG_OCTET_STRING) {
-                ukm = DerCodec.parseOctetString(ivSeq[0], 0);
-            } else {
-                throw new PkixException(
-                        PkixException.Reason.PARSE_ERROR,
-                        "IV/UKM (OCTET STRING) not found in cipher params SEQUENCE");
-            }
-        } else {
-            throw new PkixException(
-                    PkixException.Reason.PARSE_ERROR, "Cipher params (SEQUENCE) not found");
-        }
-
-        byte[] encContentField = eciParts[2];
+    private static byte[] decryptContent(ContentCipher cipher, byte[] cek) throws PkixException {
+        byte[] encContentField = cipher.encryptedContentField;
         int encContentTag = encContentField[0] & 0xFF;
         byte[] encryptedContent;
         if (encContentTag == DerCodec.TAG_CTX_PRIMITIVE_0) {
@@ -364,37 +562,45 @@ public final class CmsEnvelopedDataDecryptor {
                             + Integer.toHexString(encContentTag).toUpperCase());
         }
 
+        return switch (cipher.mode) {
+            case CTR_ACPKM_OMAC -> decryptOmac(cipher, cek, encryptedContent);
+            case CTR_ACPKM -> decryptPlain(cipher, cek, encryptedContent);
+        };
+    }
+
+    private static byte[] decryptOmac(ContentCipher cipher, byte[] cek, byte[] encryptedContent)
+            throws PkixException {
+        try {
+            return CmsOmacHelper.decrypt(encryptedContent, cipher.encryptedMac, cek, cipher.ukm);
+        } catch (AuthenticationException e) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER, "OMAC verification failed: " + e.getMessage());
+        }
+    }
+
+    private static byte[] decryptPlain(ContentCipher cipher, byte[] cek, byte[] encryptedContent) {
         SymmetricKey key = new SymmetricKey(cek);
         try {
-            if (isOmac) {
-                byte[] encryptedMac = extractEncryptedMac(unprotectedAttrsField);
-                try {
-                    return CmsOmacHelper.decrypt(encryptedContent, encryptedMac, cek, ukm);
-                } catch (AuthenticationException e) {
-                    throw new PkixException(
-                            PkixException.Reason.OTHER,
-                            "OMAC verification failed: " + e.getMessage());
-                }
-            } else {
-                return CtrAcpkmMode.decryptOnly(key, ukm, encryptedContent, AcpkmSectionSize.CMS);
-            }
+            return CtrAcpkmMode.decryptOnly(
+                    key, cipher.ukm, encryptedContent, AcpkmSectionSize.CMS);
         } finally {
             key.destroy();
         }
     }
 
     /**
-     * Извлекает значение {@code encryptedMac} из атрибута content-mac в unprotectedAttrs.
+     * Ищет атрибут content-mac в unprotectedAttrs и возвращает его {@code encryptedMac}.
+     *
+     * <p>Один и тот же разбор служит обеим проверкам согласованности: OMAC-режиму атрибут
+     * обязателен, обычному режиму он запрещён.
      *
      * @param unprotectedAttrsField поле unprotectedAttrs [1] IMPLICIT SET OF Attribute, или null
-     * @return 16-байтовый зашифрованный MAC
-     * @throws PkixException если атрибут не найден или имеет неверную структуру
+     * @return 16-байтовый зашифрованный MAC, или null, если атрибута нет
+     * @throws PkixException если структура атрибутов неверна
      */
-    private static byte[] extractEncryptedMac(byte[] unprotectedAttrsField) throws PkixException {
+    private static byte[] findEncryptedMac(byte[] unprotectedAttrsField) throws PkixException {
         if (unprotectedAttrsField == null) {
-            throw new PkixException(
-                    PkixException.Reason.PARSE_ERROR,
-                    "OMAC container missing unprotectedAttrs (content-mac attribute required)");
+            return null;
         }
 
         // unprotectedAttrs — [1] IMPLICIT SET OF Attribute (контекстный constructed тег 0xA1)
@@ -406,41 +612,75 @@ public final class CmsEnvelopedDataDecryptor {
                             + Integer.toHexString(tag).toUpperCase());
         }
 
-        int[] uaLen = DerCodec.decodeLength(unprotectedAttrsField, 1);
-        int uaStart = 1 + uaLen[1];
-        int uaContentLen = uaLen[0];
-        byte[] uaContent =
-                Arrays.copyOfRange(unprotectedAttrsField, uaStart, uaStart + uaContentLen);
-
-        // [1] IMPLICIT SET OF Attribute — тег 0xA1 заменяет тег SET OF.
-        // Содержимое SET: непосредственно Attribute SEQUENCE (без явного 0x31).
-        // Поддерживаем и вариант с явным SET внутри (старая кодировка).
-        byte[][] attributes;
-        int contentTag = uaContent[0] & 0xFF;
-        if (contentTag == DerCodec.TAG_SET) {
-            attributes = DerCodec.parseSetContents(uaContent, 0);
-        } else {
-            // Непосредственно SEQUENCE (или несколько) — собираем по одному
-            List<byte[]> attrs = new ArrayList<>();
-            int pos = 0;
-            while (pos < uaContentLen) {
-                int seqTag = uaContent[pos] & 0xFF;
-                if (seqTag != DerCodec.TAG_SEQUENCE) {
-                    break;
-                }
-                int[] seqLen = DerCodec.decodeLength(uaContent, pos + 1);
-                int seqStart = pos + 1 + seqLen[1];
-                int seqTotal = seqStart - pos + seqLen[0];
-                attrs.add(Arrays.copyOfRange(uaContent, pos, seqTotal));
-                pos = seqTotal;
+        // Ошибка DER-парсера внутри атрибутов — битая структура, а не программная ошибка
+        try {
+            int[] uaLen = DerCodec.decodeLength(unprotectedAttrsField, 1);
+            int uaStart = 1 + uaLen[1];
+            int uaContentLen = uaLen[0];
+            if (uaContentLen == DerCodec.INDEFINITE_LENGTH) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "indefinite-length unprotectedAttrs is not supported");
             }
-            attributes = attrs.toArray(new byte[0][]);
+            // SET OF Attribute по RFC 5652 §5.3 не бывает пустым (SIZE (1..MAX))
+            if (uaContentLen == 0) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR, "unprotectedAttrs must not be empty");
+            }
+            byte[] uaContent =
+                    Arrays.copyOfRange(unprotectedAttrsField, uaStart, uaStart + uaContentLen);
+            return findEncryptedMacIn(parseAttributes(uaContent));
+        } catch (IllegalArgumentException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    "Malformed unprotectedAttrs: " + e.getMessage(),
+                    e);
         }
+    }
+
+    /**
+     * Разбирает содержимое unprotectedAttrs в список Attribute.
+     *
+     * <p>[1] IMPLICIT SET OF Attribute — тег 0xA1 заменяет тег SET OF, содержимое — непосредственно
+     * Attribute SEQUENCE (без явного 0x31). Поддерживается и вариант с явным SET внутри (старая
+     * кодировка); хвост после него отвергается, как и в ветке без SET.
+     */
+    private static byte[][] parseAttributes(byte[] uaContent) throws PkixException {
+        if ((uaContent[0] & 0xFF) == DerCodec.TAG_SET) {
+            int[] setLen = DerCodec.decodeLength(uaContent, 1);
+            if (setLen[0] != DerCodec.INDEFINITE_LENGTH
+                    && 1 + setLen[1] + setLen[0] != uaContent.length) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "unprotectedAttrs contains data after the SET OF Attribute");
+            }
+            return DerCodec.parseSetContents(uaContent, 0);
+        }
+        // Общий разбор SEQUENCE сам продвигается по данным и отвергает усечённый или лишний хвост;
+        // ручной цикл по смещениям здесь уже приводил к бесконечному росту списка на входе,
+        // доступном без ключа получателя.
+        return DerCodec.parseSequenceContents(DerCodec.encodeSequence(uaContent), 0);
+    }
+
+    private static byte[] findEncryptedMacIn(byte[][] attributes) throws PkixException {
+        byte[] encryptedMac = null;
         for (byte[] attrDer : attributes) {
+            if ((attrDer[0] & 0xFF) != DerCodec.TAG_SEQUENCE) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "unprotectedAttrs element must be Attribute SEQUENCE, got tag 0x"
+                                + Integer.toHexString(attrDer[0] & 0xFF).toUpperCase());
+            }
             byte[][] attrParts = DerCodec.parseSequenceContents(attrDer, 0);
             String attrOid = DerCodec.parseOid(attrParts[0], 0);
             if (!GostOids.ID_CMS_MAC_ATTR.equals(attrOid)) {
                 continue;
+            }
+            // Два content-mac неоднозначны: какой из них проверять, решал бы порядок в контейнере
+            if (encryptedMac != null) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR,
+                        "unprotectedAttrs contains more than one content-mac attribute");
             }
 
             // attrParts[1] = SET { OCTET STRING }
@@ -450,13 +690,9 @@ public final class CmsEnvelopedDataDecryptor {
                         PkixException.Reason.PARSE_ERROR,
                         "content-mac attribute: expected 1 value, got " + setValues.length);
             }
-            return DerCodec.parseOctetString(setValues[0], 0);
+            encryptedMac = DerCodec.parseOctetString(setValues[0], 0);
         }
 
-        throw new PkixException(
-                PkixException.Reason.PARSE_ERROR,
-                "content-mac attribute ("
-                        + GostOids.ID_CMS_MAC_ATTR
-                        + ") not found in unprotectedAttrs");
+        return encryptedMac;
     }
 }

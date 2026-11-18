@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: clean doc format test test-stress-tlssession test-stress-tlssession-mixed fuzz fuzz-all android
+.PHONY: clean doc format test crossval crossval-cades crossval-full cryptopro-root-install cryptopro-root-remove cryptopro-root-status test-stress-tlssession test-stress-tlssession-mixed fuzz fuzz-all android
 
 ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 
@@ -32,6 +32,57 @@ test:
 		echo "Total tests across all modules: $$total"; \
 	fi; \
 	exit $$ret
+
+# Кросс-валидация с внешними реализациями (OpenSSL, КриптоПро и др.). Тесты, создающие контейнеры
+# КриптоПро, по умолчанию пропускаются: генерация ключа может открыть окно датчика случайных
+# чисел (нужно двигать мышью). Использование: make crossval [MVN_ARGS=...]
+# -Dcrossval.openssl.requireGostMac=true: на этой машине обязана быть сборка OpenSSL с ГОСТ MAC в PKCS#12;
+# без неё проверки PKCS#12 ушли бы в пропуск, а прогон остался бы зелёным
+crossval:
+	mvn -Pcrossval test -Dexec.skip=true -Dcrossval.openssl.requireGostMac=true $(MVN_ARGS)
+
+# CAdES-проверки КриптоПро с полной цепочкой (-cadesbes/-cadest/-xlongtype1). На время прогона
+# в доверенное хранилище uRoot ставится тестовый корень (его ключ лежит в репозитории) и после
+# прогона снимается. Нужен доступ к графической сессии (DISPLAY и XAUTHORITY): без него установка
+# корня невозможна. Только на машине разработчика, не на боевых машинах.
+crossval-cades:
+	mvn -Pcrossval -pl x-validation-tests/cadest -am test -Dexec.skip=true \
+		-Dcrossval.cryptopro.trustRoot=true -Dtest='CryptoproCAdES*' \
+		-Dsurefire.failIfNoSpecifiedTests=false $(MVN_ARGS)
+
+# То же, но с контейнерами КриптоПро. Запускать, когда вы у машины: КриптоПро может
+# показать окно «поводите мышью» (перед релизом). Также ставит и снимает тестовый корень в uRoot
+# (см. crossval-cades).
+crossval-full: crossval-cades
+	mvn -Pcrossval test -Dexec.skip=true -Dcrossval.openssl.requireGostMac=true -Dcrossval.cryptopro.containers=true $(MVN_ARGS)
+
+# Операторская установка тестового корня в uRoot (для ручных сценариев вне тестов, например
+# генерации вектора). Без явного согласия отказывает: make cryptopro-root-install ROOT_ARGS=--yes
+cryptopro-root-install:
+	$(call run_root_tool,install $(ROOT_ARGS))
+
+# Аварийная очистка: удаляет тестовый корень из uRoot, если прогон убили и корень остался.
+# Удаляет только сертификат с нашим DER; при нескольких сертификатах с тем же keyid ничего не
+# удаляет и печатает подсказку (удалить все: make cryptopro-root-remove ROOT_ARGS=--force). Корень
+# живого прогона не трогает никогда; снять и его можно только явным ROOT_ARGS=--force-live. Код выхода
+# ненулевой, если хоть одна метка не убрана.
+cryptopro-root-remove:
+	$(call run_root_tool,remove $(ROOT_ARGS))
+
+cryptopro-root-status:
+	$(call run_root_tool,status)
+
+# Собирает cadest с зависимостями и запускает операторскую команду CryptoproRootTool. Файл
+# classpath пишется в target/ каждого модуля реактора, поэтому результат не зависит от порядка
+# модулей; берётся файл cadest (его зависимости из реактора - target/classes, а не устаревшие jar)
+define run_root_tool
+	@mvn -q -Pcrossval -pl x-validation-tests/cadest -am -DskipTests -Dexec.skip=true \
+		test-compile dependency:build-classpath \
+		-Dmdep.outputFile=target/root-tool.classpath \
+		-Dmdep.includeScope=test
+	@java -cp "$$(cat $(ROOT)/x-validation-tests/cadest/target/root-tool.classpath):$(ROOT)/x-validation-tests/cadest/target/test-classes:$(ROOT)/x-validation-tests/cadest/target/classes" \
+		org.rssys.gost.crossval.cadest.CryptoproRootTool $(1)
+endef
 
 # Однопоточный throughput TlsSession (Kuznyechik-MGM-Streebog-256)
 # Длительность: 5 прогонов × ~20 с ≈ 100 с

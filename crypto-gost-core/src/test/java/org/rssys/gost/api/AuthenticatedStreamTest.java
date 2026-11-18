@@ -14,8 +14,17 @@ import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
 
-@DisplayName("AuthenticatedStream Tests")
+@DisplayName("AuthenticatedStream: тесты")
 class AuthenticatedStreamTest {
+
+    /** Позиция версии в заголовке потока: первый байт. */
+    private static final int VERSION_POS = 0;
+
+    /** Позиция nonce в заголовке потока: сразу после версии. */
+    private static final int NONCE_POS = VERSION_POS + 1;
+
+    /** Позиция размера чанка (4 байта big-endian) в заголовке потока: после nonce. */
+    private static final int CHUNK_SIZE_POS = NONCE_POS + AuthenticatedStream.NONCE_SIZE;
 
     private static SymmetricKey newKey() {
         return KeyGenerator.generateSymmetricKey();
@@ -47,6 +56,31 @@ class AuthenticatedStreamTest {
     // -----------------------------------------------------------------------
     // Roundtrip — разные размеры данных
     // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("sealing и opening: мастер-ключ не 32 байта -> IllegalArgumentException")
+    void testWrongKeyLengthRejected() throws Exception {
+        ByteArrayOutputStream valid = new ByteArrayOutputStream();
+        try (OutputStream seal = AuthenticatedStream.sealing(valid, newKey())) {
+            seal.write(new byte[] {1, 2, 3});
+        }
+
+        for (int length : new int[] {16, 33}) {
+            SymmetricKey badKey = new SymmetricKey(new byte[length]);
+            ByteArrayOutputStream sink = new ByteArrayOutputStream();
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> AuthenticatedStream.sealing(sink, badKey),
+                    "sealing принял ключ длиной " + length + " байт");
+            assertEquals(0, sink.size(), "До отказа в поток не должно быть записано ни байта");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            AuthenticatedStream.opening(
+                                    new ByteArrayInputStream(valid.toByteArray()), badKey),
+                    "opening принял ключ длиной " + length + " байт");
+        }
+    }
 
     @Test
     @DisplayName("Roundtrip: 1 байт")
@@ -130,7 +164,7 @@ class AuthenticatedStreamTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("Заголовок потока: nonce[8] случайный, version=0x02, chunkSize")
+    @DisplayName("Заголовок потока: version=0x03, nonce[16] случайный, chunkSize")
     void testStreamHeader() throws Exception {
         ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
         try (OutputStream seal = AuthenticatedStream.sealing(encBuf, newKey(), 1024)) {
@@ -138,22 +172,23 @@ class AuthenticatedStreamTest {
         }
         byte[] bytes = encBuf.toByteArray();
 
-        // nonce[8] — случайные байты, не должны быть нулями (вероятность ~2^-64)
+        // nonce[16] — случайные байты, не должны быть нулями (вероятность 2^-128)
         boolean allZeros = true;
-        for (int i = 0; i < 8; i++) {
+        for (int i = NONCE_POS; i < NONCE_POS + AuthenticatedStream.NONCE_SIZE; i++) {
             if (bytes[i] != 0) {
                 allZeros = false;
                 break;
             }
         }
         assertFalse(allZeros, "nonce не должен быть нулевым");
-        // version = 0x02
-        assertEquals(0x02, bytes[8] & 0xFF, "version");
-        // chunkSize = 1024 (big-endian) на позициях 9..12
-        assertEquals(0x00, bytes[9] & 0xFF);
-        assertEquals(0x00, bytes[10] & 0xFF);
-        assertEquals(0x04, bytes[11] & 0xFF);
-        assertEquals(0x00, bytes[12] & 0xFF);
+        // version = 0x03, первый байт заголовка
+        assertEquals(0x03, bytes[VERSION_POS] & 0xFF, "version");
+        // chunkSize = 1024 (big-endian) сразу после nonce
+        assertEquals(0x00, bytes[CHUNK_SIZE_POS] & 0xFF);
+        assertEquals(0x00, bytes[CHUNK_SIZE_POS + 1] & 0xFF);
+        assertEquals(0x04, bytes[CHUNK_SIZE_POS + 2] & 0xFF);
+        assertEquals(0x00, bytes[CHUNK_SIZE_POS + 3] & 0xFF);
+        assertEquals(21, AuthenticatedStream.HEADER_SIZE, "размер заголовка потока");
     }
 
     @Test
@@ -165,7 +200,7 @@ class AuthenticatedStreamTest {
             seal.write(data);
         }
         byte[] bytes = encBuf.toByteArray();
-        // Заголовок потока = 13 байт, затем чанк: chunkLen(4) + flags(1) + ...
+        // Заголовок потока = HEADER_SIZE байт, затем чанк: chunkLen(4) + flags(1) + ...
         // Для одного чанка flags должен быть FLAG_LAST = 0x01
         int flagPos = AuthenticatedStream.HEADER_SIZE + 4; // после chunkLen
         assertEquals(
@@ -180,8 +215,8 @@ class AuthenticatedStreamTest {
 
     @Test
     @DisplayName(
-            "opening: подмена байта в CMAC чанка -> IOException (причина: AuthenticationException)")
-    void testTamperedChunkCmac() throws Exception {
+            "opening: изменение байта в CMAC чанка -> IOException (причина: AuthenticationException)")
+    void testChangedChunkCmac() throws Exception {
         byte[] data = "data to protect".getBytes("UTF-8");
         ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
         SymmetricKey key = newKey();
@@ -190,8 +225,8 @@ class AuthenticatedStreamTest {
         }
 
         byte[] packet = encBuf.toByteArray();
-        // Портим CMAC в чанке: заголовок(13) + chunkLen(4) + flags(1) + IV(8) = позиция 26
-        int cmacPos = AuthenticatedStream.HEADER_SIZE + 4 + 1 + 8;
+        // Портим CMAC в чанке: заголовок потока(21) + chunkLen(4) + flags(1) = позиция 26
+        int cmacPos = AuthenticatedStream.HEADER_SIZE + 4 + 1;
         packet[cmacPos] ^= 0xFF;
 
         IOException ex =
@@ -214,8 +249,8 @@ class AuthenticatedStreamTest {
     }
 
     @Test
-    @DisplayName("opening: подмена байта в шифртексте -> IOException")
-    void testTamperedCiphertext() throws Exception {
+    @DisplayName("opening: изменение байта в шифртексте -> IOException")
+    void testChangedCiphertext() throws Exception {
         byte[] data = new byte[100];
         Arrays.fill(data, (byte) 0xAB);
         ByteArrayOutputStream encBuf = new ByteArrayOutputStream();
@@ -298,14 +333,40 @@ class AuthenticatedStreamTest {
     @Test
     @DisplayName("opening: неверная версия заголовка -> AuthenticationException")
     void testInvalidVersion() {
-        // Заголовок: nonce[8] + version[1] + chunkSize[4]
-        // version != 0x02 -> отказ
+        // Заголовок: version[1] + nonce[16] + chunkSize[4]
+        // version != 0x03 -> отказ
         byte[] badHeader = new byte[50];
-        badHeader[8] = 0x01; // VERSION=0x01, не 0x02
+        badHeader[VERSION_POS] = 0x01; // VERSION=0x01, не 0x03
 
-        assertThrows(
-                AuthenticationException.class,
-                () -> AuthenticatedStream.opening(new ByteArrayInputStream(badHeader), newKey()));
+        AuthenticationException ex =
+                assertThrows(
+                        AuthenticationException.class,
+                        () ->
+                                AuthenticatedStream.opening(
+                                        new ByteArrayInputStream(badHeader), newKey()));
+        assertTrue(
+                ex.getMessage().contains("Unsupported format version"),
+                "отказ должен быть именно по версии, а не по другому полю заголовка");
+    }
+
+    @Test
+    @DisplayName("opening: версия 0x02 в первом байте заголовка отвергается")
+    void testVersionTwoInFirstByteRejected() {
+        // Заголовок синтетический: версия 0x02 в первом байте, поэтому отказ именно по версии
+        // детерминирован. Настоящий поток 0.7.1 (там на этом месте байт nonce) проверяет
+        // AuthenticatedStreamFormatTest
+        byte[] packet = new byte[50];
+        packet[VERSION_POS] = 0x02;
+
+        AuthenticationException ex =
+                assertThrows(
+                        AuthenticationException.class,
+                        () ->
+                                AuthenticatedStream.opening(
+                                        new ByteArrayInputStream(packet), newKey()));
+        assertTrue(
+                ex.getMessage().contains("Unsupported format version: 2"),
+                "версия 0x02 должна отвергаться: откатов на прежний формат нет");
     }
 
     @Test
@@ -368,7 +429,7 @@ class AuthenticatedStreamTest {
         }
         byte[] packet = encBuf.toByteArray();
 
-        // chunkLen — первые 4 байта после заголовка потока (HEADER_SIZE = 13)
+        // chunkLen — первые 4 байта после заголовка потока (HEADER_SIZE)
         int chunkLenPos = AuthenticatedStream.HEADER_SIZE;
         packet[chunkLenPos] = (byte) 0x00;
         packet[chunkLenPos + 1] = (byte) 0x00;
@@ -405,11 +466,11 @@ class AuthenticatedStreamTest {
         }
         byte[] packet = encBuf.toByteArray();
 
-        // chunkSize — байты 9..12 (после nonce[8] + VERSION[1])
-        packet[9] = (byte) 0x7F;
-        packet[10] = (byte) 0xFF;
-        packet[11] = (byte) 0xFF;
-        packet[12] = (byte) 0xFF; // > MAX_CHUNK_SIZE (1_048_576)
+        // chunkSize — 4 байта после nonce[16] + VERSION[1]
+        packet[CHUNK_SIZE_POS] = (byte) 0x7F;
+        packet[CHUNK_SIZE_POS + 1] = (byte) 0xFF;
+        packet[CHUNK_SIZE_POS + 2] = (byte) 0xFF;
+        packet[CHUNK_SIZE_POS + 3] = (byte) 0xFF; // > MAX_CHUNK_SIZE (1_048_576)
 
         AuthenticationException ex =
                 assertThrows(
@@ -518,7 +579,7 @@ class AuthenticatedStreamTest {
     }
 
     // -----------------------------------------------------------------------
-    // Защита от подмены флага через AAD
+    // Защита от изменения флага через AAD
     // -----------------------------------------------------------------------
 
     @Test
@@ -554,7 +615,7 @@ class AuthenticatedStreamTest {
         assertInstanceOf(
                 AuthenticationException.class,
                 ex.getCause(),
-                "Подмена FLAG_NORMAL -> FLAG_LAST должна обнаруживаться через AAD");
+                "Изменение FLAG_NORMAL -> FLAG_LAST должно обнаруживаться через AAD");
     }
 
     @Test
@@ -597,8 +658,8 @@ class AuthenticatedStreamTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("opening: подмена nonce в заголовке -> AuthenticationException на первом чанке")
-    void testTamperedHeaderNonce() throws Exception {
+    @DisplayName("opening: изменение nonce в заголовке -> AuthenticationException на первом чанке")
+    void testChangedHeaderNonce() throws Exception {
         byte[] data = new byte[64];
         CryptoRandom.INSTANCE.nextBytes(data);
         SymmetricKey key = newKey();
@@ -628,16 +689,16 @@ class AuthenticatedStreamTest {
         assertInstanceOf(
                 AuthenticationException.class,
                 ex.getCause(),
-                "Подмена nonce в заголовке должна обнаруживаться через AAD первого чанка");
+                "Изменение nonce в заголовке должно обнаруживаться через AAD первого чанка");
     }
 
     @Test
     @DisplayName("opening: VERSION=0x01 -> AuthenticationException при чтении заголовка")
     void testOldVersionRejected() {
         byte[] header = new byte[50];
-        // Заполняем nonce[8] случайными байтами — версия на byte[8] должна быть 0x01
+        // Заполняем заголовок случайными байтами — версия первого байта должна быть 0x01
         CryptoRandom.INSTANCE.nextBytes(header);
-        header[8] = 0x01; // VERSION = 0x01 (старый формат)
+        header[VERSION_POS] = 0x01; // VERSION = 0x01 (старый формат)
 
         AuthenticationException ex =
                 assertThrows(

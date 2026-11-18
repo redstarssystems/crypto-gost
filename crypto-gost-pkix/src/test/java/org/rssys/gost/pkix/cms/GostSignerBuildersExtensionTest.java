@@ -12,10 +12,12 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.SignedDerTestSupport;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostDerParser;
 import org.rssys.gost.pkix.cert.GostOcspRequestBuilder;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.CryptoRandom;
@@ -25,7 +27,6 @@ import org.rssys.gost.util.DerCodec;
  * Интеграционные тесты абстракции {@link GostSigner} в оставшихся PKIX-билдерах
  * (CmsSignedDataBuilder, GostOcspResponseBuilder, CountersignatureBuilder,
  * GostOcspRequestBuilder) и транзитивных потребителях.
- * План 231.
  */
 @DisplayName("GostSigner в CMS/OCSP/countersignature билдерах")
 class GostSignerBuildersExtensionTest {
@@ -68,10 +69,10 @@ class GostSignerBuildersExtensionTest {
                         .addSigner(GostSigner.of(kp256.getPrivate()), cert256)
                         .build();
 
-        assertArrayEquals(
+        SignedDerTestSupport.assertSameExceptSignature(
+                "CMS SignedData: пути priv и GostSigner должны давать идентичный DER (без значения подписи)",
                 viaPriv,
-                viaSigner,
-                "CMS SignedData: пути priv и GostSigner должны давать идентичный DER");
+                viaSigner);
     }
 
     @Test
@@ -90,10 +91,10 @@ class GostSignerBuildersExtensionTest {
                         .addSigner(GostSigner.of(kp512.getPrivate()), cert512)
                         .build();
 
-        assertArrayEquals(
+        SignedDerTestSupport.assertSameExceptSignature(
+                "CMS SignedData 512: пути priv и GostSigner должны давать идентичный DER (без значения подписи)",
                 viaPriv,
-                viaSigner,
-                "CMS SignedData 512: пути priv и GostSigner должны давать идентичный DER");
+                viaSigner);
     }
 
     @Test
@@ -131,19 +132,27 @@ class GostSignerBuildersExtensionTest {
     @DisplayName(
             "GostOcspResponseBuilder: регрессия — пути priv и GostSigner.of() дают идентичный DER")
     void ocspResponseRegression() {
+        // Времена зафиксированы: по умолчанию они берутся из часов отдельными вызовами,
+        // и два sign() на границе секунды дают разные DER независимо от пути подписи.
         byte[] viaPriv =
                 GostOcspResponseBuilder.create(cert256.getSerialNumber())
                         .issuerDn(cert256.getSubjectDnBytes())
+                        .producedAt("20260101000000Z")
+                        .thisUpdate("20260101000000Z")
+                        .nextUpdate("20990101000000Z")
                         .sign(kp256.getPrivate());
         byte[] viaSigner =
                 GostOcspResponseBuilder.create(cert256.getSerialNumber())
                         .issuerDn(cert256.getSubjectDnBytes())
+                        .producedAt("20260101000000Z")
+                        .thisUpdate("20260101000000Z")
+                        .nextUpdate("20990101000000Z")
                         .sign(GostSigner.of(kp256.getPrivate()));
 
-        assertArrayEquals(
+        SignedDerTestSupport.assertSameExceptSignature(
+                "OCSP ответ: пути priv и GostSigner должны давать идентичный DER (без значения подписи)",
                 viaPriv,
-                viaSigner,
-                "OCSP ответ: пути priv и GostSigner должны давать идентичный DER");
+                viaSigner);
     }
 
     @Test
@@ -195,10 +204,10 @@ class GostSignerBuildersExtensionTest {
                 CountersignatureBuilder.buildCountersignature(
                         parentSig, GostSigner.of(kp256.getPrivate()), cert256, digestOid);
 
-        assertArrayEquals(
+        SignedDerTestSupport.assertSameExceptSignature(
+                "Countersignature: пути priv и GostSigner должны давать идентичный DER (без значения подписи)",
                 viaPriv,
-                viaSigner,
-                "Countersignature: пути priv и GostSigner должны давать идентичный DER");
+                viaSigner);
     }
 
     @Test
@@ -426,7 +435,8 @@ class GostSignerBuildersExtensionTest {
 
         // 3. Верифицируем — оба сертификата как доверенные корни
         VerifiedCAdESData result =
-                CAdESExtender.verifyCountersignature(countersigned, cert256, csCert);
+                CAdESVerifier.verifyCountersignature(
+                        countersigned, TrustAnchors.ofCertificates(cert256, csCert));
 
         assertArrayEquals(
                 DATA, result.data(), "verifyCountersignature должен вернуть исходные данные");

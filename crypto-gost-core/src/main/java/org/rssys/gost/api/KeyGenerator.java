@@ -3,10 +3,10 @@ package org.rssys.gost.api;
 import java.math.BigInteger;
 import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
+import java.util.Arrays;
 import org.rssys.crypto.util.SCrypt;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.CryptoRandom;
@@ -40,13 +40,27 @@ import org.rssys.gost.util.CryptoRandom;
  */
 public final class KeyGenerator {
 
+    /**
+     * Параметр стоимости scrypt по умолчанию: N = 2¹⁷, минимум OWASP при r = 8, p = 1. Память
+     * 128·N·r байт, то есть 128 МиБ одним массивом: на Android 14+ и других устройствах с
+     * ограниченной кучей больший массив может не поместиться. Кому нужна большая стойкость,
+     * передаёт N явно в перегрузке с параметрами.
+     */
+    static final int SCRYPT_N_DEFAULT = 1 << 17;
+
+    /** Размер блока scrypt по умолчанию. */
+    static final int SCRYPT_R_DEFAULT = 8;
+
+    /** Параллелизм scrypt по умолчанию. */
+    static final int SCRYPT_P_DEFAULT = 1;
+
     private KeyGenerator() {}
 
     /**
      * Генерирует случайный симметричный ключ для шифра Кузнечик.
      *
-     * <p>Ключ имеет длину 32 байта (256 бит)
-     * Использует {@link SecureRandom} по умолчанию.
+     * <p>Ключ имеет длину 32 байта (256 бит).
+     * Использует {@link CryptoRandom#INSTANCE}.
      *
      * @return {@link SymmetricKey}
      */
@@ -63,8 +77,13 @@ public final class KeyGenerator {
     public static SymmetricKey generateSymmetricKey(SecureRandom rng) {
         // Кузнечик: длина ключа строго 32 байта (ГОСТ Р 34.12-2015)
         byte[] keyBytes = new byte[Cipher.KEY_SIZE];
-        rng.nextBytes(keyBytes);
-        return new SymmetricKey(keyBytes);
+        try {
+            rng.nextBytes(keyBytes);
+            // SymmetricKey делает собственную копию: исходный массив затираем
+            return new SymmetricKey(keyBytes);
+        } finally {
+            Arrays.fill(keyBytes, (byte) 0);
+        }
     }
 
     /**
@@ -91,7 +110,9 @@ public final class KeyGenerator {
      * @return ключевая пара {@link KeyPair}
      */
     public static KeyPair generateKeyPair(ECParameters params, SecureRandom rng) {
-        int rolen = params.hlen; // 32 для 256-бит, 64 для 512-бит кривых
+        // длина скаляра определяется порядком подгруппы; ECParameters гарантирует, что она
+        // равна hlen, но зависимость от этого инварианта здесь не нужна
+        int rolen = (params.n.bitLength() + Byte.SIZE - 1) / Byte.SIZE;
 
         // Генерируем закрытый ключ d ∈ (0, q)
         // RFC 7091 §5.2: 0 < d < q
@@ -99,16 +120,18 @@ public final class KeyGenerator {
         BigInteger d;
         do {
             byte[] raw = new byte[rolen + 8];
-            rng.nextBytes(raw);
-            d = new BigInteger(1, raw).mod(params.n);
+            try {
+                rng.nextBytes(raw);
+                d = new BigInteger(1, raw).mod(params.n);
+            } finally {
+                Arrays.fill(raw, (byte) 0);
+            }
         } while (d.signum() == 0);
 
-        // Вычисляем открытый ключ Q = d·G
-        ECPoint g = ECPoint.affine(params.gx, params.gy, params);
-        ECPoint q = g.multiply(d).normalize();
-
+        // Q = d·G считает сам закрытый ключ: на зарегистрированной кривой подгруппа
+        // гарантирована построением и повторная проверка multiply(n) не нужна
         PrivateKeyParameters priv = new PrivateKeyParameters(d, params);
-        PublicKeyParameters pub = new PublicKeyParameters(q, params);
+        PublicKeyParameters pub = priv.derivePublicKey();
 
         return new KeyPair(priv, pub);
     }
@@ -122,7 +145,10 @@ public final class KeyGenerator {
      *
      * <p>Параметры по умолчанию:
      * <ul>
-     *   <li>N = 524288 (2^19) — параметр стоимости CPU/памяти</li>
+     *   <li>N = 131072 (2¹⁷) — параметр стоимости CPU/памяти, минимум OWASP;
+     *       памяти нужно 128·N·r байт, то есть 128 МиБ одним массивом. При нехватке кучи
+     *       выбрасывается {@link OutOfMemoryError}: уменьшать N ниже значения по умолчанию не
+     *       следует, а при большей стойкости N передаётся явно</li>
      *   <li>r = 8 — размер блока</li>
      *   <li>p = 1 — параллелизм</li>
      *   <li>dkLen = 32 байта (256 бит) — длина ключа для Кузнечика</li>
@@ -138,8 +164,7 @@ public final class KeyGenerator {
      */
     public static SymmetricKey deriveKey(byte[] password, byte[] salt)
             throws GeneralSecurityException {
-        // Параметры scrypt, рекомендованные RFC 7914 и OWASP
-        return deriveKey(password, salt, 524288, 8, 1);
+        return deriveKey(password, salt, SCRYPT_N_DEFAULT, SCRYPT_R_DEFAULT, SCRYPT_P_DEFAULT);
     }
 
     /**
@@ -156,6 +181,10 @@ public final class KeyGenerator {
     public static SymmetricKey deriveKey(byte[] password, byte[] salt, int N, int r, int p)
             throws GeneralSecurityException {
         byte[] keyBytes = SCrypt.generate(password, salt, N, r, p, Cipher.KEY_SIZE);
-        return new SymmetricKey(keyBytes);
+        try {
+            return new SymmetricKey(keyBytes);
+        } finally {
+            Arrays.fill(keyBytes, (byte) 0);
+        }
     }
 }

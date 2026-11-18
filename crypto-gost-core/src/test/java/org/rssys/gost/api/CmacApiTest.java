@@ -10,7 +10,7 @@ import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.mac.Cmac;
 
-@DisplayName("CmacApi Tests")
+@DisplayName("CmacApi: тесты")
 class CmacApiTest {
 
     private static final byte[] MSG = "hello gost".getBytes(StandardCharsets.UTF_8);
@@ -120,12 +120,12 @@ class CmacApiTest {
     }
 
     @Test
-    @DisplayName("verifyMac: подмена одного бита -> false")
-    void testVerifyMacTampered() {
+    @DisplayName("verifyMac: изменение одного бита -> false")
+    void testVerifyMacChanged() {
         byte[] mac = CmacApi.cmac(MSG, KEY);
-        byte[] tampered = mac.clone();
-        tampered[0] ^= 0x01;
-        assertFalse(CmacApi.verifyMac(mac, tampered));
+        byte[] corrupted = mac.clone();
+        corrupted[0] ^= 0x01;
+        assertFalse(CmacApi.verifyMac(mac, corrupted));
     }
 
     @Test
@@ -134,6 +134,14 @@ class CmacApiTest {
         byte[] mac16 = CmacApi.cmac(MSG, KEY, 16);
         byte[] mac8 = CmacApi.cmac(MSG, KEY, 8);
         assertFalse(CmacApi.verifyMac(mac16, mac8));
+    }
+
+    @Test
+    @DisplayName("verifyMac: проверяемый тег длиннее и начинается с ожидаемого -> false")
+    void testVerifyMacLongerActualWithExpectedPrefix() {
+        byte[] mac16 = CmacApi.cmac(MSG, KEY, 16);
+        byte[] prefix8 = Arrays.copyOf(mac16, 8);
+        assertFalse(CmacApi.verifyMac(prefix8, mac16), "сравнение по префиксу недопустимо");
     }
 
     @Test
@@ -150,6 +158,23 @@ class CmacApiTest {
         assertFalse(CmacApi.verifyMac(mac, null));
     }
 
+    @Test
+    @DisplayName("verifyMac: оба аргумента null -> false (isEqual(null, null) вернул бы true)")
+    void testVerifyMacBothNull() {
+        assertFalse(CmacApi.verifyMac(null, null));
+    }
+
+    @Test
+    @DisplayName("verifyMac: пустой тег в любом аргументе -> false")
+    void testVerifyMacEmptyTag() {
+        byte[] mac = CmacApi.cmac(MSG, KEY);
+        byte[] empty = new byte[0];
+
+        assertFalse(CmacApi.verifyMac(empty, empty), "Два пустых тега");
+        assertFalse(CmacApi.verifyMac(empty, mac), "Пустой ожидаемый тег");
+        assertFalse(CmacApi.verifyMac(mac, empty), "Пустой вычисленный тег");
+    }
+
     // -----------------------------------------------------------------------
     // verifyMac применим и для HMAC
     // -----------------------------------------------------------------------
@@ -160,9 +185,9 @@ class CmacApiTest {
         byte[] hmac = Digest.hmac256(MSG, KEY);
         assertTrue(CmacApi.verifyMac(hmac, Digest.hmac256(MSG, KEY)));
 
-        byte[] tampered = hmac.clone();
-        tampered[3] ^= 0xFF;
-        assertFalse(CmacApi.verifyMac(hmac, tampered));
+        byte[] corrupted = hmac.clone();
+        corrupted[3] ^= 0xFF;
+        assertFalse(CmacApi.verifyMac(hmac, corrupted));
     }
 
     // -----------------------------------------------------------------------

@@ -3,6 +3,11 @@ package org.rssys.gost.pkix.cert;
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,6 +28,16 @@ import org.rssys.gost.util.DerCodec;
  * @see GostDerParser
  */
 public final class GostDnParser {
+
+    private static final int TAG_UTF8_STRING = 0x0C;
+    private static final int TAG_NUMERIC_STRING = 0x12;
+    private static final int TAG_PRINTABLE_STRING = 0x13;
+    private static final int TAG_IA5_STRING = 0x16;
+    // Границы управляющих символов ASCII: C0 (< 0x20) и DEL (0x7F).
+    private static final char ASCII_FIRST_PRINTABLE = 0x20;
+    private static final char ASCII_DEL = 0x7F;
+
+    private static final Charset UTF_32_BE = Charset.forName("UTF-32BE");
 
     private GostDnParser() {}
 
@@ -164,16 +179,23 @@ public final class GostDnParser {
      * NumericString, BMPString.
      */
     static String decodeDnValue(byte[] der, int start, int len, int tag) {
+        // Для показа DN терпимое декодирование: старые сертификаты могут
+        // содержать кириллицу в PrintableString/IA5String, и отказ от такого
+        // сертификата только из-за отображения недопустим. Строгость нужна
+        // в NameConstraints (validateDnValue), где неоднозначность влияет
+        // на решение о доверии.
         switch (tag) {
-            case 0x0C: // UTF8String
+            case TAG_UTF8_STRING:
                 return new String(der, start, len, StandardCharsets.UTF_8);
-            case 0x12: // NumericString
-            case 0x13: // PrintableString
-            case 0x16: // IA5String
+            case TAG_NUMERIC_STRING:
+            case TAG_PRINTABLE_STRING:
+            case TAG_IA5_STRING:
                 return new String(der, start, len, StandardCharsets.US_ASCII);
-            case 0x14: // T61String / TeletexString — фактически Latin-1
+            case TAG_T61_STRING:
                 return new String(der, start, len, StandardCharsets.ISO_8859_1);
-            case 0x1E: // BMPString (UCS-2 big-endian)
+            case TAG_UNIVERSAL_STRING:
+                return new String(der, start, len, UTF_32_BE);
+            case TAG_BMP_STRING:
                 return new String(der, start, len, StandardCharsets.UTF_16BE);
             default:
                 // Неизвестный тип: hex dump (не теряем данные)
@@ -183,6 +205,129 @@ public final class GostDnParser {
                 }
                 if (len > 128) sb.append("...");
                 return sb.toString();
+        }
+    }
+
+    /**
+     * Строго проверяет строковое значение DN-атрибута.
+     *
+     * <p>Замена символов при декодировании недопустима: два разных DER-значения
+     * не должны сходиться в одну строку, иначе сравнение DN и NameConstraints
+     * становится неоднозначным. Поэтому malformed input — ошибка, а не U+FFFD.</p>
+     *
+     * <p>{@code emailAddress} по RFC 5280 обязан быть IA5String; другие теги
+     * для этого OID отклоняются.</p>
+     *
+     * @param der   DER-поток
+     * @param start смещение значения
+     * @param len   длина значения
+     * @param tag   тег значения
+     * @param oid   OID атрибута в точечной нотации
+     * @throws IllegalArgumentException если значение недопустимо для своего тега
+     */
+    static void validateDnValue(byte[] der, int start, int len, int tag, String oid) {
+        if (GostOids.ATTR_EMAIL.equals(oid) && tag != TAG_IA5_STRING) {
+            throw new IllegalArgumentException("emailAddress must be encoded as IA5String");
+        }
+        switch (tag) {
+            case TAG_UTF8_STRING:
+                strictDecode(der, start, len, StandardCharsets.UTF_8);
+                break;
+            case TAG_NUMERIC_STRING:
+                requireNumericString(strictDecode(der, start, len, StandardCharsets.US_ASCII));
+                break;
+            case TAG_PRINTABLE_STRING:
+                requirePrintableString(strictDecode(der, start, len, StandardCharsets.US_ASCII));
+                break;
+            case TAG_IA5_STRING:
+                String ia5Value = strictDecode(der, start, len, StandardCharsets.US_ASCII);
+                if (GostOids.ATTR_EMAIL.equals(oid)) {
+                    requireNoAsciiControl(ia5Value);
+                }
+                break;
+            case TAG_T61_STRING:
+                // ISO-8859-1 отображает любой байт, проверять нечего. Допускать T61 нужно: иначе
+                // цепочки с T61 в DN не проходили бы при любых NameConstraints. Строгость
+                // обеспечивает сравнение в DirectoryNameSubtree (там T61 не декодируется).
+                break;
+            case TAG_UNIVERSAL_STRING:
+                if ((len & 3) != 0) {
+                    throw new IllegalArgumentException(
+                            "UniversalString length must be a multiple of 4");
+                }
+                strictDecode(der, start, len, UTF_32_BE);
+                break;
+            case TAG_BMP_STRING:
+                if ((len & 1) != 0) {
+                    throw new IllegalArgumentException("BMPString length must be even");
+                }
+                strictDecode(der, start, len, StandardCharsets.UTF_16BE);
+                break;
+            default:
+                break;
+        }
+    }
+
+    /**
+     * Адрес электронной почты не содержит управляющих символов ASCII: NUL и переводы строк
+     * обрезают значение в сторонних разборщиках и ломают сравнение с ограничениями.
+     * C1 (0x80-0x9F) отвергает уже строгое декодирование US-ASCII.
+     */
+    private static void requireNoAsciiControl(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c < ASCII_FIRST_PRINTABLE || c == ASCII_DEL) {
+                throw new IllegalArgumentException("emailAddress contains a control character");
+            }
+        }
+    }
+
+    private static void requireNumericString(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c != ' ' && (c < '0' || c > '9')) {
+                throw new IllegalArgumentException(
+                        "NumericString contains a character outside digits and space");
+            }
+        }
+    }
+
+    /**
+     * RFC 5280 Appendix A: countryName — PrintableString (SIZE (2)), код
+     * страны ISO 3166 — две заглавные латинские буквы.
+     */
+    private static void requireCountryCode(String value) {
+        if (value.length() != 2
+                || value.charAt(0) < 'A'
+                || value.charAt(0) > 'Z'
+                || value.charAt(1) < 'A'
+                || value.charAt(1) > 'Z') {
+            throw new IllegalArgumentException(
+                    "countryName must be exactly two uppercase ASCII letters");
+        }
+    }
+
+    /**
+     * X.520 ub-serial-number: PrintableString (SIZE (1..64)). Это атрибут DN,
+     * а не serialNumber сертификата.
+     */
+    private static void requireDnSerialNumber(String value) {
+        if (value.isEmpty() || value.length() > 64) {
+            throw new IllegalArgumentException(
+                    "serialNumber DN value must contain 1..64 characters");
+        }
+        requirePrintableString(value);
+    }
+
+    private static String strictDecode(byte[] der, int start, int len, Charset charset) {
+        CharsetDecoder decoder =
+                charset.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT);
+        try {
+            return decoder.decode(ByteBuffer.wrap(der, start, len)).toString();
+        } catch (CharacterCodingException e) {
+            throw new IllegalArgumentException("DN value is not valid " + charset.name(), e);
         }
     }
 
@@ -212,10 +357,18 @@ public final class GostDnParser {
     }
 
     /**
-     * Обрезает строку для логирования, если она длиннее maxLen.
-     * Добавляет "...[truncated]" при обрезке.
+     * Обрезает строку для логирования, если она длиннее {@code maxLen}.
+     * Добавляет {@code "...[truncated]"} при обрезке.
+     *
+     * <p>Открыт другим модулям библиотеки ({@code tls13}, {@code jsse}): DN и другие строки от
+     * собеседника в журнал пишутся только усечёнными.
+     *
+     * @param s строка или {@code null}
+     * @param maxLen предельная длина
+     * @return строка не длиннее {@code maxLen} с суффиксом при обрезке; {@code null} для
+     *     {@code null}
      */
-    static String truncateForLog(String s, int maxLen) {
+    public static String truncateForLog(String s, int maxLen) {
         if (s == null) return null;
         if (s.length() <= maxLen) return s;
         return s.substring(0, maxLen) + "...[truncated]";
@@ -243,10 +396,38 @@ public final class GostDnParser {
      * Каждый элемент — отдельный RDN: SEQUENCE { SET { SEQUENCE { OID, UTF8String } } }.
      * Структура идентична ожидаемой {@link #parseDnString}.
      *
+     * <p><b>Порядок RDN:</b> метод записывает RDN в том порядке, в котором они
+     * перечислены в строке. RFC 4514 §2.1 задаёт обратный порядок строкового
+     * представления (последний RDN последовательности идёт первым), поэтому
+     * для многозначных DN этот метод не является RFC 4514-совместимым.
+     * Для {@code directoryName} в Name Constraints порядок RDN семантически
+     * важен: формируйте строку в порядке DER-последовательности (корень -> leaf),
+     * например {@code "C=RU,O=Evil,CN=leaf"}.</p>
+     *
+     * <p>Типы значений выбираются по RFC 5280 Appendix A: countryName и
+     * serialNumber кодируются PrintableString, emailAddress — IA5String,
+     * остальные DirectoryString-атрибуты — UTF8String.</p>
+     *
+     * <p><b>Ограничения формата:</b> запятая всегда разделяет RDN, в значении её
+     * передать нельзя; знак {@code =} в значении допустим (делится только по первому);
+     * экранирование RFC 4514 не обрабатывается, обратная косая черта - обычный символ;
+     * пробелы по краям ключа и значения отбрасываются. Управляющие символы
+     * ({@link Character#isISOControl(int)}) отвергаются во всей строке, в том числе по
+     * краям, где {@link String#trim()} иначе молча срезал бы их.</p>
+     *
      * @param dn DN в строковом формате
      * @return DER-кодированный DN
+     * @throws IllegalArgumentException если строка содержит управляющие символы, неизвестный
+     *     атрибут или недопустимое значение
      */
     public static byte[] encodeDn(String dn) {
+        // Проверка до split/trim: trim() срезает всё <= U+0020, включая NUL, и такой символ
+        // прошёл бы в проверку значения уже «очищенным».
+        for (int i = 0; i < dn.length(); i++) {
+            if (Character.isISOControl(dn.charAt(i))) {
+                throw new IllegalArgumentException("DN contains a control character");
+            }
+        }
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (String part : dn.split(",")) {
             part = part.trim();
@@ -325,12 +506,31 @@ public final class GostDnParser {
                 default:
                     throw new IllegalArgumentException("Unknown DN attribute: " + key);
             }
+            // Типы значений по RFC 5280 Appendix A: countryName и serialNumber —
+            // PrintableString, emailAddress — IA5String, остальное — UTF8String.
+            int valueTag = DerCodec.TAG_UTF8_STRING;
+            byte[] valueBytes = value.getBytes(StandardCharsets.UTF_8);
+            if (GostOids.ATTR_EMAIL.equals(oid)) {
+                for (int i = 0; i < value.length(); i++) {
+                    if (value.charAt(i) > 0x7F) {
+                        throw new IllegalArgumentException(
+                                "emailAddress value must contain only ASCII characters");
+                    }
+                }
+                valueTag = TAG_IA5_STRING;
+                valueBytes = value.getBytes(StandardCharsets.US_ASCII);
+            } else if (GostOids.ATTR_C.equals(oid)) {
+                requireCountryCode(value);
+                valueTag = TAG_PRINTABLE_STRING;
+                valueBytes = value.getBytes(StandardCharsets.US_ASCII);
+            } else if (GostOids.ATTR_SERIALNUMBER.equals(oid)) {
+                requireDnSerialNumber(value);
+                valueTag = TAG_PRINTABLE_STRING;
+                valueBytes = value.getBytes(StandardCharsets.US_ASCII);
+            }
             byte[] attr =
                     DerCodec.encodeSequence(
-                            DerCodec.encodeOid(oid),
-                            DerCodec.encodeTlv(
-                                    DerCodec.TAG_UTF8_STRING,
-                                    value.getBytes(StandardCharsets.UTF_8)));
+                            DerCodec.encodeOid(oid), DerCodec.encodeTlv(valueTag, valueBytes));
             try {
                 out.write(DerCodec.encodeTlv(DerCodec.TAG_SET, attr));
             } catch (java.io.IOException e) {

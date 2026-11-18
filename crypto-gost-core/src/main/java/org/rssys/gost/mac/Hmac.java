@@ -11,7 +11,7 @@ import org.rssys.gost.digest.Digest;
  *   - RFC 2104: https://www.rfc-editor.org/rfc/rfc2104
  *   - RFC 7836 Appendix B (тест-векторы HMAC-Streebog)
  */
-public class Hmac implements Mac {
+public final class Hmac implements Mac {
 
     private static final byte IPAD = 0x36;
     private static final byte OPAD = 0x5C;
@@ -21,6 +21,12 @@ public class Hmac implements Mac {
     private final int blockLen;
     private final byte[] inputPad;
     private final byte[] outputPad;
+
+    /**
+     * Признак инициализации ключом. Без него нулевые pads дали бы значение, не зависящее
+     * от секрета (H(0ᴮ ‖ H(M))), поэтому все операции над данными проверяют флаг.
+     */
+    private boolean initialized;
 
     public Hmac(Digest digest) {
         if (digest == null) {
@@ -50,21 +56,42 @@ public class Hmac implements Mac {
      * где ключевой материал существует только как временный {@code byte[]} и не должен
      * оборачиваться в {@link SymmetricKey}.
      *
+     * <p>Пустой ключ допустим (RFC 2104). Неудачный вызов (например, {@code null}) переводит
+     * объект в неинициализированное состояние и затирает прежний ключевой материал
+     * (как {@link #clear()}): прежний ключ после пойманного исключения не используется.
+     *
      * @param key ключевой материал (defensive copy)
+     * @throws IllegalArgumentException если {@code key == null}
      */
     public void init(byte[] key) {
+        // Полное затирание до проверки аргументов: неудачный init не должен ни оставлять
+        // рабочим старый ключ, ни хранить его производные (pads) в памяти.
+        clear();
         if (key == null) {
             throw new IllegalArgumentException("HMAC key must not be null");
         }
         initWithKeyBytes(key);
     }
 
+    /**
+     * Инициализирует HMAC симметричным ключом. Неудачный вызов переводит объект в
+     * неинициализированное состояние (см. {@link #init(byte[])}).
+     *
+     * @throws IllegalArgumentException если {@code params} не {@link SymmetricKey}
+     */
     @Override
     public void init(CipherParameters params) {
+        clear();
         if (!(params instanceof SymmetricKey)) {
             throw new IllegalArgumentException("HMac requires SymmetricKey");
         }
-        initWithKeyBytes(((SymmetricKey) params).getKey());
+        // getKey() отдаёт копию: её затираем сами, иначе ключ останется в куче.
+        byte[] keyCopy = ((SymmetricKey) params).getKey();
+        try {
+            initWithKeyBytes(keyCopy);
+        } finally {
+            Arrays.fill(keyCopy, (byte) 0);
+        }
     }
 
     /**
@@ -95,20 +122,24 @@ public class Hmac implements Mac {
 
         digest.reset();
         digest.update(inputPad, 0, blockLen);
+        initialized = true;
     }
 
     @Override
     public void update(byte in) {
+        checkInitialized();
         digest.update(in);
     }
 
     @Override
     public void update(byte[] in, int inOff, int len) {
+        checkInitialized();
         digest.update(in, inOff, len);
     }
 
     @Override
     public int doFinal(byte[] out, int outOff) {
+        checkInitialized();
         byte[] inner = new byte[digestSize];
         digest.doFinal(inner, 0);
 
@@ -127,8 +158,15 @@ public class Hmac implements Mac {
 
     @Override
     public void reset() {
+        checkInitialized();
         digest.reset();
         digest.update(inputPad, 0, blockLen);
+    }
+
+    private void checkInitialized() {
+        if (!initialized) {
+            throw new IllegalStateException("HMAC not initialized — call init() first");
+        }
     }
 
     /**
@@ -140,15 +178,29 @@ public class Hmac implements Mac {
      * содержат данные, производные от ключа. Метод {@code clear()} обнуляет эти буферы,
      * делая восстановление ключевого материала из памяти невозможным.
      *
+     * <p>Дополнительно затираются рабочие буферы дайджеста ({@link Digest#destroy()}):
+     * в них остаётся последний обработанный блок, то есть {@code K ⊕ ipad}.
+     *
+     * <p>После вызова объект неинициализирован: {@code update}, {@code doFinal} и
+     * {@code reset} бросают {@link IllegalStateException} до повторного {@code init}.
+     *
      * <p>Используется в коде электронной подписи ({@code ECDSASigner}) для уничтожения
-     * временных HMAC-буферов после генерации детерминированного нonce {@code k} по RFC 6979.
+     * временных HMAC-буферов после выработки нонса {@code k} по RFC 6979.
      */
     public void clear() {
         Arrays.fill(inputPad, (byte) 0);
         Arrays.fill(outputPad, (byte) 0);
-        digest.reset();
+        // Флаг снимаем до destroy(): если сторонний Digest бросит исключение, объект не должен
+        // остаться «инициализированным» с нулевыми pads и считать MAC от нулевого ключа.
+        initialized = false;
+        // reset() оставил бы в рабочих буферах дайджеста последний блок входа (K ⊕ ipad)
+        digest.destroy();
     }
 
+    /**
+     * Уничтожает ключевой материал; то же, что {@link #clear()}. После вызова объект
+     * неинициализирован и требует повторного {@code init}.
+     */
     @Override
     public void destroy() {
         clear();

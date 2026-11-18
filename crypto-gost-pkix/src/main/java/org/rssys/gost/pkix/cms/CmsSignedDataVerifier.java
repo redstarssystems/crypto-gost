@@ -8,38 +8,44 @@ import java.util.List;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.ChainValidator;
+import org.rssys.gost.pkix.cert.CrlLimits;
 import org.rssys.gost.pkix.cert.CrlVerifier;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
-import org.rssys.gost.pkix.cert.GostSignatureHelper;
+import org.rssys.gost.pkix.cert.GostDerParser;
 import org.rssys.gost.pkix.cert.PkixException;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Проверка CMS SignedData.
  *
- * <p>Два режима верификации:
+ * <p>Единственный входной метод - {@link #verify(byte[], VerifyOptions)}; все варианты проверки
+ * задаются {@link VerifyOptions}:
  * <ul>
- *   <li>{@link #verifyAny} — OR-семантика: возвращает первого валидного подписанта.
+ *   <li>{@link SignerSelection#ANY} - OR-семантика: возвращается первый валидный подписант.
  *       Полезен для сценариев типа «достаточно подписи любого члена совета директоров».</li>
- *   <li>{@link #verifyAll} — AND-семантика: каждый подписант обязан пройти,
+ *   <li>{@link SignerSelection#ALL} - AND-семантика: каждый подписант обязан пройти,
  *       иначе {@link PkixException} с указанием, какой подписант провалился.
  *       Используется {@link CAdESExtender} для multi-signer CAdES-T.</li>
+ *   <li>{@link Revocation} - политика отзыва: {@link Revocation#none()},
+ *       {@link Revocation#required(java.util.List)} (нет подходящего CRL - отказ) или
+ *       {@link Revocation#ifAvailable(java.util.List)}. Проверяются embedded CRL из SignedData
+ *       и внешние CRL через {@link CrlVerifier}.</li>
  * </ul>
  *
- * <p>Для каждого режима есть вариант с автоматической проверкой отзыва
- * ({@code WithRevocationCheck}): проверяет embedded CRL из SignedData
- * и опционально внешние CRL через {@link CrlVerifier}.
- *
- * <p>При ошибке все методы бросают {@link PkixException} (fail-closed).
+ * <p>При ошибке метод бросает {@link PkixException} (fail-closed).
  */
 public final class CmsSignedDataVerifier {
 
     private static final GostLogger LOG =
             GostLogger.getLogger("org.rssys.gost.pkix.cms.CmsSignedDataVerifier");
+
+    /** Пустой массив якорей для явного режима «только подпись». */
+    private static final GostCertificate[] EMPTY_TRUSTED_CERTS = new GostCertificate[0];
 
     private CmsSignedDataVerifier() {}
 
@@ -48,142 +54,125 @@ public final class CmsSignedDataVerifier {
     // ========================================================================
 
     /**
-     * Верифицирует SignedData DER — хотя бы один подписант должен пройти.
-     * OR-семантика: возвращает первого успешно верифицированного подписанта.
-     * Остальные подписанты не проверяются до конца — при обнаружении первого
-     * валидного метод немедленно возвращает результат.
+     * Верифицирует CMS SignedData по заданным параметрам.
      *
-     * <p>Для сценариев, где важны все подписанты, используйте {@link #verifyAll}.
+     * <p>Режим доверия, выбор подписантов, политика отзыва, detached-документ и пул кандидатов
+     * задаются {@link VerifyOptions}; метод не имеет скрытых умолчаний. Семантика
+     * {@link SignerSelection#ANY}: возвращается первый прошедший подписант, подписант с битой
+     * подписью, недоверенной цепочкой или отзывом пропускается; {@link SignerSelection#ALL}:
+     * любой отказ прерывает проверку.</p>
      *
-     * <p>Проверка отзыва сертификатов не выполняется — используйте
-     * {@link #verifyAnyWithRevocationCheck} для автоматической проверки по CRL.
-     *
-     * @param signedDataDer DER-байты ContentInfo(id-signedData)
-     * @param trustedCerts  список доверенных сертификатов
-     * @return результат с данными и сертификатом первого валидного подписанта
-     * @throws PkixException если ни один подписант не прошёл верификацию
-     */
-    public static VerifiedSignedData verifyAny(
-            byte[] signedDataDer, GostCertificate... trustedCerts) throws PkixException {
-        return verifyInternal(signedDataDer, trustedCerts, false, false, null);
-    }
-
-    /**
-     * Верифицирует SignedData DER — все подписанты обязаны пройти.
-     * AND-семантика: любой провал немедленно прерывает верификацию.
-     *
-     * <p>В отличие от {@link #verifyAny}, который возвращает первого валидного
-     * и игнорирует остальных, этот метод требует успешной верификации каждого
-     * подписанта. Используется {@link CAdESExtender} для multi-signer CAdES-T.
-     *
-     * <p>Проверка отзыва сертификатов не выполняется — используйте
-     * {@link #verifyAllWithRevocationCheck} для автоматической проверки по CRL.
+     * <p>Detached-подпись принимается только с {@link VerifyOptions#detached(byte[])}, attached - только
+     * без него: смешение режимов отвергается, чтобы подпись не проверялась не против того документа.</p>
      *
      * @param signedDataDer DER-байты ContentInfo(id-signedData)
-     * @param trustedCerts  список доверенных сертификатов
-     * @return все успешно верифицированные подписанты
-     * @throws PkixException если хотя бы один подписант провалился
+     * @param options       параметры проверки (не null)
+     * @return данные и прошедшие проверку подписанты
+     * @throws PkixException если проверка не прошла: подпись, цепочка, срок, отзыв, привязка к документу
+     * @throws IllegalArgumentException если {@code options} равен null
      */
-    public static MultiSignerVerifiedData verifyAll(
-            byte[] signedDataDer, GostCertificate... trustedCerts) throws PkixException {
-        return verifyInternal(signedDataDer, trustedCerts, true, false, null);
-    }
-
-    /**
-     * Верифицирует SignedData с автоматической проверкой отзыва по embedded CRL.
-     * OR-семантика: возвращает первого успешно верифицированного подписанта.
-     * Если подписант отозван — пробуется следующий (как и при битой подписи).
-     *
-     * <p>Для каждого сертификата цепочки (кроме trust anchor) проверяются все CRL
-     * с совпадающим issuer DN среди embedded CRL из SignedData. Если ни один
-     * из matching CRL не определяет сертификат как отозванный — подписант
-     * считается валидным. При отсутствии подходящего CRL проверка пропускается
-     * (best-effort, warn).
-     *
-     * <p>Delta CRL и partial/indirect CRL (неподдерживаемые типы) пропускаются
-     * при подборе кандидата — верификатор проверяет следующий подходящий CRL.
-     *
-     * @param signedDataDer DER-байты ContentInfo(id-signedData)
-     * @param trustedCerts  список доверенных сертификатов (не пустой)
-     * @return результат с данными и сертификатом первого валидного подписанта
-     * @throws PkixException          если ни один подписант не прошёл верификацию
-     *                                (в том числе все отозваны)
-     * @throws IllegalArgumentException если {@code trustedCerts} пуст
-     */
-    public static VerifiedSignedData verifyAnyWithRevocationCheck(
-            byte[] signedDataDer, GostCertificate... trustedCerts) throws PkixException {
-        return verifyAnyWithRevocationCheck(signedDataDer, null, trustedCerts);
-    }
-
-    /**
-     * Верифицирует SignedData с проверкой отзыва по embedded и внешним CRL.
-     * OR-семантика.
-     *
-     * <p>Приоритет поиска CRL: сначала embedded (из SignedData), затем
-     * {@code externalCrls}. Сопоставление — по issuer DN.
-     *
-     * @param signedDataDer DER-байты ContentInfo(id-signedData)
-     * @param externalCrls  дополнительные CRL для проверки (может быть null)
-     * @param trustedCerts  список доверенных сертификатов (не пустой)
-     * @return результат с данными и сертификатом первого валидного подписанта
-     * @throws PkixException          при ошибке верификации или отзыве
-     * @throws IllegalArgumentException если {@code trustedCerts} пуст
-     */
-    public static VerifiedSignedData verifyAnyWithRevocationCheck(
-            byte[] signedDataDer, List<GostCrl> externalCrls, GostCertificate... trustedCerts)
+    public static VerifiedSignedData verify(byte[] signedDataDer, VerifyOptions options)
             throws PkixException {
-        return verifyInternal(signedDataDer, trustedCerts, false, true, externalCrls);
+        if (options == null) {
+            throw new IllegalArgumentException("options must not be null");
+        }
+        List<GostCertificate> candidates = normalizeCandidates(options.untrustedCandidates());
+        TrustAnchors anchors = options.anchors();
+        return verifyInternal(signedDataDer, options, anchors, candidates);
     }
 
-    /**
-     * Верифицирует SignedData с проверкой отзыва по embedded CRL, все подписанты.
-     * AND-семантика.
-     *
-     * @param signedDataDer DER-байты ContentInfo(id-signedData)
-     * @param trustedCerts  список доверенных сертификатов (не пустой)
-     * @return все успешно верифицированные подписанты
-     * @throws PkixException          при ошибке верификации или отзыве
-     * @throws IllegalArgumentException если {@code trustedCerts} пуст
-     */
-    public static MultiSignerVerifiedData verifyAllWithRevocationCheck(
-            byte[] signedDataDer, GostCertificate... trustedCerts) throws PkixException {
-        return verifyAllWithRevocationCheck(signedDataDer, null, trustedCerts);
-    }
-
-    /**
-     * Верифицирует SignedData с проверкой отзыва по embedded и внешним CRL, все подписанты.
-     * AND-семантика.
-     *
-     * @param signedDataDer DER-байты ContentInfo(id-signedData)
-     * @param externalCrls  дополнительные CRL для проверки (может быть null)
-     * @param trustedCerts  список доверенных сертификатов (не пустой)
-     * @return все успешно верифицированные подписанты
-     * @throws PkixException          при ошибке верификации или отзыве
-     * @throws IllegalArgumentException если {@code trustedCerts} пуст
-     */
-    public static MultiSignerVerifiedData verifyAllWithRevocationCheck(
-            byte[] signedDataDer, List<GostCrl> externalCrls, GostCertificate... trustedCerts)
+    /** Проверяет список кандидатов: без null, дедупликация по DER, лимит размера. */
+    private static List<GostCertificate> normalizeCandidates(List<GostCertificate> candidates)
             throws PkixException {
-        return verifyInternal(signedDataDer, trustedCerts, true, true, externalCrls);
+        if (candidates == null) {
+            throw new IllegalArgumentException("untrustedCandidates must not be null");
+        }
+        List<GostCertificate> unique = new ArrayList<>();
+        for (GostCertificate candidate : candidates) {
+            if (candidate == null) {
+                throw new IllegalArgumentException("untrustedCandidates must not contain null");
+            }
+            if (!containsDer(unique, candidate)) {
+                unique.add(candidate);
+            }
+        }
+        if (unique.size() > CmsConstants.MAX_EMBEDDED_CERTS) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "Too many untrusted candidate certificates: "
+                            + unique.size()
+                            + " > "
+                            + CmsConstants.MAX_EMBEDDED_CERTS);
+        }
+        return unique;
+    }
+
+    private static boolean containsDer(List<GostCertificate> certs, GostCertificate cert) {
+        byte[] der = cert.getEncoded();
+        for (GostCertificate existing : certs) {
+            if (Arrays.equals(existing.getEncoded(), der)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ========================================================================
     // Приватная логика
     // ========================================================================
 
-    @SuppressWarnings("unchecked")
-    private static <T> T verifyInternal(
-            byte[] signedDataDer,
-            GostCertificate[] trustedCerts,
-            boolean strict,
-            boolean checkRevocation,
-            List<GostCrl> externalCrls)
-            throws PkixException {
-        if (checkRevocation && (trustedCerts == null || trustedCerts.length == 0)) {
+    /**
+     * Требует непустой список якорей без null-элементов (используется
+     * {@code CmsSignedAndEnvelopedData}, где доверенные сертификаты приходят массивом).
+     * <p>
+     * Пустой список нельзя трактовать как «проверять только подпись»: это молчаливое отключение
+     * доверия. Для явного режима есть {@link VerifyOptions#signatureOnly(SignerSelection)}.
+     */
+    static void requireTrustedCerts(GostCertificate[] trustedCerts) {
+        if (trustedCerts == null || trustedCerts.length == 0) {
             throw new IllegalArgumentException(
-                    "trustedCerts must not be empty for revocation checking");
+                    "trustedCerts must not be empty; use VerifyOptions.signatureOnly()"
+                            + " for explicit signature-only verification");
         }
-        SignedDataParsed parsed = parseSignedData(signedDataDer);
+        for (GostCertificate cert : trustedCerts) {
+            if (cert == null) {
+                throw new IllegalArgumentException("trustedCerts must not contain null");
+            }
+        }
+    }
+
+    private static VerifiedSignedData verifyInternal(
+            byte[] signedDataDer,
+            VerifyOptions options,
+            TrustAnchors anchors,
+            List<GostCertificate> untrustedCandidates)
+            throws PkixException {
+        boolean strict = options.signers() == SignerSelection.ALL;
+        Revocation revocation = options.revocation();
+        byte[] externalContent = options.detachedContent();
+        GostCertificate[] trustedCerts =
+                anchors != null
+                        ? anchors.certificates().toArray(new GostCertificate[0])
+                        : EMPTY_TRUSTED_CERTS;
+        SignedDataParsed parsed = parseSignedData(signedDataDer, options.crlLimits());
+
+        byte[] content;
+        if (externalContent != null) {
+            if (parsed.encapData() != null) {
+                throw new PkixException(
+                        PkixException.Reason.OTHER,
+                        "Detached verification requires SignedData without eContent");
+            }
+            content = externalContent;
+        } else {
+            if (parsed.encapData() == null) {
+                throw new PkixException(
+                        PkixException.Reason.OTHER,
+                        "Detached SignedData requires a detached verification method"
+                                + " with the signed content");
+            }
+            content = parsed.encapData();
+        }
 
         int totalSigners = parsed.signerInfos().length;
         if (totalSigners == 0) {
@@ -192,6 +181,16 @@ public final class CmsSignedDataVerifier {
         }
         List<SignerResult> results = new ArrayList<>();
         PkixException lastRevocationError = null;
+        PkixException lastSignerError = null;
+        List<GostCertificate> signerCandidates =
+                signerCandidates(parsed.embeddedCerts(), trustedCerts);
+        // Пул для построения цепочки: встроенные сертификаты и недоверенные кандидаты.
+        List<GostCertificate> chainPool = new ArrayList<>(parsed.embeddedCerts());
+        for (GostCertificate candidate : untrustedCandidates) {
+            if (!containsDer(chainPool, candidate)) {
+                chainPool.add(candidate);
+            }
+        }
 
         for (int sn = 0; sn < totalSigners; sn++) {
             byte[] signerInfoDer = parsed.signerInfos()[sn];
@@ -203,17 +202,31 @@ public final class CmsSignedDataVerifier {
                 result =
                         verifyOneSigner(
                                 signerInfoDer,
-                                parsed.encapData(),
-                                parsed.embeddedCerts(),
+                                content,
+                                signerCandidates,
+                                untrustedCandidates,
                                 parsed.eContentTypeOid());
-                if (trustedCerts.length > 0) {
-                    chain =
-                            buildAndValidateChain(
+                if (anchors != null) {
+                    chain = buildAndValidateChain(result.signerCertificate(), chainPool, anchors);
+                    result =
+                            new SignerResult(
                                     result.signerCertificate(),
-                                    parsed.embeddedCerts(),
-                                    Arrays.asList(trustedCerts));
+                                    result.signatureValue(),
+                                    result.signedAttributes(),
+                                    result.unsignedAttributes(),
+                                    chain);
                 }
-            } catch (PkixException e) {
+            } catch (PkixException | IllegalArgumentException failure) {
+                // SignerInfo целиком приходит от атакующего: unchecked-исключение разбора
+                // нельзя пропускать наружу, иначе один битый подписант в режиме ANY оборвёт
+                // проверку остальных, а в режиме ALL нарушит контракт PkixException.
+                PkixException e =
+                        failure instanceof PkixException pkix
+                                ? pkix
+                                : new PkixException(
+                                        PkixException.Reason.PARSE_ERROR,
+                                        "Malformed SignerInfo: " + failure.getMessage(),
+                                        failure);
                 if (strict) {
                     throw new PkixException(
                             e.reason(),
@@ -225,15 +238,21 @@ public final class CmsSignedDataVerifier {
                                     + e.getMessage(),
                             e);
                 }
+                lastSignerError = e;
                 LOG.log(Level.DEBUG, "Signer {0} failed: {1}", sn + 1, e.getMessage());
                 continue;
             }
 
             // Проверка отзыва: отзыв подписанта невалидирует его, как и битая подпись.
             // В OR-режиме пробуем следующего, в AND-режиме — немедленное исключение.
-            if (checkRevocation && chain != null) {
+            if (revocation.mode() != Revocation.Mode.NONE && chain != null) {
                 try {
-                    validateRevocation(chain, parsed.embeddedCrls(), externalCrls);
+                    validateRevocation(
+                            chain,
+                            parsed.embeddedCrls(),
+                            revocation.externalCrls(),
+                            revocation.mode() == Revocation.Mode.REQUIRED,
+                            options.crlLimits());
                 } catch (PkixException e) {
                     if (strict) {
                         throw new PkixException(
@@ -257,19 +276,14 @@ public final class CmsSignedDataVerifier {
             }
 
             LOG.log(
-                    Level.INFO,
+                    Level.DEBUG,
                     "SignedData verification passed (signer {0}/{1})",
                     sn + 1,
                     totalSigners);
 
             if (!strict) {
                 // OR-семантика: первый успешный
-                return (T)
-                        new VerifiedSignedData(
-                                parsed.encapData(),
-                                result.signerCertificate(),
-                                result.unsignedAttributes(),
-                                parsed.embeddedCrls());
+                return new VerifiedSignedData(content, List.of(result), parsed.embeddedCrls());
             }
             results.add(result);
         }
@@ -278,9 +292,12 @@ public final class CmsSignedDataVerifier {
             if (lastRevocationError != null) {
                 throw lastRevocationError;
             }
+            if (lastSignerError != null) {
+                throw lastSignerError;
+            }
             throw new PkixException(PkixException.Reason.OTHER, "No signer passed verification");
         }
-        return (T) new MultiSignerVerifiedData(parsed.encapData(), results, parsed.embeddedCrls());
+        return new VerifiedSignedData(content, results, parsed.embeddedCrls());
     }
 
     // Родственный, но НЕ идентичный разбор SignedData есть в SignedDataParts.parse() (пакет cms):
@@ -288,7 +305,22 @@ public final class CmsSignedDataVerifier {
     // интерпретирует encapContentInfo и применяет DoS-лимиты (MAX_SIGNER_INFOS/MAX_EMBEDDED_CERTS),
     // прошёл отдельные P0-фиксы. Сознательно не унифицированы (см. javadoc SignedDataParts): цена
     // общей абстракции для двух разных контрактов выше выгоды.
-    private static SignedDataParsed parseSignedData(byte[] signedDataDer) throws PkixException {
+    private static SignedDataParsed parseSignedData(byte[] signedDataDer, CrlLimits limits)
+            throws PkixException {
+        // Контейнер приходит от недоверенной стороны: ошибка DER-парсера - это битый вход, а не
+        // программная ошибка, поэтому наружу выходит PkixException(PARSE_ERROR), как и у
+        // CmsContentInfo.decode. Перехват узкий: NPE и прочие ошибки программы не маскируются,
+        // а границы вложенных элементов проверяются явно, не через AIOOBE.
+        try {
+            return parseSignedDataChecked(signedDataDer, limits);
+        } catch (IllegalArgumentException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR, "Malformed SignedData: " + e.getMessage(), e);
+        }
+    }
+
+    private static SignedDataParsed parseSignedDataChecked(byte[] signedDataDer, CrlLimits limits)
+            throws PkixException {
         CmsContentInfo contentInfo = CmsContentInfo.decode(signedDataDer);
         if (!GostOids.CMS_SIGNED_DATA.equals(contentInfo.contentType())) {
             throw new PkixException(
@@ -321,20 +353,23 @@ public final class CmsSignedDataVerifier {
         byte[] eContentTypeOid = encapParts[0];
         byte[] encapData = null;
         if (encapParts.length > 1) {
-            int[] lenInfo = DerCodec.decodeLength(encapParts[1], 1);
-            int innerOff = 1 + lenInfo[1];
-            int tag = encapParts[1][innerOff] & 0xFF;
-            if (tag == DerCodec.TAG_OCTET_STRING_CONSTRUCTED) {
-                int[] conLen = DerCodec.decodeLength(encapParts[1], innerOff + 1);
-                int inner2 = innerOff + 1 + conLen[1];
-                encapData = DerCodec.parseOctetString(encapParts[1], inner2);
-            } else if (tag == DerCodec.TAG_OCTET_STRING) {
-                encapData = DerCodec.parseOctetString(encapParts[1], innerOff);
-            } else {
+            // [0] EXPLICIT { OCTET STRING }. КриптоПро кодирует eContent в BER: неопределённая
+            // длина [0] и составной OCTET STRING из сегментов; сегменты склеиваются в порядке
+            // следования, как и в хэше подписанных атрибутов. Пустой, усечённый элемент, хвост и
+            // чужой тег дают IllegalArgumentException, который parseSignedData превращает в
+            // PARSE_ERROR (выход за границу массива исключён самой сборкой с проверкой границ).
+            int explicitTag = encapParts[1][0] & 0xFF;
+            if (explicitTag != DerCodec.TAG_CTX_CONSTRUCTED_0) {
                 throw new PkixException(
-                        PkixException.Reason.OTHER,
-                        "Unexpected tag in encapContentInfo: 0x" + Integer.toHexString(tag));
+                        PkixException.Reason.PARSE_ERROR,
+                        "Unexpected tag in encapContentInfo: 0x"
+                                + Integer.toHexString(explicitTag));
             }
+            if (GostDerParser.isEmptyConstructed(encapParts[1])) {
+                throw new PkixException(
+                        PkixException.Reason.PARSE_ERROR, "encapContentInfo eContent is empty");
+            }
+            encapData = DerCodec.collectImplicitOctets(encapParts[1], 0);
         }
 
         // [3] certificates [0] IMPLICIT OPTIONAL
@@ -353,7 +388,7 @@ public final class CmsSignedDataVerifier {
         if (partIdx < signedDataParts.length
                 && DerCodec.isContextTag(signedDataParts[partIdx], 1)) {
             byte[] crlsField = signedDataParts[partIdx++];
-            embeddedCrls = parseEmbeddedCrls(crlsField);
+            embeddedCrls = parseEmbeddedCrls(crlsField, limits);
         } else {
             embeddedCrls = new ArrayList<>();
         }
@@ -392,6 +427,21 @@ public final class CmsSignedDataVerifier {
      * @throws PkixException если превышены лимиты или CRL повреждён
      */
     static List<GostCrl> parseEmbeddedCrls(byte[] crlsField) throws PkixException {
+        return parseEmbeddedCrls(crlsField, CrlLimits.DEFAULT);
+    }
+
+    /**
+     * То же, что {@link #parseEmbeddedCrls(byte[])}, с заданными пределами CRL. Превышение размера
+     * одного CRL даёт причину {@code CRL_LIMIT_EXCEEDED} (до создания {@link GostCrl}); число
+     * записей проверяется позже, при проверке отзыва.
+     *
+     * @param crlsField DER-байты поля {@code [1]} (контекстный тег 1)
+     * @param limits    пределы размера и числа записей CRL
+     * @return список разобранных CRL (возможно пустой)
+     * @throws PkixException если превышены пределы или CRL повреждён
+     */
+    static List<GostCrl> parseEmbeddedCrls(byte[] crlsField, CrlLimits limits)
+            throws PkixException {
         int[] lenInfo = DerCodec.decodeLength(crlsField, 1);
         int contentStart = 1 + lenInfo[1];
         int contentEnd = crlsField.length;
@@ -429,8 +479,9 @@ public final class CmsSignedDataVerifier {
                         "CRL TLV length exceeds remaining buffer in crls field");
             }
             byte[] crlDer = Arrays.copyOfRange(crlsField, pos, pos + crlTotal);
+            limits.requireSize(crlDer);
             try {
-                crls.add(GostCrl.fromDer(crlDer));
+                crls.add(GostCrl.fromDer(crlDer, limits));
             } catch (IllegalArgumentException e) {
                 throw new PkixException(
                         PkixException.Reason.PARSE_ERROR,
@@ -495,10 +546,36 @@ public final class CmsSignedDataVerifier {
         return certs;
     }
 
+    /**
+     * Кандидаты для поиска сертификата подписанта: embedded-сертификаты и
+     * явно доверенные сертификаты. Доверенные не становятся якорями сами по
+     * себе; цепочка всё равно строится отдельно. Это нужно для TSP-токенов,
+     * где КриптоПро не встраивает сертификат TSA.
+     */
+    private static List<GostCertificate> signerCandidates(
+            List<GostCertificate> embedded, GostCertificate[] trustedCerts) {
+        List<GostCertificate> result = new ArrayList<>(embedded);
+        for (GostCertificate candidate : trustedCerts) {
+            boolean duplicate = false;
+            byte[] der = candidate.getEncoded();
+            for (GostCertificate existing : result) {
+                if (Arrays.equals(existing.getEncoded(), der)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                result.add(candidate);
+            }
+        }
+        return result;
+    }
+
     private static SignerResult verifyOneSigner(
             byte[] signerInfoDer,
             byte[] encapData,
             List<GostCertificate> embeddedCerts,
+            List<GostCertificate> untrustedCandidates,
             byte[] eContentTypeOid)
             throws PkixException {
         byte[][] siParts = DerCodec.parseSequenceContents(signerInfoDer, 0);
@@ -620,7 +697,14 @@ public final class CmsSignedDataVerifier {
 
         byte[] signedAttrsHash = digestFor(signedAttrsForHash, digestOid);
 
-        GostCertificate signerCert = findCertByIssuerAndSerial(sid, embeddedCerts);
+        GostCertificate signerCert =
+                resolveSignerCert(sid, embeddedCerts, untrustedCandidates, signedAttributes);
+
+        if (signerCert != null && !signerCert.isKeyUsageValidForSigning()) {
+            throw new PkixException(
+                    PkixException.Reason.POLICY_VIOLATION,
+                    "Signer certificate KeyUsage does not permit digital signatures");
+        }
 
         PublicKeyParameters pubKey;
         if (signerCert != null) {
@@ -629,9 +713,24 @@ public final class CmsSignedDataVerifier {
             throw new PkixException(PkixException.Reason.OTHER, "Signer certificate not found");
         }
 
-        validateSignatureAlgorithm(signatureAlgOid, pubKey.getParams().hlen);
+        CAdESSupport.validateSignatureAlgorithm(
+                signatureAlgOid, pubKey.getParams().hlen, "SignerInfo");
 
-        if (!Signature.verifyHash(signedAttrsHash, signatureValue, pubKey)) {
+        // Длина хэша задаётся digestAlgorithm из SignerInfo, а длина подписи - самим SignerInfo:
+        // оба значения контролирует атакующий. Подпись с хэшем другой длины проверить нельзя в
+        // принципе, поэтому несовпадение отклоняется как подмена алгоритма, а не как сбой core.
+        if (signedAttrsHash.length != pubKey.getParams().hlen) {
+            throw new PkixException(
+                    PkixException.Reason.ALG_MISMATCH,
+                    "SignerInfo digestAlgorithm "
+                            + digestOid
+                            + " does not match signer key size ("
+                            + (pubKey.getParams().hlen * 8)
+                            + " bit)");
+        }
+        // Подпись неверной длины core не принимает: verifyHash возвращает false
+        boolean signatureValid = Signature.verifyHash(signedAttrsHash, signatureValue, pubKey);
+        if (!signatureValid) {
             throw new PkixException(PkixException.Reason.SIGNATURE_INVALID, "Signature invalid");
         }
 
@@ -639,54 +738,107 @@ public final class CmsSignedDataVerifier {
     }
 
     private static byte[] digestFor(byte[] data, String digestOid) throws PkixException {
-        try {
-            return GostSignatureHelper.digestByOid(digestOid, data);
-        } catch (IllegalArgumentException e) {
-            throw new PkixException("Unsupported digest algorithm: " + digestOid);
-        }
+        return CAdESSupport.digestByOidOrThrow(digestOid, data);
     }
 
     /**
-     * Проверяет OID из {@code SignerInfo.signatureAlgorithm} (RFC 5652 §5.3) в режиме fail-closed.
+     * Находит сертификат подписанта. Сначала среди встроенных и доверенных (прежнее
+     * поведение), затем среди недоверенных кандидатов.
      *
-     * <p>Легитимные продюсеры используют два семейства OID для ГОСТ Р 34.10-2012:
-     * OID открытого ключа ({@code 1.2.643.7.1.1.1.1/.2}; так делают КриптоПро, openssl gost-engine
-     * и данная библиотека) и signWithDigest ({@code 1.2.643.7.1.1.3.2/.3}; так делает BouncyCastle).
-     * Оба принимаются. Реальная защита от подмены алгоритма — сверка объявленной OID-битности
-     * (256/512) с кривой открытого ключа сертификата: несоответствие означает попытку
-     * algorithm-confusion и отклоняется. Параметры алгоритма не проверяются строго — допустимы
-     * и NULL, и их отсутствие (разные продюсеры кодируют по-разному).
-     *
-     * @param signatureAlgOid OID из signatureAlgorithm подписанта
-     * @param keyHlen         длина хэша кривой ключа сертификата (32 -> 256-бит, 64 -> 512-бит)
-     * @throws PkixException если OID не из ожидаемого множества либо его битность не совпадает
-     *     с битностью ключа сертификата
+     * <p>Сертификат из кандидатов принимается только при привязке к подписанным
+     * данным: ровно один {@code signingCertificateV2}, и ровно один сертификат из
+     * совпавших по sid имеет такой certHash. Перебора после неудачной проверки
+     * подписи нет: выбор детерминирован до неё.</p>
      */
-    private static void validateSignatureAlgorithm(String signatureAlgOid, int keyHlen)
+    private static GostCertificate resolveSignerCert(
+            CmsIssuerAndSerialNumber sid,
+            List<GostCertificate> ownCerts,
+            List<GostCertificate> untrustedCandidates,
+            List<CmsAttribute> signedAttributes)
             throws PkixException {
-        boolean is256Oid =
-                GostOids.PUBLIC_KEY_256.equals(signatureAlgOid)
-                        || GostOids.SIGN_WITH_DIGEST_256.equals(signatureAlgOid);
-        boolean is512Oid =
-                GostOids.PUBLIC_KEY_512.equals(signatureAlgOid)
-                        || GostOids.SIGN_WITH_DIGEST_512.equals(signatureAlgOid);
+        GostCertificate own = findCertByIssuerAndSerial(sid, ownCerts);
+        if (own != null || untrustedCandidates.isEmpty()) {
+            return own;
+        }
+        List<GostCertificate> sidMatches = new ArrayList<>();
+        for (GostCertificate candidate : untrustedCandidates) {
+            if (candidate.getSerialNumberBigInt().equals(sid.serial())
+                    && issuerMatches(candidate, sid.issuer())
+                    && !containsDer(sidMatches, candidate)) {
+                sidMatches.add(candidate);
+            }
+        }
+        if (sidMatches.isEmpty()) {
+            return null;
+        }
+        return selectBoundCandidate(sidMatches, signedAttributes);
+    }
 
-        if (!is256Oid && !is512Oid) {
+    /**
+     * Выбирает из совпавших по sid кандидатов единственный, названный в
+     * {@code signingCertificateV2} подписанных атрибутов.
+     *
+     * <p>Требуется ровно один атрибут с одним значением и ровно один сертификат с
+     * совпавшим certHash. Сверяется первый {@code ESSCertIDv2} атрибута (для подписанта
+     * он единственный по RFC 5035 §4). Устаревший {@code signingCertificate} v1 (SHA-1)
+     * не принимается. Отсутствие атрибута, несовпадение и неоднозначность -
+     * отказ до проверки подписи (fail-closed, без перебора).</p>
+     *
+     * @param sidMatches       различные по DER кандидаты с тем же issuer и serial
+     * @param signedAttributes подписанные атрибуты SignerInfo
+     */
+    static GostCertificate selectBoundCandidate(
+            List<GostCertificate> sidMatches, List<CmsAttribute> signedAttributes)
+            throws PkixException {
+        byte[] essValue = null;
+        for (CmsAttribute attr : signedAttributes) {
+            if (!GostOids.SIGNING_CERTIFICATE_V2.equals(attr.attrType())) {
+                continue;
+            }
+            byte[][] values = attr.attrValues();
+            if (essValue != null || values.length != 1) {
+                throw new PkixException(
+                        PkixException.Reason.OTHER,
+                        "Signer certificate from untrusted candidates requires exactly one"
+                                + " signingCertificateV2 value");
+            }
+            essValue = values[0];
+        }
+        if (essValue == null) {
             throw new PkixException(
                     PkixException.Reason.OTHER,
-                    "Unexpected SignerInfo signatureAlgorithm OID: " + signatureAlgOid);
+                    "Signer certificate from untrusted candidates requires signingCertificateV2");
         }
 
-        boolean keyIs512 = keyHlen == GostOids.STREEBOG_512_HASH_LEN;
-        if (is512Oid != keyIs512) {
+        GostCertificate bound = null;
+        for (GostCertificate match : sidMatches) {
+            try {
+                CAdESAttributes.verifySigningCertificateV2(essValue, match);
+            } catch (PkixException e) {
+                // Кандидат по sid подходит, но не связан с подписью через ESS: причина отказа
+                // «signer certificate not found» иначе не отличима от отсутствия кандидатов
+                if (LOG.isLoggable(Level.DEBUG)) {
+                    LOG.log(
+                            Level.DEBUG,
+                            "Candidate certificate (serial 0x{0}) does not match"
+                                    + " signingCertificateV2",
+                            match.getSerialNumberBigInt().toString(16));
+                }
+                continue;
+            }
+            if (bound != null) {
+                throw new PkixException(
+                        PkixException.Reason.OTHER,
+                        "Ambiguous signer certificate among untrusted candidates");
+            }
+            bound = match;
+        }
+        if (bound == null) {
             throw new PkixException(
                     PkixException.Reason.OTHER,
-                    "SignerInfo signatureAlgorithm OID "
-                            + signatureAlgOid
-                            + " does not match signer key size ("
-                            + (keyHlen * 8)
-                            + " bit)");
+                    "No candidate matches signingCertificateV2 of the signer");
         }
+        return bound;
     }
 
     private static GostCertificate findCertByIssuerAndSerial(
@@ -722,16 +874,13 @@ public final class CmsSignedDataVerifier {
      * @throws PkixException при ошибке построения или валидации цепочки
      */
     private static List<GostCertificate> buildAndValidateChain(
-            GostCertificate signerCert,
-            List<GostCertificate> embeddedCerts,
-            List<GostCertificate> trustedCerts)
+            GostCertificate signerCert, List<GostCertificate> embeddedCerts, TrustAnchors anchors)
             throws PkixException {
+        // Политика срока якоря уже применена в VerifyOptions.trusting: DEFAULT там
+        // превращается в REJECT, поэтому срок любого якоря проверяется независимо от n.
         List<GostCertificate> chain =
-                CertChainBuilder.buildChain(signerCert, embeddedCerts, trustedCerts);
-        List<PublicKeyParameters> caKeys =
-                trustedCerts.stream().map(GostCertificate::getPublicKey).toList();
-        ChainValidator.validateChain(chain, caKeys);
-        return chain;
+                CertChainBuilder.buildChain(signerCert, embeddedCerts, anchors.certificates());
+        return ChainValidator.validateChain(chain, anchors);
     }
 
     /**
@@ -743,18 +892,29 @@ public final class CmsSignedDataVerifier {
      * против downgrade-атаки: если embedded CRL устарел, а внешний содержит отзыв —
      * верификатор дойдёт до внешнего и выявит отзыв).
      *
-     * <p>Delta CRL (Reason.DELTA_CRL_NOT_SUPPORTED) и partial/indirect CRL
-     * (Reason.IDP_NOT_SUPPORTED) пропускаются.
+     * <p>Delta CRL (Reason.DELTA_CRL_NOT_SUPPORTED), CRL, не покрывающий сертификат
+     * (partial/indirect, Reason.IDP_NOT_SUPPORTED) и CRL с неизвестным critical-расширением
+     * (Reason.UNKNOWN_CRITICAL_EXTENSION, RFC 5280 §5.2 запрещает использовать такой CRL)
+     * пропускаются как неподдерживаемые.
      * Остальные ошибки верификации пробрасываются немедленно (fail-closed).
-     * При отсутствии подходящего CRL проверка пропускается (best-effort, warn).
+     * При отсутствии подходящего CRL: {@code required} - отказ
+     * ({@code REVOCATION_STATUS_UNKNOWN}), иначе предупреждение и сертификат проходит.
      *
      * @param chain        цепочка leaf-first
      * @param embeddedCrls CRL из поля crls [1] SignedData
-     * @param externalCrls дополнительные CRL от вызывающего (может быть null)
-     * @throws PkixException если сертификат отозван или CRL невалиден
+     * @param externalCrls дополнительные CRL от вызывающего (не null)
+     * @param required     true - отсутствие подходящего CRL недопустимо
+     * @param limits       пределы размера и числа записей CRL; превышение - ошибка, а не
+     *                     пропуск CRL
+     * @throws PkixException если сертификат отозван, CRL невалиден, превышены пределы или
+     *                       обязательный CRL не найден
      */
     private static void validateRevocation(
-            List<GostCertificate> chain, List<GostCrl> embeddedCrls, List<GostCrl> externalCrls)
+            List<GostCertificate> chain,
+            List<GostCrl> embeddedCrls,
+            List<GostCrl> externalCrls,
+            boolean required,
+            CrlLimits limits)
             throws PkixException {
         int n = chain.size();
         for (int i = 0; i < n - 1; i++) {
@@ -778,25 +938,33 @@ public final class CmsSignedDataVerifier {
                     continue;
                 }
                 try {
-                    CrlVerifier.verify(
-                            crl.getEncoded(), certSerial, issuer.getPublicKey(), certIssuerDn);
+                    CrlVerifier.verify(crl.getEncoded(), cert, issuer, null, limits);
                     foundValidCrl = true;
                     // без break — проверяем все matching CRL;
                     // если любой последующий CRL обнаружит отзыв — пробрасывается исключение
                 } catch (PkixException e) {
                     if (e.reason() == PkixException.Reason.IDP_NOT_SUPPORTED
-                            || e.reason() == PkixException.Reason.DELTA_CRL_NOT_SUPPORTED) {
+                            || e.reason() == PkixException.Reason.DELTA_CRL_NOT_SUPPORTED
+                            || e.reason() == PkixException.Reason.UNKNOWN_CRITICAL_EXTENSION) {
                         LOG.log(
                                 Level.DEBUG,
                                 "CRL skipped (unsupported type: {0}), issuer={1}",
                                 e.getMessage(),
-                                crl.getIssuerDn());
+                                crl.getIssuerDnForLog(GostCertificate.DN_LOG_MAX_CHARS));
                         continue;
                     }
                     throw e;
                 }
             }
 
+            if (!foundValidCrl && required) {
+                throw new PkixException(
+                        PkixException.Reason.REVOCATION_STATUS_UNKNOWN,
+                        "No valid CRL found for cert chain["
+                                + i
+                                + "], serial=0x"
+                                + new BigInteger(1, certSerial).toString(16));
+            }
             if (!foundValidCrl) {
                 LOG.log(
                         Level.WARNING,

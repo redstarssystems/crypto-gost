@@ -31,6 +31,10 @@ import org.rssys.gost.tls13.config.TlsServerCredentials;
  */
 public final class GostX509KeyManager extends X509ExtendedKeyManager {
 
+    // Длина хэша ключа, которую задаёт тип; два служебных значения не совпадают ни с одной длиной
+    private static final int KEY_TYPE_UNSUPPORTED = -1;
+    private static final int KEY_TYPE_ANY_SIZE = 0;
+
     private final List<KeyEntry> entries = new CopyOnWriteArrayList<>();
 
     /**
@@ -58,26 +62,29 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
 
     @Override
     public String[] getServerAliases(String keyType, Principal[] issuers) {
-        return filterAliases(keyType, issuers).toArray(new String[0]);
+        return getClientAliases(keyType, issuers);
     }
 
     @Override
     public String chooseServerAlias(String keyType, Principal[] issuers, Socket socket) {
-        List<String> matching = filterAliases(keyType, issuers);
-        return matching.isEmpty() ? null : matching.get(0);
+        return chooseFirst(new String[] {keyType}, issuers);
     }
 
     @Override
     public String chooseEngineServerAlias(String keyType, Principal[] issuers, SSLEngine engine) {
-        List<String> matching = filterAliases(keyType, issuers);
-        return matching.isEmpty() ? null : matching.get(0);
+        return chooseFirst(new String[] {keyType}, issuers);
     }
 
     @Override
     public X509Certificate[] getCertificateChain(String alias) {
+        KeyEntry entry = findEntry(alias);
+        return entry != null && entry.chain != null ? entry.chain.clone() : null;
+    }
+
+    private KeyEntry findEntry(String alias) {
         for (KeyEntry entry : entries) {
             if (entry.alias.equals(alias)) {
-                return entry.chain != null ? entry.chain.clone() : null;
+                return entry;
             }
         }
         return null;
@@ -91,12 +98,8 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
      * @return цепочка GostCertificate, или null если алиас не найден
      */
     public List<GostCertificate> getCertificateChainTls(String alias) {
-        for (KeyEntry entry : entries) {
-            if (entry.alias.equals(alias)) {
-                return entry.getTlsChain();
-            }
-        }
-        return null;
+        KeyEntry entry = findEntry(alias);
+        return entry != null ? entry.tlsChain : null;
     }
 
     /**
@@ -108,52 +111,36 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
      * @return ключ в формате ядра, или null если алиас не найден
      */
     public PrivateKeyParameters getPrivateKeyParams(String alias) {
-        for (KeyEntry entry : entries) {
-            if (entry.alias.equals(alias)) {
-                return entry.key;
-            }
-        }
-        return null;
+        KeyEntry entry = findEntry(alias);
+        return entry != null ? entry.key : null;
     }
 
     @Override
     public PrivateKey getPrivateKey(String alias) {
-        for (KeyEntry e : entries) {
-            if (e.alias.equals(alias)) {
-                return e.key != null ? new GostECPrivateKey(e.key) : null;
-            }
-        }
-        return null;
+        KeyEntry entry = findEntry(alias);
+        return entry != null && entry.key != null ? new GostECPrivateKey(entry.key) : null;
     }
 
     /**
-     * Ищет алиас, чей сертификат содержит SAN dNSName, совпадающий с hostname.
+     * Ищет алиас, чей сертификат соответствует имени по правилам RFC 6125
+     * ({@link GostCertificate#verifyHostname}).
      * <p>
-     * Только SAN dNSName (RFC 6125), без fallback на CN.
-     * Exact match, без wildcard — для детерминированного поведения в тестах.
+     * Только SAN (dNSName и iPAddress), без fallback на CN. Допустим wildcard {@code *.example.com}
+     * (одна метка слева), IDN сравнивается в A-label. Нормализация имени (регистр, пробелы,
+     * завершающая точка) та же, что при проверке сертификата сервера, поэтому выбор сертификата
+     * по SNI и его последующая проверка клиентом согласованы.
      *
-     * @param hostname DNS-имя для поиска (null -> первый алиас)
+     * @param hostname имя для поиска (null -> первый алиас)
      * @return алиас или null
      */
     public String chooseAliasForHostname(String hostname) {
         if (hostname == null) {
             return entries.isEmpty() ? null : entries.get(0).alias;
         }
-        String normalized = hostname.trim().toLowerCase();
-        if (normalized.endsWith(".")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
         for (KeyEntry entry : entries) {
-            if (entry.chain == null || entry.chain.length == 0) continue;
-            List<GostCertificate> chain = getCertificateChainTls(entry.alias);
-            if (chain == null || chain.isEmpty()) continue;
-            GostCertificate cert = chain.get(0);
-            String[] sanNames = cert.getSanDnsNames();
-            if (sanNames == null) continue;
-            for (String dnsName : sanNames) {
-                if (GostCertificate.matchDnsName(normalized, dnsName)) {
-                    return entry.alias;
-                }
+            List<GostCertificate> chain = entry.tlsChain;
+            if (chain != null && !chain.isEmpty() && chain.get(0).verifyHostname(hostname)) {
+                return entry.alias;
             }
         }
         return null;
@@ -176,60 +163,129 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
 
     /**
      * Создаёт ClientCertificateSelector на основе этого KeyManager.
-     * Вызывается клиентом для выбора сертификата по oid_filters
-     * из CertificateRequest (RFC 8446 §4.2.5).
+     * Вызывается клиентом на каждый CertificateRequest и выбирает сертификат по запросу сервера.
      * <p>
-     * Перебирает все записи, отбирает первую, удовлетворяющую всем OID-фильтрам.
-     * Фильтрация по acceptedCaDns (issuer DN) не реализована.
+     * Запись отбирается, если одновременно:
+     * <ul>
+     *   <li>лист удовлетворяет всем OID-фильтрам (RFC 8446 §4.2.5);</li>
+     *   <li>при непустом списке certificate_authorities издатель какого-либо сертификата цепочки
+     *       входит в него (§4.2.4). Пустой список означает «CA не указаны», по нему не
+     *       фильтруем. Фильтр жёсткий: иначе клиент отправил бы сертификат, который сервер
+     *       заведомо не примет;</li>
+     *   <li>схема ключа листа входит в signature_algorithms сервера (§4.4.3).</li>
+     * </ul>
+     * Среди подошедших предпочитается запись, подписи цепочки которой тоже входят в
+     * signature_algorithms_cert (§4.2.3); иначе берётся первая подошедшая. Если не подошла ни
+     * одна, возвращается {@code null}, то есть клиент отправит пустой Certificate (§4.4.2.3).
      */
     public ClientCertificateSelector asClientCertificateSelector() {
-        return (acceptedCaDns, oidFilters) -> {
-            if (entries.isEmpty()) return null;
+        return request -> {
+            boolean filterByAuthorities = !request.caDns().isEmpty();
+            // DN разбираются один раз на запрос; ни один не разобрался - совпадений нет, а
+            // не «CA не указаны»: фильтр жёсткий
+            List<X500Principal> authorities = parseAuthorities(request.caDns());
+            int[] leafSchemes = request.signatureSchemes();
+            int[] chainSchemes = request.certificateSignatureSchemes();
+            TlsClientCredentials firstFit = null;
             for (KeyEntry entry : entries) {
-                if (entry.chain == null || entry.chain.length == 0) continue;
-                List<GostCertificate> chain = getCertificateChainTls(entry.alias);
-                PrivateKeyParameters key = getPrivateKeyParams(entry.alias);
-                if (chain == null || chain.isEmpty() || key == null) continue;
-                GostCertificate leaf = chain.get(0);
-                // Проверка OID-фильтров
-                boolean matches = true;
-                for (OIDFilter filter : oidFilters) {
-                    if (!TlsCertUtils.matchesOidFilter(leaf, filter)) {
-                        matches = false;
-                        break;
-                    }
+                List<GostCertificate> chain = entry.tlsChain;
+                if (chain == null || chain.isEmpty() || entry.key == null) continue;
+                if (!matchesOidFilters(chain.get(0), request.oidFilters())) continue;
+                if (filterByAuthorities && !issuedByAny(entry.chain, authorities)) continue;
+                if (!leafSchemeOffered(chain, leafSchemes)) continue;
+                TlsClientCredentials credentials = new TlsClientCredentials(chain, entry.key);
+                if (chainSchemesOffered(chain, chainSchemes)) {
+                    return credentials;
                 }
-                if (!matches) continue;
-                return new TlsClientCredentials(chain, key);
+                if (firstFit == null) firstFit = credentials;
             }
-            return null;
+            return firstFit;
         };
+    }
+
+    private static boolean matchesOidFilters(GostCertificate leaf, List<OIDFilter> filters) {
+        for (OIDFilter filter : filters) {
+            if (!TlsCertUtils.matchesOidFilter(leaf, filter)) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Разбирает DN удостоверяющих центров в канонические X500Principal (как в issuerMatches).
+     * DN приходят от сервера: с неверной DER-структурой он пропускается как не совпавший, а не
+     * превращается в исключение селектора (то есть в internal_error по вине пира).
+     */
+    private static List<X500Principal> parseAuthorities(List<byte[]> caDns) {
+        List<X500Principal> result = new ArrayList<>(caDns.size());
+        for (byte[] dn : caDns) {
+            try {
+                result.add(new X500Principal(dn));
+            } catch (IllegalArgumentException e) {
+                // непарсируемый DN не может совпасть с издателем
+            }
+        }
+        return result;
+    }
+
+    private static boolean issuedByAny(X509Certificate[] chain, List<X500Principal> authorities) {
+        for (X509Certificate certificate : chain) {
+            if (authorities.contains(certificate.getIssuerX500Principal())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Все подписи цепочки предложены сервером. Незнакомая кривая в цепочке не превращается в
+     * исключение селектора: запись просто не предпочитается, но остаётся кандидатом.
+     */
+    private static boolean chainSchemesOffered(List<GostCertificate> chain, int[] offered) {
+        try {
+            return TlsCertUtils.unofferedChainSchemes(chain, offered).isEmpty();
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /** Схема ключа листа входит в список сервера; кривая, которую не знаем, - не входит. */
+    private static boolean leafSchemeOffered(List<GostCertificate> chain, int[] offered) {
+        try {
+            return TlsCertUtils.isSchemeOffered(offered, TlsCertUtils.leafSignatureScheme(chain));
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     /**
      * Фильтрует алиасы по keyType и issuers.
-     * keyType: ECGOST3410-2012-256 или ECGOST3410-2012-512.
+     * keyType: {@code ECGOST3410-2012-256}, {@code ECGOST3410-2012-512} либо общий
+     * {@code ECGOST3410-2012} (подходит ключ любого размера). Прочие типы не подходят.
      * Если issuers != null и не пуст — отбирает только сертификаты,
      * выпущенные одним из перечисленных CA (сравнение issuer X500Principal).
      */
     private List<String> filterAliases(String keyType, Principal[] issuers) {
-        if (keyType == null) return Collections.emptyList();
-        if (!keyType.startsWith(GostJsseConstants.KEY_ALG_ECGOST_2012))
-            return Collections.emptyList();
-
-        boolean want256 = keyType.contains("256");
+        int wantedHashLen = hashLenOfKeyType(keyType);
+        if (wantedHashLen == KEY_TYPE_UNSUPPORTED) return Collections.emptyList();
 
         List<String> result = new ArrayList<>();
         for (KeyEntry entry : entries) {
             if (entry.chain == null || entry.chain.length == 0) continue;
-            int hlen = entry.hlen;
-            boolean is256 = hlen == TlsConstants.STREEBOG_256_HASH_LEN;
-            if (want256 != is256) continue;
+            if (wantedHashLen != KEY_TYPE_ANY_SIZE && wantedHashLen != entry.hlen) continue;
             if (issuers != null && issuers.length > 0 && !issuerMatches(entry.chain[0], issuers))
                 continue;
             result.add(entry.alias);
         }
         return result;
+    }
+
+    private static int hashLenOfKeyType(String keyType) {
+        if (GostJsseConstants.KEY_ALG_ECGOST_2012.equals(keyType)) return KEY_TYPE_ANY_SIZE;
+        if (GostJsseConstants.KEY_TYPE_ECGOST_256.equals(keyType)) {
+            return TlsConstants.STREEBOG_256_HASH_LEN;
+        }
+        if (GostJsseConstants.KEY_TYPE_ECGOST_512.equals(keyType)) {
+            return TlsConstants.STREEBOG_512_HASH_LEN;
+        }
+        return KEY_TYPE_UNSUPPORTED;
     }
 
     /** @return true если сертификат выпущен одним из перечисленных CA */
@@ -241,10 +297,11 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
         return false;
     }
 
+    /** Первый подходящий алиас по списку типов ключей в порядке предпочтения; иначе null. */
     private String chooseFirst(String[] keyTypes, Principal[] issuers) {
         if (keyTypes == null) return null;
-        for (String kt : keyTypes) {
-            List<String> aliases = filterAliases(kt, issuers);
+        for (String keyType : keyTypes) {
+            List<String> aliases = filterAliases(keyType, issuers);
             if (!aliases.isEmpty()) return aliases.get(0);
         }
         return null;
@@ -254,35 +311,26 @@ public final class GostX509KeyManager extends X509ExtendedKeyManager {
         final String alias;
         final X509Certificate[] chain;
         final PrivateKeyParameters key;
+
+        /** Длина хэша ключа листа; -1, если цепочки нет. */
         final int hlen;
-        // volatile для safe publication через benign race:
-        // CertificateBridge.toGost — чистая функция (детерминирована, без побочных эффектов),
-        // поэтому double-compute между потоками безопасен — оба потока получат эквивалентный
-        // результат. volatile-запись в tlsChain гарантирует, что читающий поток видит полностью
-        // собранный список.
-        private volatile List<GostCertificate> tlsChain;
+
+        /** Цепочка в формате ядра; собирается один раз, неизменяема. {@code null}, если цепочки нет. */
+        final List<GostCertificate> tlsChain;
 
         KeyEntry(String alias, X509Certificate[] chain, PrivateKeyParameters key) {
             this.alias = alias;
-            // defensive copy: цепочка теперь кэшируется (hlen/tlsChain), мутация
-            // входного массива вызывающим кодом привела бы к неисправимой рассинхронизации
+            // Копия: цепочка разбирается один раз (hlen, tlsChain), и изменение входного массива
+            // вызывающим кодом рассинхронизировало бы запись
             this.chain = chain != null ? chain.clone() : null;
             this.key = key;
-            // sentinel -1: filterAliases() имеет guard (chain == null/empty -> continue)
-            // и доходит до сравнения hlen только на валидных записях
-            this.hlen =
-                    (chain != null && chain.length > 0 && chain[0] != null)
-                            ? CertificateBridge.toGost(chain[0]).getPublicKey().getParams().hlen
-                            : -1;
-        }
-
-        List<GostCertificate> getTlsChain() {
-            List<GostCertificate> result = tlsChain;
-            if (result == null && chain != null && chain.length > 0) {
-                result = CertificateBridge.toGost(chain);
-                tlsChain = result;
+            if (this.chain != null && this.chain.length > 0) {
+                this.tlsChain = List.copyOf(CertificateBridge.toGost(this.chain));
+                this.hlen = tlsChain.get(0).getPublicKey().getParams().hlen;
+            } else {
+                this.tlsChain = null;
+                this.hlen = -1;
             }
-            return result;
         }
     }
 }

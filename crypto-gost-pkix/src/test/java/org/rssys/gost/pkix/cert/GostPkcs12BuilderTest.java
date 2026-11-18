@@ -357,4 +357,93 @@ class GostPkcs12BuilderTest {
                 () -> GostPkcs12Builder.create().friendlyName(tooLong),
                 "65 ASCII-символов (130 байт UTF-16BE) должны отвергаться");
     }
+
+    // ========================================================================
+    // Одноразовость билдера и затирание пароля
+    // ========================================================================
+
+    @Test
+    @DisplayName("несовпадение ключа и сертификата: пароль затёрт, повторный build() -> ISE")
+    void testMismatchWipesPasswordAndConsumesBuilder() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        PkixCertTestHelper.CertBundle first = PkixCertTestHelper.createCertWithKey(params);
+        PkixCertTestHelper.CertBundle second = PkixCertTestHelper.createCertWithKey(params);
+
+        GostPkcs12Builder.Builder builder =
+                GostPkcs12Builder.create()
+                        .key(first.priv)
+                        .certificate(second.cert)
+                        .password(PASSWORD)
+                        .iterations(TEST_ITER);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                builder::build,
+                "ключ и сертификат от разных пар должны отвергаться");
+        for (char c : internalPassword(builder)) {
+            assertEquals('\0', c, "пароль должен быть затёрт после ошибки внутри сборки");
+        }
+        // Без одноразовости второй вызов собрал бы PFX с уже обнулённым паролем.
+        assertThrows(
+                IllegalStateException.class,
+                builder::build,
+                "повторный build() после ошибки должен быть запрещён");
+    }
+
+    @Test
+    @DisplayName("успешная сборка: пароль затёрт, повторный build() -> ISE")
+    void testSuccessConsumesBuilder() throws Exception {
+        PkixCertTestHelper.CertBundle bundle =
+                PkixCertTestHelper.createCertWithKey(ECParameters.tc26a256());
+        GostPkcs12Builder.Builder builder =
+                GostPkcs12Builder.create()
+                        .key(bundle.priv)
+                        .certificate(bundle.cert)
+                        .password(PASSWORD)
+                        .iterations(TEST_ITER);
+
+        assertNotNull(builder.build(), "первая сборка должна успешно завершиться");
+        for (char c : internalPassword(builder)) {
+            assertEquals('\0', c, "пароль должен быть затёрт после сборки");
+        }
+        assertThrows(
+                IllegalStateException.class,
+                builder::build,
+                "повторный build() после успеха должен быть запрещён");
+        assertThrows(
+                IllegalStateException.class,
+                () -> builder.buildAndWriteTo(Path.of("unused.pfx")),
+                "buildAndWriteTo() тоже терминальный");
+    }
+
+    @Test
+    @DisplayName("нет ключа или сертификата: билдер не расходуется и пароль не затирается")
+    void testConfigurationErrorKeepsBuilderUsable() throws Exception {
+        PkixCertTestHelper.CertBundle bundle =
+                PkixCertTestHelper.createCertWithKey(ECParameters.tc26a256());
+        GostPkcs12Builder.Builder builder =
+                GostPkcs12Builder.create().password(PASSWORD).iterations(TEST_ITER);
+
+        assertThrows(IllegalStateException.class, builder::build, "нет ключа");
+        builder.key(bundle.priv);
+        assertThrows(IllegalStateException.class, builder::build, "нет сертификата");
+        assertArrayEquals(
+                PASSWORD,
+                internalPassword(builder),
+                "ошибки конфигурации не должны затирать пароль");
+
+        builder.certificate(bundle.cert);
+        byte[] pfx = builder.build();
+        assertNotNull(
+                GostPkcs12Loader.load(pfx, PASSWORD, true, 50).getPrivateKey(),
+                "после исправления конфигурации PFX собирается с исходным паролем");
+    }
+
+    /** Читает внутренний массив пароля: единственный способ проверить затирание. */
+    private static char[] internalPassword(GostPkcs12Builder.Builder builder) throws Exception {
+        java.lang.reflect.Field field =
+                GostPkcs12Builder.Builder.class.getDeclaredField("password");
+        field.setAccessible(true);
+        return (char[]) field.get(builder);
+    }
 }

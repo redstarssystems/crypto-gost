@@ -12,6 +12,8 @@ import org.rssys.gost.signature.PublicKeyParameters;
  * Открытый ключ ГОСТ Р 34.10-2012, реализующий {@link PublicKey}.
  * <p>
  * Хранит {@link PublicKeyParameters} и предоставляет совместимый с JCA интерфейс.
+ * Ключи равны, если равны кривая и точка.
+ * <p>
  * DER-кодирование в формате X.509 SubjectPublicKeyInfo выполняется
  * через {@link GostDerCodec#encodePublicKey(PublicKeyParameters)}.
  * <p>
@@ -65,14 +67,16 @@ public final class GostECPublicKey implements PublicKey {
      * }
      * </pre>
      *
-     * @return DER-байты, или {@code null} если кодирование недоступно
+     * @return DER-байты, или {@code null}, если кривая ключа не зарегистрирована и ключ нельзя
+     *         закодировать
      */
     @Override
     public byte[] getEncoded() {
         try {
             return GostDerCodec.encodePublicKey(params);
-        } catch (Exception e) {
-            // Стандарт Key.getEncoded() разрешает вернуть null при ошибке
+        } catch (IllegalArgumentException e) {
+            // Контракт Key.getEncoded: null, если ключ не поддерживает кодирование. Единственная
+            // причина здесь - кривая вне реестра провайдера (нет OID); прочие сбои не скрываются.
             return null;
         }
     }
@@ -84,6 +88,18 @@ public final class GostECPublicKey implements PublicKey {
      */
     public PublicKeyParameters toPublicKeyParameters() {
         return params;
+    }
+
+    /** Равенство по кривой и точке: два ключа с одинаковыми координатами равны. */
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) return true;
+        return other instanceof GostECPublicKey that && params.equals(that.params);
+    }
+
+    @Override
+    public int hashCode() {
+        return params.hashCode();
     }
 
     /**

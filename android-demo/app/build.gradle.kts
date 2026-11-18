@@ -7,7 +7,7 @@ android {
     compileSdk = 34
     defaultConfig {
         applicationId = "org.rssys.gost.demo"
-        minSdk = 31
+        minSdk = 34
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"

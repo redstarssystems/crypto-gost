@@ -57,6 +57,8 @@ public final class GostOcspResponseBuilder {
     private byte[] nonce;
     private boolean useByKey;
     private int responderKeyHashLen = GostOids.STREEBOG_256_HASH_LEN;
+    // 0 = длина хэша CertID по ключу CA (поведение по умолчанию)
+    private int certIdHashLen;
 
     private GostOcspResponseBuilder(byte[] serialNumber) {
         this.serialNumber = serialNumber;
@@ -77,13 +79,38 @@ public final class GostOcspResponseBuilder {
         return this;
     }
 
+    /**
+     * Явно задаёт длину хэша CertID, не привязывая её к ключу CA.
+     *
+     * <p>По умолчанию длина берётся из ключа CA. Явный выбор нужен для ответов,
+     * где хэш CertID не совпадает с размером ключа УЦ — например, УЦ с ключом
+     * 512 бит и запрос на Стрибоге-256 (Р 1323565.1.059-2024, п. 7.2.2.2).</p>
+     *
+     * @param hlen длина хэша: 32 (Стрибог-256) или 64 (Стрибог-512)
+     * @throws IllegalArgumentException если длина не равна 32 или 64
+     */
+    public GostOcspResponseBuilder certIdHashLen(int hlen) {
+        if (hlen != GostOids.STREEBOG_256_HASH_LEN && hlen != GostOids.STREEBOG_512_HASH_LEN) {
+            throw new IllegalArgumentException("CertID hash length must be 32 or 64, got: " + hlen);
+        }
+        this.certIdHashLen = hlen;
+        return this;
+    }
+
     /** DER-кодированный subject DN CA для CertID issuerNameHash. */
     public GostOcspResponseBuilder issuerDn(byte[] subjectDer) {
         this.caSubjectDer = subjectDer;
         return this;
     }
 
-    /** Удобная перегрузка: DN из строки "CN=..., O=..." */
+    /**
+     * Удобная перегрузка: DN из строки "CN=..., O=...".
+     *
+     * <p>Для OCSP-ответа по уже существующему УЦ передавайте DER через
+     * {@link #issuerDn(byte[])} (например, {@code caCert.getSubjectDnBytes()}):
+     * строковая перегрузка кодирует DN заново и может не совпасть с issuer
+     * DN старых сертификатов.</p>
+     */
     public GostOcspResponseBuilder issuerDn(String dn) {
         this.caSubjectDer = GostDnParser.encodeDn(dn);
         return this;
@@ -166,7 +193,8 @@ public final class GostOcspResponseBuilder {
      * @param reasonCode код причины из {@link ReasonCode} ({@code ReasonCode.UNSPECIFIED} — без добавления поля причины в DER)
      */
     public GostOcspResponseBuilder revoked(String revocationTime, ReasonCode reasonCode) {
-        byte[] revTime = DerCodec.encodeTime(revocationTime);
+        // RFC 6960 §2.4: revocationTime — GeneralizedTime независимо от года.
+        byte[] revTime = DerCodec.encodeGeneralizedTime(revocationTime);
         java.io.ByteArrayOutputStream rvContent = new java.io.ByteArrayOutputStream();
         try {
             rvContent.write(revTime);
@@ -191,10 +219,20 @@ public final class GostOcspResponseBuilder {
     /**
      * Nonce для эхо-возврата из запроса (RFC 8954).
      *
-     * @param nonce значение nonce из OCSP-запроса (16 байт) или null — не добавлять
+     * <p>Принимает сырые байты значения {@code Nonce} (как их возвращает
+     * {@link GostOcspRequest#getNonce()}); обёртки OCTET STRING добавляются при построении.
+     *
+     * @param nonce значение nonce из OCSP-запроса длиной 1..32 байта или {@code null} —
+     *              расширение не добавляется
+     * @throws IllegalArgumentException если длина nonce вне диапазона 1..32
      */
     public GostOcspResponseBuilder nonce(byte[] nonce) {
-        this.nonce = nonce;
+        if (nonce == null) {
+            this.nonce = null;
+            return this;
+        }
+        OcspNonceCodec.requireValidLength(nonce);
+        this.nonce = nonce.clone();
         return this;
     }
 
@@ -205,6 +243,11 @@ public final class GostOcspResponseBuilder {
      * <p>RFC 5019bis рекомендует byKey для высоконагруженных сред — компактнее
      * byName. Хэш вычисляется через Streebog, поэтому распознаётся только
      * ГОСТ-клиентами; для универсальной совместимости используйте byName.</p>
+     *
+     * <p><b>Отступление от нормы:</b> Р 1323565.1.059-2024 (п. 7.3.3.3) требует для byKey
+     * хэш SHA-1 (20 байт). Построитель SHA-1 не вычисляет, поэтому ответ не будет
+     * распознан сторонними клиентами, ожидающими SHA-1. Проверяющая сторона библиотеки
+     * принимает чужие ответы с 20-байтным byKey без сверки хэша.</p>
      */
     public GostOcspResponseBuilder withResponderByKey() {
         return withResponderByKey(GostOids.STREEBOG_256_HASH_LEN);
@@ -230,8 +273,8 @@ public final class GostOcspResponseBuilder {
      * Открытый ключ подписанта выводится из {@link GostSigner#getPublicKey()}.
      *
      * <p>Параметры кривой (hlen) для хэширования TBS берутся из открытого ключа подписанта;
-     * параметры для CertID (hlenCa) — из ключа CA ({@link #caPublicKey}), или из того же
-     * ключа подписанта по умолчанию.</p>
+     * длина хэша CertID — заданная явно ({@link #certIdHashLen(int)}), иначе длина хэша ключа CA
+     * ({@link #caPublicKey}), а если CA не задан — ключа подписанта.</p>
      *
      * @param signer подписант OCSP-ответа
      * @return DER-кодированный OCSPResponse
@@ -258,6 +301,7 @@ public final class GostOcspResponseBuilder {
                 buildTbsResponseData(
                         serialNumber,
                         caKey,
+                        certIdHashLen != 0 ? certIdHashLen : caKey.getParams().hlen,
                         caSubjectDer,
                         nu,
                         pa,
@@ -307,7 +351,7 @@ public final class GostOcspResponseBuilder {
     private byte[] buildResponderId(
             byte[] caSubjectDer, byte[][] delegatedCertsDer, PublicKeyParameters signerPub) {
         if (useByKey) {
-            byte[] keyValue = GostDerCodec.encodeSpkiKeyValue(signerPub);
+            byte[] keyValue = GostDerCodec.encodeSpkiKeyBits(signerPub);
             byte[] keyHash = GostSignatureHelper.doHash(keyValue, responderKeyHashLen);
             return DerCodec.encodeTlv(
                     DerCodec.TAG_CTX_CONSTRUCTED_2, DerCodec.encodeOctetString(keyHash));
@@ -325,6 +369,7 @@ public final class GostOcspResponseBuilder {
     private static byte[] buildTbsResponseData(
             byte[] serialNumber,
             PublicKeyParameters caPub,
+            int hlenCertId,
             byte[] caSubjectDer,
             String nextUpdateGeneralizedTime,
             String producedAtGeneralizedTime,
@@ -333,18 +378,11 @@ public final class GostOcspResponseBuilder {
             byte[] certStatusDer,
             byte[] nonce,
             byte[] responderId) {
-        int hlenCa = caPub.getParams().hlen;
-        byte[] issuerNameHash = GostSignatureHelper.doHash(caSubjectDer, hlenCa);
-        byte[] caSpkiDer = GostDerCodec.encodePublicKey(caPub);
-        int[] spkiSeq = GostDerParser.parseSequence(caSpkiDer, 0);
-        int spkiPos = spkiSeq[0];
-        int[] algTlv = GostDerParser.readTlv(caSpkiDer, spkiPos);
-        spkiPos = algTlv[1];
-        int[] bsTlv = GostDerParser.readTlv(caSpkiDer, spkiPos);
-        byte[] bitStringValue = java.util.Arrays.copyOfRange(caSpkiDer, bsTlv[0], bsTlv[1]);
-        byte[] issuerKeyHash = GostSignatureHelper.doHash(bitStringValue, hlenCa);
+        byte[] issuerNameHash = GostSignatureHelper.doHash(caSubjectDer, hlenCertId);
+        byte[] issuerKeyHash =
+                GostSignatureHelper.doHash(GostDerCodec.encodeSpkiKeyBits(caPub), hlenCertId);
         String digestOid =
-                hlenCa == GostOids.STREEBOG_512_HASH_LEN
+                hlenCertId == GostOids.STREEBOG_512_HASH_LEN
                         ? GostOids.DIGEST_512
                         : GostOids.DIGEST_256;
         byte[] hashAlg = DerCodec.encodeSequence(DerCodec.encodeOid(digestOid));
@@ -354,7 +392,8 @@ public final class GostOcspResponseBuilder {
                         DerCodec.encodeOctetString(issuerNameHash),
                         DerCodec.encodeOctetString(issuerKeyHash),
                         DerCodec.encodeTlv(0x02, serialNumber));
-        byte[] thisUpdate = DerCodec.encodeTime(thisUpdateGeneralizedTime);
+        // RFC 6960 §2.4: thisUpdate — GeneralizedTime независимо от года.
+        byte[] thisUpdate = DerCodec.encodeGeneralizedTime(thisUpdateGeneralizedTime);
         ByteArrayOutputStream srOut = new ByteArrayOutputStream();
         try {
             srOut.write(certId);
@@ -374,17 +413,17 @@ public final class GostOcspResponseBuilder {
             throw new RuntimeException("Unexpected IOException from ByteArrayOutputStream", e);
         }
         byte[] singleResponse = DerCodec.encodeSequence(srOut.toByteArray());
-        byte[] version = DerCodec.encodeTlv(0xA0, new byte[] {0x02, 0x01, 0x00});
         byte[] producedAt =
                 DerCodec.encodeTlv(
                         0x18, producedAtGeneralizedTime.getBytes(StandardCharsets.US_ASCII));
         byte[] responses = DerCodec.encodeSequence(singleResponse);
 
-        byte[] baseContent = DerCodec.concat(version, responderId, producedAt, responses);
+        // version имеет DEFAULT v1: по DER (X.690 §11.5) значение по умолчанию не
+        // кодируется. Явный [0] v1 нормализуют при пересохранении (КриптоПро в
+        // revocation-values X-Long), и подпись над исходным TBS перестаёт сходиться.
+        byte[] baseContent = DerCodec.concat(responderId, producedAt, responses);
         if (nonce != null) {
-            byte[] nonceOid = DerCodec.encodeOid(GostOids.OCSP_NONCE);
-            byte[] nonceValue = DerCodec.encodeOctetString(nonce);
-            byte[] nonceExt = DerCodec.encodeSequence(nonceOid, nonceValue);
+            byte[] nonceExt = OcspNonceCodec.encodeExtension(nonce);
             byte[] nonceExtSeq = DerCodec.encodeSequence(nonceExt);
             byte[] responseExtensions = DerCodec.encodeTlv(0xA1, nonceExtSeq);
             return DerCodec.encodeSequence(DerCodec.concat(baseContent, responseExtensions));

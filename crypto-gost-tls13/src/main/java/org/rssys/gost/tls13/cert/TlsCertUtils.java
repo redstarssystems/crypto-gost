@@ -2,7 +2,11 @@ package org.rssys.gost.tls13.cert;
 
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
+import java.math.BigInteger;
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
@@ -35,8 +39,6 @@ public final class TlsCertUtils {
                     GostOids.EXT_EKU,
                     GostOids.EXT_AIA,
                     GostOids.EXT_NAME_CONSTRAINTS);
-
-    private static final int TBS_SPKI_SEQUENCE_INDEX = 5;
 
     private TlsCertUtils() {}
 
@@ -75,8 +77,10 @@ public final class TlsCertUtils {
         if (scheme == expectedScheme) return true;
         if (interopAcceptGostBaseSigScheme) {
             int hlen = pubKey.getParams().hlen;
-            if (hlen == 32 && scheme == TlsConstants.SIG_GOST_TC26_A_256) return true;
-            if (hlen == 64 && scheme == TlsConstants.SIG_GOST_TC26_512_A) return true;
+            if (hlen == TlsConstants.STREEBOG_256_HASH_LEN
+                    && scheme == TlsConstants.SIG_GOST_TC26_A_256) return true;
+            if (hlen == TlsConstants.STREEBOG_512_HASH_LEN
+                    && scheme == TlsConstants.SIG_GOST_TC26_512_A) return true;
         }
         return false;
     }
@@ -89,6 +93,68 @@ public final class TlsCertUtils {
      */
     public static int getNamedGroup(PublicKeyParameters pubKey) {
         return TlsCiphersuite.paramsToNamedGroup(pubKey.getParams());
+    }
+
+    /**
+     * Входит ли схема подписи в список, присланный сервером в CertificateRequest.
+     *
+     * @param offered схемы из CertificateRequest
+     * @param scheme  проверяемая схема
+     * @return true, если схема есть в списке
+     */
+    public static boolean isSchemeOffered(int[] offered, int scheme) {
+        for (int candidate : offered) {
+            if (candidate == scheme) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Схема подписи CertificateVerify для ключа листа клиентской цепочки (по кривой ключа,
+     * RFC 9367 §5).
+     * <p>
+     * RFC 8446 §4.4.3 требует, чтобы эта схема входила в {@code signature_algorithms} запроса, а
+     * §4.4.2.3 при её отсутствии велит отправить пустой Certificate.
+     *
+     * @param chain клиентская цепочка, лист первым
+     * @return код схемы подписи
+     * @throws IllegalArgumentException если кривая ключа листа не поддерживается
+     */
+    public static int leafSignatureScheme(List<GostCertificate> chain) {
+        return schemeOfKeyCurve(chain.get(0));
+    }
+
+    /**
+     * Схемы подписей сертификатов цепочки, которых нет в списке сервера.
+     * <p>
+     * Подпись {@code chain[i]} проверяется ключом {@code chain[i + 1]}, поэтому её схема
+     * определяется кривой следующего сертификата. Издателя последнего сертификата в цепочке нет
+     * (корень обычно не отправляется), его подпись не сверяется. Без
+     * {@code signature_algorithms_cert} тот же список относится и к подписям в сертификатах
+     * цепочки (RFC 8446 §4.2.3).
+     *
+     * @param chain   клиентская цепочка, лист первым
+     * @param offered схемы подписи сертификатов из CertificateRequest
+     *                ({@code signature_algorithms_cert}, а без него {@code signature_algorithms})
+     * @return не предложенные схемы без повторов в порядке цепочки; пусто, если цепочка из одного
+     *         сертификата или все схемы предложены
+     */
+    public static List<Integer> unofferedChainSchemes(List<GostCertificate> chain, int[] offered) {
+        Set<Integer> missing = new LinkedHashSet<>();
+        for (int i = 0; i + 1 < chain.size(); i++) {
+            int scheme = schemeOfKeyCurve(chain.get(i + 1));
+            if (!isSchemeOffered(offered, scheme)) {
+                missing.add(scheme);
+            }
+        }
+        return List.copyOf(missing);
+    }
+
+    private static int schemeOfKeyCurve(GostCertificate certificate) {
+        return TlsCiphersuite.namedGroupToSignatureScheme(
+                getNamedGroup(certificate.getPublicKey()));
     }
 
     /**
@@ -105,30 +171,51 @@ public final class TlsCertUtils {
      */
     public static void verifyOcspResponse(GostCertificate cert, GostCertificate issuer)
             throws TlsException {
-        verifyOcspResponse(cert, issuer, GostOids.MAX_OCSP_AGE_MS);
+        verifyOcspResponse(cert, issuer, GostOids.MAX_OCSP_AGE_MS, null);
     }
 
     /**
      * Верифицирует OCSP-ответ с настраиваемой политикой свежести (RFC 6960 §2.4).
      * <p>
      * Перегрузка для проброса локальной политики свежести relying party из
-     * вышестоящего слоя (JSSE TrustManager). Семантика {@code maxOcspAgeMs}
-     * идентична {@link OcspVerifier#verify(byte[], byte[], GostCertificate, byte[], long)}.
+     * вышестоящего слоя (JSSE TrustManager). Семантика параметров идентична
+     * {@link OcspVerifier#verify(byte[], byte[], GostCertificate, byte[], long, Duration)}.
      *
-     * @param cert         сертификат с прикреплённым OCSP-ответом
-     * @param issuer       сертификат издателя
-     * @param maxOcspAgeMs максимальный возраст ответа без {@code nextUpdate} в мс
+     * @param cert             сертификат с прикреплённым OCSP-ответом
+     * @param issuer           сертификат издателя
+     * @param maxOcspAgeMs     максимальный возраст ответа без {@code nextUpdate} в мс
+     * @param maxThisUpdateAge необязательный предел возраста {@code thisUpdate} для всех
+     *                         ответов или {@code null}
      * @throws TlsException при ошибке верификации OCSP
+     * @throws IllegalArgumentException если {@code maxThisUpdateAge} нулевой или отрицательный
      */
     public static void verifyOcspResponse(
-            GostCertificate cert, GostCertificate issuer, long maxOcspAgeMs) throws TlsException {
+            GostCertificate cert,
+            GostCertificate issuer,
+            long maxOcspAgeMs,
+            Duration maxThisUpdateAge)
+            throws TlsException {
         byte[] serialCopy = cert.getSerialNumber();
         byte[] ocspResp = cert.getOcspResponse();
         byte[] nonce = cert.getOcspNonce();
         try {
-            OcspVerifier.verify(ocspResp, serialCopy, issuer, nonce, maxOcspAgeMs);
+            OcspVerifier.verify(
+                    ocspResp, serialCopy, issuer, nonce, maxOcspAgeMs, maxThisUpdateAge);
         } catch (PkixException e) {
-            throw new TlsException(TlsConstants.ALERT_BAD_CERTIFICATE, e.getMessage());
+            // RFC 8446 §6.2: отзыв сертификата сообщается своим кодом; исходное исключение
+            // остаётся причиной
+            byte alert =
+                    e.reason() == PkixException.Reason.REVOKED
+                            ? TlsConstants.ALERT_CERTIFICATE_REVOKED
+                            : TlsConstants.ALERT_BAD_CERTIFICATE;
+            String message = e.getMessage();
+            if (e.reason() == PkixException.Reason.REVOKED) {
+                // Текст отзыва постоянный и не называет сертификат, а оператору нужен
+                // серийный номер: по нему отзыв сопоставляется с записью менеджера доверия
+                message =
+                        message + " (serial=0x" + new BigInteger(1, serialCopy).toString(16) + ")";
+            }
+            throw new TlsException(alert, message, e);
         }
     }
 
@@ -147,29 +234,30 @@ public final class TlsCertUtils {
         byte[] filterValues = filter.extensionValues();
         int keyUsageBits = cert.getKeyUsageBits();
         byte[][] ekuOids = cert.getEkuOids();
-        Set<String> presentExtensionOids = cert.getPresentExtensionOids();
+        // OID фильтра сопоставляется в точечной нотации: сырые байты OID парсер pkix не отдаёт
+        String filterOidDot = oidBytesToDottedString(filterOid, 0, filterOid.length);
 
-        if (Arrays.equals(filterOid, KU_OID_BYTES)) {
-            int filterBits = 0;
-            if (filterValues.length > 0) {
-                int unused = filterValues[0] & 0xFF;
-                for (int i = 1; i < filterValues.length && i - 1 < 2; i++) {
-                    filterBits |= (filterValues[i] & 0xFF) << (8 * (i - 1));
-                }
-                if (unused > 0 && filterValues.length > 1) {
-                    filterBits = (filterBits >> unused) << unused;
-                }
+        if (GostOids.EXT_KU.equals(filterOidDot)) {
+            // Как и у остальных расширений, пустое значение фильтра требует лишь наличия
+            // расширения, а сертификат без KeyUsage не подходит под любой фильтр KeyUsage
+            if (cert.getExtensionValue(GostOids.EXT_KU) == null) {
+                return false;
             }
-            return (keyUsageBits & filterBits) == filterBits;
+            if (filterValues.length == 0) {
+                return true;
+            }
+            int requestedBits = keyUsageBitsOfFilter(filterValues);
+            return requestedBits >= 0 && (keyUsageBits & requestedBits) == requestedBits;
         }
 
-        if (Arrays.equals(filterOid, EKU_OID_BYTES)) {
+        if (GostOids.EXT_EKU.equals(filterOidDot)) {
             if (ekuOids == null && filterValues.length > 0) {
                 return false;
             }
             if (ekuOids != null) {
                 for (byte[] ekuOid : ekuOids) {
-                    if (matchesOid(ekuOid, 0, ekuOid.length, ANY_EKU_OID_BYTES)) {
+                    if (GostOids.EXT_ANY_EKU.equals(
+                            oidBytesToDottedString(ekuOid, 0, ekuOid.length))) {
                         return false;
                     }
                 }
@@ -177,41 +265,13 @@ public final class TlsCertUtils {
             if (filterValues.length == 0) {
                 return ekuOids != null;
             }
-            if (filterValues.length < 2 || filterValues[0] != TAG_SEQUENCE) {
-                return false;
-            }
-            int[] seqTlv = readTlv(filterValues, 0);
-            int pos = seqTlv[0];
-            int end = seqTlv[1];
-            while (pos < end) {
-                if ((filterValues[pos] & 0xFF) != TAG_OID) {
-                    pos = readTlv(filterValues, pos)[1];
-                    continue;
-                }
-                int[] oidTlv = readTlv(filterValues, pos);
-                boolean found = false;
-                if (ekuOids != null) {
-                    for (byte[] ekuOid : ekuOids) {
-                        if (matchesOid(
-                                ekuOid,
-                                0,
-                                ekuOid.length,
-                                Arrays.copyOfRange(filterValues, oidTlv[0], oidTlv[1]))) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if (!found) return false;
-                pos = oidTlv[1];
-            }
-            return true;
+            return containsAllFilterOids(filterValues, ekuOids);
         }
 
         // anyPolicy (2.5.29.32.0, RFC 5280 §4.2.1.4) — структурный аналог anyExtendedKeyUsage —
         // не обрабатывается отдельно; отсутствие аналогичной логики осознанно, при добавлении
         // anyPolicy-handling синхронизировать с EKU-веткой.
-        if (Arrays.equals(filterOid, CP_OID_BYTES)) {
+        if (GostOids.EXT_CP.equals(filterOidDot)) {
             byte[][] cpOids = cert.getCpOids();
             if (cpOids == null && filterValues.length > 0) {
                 return false;
@@ -219,46 +279,17 @@ public final class TlsCertUtils {
             if (filterValues.length == 0) {
                 return cpOids != null;
             }
-            if (filterValues.length < 2 || filterValues[0] != TAG_SEQUENCE) {
-                return false;
-            }
-            int[] seqTlv = readTlv(filterValues, 0);
-            int pos = seqTlv[0];
-            int end = seqTlv[1];
-            while (pos < end) {
-                if ((filterValues[pos] & 0xFF) != TAG_OID) {
-                    pos = readTlv(filterValues, pos)[1];
-                    continue;
-                }
-                int[] oidTlv = readTlv(filterValues, pos);
-                boolean found = false;
-                if (cpOids != null) {
-                    for (byte[] cpOid : cpOids) {
-                        if (matchesOid(
-                                cpOid,
-                                0,
-                                cpOid.length,
-                                Arrays.copyOfRange(filterValues, oidTlv[0], oidTlv[1]))) {
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if (!found) return false;
-                pos = oidTlv[1];
-            }
-            return true;
+            return containsAllFilterOids(filterValues, cpOids);
         }
 
-        String oidDot = oidBytesToDottedString(filterOid, 0, filterOid.length);
-        if (presentExtensionOids.contains(oidDot)) {
-            if (filterValues.length > 0) {
-                return matchesExtensionValue(filterOid, filterValues, cert);
-            }
-            return true;
+        // Значение расширения берётся из строгого разбора сертификата (pkix): второго
+        // независимого обхода DER здесь нет, поэтому строгость обоих не может разойтись
+        byte[] certValue = cert.getExtensionValue(filterOidDot);
+        if (certValue != null) {
+            return filterValues.length == 0 || Arrays.equals(certValue, filterValues);
         }
 
-        if (KNOWN_EXTENSION_OIDS.contains(oidDot)) {
+        if (KNOWN_EXTENSION_OIDS.contains(filterOidDot)) {
             return false;
         }
 
@@ -266,99 +297,83 @@ public final class TlsCertUtils {
     }
 
     /**
-     * Сканирует raw DER сертификата для поиска extension с указанным OID
-     * и сравнивает его значение с expectedValue побайтово.
+     * Проверяет, что каждый OID из SEQUENCE значения фильтра есть среди OID сертификата
+     * (RFC 8446 §4.2.5: для списковых расширений фильтр требует, чтобы сертификат содержал все
+     * перечисленные значения). Нераспознаваемая рамка значения даёт false (fail-closed). Общая
+     * часть фильтров ExtendedKeyUsage и CertificatePolicies.
+     *
+     * @param filterValues DER значения фильтра: SEQUENCE OID (не пусто)
+     * @param certOids     OID расширения сертификата в DER, или null если расширения нет
+     * @return true если все OID фильтра присутствуют в сертификате
      */
-    private static boolean matchesExtensionValue(
-            byte[] filterOid, byte[] expectedValue, GostCertificate cert) {
-        byte[] certData = cert.getEncoded();
-        int tbsCertOff = parseSequence(certData, 0)[0];
-        int[] tbsTlv = readTlv(certData, tbsCertOff);
-        int end = tbsTlv[1];
-        int pos = skipVersionAndSerial(certData, tbsTlv);
-        if (pos < 0) return false;
-
-        int seqCount = 0;
-        while (pos < end) {
-            int tag = certData[pos] & 0xFF;
-            int[] tlv = readTlv(certData, pos);
-            if (tag == TAG_SEQUENCE) {
-                seqCount++;
-                if (seqCount == TBS_SPKI_SEQUENCE_INDEX) {
-                    pos = tlv[1];
-                    break;
-                }
-            }
-            pos = tlv[1];
+    private static boolean containsAllFilterOids(byte[] filterValues, byte[][] certOids) {
+        if (filterValues.length < 2 || filterValues[0] != TAG_SEQUENCE) {
+            return false;
         }
-        if (seqCount < TBS_SPKI_SEQUENCE_INDEX) return false;
-
+        int[] seqTlv = readTlv(filterValues, 0);
+        int pos = seqTlv[0];
+        int end = seqTlv[1];
         while (pos < end) {
-            if (pos >= end) return false;
-            int tag = certData[pos] & 0xFF;
-            if (tag == TAG_CTX_1 || tag == TAG_CTX_2) {
-                pos = readTlv(certData, pos)[1];
+            // Элементы не-OID внутри SEQUENCE пропускаются: расширяемость значения фильтра
+            if ((filterValues[pos] & 0xFF) != TAG_OID) {
+                pos = readTlv(filterValues, pos)[1];
                 continue;
             }
-            if (tag == TAG_CTX_3) {
-                int[] extTlv = readTlv(certData, pos);
-                int epos = extTlv[0];
-                int eend = extTlv[1];
-                if (epos >= eend || (certData[epos] & 0xFF) != 0x30) return false;
-                int[] seqTlv2 = readTlv(certData, epos);
-                epos = seqTlv2[0];
-                eend = seqTlv2[1];
-                while (epos < eend) {
-                    if ((certData[epos] & 0xFF) != TAG_SEQUENCE) {
-                        epos = readTlv(certData, epos)[1];
-                        continue;
-                    }
-                    int[] extSeqTlv = readTlv(certData, epos);
-                    int extContent2 = extSeqTlv[0];
-                    int extContentEnd2 = extSeqTlv[1];
-                    if (extContent2 >= extContentEnd2
-                            || (certData[extContent2] & 0xFF) != TAG_OID) {
-                        epos = extSeqTlv[1];
-                        continue;
-                    }
-                    int[] oidTlv = readTlv(certData, extContent2);
-                    if (!matchesOid(certData, oidTlv[0], oidTlv[1] - oidTlv[0], filterOid)) {
-                        epos = extSeqTlv[1];
-                        continue;
-                    }
-                    int afterOid = oidTlv[1];
-                    if (afterOid < extContentEnd2 && (certData[afterOid] & 0xFF) == TAG_BOOLEAN) {
-                        afterOid = readTlv(certData, afterOid)[1];
-                    }
-                    if (afterOid >= extContentEnd2) return false;
-                    if ((certData[afterOid] & 0xFF) == TAG_OCTET_STRING) {
-                        int[] octTlv = readTlv(certData, afterOid);
-                        return octTlv[1] - octTlv[0] == expectedValue.length
-                                && arrayRangeEquals(
-                                        certData,
-                                        octTlv[0],
-                                        octTlv[1],
-                                        expectedValue,
-                                        0,
-                                        expectedValue.length);
-                    }
-                    return false;
-                }
+            int[] oidTlv = readTlv(filterValues, pos);
+            byte[] wanted = Arrays.copyOfRange(filterValues, oidTlv[0], oidTlv[1]);
+            if (!containsOid(certOids, wanted)) {
                 return false;
             }
-            break;
+            pos = oidTlv[1];
+        }
+        return true;
+    }
+
+    private static boolean containsOid(byte[][] certOids, byte[] oid) {
+        if (certOids == null) {
+            return false;
+        }
+        for (byte[] certOid : certOids) {
+            if (matchesOid(certOid, 0, certOid.length, oid)) {
+                return true;
+            }
         }
         return false;
     }
 
-    /** Пропускает version [0] EXPLICIT и serial INTEGER в TBSCertificate. */
-    private static int skipVersionAndSerial(byte[] der, int[] tbsTlv) {
-        int pos = tbsTlv[0];
-        int end = tbsTlv[1];
-        if (pos < end && (der[pos] & 0xFF) == TAG_CTX_0) {
-            pos = readTlv(der, pos)[1];
+    /**
+     * Разбирает значение фильтра KeyUsage: DER BIT STRING целиком (тег, длина, число
+     * неиспользуемых бит, байты битов), как и у остальных расширений в {@code oid_filters}
+     * (RFC 8446 §4.2.5). Определено 9 битов KeyUsage, то есть не больше двух байт; неиспользуемые
+     * биты последнего байта в запрос не входят. Раскладка битов совпадает с
+     * {@link GostCertificate#getKeyUsageBits()}: первый байт - младший.
+     *
+     * @param filterValue DER значения фильтра (не пусто)
+     * @return маска запрошенных битов или -1, если значение не является корректным BIT STRING
+     */
+    private static int keyUsageBitsOfFilter(byte[] filterValue) {
+        int maxDataBytes = 2;
+        // Тег, однобайтовая длина, число неиспользуемых бит и хотя бы один байт битов
+        if (filterValue.length < 4 || filterValue[0] != TAG_BIT_STRING) {
+            return -1;
         }
-        if (pos >= end) return -1;
-        return readTlv(der, pos)[1];
+        int contentLength = filterValue[1] & 0xFF;
+        if ((filterValue[1] & 0x80) != 0 || filterValue.length != 2 + contentLength) {
+            return -1;
+        }
+        int unusedBits = filterValue[2] & 0xFF;
+        int dataBytes = contentLength - 1;
+        if (unusedBits > 7 || dataBytes < 1 || dataBytes > maxDataBytes) {
+            return -1;
+        }
+        int bits = 0;
+        for (int i = 0; i < dataBytes; i++) {
+            int value = filterValue[3 + i] & 0xFF;
+            if (i == dataBytes - 1) {
+                value &= ~((1 << unusedBits) - 1);
+            }
+            bits |= value << (8 * i);
+        }
+        return bits;
     }
 }

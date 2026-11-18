@@ -7,83 +7,64 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 
-@DisplayName(
-        "GostSslBuilder.interopAcceptGostBaseSigScheme — флаг доходит до GostSSLSessionContext")
+@DisplayName("GostSslBuilder: флаги режима доходят до GostSSLSessionContext")
 class GostSslBuilderInteropTest {
 
-    @Test
-    @DisplayName(
-            "флаг true через builder: sessionContext.isInteropAcceptGostBaseSigScheme() == true")
-    void testFlagPropagatedToSessionContext() throws Exception {
-        SSLContext ctx =
-                GostSsl.builder()
-                        .trustAll()
-                        .interopAcceptGostBaseSigScheme(true)
-                        .buildClientContext();
+    private static GostSSLSessionContext clientSession(GostSslBuilder builder) throws Exception {
+        return (GostSSLSessionContext) builder.buildClientContext().getClientSessionContext();
+    }
 
-        GostSSLSessionContext sessionCtx = (GostSSLSessionContext) ctx.getClientSessionContext();
-        assertTrue(
-                sessionCtx.isInteropAcceptGostBaseSigScheme(),
-                "флаг должен быть true после interopAcceptGostBaseSigScheme(true)");
+    private static GostSSLSessionContext serverSession(GostSslBuilder builder) throws Exception {
+        SSLContext ctx = builder.buildServerContext();
+        return (GostSSLSessionContext) ctx.getServerSessionContext();
     }
 
     @Test
-    @DisplayName("флаг false по умолчанию: без вызова builder-метода")
-    void testFlagDefaultFalse() throws Exception {
-        SSLContext ctx = GostSsl.builder().trustAll().buildClientContext();
+    @DisplayName("Без вызовов builder-методов и при явном false все флаги выключены")
+    void flagsAreOffByDefaultAndWhenExplicitlyFalse() throws Exception {
+        GostSSLSessionContext client = clientSession(GostSsl.builder().trustAll());
+        GostSSLSessionContext server = serverSession(GostSsl.builder().trustAll());
+        GostSSLSessionContext explicitFalse =
+                clientSession(GostSsl.builder().trustAll().interopAcceptGostBaseSigScheme(false));
 
-        GostSSLSessionContext sessionCtx = (GostSSLSessionContext) ctx.getClientSessionContext();
+        assertFalse(client.isInteropAcceptGostBaseSigScheme(), "interop по умолчанию выключен");
+        assertFalse(server.isNeedClientAuth(), "needClientAuth по умолчанию выключен");
+        assertFalse(server.isWantClientAuth(), "wantClientAuth по умолчанию выключен");
         assertFalse(
-                sessionCtx.isInteropAcceptGostBaseSigScheme(),
-                "флаг должен быть false по умолчанию");
+                explicitFalse.isInteropAcceptGostBaseSigScheme(),
+                "после interopAcceptGostBaseSigScheme(false) флаг выключен");
     }
 
     @Test
-    @DisplayName("флаг false после явного .interopAcceptGostBaseSigScheme(false)")
-    void testFlagExplicitFalse() throws Exception {
-        SSLContext ctx =
-                GostSsl.builder()
-                        .trustAll()
-                        .interopAcceptGostBaseSigScheme(false)
-                        .buildClientContext();
+    @DisplayName("interopAcceptGostBaseSigScheme(true): флаг доходит до клиентского и серверного")
+    void interopFlagReachesBothSessionContexts() throws Exception {
+        GostSslBuilder builder = GostSsl.builder().trustAll().interopAcceptGostBaseSigScheme(true);
 
-        GostSSLSessionContext sessionCtx = (GostSSLSessionContext) ctx.getClientSessionContext();
+        assertTrue(
+                clientSession(builder).isInteropAcceptGostBaseSigScheme(),
+                "флаг должен дойти до clientSessionContext");
+        assertTrue(
+                serverSession(builder).isInteropAcceptGostBaseSigScheme(),
+                "флаг должен дойти до serverSessionContext");
+    }
+
+    @Test
+    @DisplayName("needClientAuth(true) включает обязательный режим")
+    void needClientAuthReachesServerSessionContext() throws Exception {
+        GostSSLSessionContext server =
+                serverSession(GostSsl.builder().trustAll().needClientAuth(true));
+
+        assertTrue(server.isNeedClientAuth(), "флаг должен быть true после needClientAuth(true)");
+    }
+
+    @Test
+    @DisplayName("wantClientAuth(true) включает запрос, но не обязательный режим")
+    void wantClientAuthDoesNotEnableNeedMode() throws Exception {
+        GostSSLSessionContext server =
+                serverSession(GostSsl.builder().trustAll().wantClientAuth(true));
+
+        assertTrue(server.isWantClientAuth(), "флаг должен быть true после wantClientAuth(true)");
         assertFalse(
-                sessionCtx.isInteropAcceptGostBaseSigScheme(),
-                "флаг должен быть false после interopAcceptGostBaseSigScheme(false)");
-    }
-
-    @Test
-    @DisplayName("серверный контекст: флаг доходит до serverSessionContext")
-    void testFlagServerContext() throws Exception {
-        SSLContext ctx =
-                GostSsl.builder()
-                        .trustAll()
-                        .interopAcceptGostBaseSigScheme(true)
-                        .buildServerContext();
-
-        GostSSLSessionContext sessionCtx = (GostSSLSessionContext) ctx.getServerSessionContext();
-        assertTrue(
-                sessionCtx.isInteropAcceptGostBaseSigScheme(),
-                "флаг должен доходить до serverSessionContext");
-    }
-
-    @Test
-    @DisplayName("needClientAuth true: доходит до serverSessionContext.isNeedClientAuth()")
-    void testNeedClientAuthTrue() throws Exception {
-        SSLContext ctx = GostSsl.builder().trustAll().needClientAuth(true).buildServerContext();
-
-        GostSSLSessionContext sessionCtx = (GostSSLSessionContext) ctx.getServerSessionContext();
-        assertTrue(
-                sessionCtx.isNeedClientAuth(), "флаг должен быть true после needClientAuth(true)");
-    }
-
-    @Test
-    @DisplayName("needClientAuth false по умолчанию: без вызова needClientAuth")
-    void testNeedClientAuthDefaultFalse() throws Exception {
-        SSLContext ctx = GostSsl.builder().trustAll().buildServerContext();
-
-        GostSSLSessionContext sessionCtx = (GostSSLSessionContext) ctx.getServerSessionContext();
-        assertFalse(sessionCtx.isNeedClientAuth(), "флаг должен быть false по умолчанию");
+                server.isNeedClientAuth(), "wantClientAuth не должен включать обязательный режим");
     }
 }

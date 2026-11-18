@@ -25,9 +25,22 @@ import org.rssys.gost.util.DerCodec;
  */
 public final class GostOcspResponse {
 
-    private static final int MAX_OCSP_RESPONSE_SIZE = 262_144;
+    /**
+     * Наибольший размер DER OCSP-ответа, который разбирается (256 КБ). Загрузчик по сети не должен
+     * принимать ответ больше этого предела: разобрать его всё равно нельзя.
+     */
+    public static final int MAX_OCSP_RESPONSE_SIZE = 262_144;
+
     private static final int MAX_DELEGATED_CERTS = 5;
     private static final int MAX_SINGLE_RESPONSES = 256;
+
+    // Значения OCSPResponseStatus (RFC 6960 §4.2.1); 4 не используется и допустимым не считается
+    private static final int STATUS_SUCCESSFUL = 0;
+    private static final int STATUS_MALFORMED_REQUEST = 1;
+    private static final int STATUS_INTERNAL_ERROR = 2;
+    private static final int STATUS_TRY_LATER = 3;
+    private static final int STATUS_SIG_REQUIRED = 5;
+    private static final int STATUS_UNAUTHORIZED = 6;
 
     /** Тип responder ID в ответе (RFC 6960 §4.1.1). */
     public enum ResponderIdType {
@@ -46,6 +59,7 @@ public final class GostOcspResponse {
     private final byte[] responderKeyHash;
     private final byte[] responderIdDer;
     private final byte[] encoded;
+    private byte[] basicResponseDer;
     private volatile boolean signatureVerified;
 
     /**
@@ -74,25 +88,34 @@ public final class GostOcspResponse {
             int pos = ocspSeq[0];
             int end = ocspSeq[1];
 
-            // responseStatus ENUMERATED
-            if (pos >= end || (der[pos] & 0xFF) != 0x0A) {
+            // responseStatus ENUMERATED; читается с пределом конца OCSPResponse, иначе значение
+            // могло бы лежать за границей охватывающей SEQUENCE
+            if (pos >= end || (der[pos] & 0xFF) != TAG_ENUMERATED) {
                 throw new PkixException("OCSP: expected ENUMERATED status");
             }
-            int[] statusTlv = readTlv(der, pos);
+            int[] statusTlv = readTlv(der, pos, end);
             if (statusTlv[1] - statusTlv[0] > 1) {
                 throw new PkixException(
                         "OCSP: ENUMERATED responseStatus too long ("
                                 + (statusTlv[1] - statusTlv[0])
                                 + " bytes), expected 1 byte per RFC 6960");
             }
-            int statusVal = 0;
-            for (int i = statusTlv[0]; i < statusTlv[1]; i++) {
-                statusVal = (statusVal << 8) | (der[i] & 0xFF);
+            if (statusTlv[1] == statusTlv[0]) {
+                throw new PkixException("OCSP: empty ENUMERATED responseStatus");
+            }
+            int statusVal = der[statusTlv[0]] & 0xFF;
+            if (!isAllowedStatus(statusVal)) {
+                throw new PkixException("OCSP: unsupported responseStatus " + statusVal);
             }
             this.responseStatus = statusVal;
             pos = statusTlv[1];
 
-            if (statusVal != 0) {
+            if (statusVal != STATUS_SUCCESSFUL) {
+                // responseBytes присутствует только в успешном ответе (RFC 6960 §4.2.1)
+                if (pos != end) {
+                    throw new PkixException(
+                            "OCSP: responseBytes must be absent for non-successful status");
+                }
                 this.producedAt = null;
                 this.responses = Collections.emptyList();
                 this.tbsRaw = null;
@@ -132,6 +155,7 @@ public final class GostOcspResponse {
                 throw new PkixException("OCSP: expected OCTET STRING");
             }
             int[] octTlv = readTlv(der, rbPos);
+            this.basicResponseDer = Arrays.copyOfRange(der, octTlv[0], octTlv[1]);
 
             // BasicOCSPResponse SEQUENCE { tbsResponseData, sigAlg, sig, [0] certs }
             int[] basicSeq = parseSequence(der, octTlv[0]);
@@ -148,10 +172,8 @@ public final class GostOcspResponse {
             int tbsPos = tbsSeq[0];
             int tbsEnd = tbsSeq[1];
 
-            // version [0] EXPLICIT (опционально)
-            if (tbsPos < tbsEnd && (der[tbsPos] & 0xFF) == DerCodec.TAG_CTX_CONSTRUCTED_0) {
-                tbsPos = readTlv(der, tbsPos)[1];
-            }
+            // version [0] EXPLICIT (опционально): допустима только v1 (RFC 6960 §4.2.2.3)
+            tbsPos = skipOcspVersionV1(der, tbsPos, tbsEnd);
 
             // responderID: byName [1] или byKey [2] (RFC 6960 §4.1.1)
             if (tbsPos >= tbsEnd) {
@@ -174,7 +196,7 @@ public final class GostOcspResponse {
                 }
                 int[] keyHashTlv = readTlv(der, khPos);
                 int khLen = keyHashTlv[1] - keyHashTlv[0];
-                if (khLen < 20 || khLen > 64) {
+                if (khLen < GostOids.SHA1_HASH_LEN || khLen > GostOids.STREEBOG_512_HASH_LEN) {
                     throw new PkixException("OCSP: responderKeyHash invalid length: " + khLen);
                 }
                 this.responderKeyHash = Arrays.copyOfRange(der, keyHashTlv[0], keyHashTlv[1]);
@@ -353,15 +375,27 @@ public final class GostOcspResponse {
                                 extOidTlv[0],
                                 extOidTlv[1] - extOidTlv[0],
                                 OCSP_NONCE_OID_BYTES)) {
+                            // Дубликат делает «верный» nonce неоднозначным — отклоняем
+                            if (parsedNonce != null) {
+                                throw new PkixException("OCSP response: duplicate nonce extension");
+                            }
                             extContent = extOidTlv[1];
                             if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x01) {
                                 extContent = readTlv(der, extContent)[1];
                             }
-                            if (extContent < extContentEnd && (der[extContent] & 0xFF) == 0x04) {
-                                int[] nonceOctTlv = readTlv(der, extContent);
-                                parsedNonce =
-                                        Arrays.copyOfRange(der, nonceOctTlv[0], nonceOctTlv[1]);
+                            if (extContent >= extContentEnd || (der[extContent] & 0xFF) != 0x04) {
+                                throw new PkixException(
+                                        "OCSP response: nonce extension without extnValue"
+                                                + " OCTET STRING");
                             }
+                            int[] extnValueTlv = readTlv(der, extContent);
+                            if (extnValueTlv[1] != extContentEnd) {
+                                throw new PkixException(
+                                        "OCSP response: trailing data after nonce extnValue");
+                            }
+                            parsedNonce =
+                                    OcspNonceCodec.parseExtnValue(
+                                            der, extnValueTlv[0], extnValueTlv[1]);
                         }
                     }
                     rePos = extTlv[1];
@@ -397,6 +431,19 @@ public final class GostOcspResponse {
         } catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
             throw new PkixException("Malformed OCSP response DER", e);
         }
+    }
+
+    private static boolean isAllowedStatus(int status) {
+        return switch (status) {
+            case STATUS_SUCCESSFUL,
+                    STATUS_MALFORMED_REQUEST,
+                    STATUS_INTERNAL_ERROR,
+                    STATUS_TRY_LATER,
+                    STATUS_SIG_REQUIRED,
+                    STATUS_UNAUTHORIZED ->
+                    true;
+            default -> false;
+        };
     }
 
     private static List<byte[]> parseDelegatedCerts(byte[] rawData, int certsPos)
@@ -451,6 +498,37 @@ public final class GostOcspResponse {
     /**
      * @return полный DER-кодированный OCSPResponse (defensive copy)
      */
+    /**
+     * DER значения для revocation-values CAdES-X Long.
+     *
+     * <p>RFC 5126 §6.3.3 хранит {@code BasicOCSPResponse}, а не полный
+     * {@code OCSPResponse}. Для ответов, разобранных из такого значения,
+     * возвращается исходный BasicOCSPResponse; для остальных — полный
+     * OCSPResponse.</p>
+     */
+    public byte[] getRevocationValueDer() {
+        return basicResponseDer != null ? basicResponseDer.clone() : encoded.clone();
+    }
+
+    /**
+     * Создаёт объект из BasicOCSPResponse, оборачивая его в OCSPResponse
+     * со статусом successful для существующего парсера.
+     */
+    public static GostOcspResponse fromBasicResponse(byte[] basicDer) throws PkixException {
+        if (basicDer == null || basicDer.length == 0) {
+            throw new PkixException("BasicOCSPResponse must not be null or empty");
+        }
+        byte[] status = DerCodec.encodeTlv(0x0A, new byte[] {0x00});
+        byte[] responseBytes =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid(GostOids.OCSP_BASIC),
+                        DerCodec.encodeOctetString(basicDer));
+        byte[] full =
+                DerCodec.encodeSequence(
+                        status, DerCodec.encodeContextConstructed(0, responseBytes));
+        return new GostOcspResponse(full);
+    }
+
     public byte[] getEncoded() {
         return encoded.clone();
     }
@@ -475,7 +553,7 @@ public final class GostOcspResponse {
 
     /** @return {@code true} если статус успешный */
     public boolean isSuccessful() {
-        return responseStatus == 0;
+        return responseStatus == STATUS_SUCCESSFUL;
     }
 
     /** @return дата создания ответа или {@code null} если статус не успешный */
@@ -484,9 +562,11 @@ public final class GostOcspResponse {
     }
 
     /**
-     * Возвращает nonce из responseExtensions OCSP-ответа.
+     * Возвращает nonce из responseExtensions OCSP-ответа (RFC 8954).
      *
-     * @return значение nonce или {@code null} если nonce отсутствует в ответе
+     * <p>Это сырые байты значения {@code Nonce} (1..32 байта) без обёрток OCTET STRING.
+     *
+     * @return копия nonce или {@code null}, если nonce отсутствует в ответе
      */
     public byte[] getNonce() {
         return nonce != null ? nonce.clone() : null;
@@ -592,7 +672,9 @@ public final class GostOcspResponse {
         int hlen = caKey.getParams().hlen;
         byte[] hash = GostSignatureHelper.doHash(tbsRaw, hlen);
 
-        if (!Signature.verifyHash(hash, sigValue, caKey)) {
+        // Длина подписи берётся из недоверенного DER: неверная длина даёт false, а не исключение
+        boolean signatureValid = Signature.verifyHash(hash, sigValue, caKey);
+        if (!signatureValid) {
             throw new PkixException(
                     PkixException.Reason.SIGNATURE_INVALID, "OCSP: signature verification failed");
         }

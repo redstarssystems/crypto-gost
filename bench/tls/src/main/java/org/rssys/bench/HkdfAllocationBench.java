@@ -6,6 +6,7 @@ import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.tls13.crypto.HkdfStreebog;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -23,6 +24,10 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.SECONDS)
 @State(Scope.Thread)
 public class HkdfAllocationBench {
+
+    /** Метка "tls13 finished": в библиотеке она закрыта, а бенчмарку нужны лишь её байты. */
+    private static final byte[] FINISHED_LABEL =
+            "tls13 finished".getBytes(StandardCharsets.US_ASCII);
 
     @Param({"32", "64"})
     private int hashLen;
@@ -116,13 +121,13 @@ public class HkdfAllocationBench {
     @Benchmark
     public byte[] finishedKey_new() {
         return HkdfStreebog.expandLabel(
-                trafficSecret, HkdfStreebog.PREFIXED_FINISHED,
+                trafficSecret, FINISHED_LABEL,
                 HkdfStreebog.EMPTY_CONTEXT, hashLen, hashLen);
     }
 
     @Benchmark
     public byte[] finishedKey_reuse() {
-        byte[] prefixed = HkdfStreebog.PREFIXED_FINISHED;
+        byte[] prefixed = FINISHED_LABEL;
         byte[] hkdfLabel = new byte[2 + 1 + prefixed.length + 1];
         hkdfLabel[0] = (byte) (hashLen >>> 8);
         hkdfLabel[1] = (byte) hashLen;
@@ -150,7 +155,7 @@ public class HkdfAllocationBench {
     @Benchmark
     public byte[] hmacVerify_new() {
         byte[] key = HkdfStreebog.expandLabel(
-                trafficSecret, HkdfStreebog.PREFIXED_FINISHED,
+                trafficSecret, FINISHED_LABEL,
                 HkdfStreebog.EMPTY_CONTEXT, hashLen, hashLen);
         Hmac hmac = HkdfStreebog.newHmac(hashLen);
         hmac.init(key);
@@ -163,7 +168,7 @@ public class HkdfAllocationBench {
     @Benchmark
     public byte[] hmacVerify_reuse() {
         byte[] key = HkdfStreebog.expandLabel(
-                trafficSecret, HkdfStreebog.PREFIXED_FINISHED,
+                trafficSecret, FINISHED_LABEL,
                 HkdfStreebog.EMPTY_CONTEXT, hashLen, hashLen);
         hmacVerify.clear();
         hmacVerify.init(key);

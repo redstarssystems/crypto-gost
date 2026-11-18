@@ -1,134 +1,64 @@
 package org.rssys.gost.jsse.crl;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.time.Duration;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
-import org.rssys.gost.pkix.util.SsrfGuard;
+import java.util.function.Predicate;
+import org.rssys.gost.pkix.internal.net.FetchRequest;
+import org.rssys.gost.pkix.internal.net.JdkHttpFetch;
+import org.rssys.gost.pkix.util.Deadline;
 
 /**
  * Реализация {@link CrlFetcher} на JDK HttpClient с SSRF-защитой.
- * <p>
- * <p>JVM only. Для Android используйте {@link UrlConnectionCrlFetcher}.</p>
- * <p>vthread-совместимость не валидирована JFR.</p>
- * SSRF-защита: только http:// и https:// схемы, блокировка private/reserved IP
- * после DNS-разрешения (проверяются все резолвнутые адреса, fail-closed).
- * <p>
- * <b>Остаточный риск (простыми словами):</b> адрес проверяется до запроса, но
- * само соединение делает {@code HttpClient}, который заново обращается к DNS —
- * между этими моментами атакующий с контролем DNS может подменить публичный
- * адрес на внутренний (DNS-rebinding TOCTOU). Штатными средствами HttpClient не
- * закрывается. Риск ограничен: украсть данные нельзя (ответ CRL проверяется по
- * подписи), возможно лишь probing внутренней сети. Полное закрытие требует
- * ручного HTTP (raw socket + SNI), которое мы пока не планируем делать.
- * Подробнее — {@link org.rssys.gost.pkix.util.SsrfGuard}.
+ *
+ * <p>JVM only. Для Android используйте {@link UrlConnectionCrlFetcher}. vthread-совместимость не
+ * валидирована JFR.
+ *
+ * <p><b>Срок.</b> Один общий срок на весь запрос: соединение, заголовки, тело и перенаправления.
+ * Запрос идёт асинхронно, вызывающий поток ждёт не дольше остатка срока, по истечении запрос
+ * отменяется и соединение закрывается. Сервер CDP, присылающий тело по байту, срок не продлевает.
+ * Это важно ещё и потому, что менеджер доверия грузит CRL одним потоком на адрес, а остальные ждут
+ * его без собственного срока.
+ *
+ * <p><b>Ответ.</b> Принимается только 200; ответ больше предела (по заявленному
+ * {@code Content-Length} или фактически) даёт {@link CrlSizeLimitException}, тело ответа не-200 не
+ * накапливается. GET следует перенаправлениям 301, 302, 303, 307, 308, не более 5 запросов; SSRF и
+ * схема проверяются на каждом переходе, понижение {@code https} до {@code http} запрещено.
+ * Допустимы {@code http://} и {@code https://}.
+ *
+ * <p><b>SSRF.</b> Адрес проверяется до запроса (блокировка private/reserved IP после
+ * DNS-разрешения, fail-closed). <b>Остаточный риск:</b> соединение делает {@code HttpClient},
+ * который заново обращается к DNS, поэтому тот, кто контролирует ответы DNS, может подменить публичный адрес
+ * на внутренний между проверкой и соединением (DNS-rebinding). Риск ограничен: содержимое
+ * внутренних ресурсов не раскрывается (ответ CRL проверяется по подписи), возможно лишь
+ * зондирование внутренней сети. Само
+ * разрешение имени в срок не входит. Подробнее — {@link org.rssys.gost.pkix.util.SsrfGuard}.
  */
-public final class JdkHttpCrlFetcher implements CrlFetcher {
+public final class JdkHttpCrlFetcher extends AbstractCrlFetcher {
 
-    private static final GostLogger LOG =
-            GostLogger.getLogger("org.rssys.gost.jsse.crl.JdkHttpCrlFetcher");
-
-    private static final int DEFAULT_TIMEOUT_MS = 30_000;
-    private static final int DEFAULT_MAX_RESPONSE_SIZE = 67_108_864; // 64 МБ
-
-    private final HttpClient client;
-    private final Duration timeout;
-    private final int maxResponseSize;
-    private final boolean skipSsrfCheck;
-
+    /** Создаёт загрузчик с таймаутом и пределом размера по умолчанию, с SSRF-защитой. */
     public JdkHttpCrlFetcher() {
         this(Duration.ofMillis(DEFAULT_TIMEOUT_MS), DEFAULT_MAX_RESPONSE_SIZE);
     }
 
     /**
-     * @param timeout         таймаут HTTP-запроса
-     * @param maxResponseSize максимальный размер CRL-ответа в байтах (защита от OOM)
+     * @param timeout         общий срок запроса, от 1 мс до {@link Deadline#MAX_FETCH_TIMEOUT}
+     * @param maxResponseSize максимальный размер CRL-ответа в байтах (защита от OOM), больше нуля
+     * @throws IllegalArgumentException если срок или предел размера недопустимы
      */
     public JdkHttpCrlFetcher(Duration timeout, int maxResponseSize) {
-        this(timeout, maxResponseSize, false);
+        this(timeout, maxResponseSize, FetchRequest.BLOCK_PRIVATE_ADDRESSES);
     }
 
     /** Для тестов — отключает SSRF-проверку (localhost mock). */
     JdkHttpCrlFetcher(Duration timeout, int maxResponseSize, boolean skipSsrfCheck) {
-        this.client = HttpClient.newHttpClient();
-        this.timeout = timeout;
-        this.maxResponseSize = maxResponseSize;
-        this.skipSsrfCheck = skipSsrfCheck;
+        this(timeout, maxResponseSize, blockedTarget(skipSsrfCheck));
     }
 
-    @Override
-    public byte[] fetch(String crlUri) throws IOException {
-        if (crlUri == null || crlUri.isEmpty()) {
-            return null;
-        }
-        if (!crlUri.startsWith("http://") && !crlUri.startsWith("https://")) {
-            LOG.log(
-                    Level.WARNING,
-                    "CRL fetch skipped: URI scheme not supported: {0}"
-                            + " — only http:// and https:// are supported",
-                    crlUri);
-            return null;
-        }
-
-        URI uri;
-        try {
-            uri = URI.create(crlUri);
-        } catch (RuntimeException e) {
-            return null;
-        }
-
-        if (!skipSsrfCheck && SsrfGuard.isPrivateAddress(uri)) {
-            LOG.log(
-                    Level.WARNING,
-                    "CRL fetch skipped: private/reserved IP resolved from {0}",
-                    crlUri);
-            return null;
-        }
-
-        try {
-            HttpRequest request = HttpRequest.newBuilder().uri(uri).timeout(timeout).GET().build();
-
-            HttpResponse<InputStream> response =
-                    client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-
-            if (response.statusCode() != 200) {
-                response.body().close();
-                LOG.log(
-                        Level.WARNING,
-                        "CRL fetch failed: HTTP {0} for {1}",
-                        response.statusCode(),
-                        crlUri);
-                return null;
-            }
-
-            try (InputStream is = response.body();
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                byte[] buf = new byte[8192];
-                int total = 0;
-                int n;
-                while ((n = is.read(buf)) != -1) {
-                    if (total > maxResponseSize - n) {
-                        LOG.log(
-                                Level.WARNING,
-                                "CRL fetch aborted: response exceeds {0} bytes for {1}",
-                                maxResponseSize,
-                                crlUri);
-                        return null;
-                    }
-                    total += n;
-                    baos.write(buf, 0, n);
-                }
-                return baos.toByteArray();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("CRL fetch interrupted", e);
-        }
+    /**
+     * Для тестов — собственная проверка адреса ({@code true} - заблокировать), в том числе на
+     * переходах.
+     */
+    JdkHttpCrlFetcher(Duration timeout, int maxResponseSize, Predicate<URI> blockedTarget) {
+        super(timeout, maxResponseSize, blockedTarget, new JdkHttpFetch());
     }
 }

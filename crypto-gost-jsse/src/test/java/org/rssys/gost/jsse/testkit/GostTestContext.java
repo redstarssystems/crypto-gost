@@ -9,8 +9,9 @@ import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Создание SSLContext с ГОСТ-ключами для тестов и примеров.
@@ -29,18 +30,17 @@ public final class GostTestContext {
      *
      * @param serverChain цепочка серверных сертификатов (JCA)
      * @param serverKey   приватный ключ сервера
-     * @param caPublicKey публичный ключ CA (для TrustManager)
+     * @param caCert сертификат CA-якоря (для TrustManager)
      * @return инициализированный SSLContext
      */
     public static SSLContext buildSslContext(
-            X509Certificate[] serverChain,
-            PrivateKeyParameters serverKey,
-            PublicKeyParameters caPublicKey)
+            X509Certificate[] serverChain, PrivateKeyParameters serverKey, GostCertificate caCert)
             throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         GostX509KeyManager km = new GostX509KeyManager();
         km.addKeyEntry("default", serverChain, serverKey);
-        GostX509TrustManager tm = new GostX509TrustManager(caPublicKey, false);
+        GostX509TrustManager tm =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert));
         SSLContext ctx =
                 SSLContext.getInstance(
                         GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
@@ -50,9 +50,9 @@ public final class GostTestContext {
 
     /**
      * Перегрузка для {@link GostTestCerts.CertChain} — конвертирует цепочку
-     * в JCA-формат и вызывает {@link #buildSslContext(X509Certificate[], PrivateKeyParameters, PublicKeyParameters)}.
+     * в JCA-формат и вызывает {@link #buildSslContext(X509Certificate[], PrivateKeyParameters, GostCertificate)}.
      */
     public static SSLContext buildSslContext(GostTestCerts.CertChain certs) throws Exception {
-        return buildSslContext(certs.toJca(), certs.key(), certs.caKey());
+        return buildSslContext(certs.toJca(), certs.key(), certs.caCert());
     }
 }

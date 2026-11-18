@@ -23,7 +23,8 @@ import org.rssys.gost.util.AuthenticationException;
  * ПОЧЕМУ ловим только TlsException|IllegalArgumentException|
  * IllegalStateException|AuthenticationException, а не RuntimeException:
  * TlsRecord НЕ ДОЛЖЕН кидать NPE/AIOOBE на битом входе — это баги.
- * IllegalArgumentException ловим — checkBounds кидает IAE, а не TlsException.
+ * IllegalArgumentException ловим только для ошибок вызова (например, буфер приёмника мал):
+ * ошибки формата записи TlsRecord сообщает как TlsException с decode_error.
  * AuthenticationException — корректная реакция на подмену ciphertext.
  * IllegalStateException — переполнение seqNum (SNMAX), тоже ожидаемое.
  */

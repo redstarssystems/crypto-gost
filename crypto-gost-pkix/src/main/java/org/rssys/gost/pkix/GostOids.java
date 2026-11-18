@@ -144,6 +144,9 @@ public final class GostOids {
     /** id-kp-emailProtection (RFC 5280 §4.2.1.12) */
     public static final String EXT_EMAIL_PROTECTION = "1.3.6.1.5.5.7.3.4";
 
+    /** anyExtendedKeyUsage (RFC 5280 §4.2.1.12) */
+    public static final String EXT_ANY_EKU = "2.5.29.37.0";
+
     /** id-kp-timeStamping (RFC 3161 §2.3) */
     public static final String EXT_TIME_STAMPING = "1.3.6.1.5.5.7.3.8";
 
@@ -412,6 +415,9 @@ public final class GostOids {
     /** id-aa-ets-contentTimestamp — 1.2.840.113549.1.9.16.2.20 (RFC 5126 §5.11.1) */
     public static final String CONTENT_TIME_STAMP = "1.2.840.113549.1.9.16.2.20";
 
+    /** id-aa-ets-escTimeStamp — 1.2.840.113549.1.9.16.2.25 (RFC 5126 §6.3.5) */
+    public static final String ESC_TIME_STAMP = "1.2.840.113549.1.9.16.2.25";
+
     // ========================================================================
     // PKCS#9 (RFC 2985) — Атрибуты подписи (signed attributes)
     // ========================================================================
@@ -459,6 +465,9 @@ public final class GostOids {
     // PKCS#9 (RFC 2985) — Attributes
     // ========================================================================
 
+    /** pkcs-9-at-challengePassword — 1.2.840.113549.1.9.7 (RFC 2985 §5.4.1) */
+    public static final String ATTR_CHALLENGE_PASSWORD = "1.2.840.113549.1.9.7";
+
     /** id-friendlyName — 1.2.840.113549.1.9.20 */
     public static final String ATTR_FRIENDLY_NAME = "1.2.840.113549.1.9.20";
 
@@ -481,23 +490,82 @@ public final class GostOids {
     /** Длина хеша Стрибог-512 в байтах */
     public static final int STREEBOG_512_HASH_LEN = 64;
 
+    /**
+     * Длина SHA-1 в байтах: ResponderID byKey в ответах сторонних служб (Р 1323565.1.059-2024,
+     * п. 7.3.3.3). Библиотека SHA-1 не вычисляет, константа нужна только для распознавания длины.
+     */
+    public static final int SHA1_HASH_LEN = 20;
+
     /** Допуск расхождения часов при проверке thisUpdate/nextUpdate/genTime (5 минут) */
     public static final long CLOCK_SKEW_MS = 5 * 60 * 1000L;
+
+    /**
+     * Оценка удерживаемой памяти разобранным CRL на одну отозванную запись (без учёта копии DER),
+     * в байтах. Получена замером: 224 МиБ на 800 000 записей при 49 байтах DER на запись.
+     * Нужна кэшу проверенных CRL для бюджета памяти.
+     */
+    public static final int CRL_RETAINED_BYTES_PER_ENTRY = 245;
 
     /** Максимальный возраст OCSP-ответа без nextUpdate (RFC 6960 §2.4 — локальная политика) */
     public static final long MAX_OCSP_AGE_MS = 24 * 60 * 60 * 1000L;
 
-    /** Длина соли PBES2 в байтах (RFC 9337 §5) */
-    public static final int PBES2_SALT_LEN = 16;
+    /** Предел числа уникальных доказательств отзыва на один сертификат в X-Long */
+    public static final int MAX_REVOCATION_EVIDENCE_PER_CERT = 8;
+
+    /**
+     * Предел числа недоверенных кандидатов в сертификаты делегированных OCSP-ответчиков
+     * (из certificate-values). Каждый кандидат стоит проверки ГОСТ-подписи.
+     */
+    public static final int MAX_OCSP_RESPONDER_CANDIDATES = 8;
+
+    /**
+     * Предел числа элементов списка кандидатов в OCSP-ответчики до дедупликации.
+     * Нужен, чтобы сама дедупликация по DER (попарное сравнение) не стала вектором DoS.
+     */
+    public static final int MAX_RAW_OCSP_RESPONDER_CANDIDATES = 4 * MAX_OCSP_RESPONDER_CANDIDATES;
+
+    /**
+     * Длина соли PBKDF2 при записи (PBES2 и MacData PFX), в байтах. RFC 9337 и RFC 9548 §8
+     * рекомендуют не менее 32 октетов, чтобы снизить вероятность совпадения ключей из одного пароля.
+     */
+    public static final int PBKDF2_SALT_LEN = 32;
+
+    /** Минимальная длина соли PBKDF2 при чтении (RFC 9337: от 8 октетов; RFC 9548 §7). */
+    public static final int MIN_PBKDF2_SALT_LEN = 8;
+
+    /** Максимальная длина соли PBKDF2 при чтении (RFC 9337: до 32 октетов; RFC 9548 §7). */
+    public static final int MAX_PBKDF2_SALT_LEN = 32;
 
     /** Длина UKM (вектора) PBES2 в байтах (RFC 9337 §5) */
     public static final int PBES2_UKM_LEN = 16;
+
+    /**
+     * Длина content-UKM шифра CTR-ACPKM(-OMAC) в CMS EnvelopedData: IV[0..8) ‖ seed[8..16).
+     * Укороченное значение молча дополнялось бы нулями в seed KDF_TREE и ослабляло
+     * защиту от коллизий, поэтому длина проверяется строго.
+     */
+    public static final int CMS_CONTENT_UKM_LEN = 16;
 
     /** Длина ключа шифрования Кузнечик в байтах (ГОСТ Р 34.12-2018) */
     public static final int KUZNYECHIK_KEY_LEN = 32;
 
     /** Максимальная длина серийного номера сертификата в октетах (RFC 5280 §4.1.2.2) */
     public static final int MAX_SERIAL_OCTETS = 20;
+
+    /**
+     * Максимальная длина cRLNumber и BaseCRLNumber в октетах по величине без ведущего нуля знака
+     * (RFC 5280 §5.2.3: проверяющий обязан принимать номера до 20 октетов).
+     */
+    public static final int MAX_CRL_NUMBER_OCTETS = 20;
+
+    /**
+     * Предел числа расширений на уровне CRL. Поиск дубликатов квадратичен, поэтому число
+     * расширений ограничено; настоящий CRL содержит единицы расширений.
+     */
+    public static final int MAX_CRL_EXTENSIONS = 32;
+
+    /** Предел числа расширений одной записи об отзыве (по тем же причинам, что и на уровне CRL). */
+    public static final int MAX_CRL_ENTRY_EXTENSIONS = 16;
 
     // ========================================================================
     // Отображаемые имена OID для человекочитаемого вывода
@@ -548,6 +616,7 @@ public final class GostOids {
         m.put(EXT_AIA, "Authority Info Access (id-pe 1.3.6.1.5.5.7.1.1)");
 
         // Extended Key Usage
+        m.put(EXT_ANY_EKU, "anyExtendedKeyUsage");
         m.put(EXT_SERVER_AUTH, "serverAuth");
         m.put(EXT_CLIENT_AUTH, "clientAuth");
         m.put(EXT_CODE_SIGNING, "codeSigning");
@@ -614,6 +683,7 @@ public final class GostOids {
         m.put(CERTIFICATE_VALUES, "Certificate Values (CAdES-X Long)");
         m.put(REVOCATION_VALUES, "Revocation Values (CAdES-X Long)");
         m.put(CONTENT_TIME_STAMP, "Content Time-Stamp (ES-C)");
+        m.put(ESC_TIME_STAMP, "CAdES-C Time-Stamp (CAdES-X Type 1)");
 
         // PKCS#9 signed attributes
         m.put(ATTR_CONTENT_TYPE, "Content Type");
@@ -638,6 +708,7 @@ public final class GostOids {
         // PKCS#12
         m.put(BAG_PKCS8_SHROUDED_KEY, "PKCS#8 Shrouded Key Bag");
         m.put(BAG_CERT, "Certificate Bag");
+        m.put(ATTR_CHALLENGE_PASSWORD, "Challenge Password");
         m.put(ATTR_FRIENDLY_NAME, "Friendly Name");
         m.put(ATTR_LOCAL_KEY_ID, "Local Key ID");
         m.put(PBES2, "PBES2");

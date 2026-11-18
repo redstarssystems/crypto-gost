@@ -50,6 +50,28 @@ class GostCertificateBuilderTest {
     }
 
     @Test
+    @DisplayName("buildTbs: даты кодируются по RFC 5280 (UTCTime до 2050, далее GeneralizedTime)")
+    void testValidityTimeTags() {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Time Tags,C=RU");
+        byte[] tbs =
+                GostCertificateBuilder.create(params, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .issuerDn(subjectDn)
+                        .randomSerial()
+                        .buildTbs();
+
+        // TBSCertificate: [0] version, serial, sigAlg, issuer, validity, ...
+        byte[][] tbsParts = DerCodec.parseSequenceContents(tbs, 0);
+        byte[][] validity = DerCodec.parseSequenceContents(tbsParts[4], 0);
+        assertEquals(0x17, validity[0][0] & 0xFF, "notBefore 2024 должен быть UTCTime");
+        assertEquals(0x18, validity[1][0] & 0xFF, "notAfter 2106 должен быть GeneralizedTime");
+    }
+
+    @Test
     @DisplayName("P1-T1: сертификат без KeyUsage — isKeyCertSignSet() = true (RFC 5280 §4.2.1.3)")
     void testKeyCertSignWithoutKeyUsage() {
         ECParameters params = ECParameters.tc26a256();
@@ -477,6 +499,29 @@ class GostCertificateBuilderTest {
         assertTrue(
                 leafCert.verifySignature(rootCert.getPublicKey()),
                 "Дочерний сертификат должен верифицироваться ключом root CA");
+    }
+
+    @Test
+    @DisplayName("Сертификат с дубликатом BasicConstraints отклоняется при разборе")
+    void testDuplicateExtensionRejectedOnCertificateParse() {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Duplicate Extension");
+        byte[] bcExt = GostCertificateBuilder.buildBasicConstraintsExtension(true, null);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        GostCertificateBuilder.create(params, subjectDn)
+                                .publicKey(kp.getPublic())
+                                .notBefore("20240501120000Z")
+                                .notAfter("21060101120000Z")
+                                .issuerDn(subjectDn)
+                                .basicConstraints(true, null)
+                                .additionalExtensions(bcExt)
+                                .randomSerial()
+                                .sign(kp.getPrivate()),
+                "Повтор BasicConstraints должен давать ошибку разбора сертификата");
     }
 
     @Test
@@ -1795,5 +1840,94 @@ class GostCertificateBuilderTest {
                 NullPointerException.class,
                 () -> GostCertificateBuilder.fromCertificate(cert, null),
                 "null params → NPE");
+    }
+
+    /** Собирает самоподписанный сертификат и возвращает [TBS, signatureAlgorithm, signatureValue]. */
+    private static byte[][] selfSignedParts(KeyPair kp) {
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Bounds");
+        byte[] tbs =
+                GostCertificateBuilder.create(ECParameters.tc26a256(), subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .issuerDn(subjectDn)
+                        .randomSerial()
+                        .buildTbs();
+        GostCertificate cert = GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate()));
+        return DerCodec.parseSequenceContents(cert.getEncoded(), 0);
+    }
+
+    @Test
+    @DisplayName("Сертификат: TBS, поглотивший подпись, не принимается (границы внешней SEQUENCE)")
+    void testTbsSwallowingSignatureRejected() {
+        KeyPair kp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
+        byte[][] parts = selfSignedParts(kp);
+        byte[][] tbsFields = DerCodec.parseSequenceContents(parts[0], 0);
+        java.util.List<byte[]> swallowed = new java.util.ArrayList<>(java.util.List.of(tbsFields));
+        swallowed.add(parts[1]);
+        swallowed.add(parts[2]);
+        byte[] forgedTbs = DerCodec.encodeSequence(swallowed.toArray(new byte[0][]));
+        // Внешняя SEQUENCE содержит только раздутый TBS; «подпись» лежит за её границей
+        byte[] outerOnlyTbs = DerCodec.encodeSequence(forgedTbs);
+        byte[] forged = new byte[outerOnlyTbs.length + parts[1].length + parts[2].length];
+        System.arraycopy(outerOnlyTbs, 0, forged, 0, outerOnlyTbs.length);
+        System.arraycopy(parts[1], 0, forged, outerOnlyTbs.length, parts[1].length);
+        System.arraycopy(
+                parts[2], 0, forged, outerOnlyTbs.length + parts[1].length, parts[2].length);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new GostCertificate(forged),
+                "поля подписи за границей внешней SEQUENCE не должны читаться");
+    }
+
+    @Test
+    @DisplayName("Сертификат: байты после notAfter внутри Validity -> исключение")
+    void testValidityTrailingBytesRejected() {
+        KeyPair kp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
+        byte[][] parts = selfSignedParts(kp);
+        byte[][] tbsFields = DerCodec.parseSequenceContents(parts[0], 0);
+        // [0] version, serial, sigAlg, issuer, validity, subject, spki
+        byte[][] validity = DerCodec.parseSequenceContents(tbsFields[4], 0);
+        tbsFields[4] = DerCodec.encodeSequence(validity[0], validity[1], new byte[] {0x05, 0x00});
+        byte[] forgedTbs = DerCodec.encodeSequence(tbsFields);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostCertificateBuilder.sign(forgedTbs, GostSigner.of(kp.getPrivate())),
+                "Validity должна заканчиваться на notAfter, хвост недопустим");
+    }
+
+    @Test
+    @DisplayName(
+            "GostCertificate(byte[]): extensions [3] в сертификате v1 -> IllegalArgumentException")
+    // RFC 5280 §4.1.2.9: расширения допустимы только в v3. Подпись при разборе не
+    // проверяется, поэтому достаточно понизить версию в готовом DER.
+    void testExtensionsInV1CertificateRejected() throws Exception {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] dn = GostDnParser.encodeDn("CN=V1 With Extensions");
+        byte[] der =
+                GostCertificateBuilder.create(params, dn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20250101000000Z")
+                        .notAfter("20351231235959Z")
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .issuerDn(dn)
+                        .randomSerial()
+                        .sign(kp.getPrivate())
+                        .getEncoded();
+        // version [0] EXPLICIT INTEGER 2 (v3) -> INTEGER 0 (v1)
+        byte[] v3Marker = {(byte) 0xA0, 0x03, 0x02, 0x01, 0x02};
+        int pos = findBytes(der, v3Marker, 0);
+        assertTrue(pos >= 0, "Поле version не найдено в DER");
+        byte[] downgraded = der.clone();
+        downgraded[pos + 4] = 0x00;
+
+        assertDoesNotThrow(() -> new GostCertificate(der), "Исходный v3 разбирается");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new GostCertificate(downgraded),
+                "v1 с блоком extensions обязан отвергаться");
     }
 }

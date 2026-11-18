@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
@@ -123,19 +124,20 @@ public final class CAdESCompleteData {
     // ========================================================================
 
     /**
-     * Кодирует OtherHash как CHOICE otherHash [1] OtherHashAlgAndValue (ГОСТ).
+     * Кодирует OtherHash как CHOICE {@code otherHash OtherHashAlgAndValue}
+     * (RFC 5126 §5.7.3.3 и Annex A.2).
+     *
+     * <p>Тег {@code [1]} в RFC 5126 отсутствует. Старая форма с {@code [1]}
+     * продолжает читаться {@link #decodeOtherHash(byte[])} для совместимости.</p>
      */
     public static byte[] encodeOtherHashStreebog(byte[] hashValue, String hashOid) {
-        // AlgorithmIdentifier с NULL-параметрами: правило присуще самому OID
-        // id-tc26-gost3411-2012-256/512 (Р 1323565.1.025 §4). Единообразно с
-        // digestAlgorithm и ESSCertIDv2.hashAlgorithm. Внешнего эталона CAdES-C
-        // с ГОСТ нет (openssl не формирует GOST complete-refs, КриптоПро не имеет
-        // типа CADES_C), поэтому форма наследуется от проверенной точки
-        // signingCertificateV2 по принципу единообразия.
-        byte[] algId = CmsAlgorithmIdentifier.encode(hashOid);
+        // КриптоПро в CAdES-C/X Long кодирует AlgorithmIdentifier без параметров
+        // (только OID). Наличие NULL ломает сопоставление ссылок и значений
+        // доказательств: cryptcp отвечает 0x80070490 «Элемент не найден».
+        // Декодер принимает оба варианта, обратная совместимость сохраняется.
+        byte[] algId = CmsAlgorithmIdentifier.encodeOnlyOid(hashOid);
         byte[] hashOctet = DerCodec.encodeOctetString(hashValue);
-        byte[] algAndVal = DerCodec.encodeSequence(algId, hashOctet);
-        return DerCodec.encodeContextConstructed(1, algAndVal);
+        return DerCodec.encodeSequence(algId, hashOctet);
     }
 
     /**
@@ -261,30 +263,120 @@ public final class CAdESCompleteData {
     // Декодирование
     // ========================================================================
 
+    /** Декодер одной структуры; нужен, чтобы единообразно перевести сбои разбора в PkixException. */
+    @FunctionalInterface
+    private interface Decoder<T> {
+        T decode(byte[] der) throws PkixException;
+    }
+
+    /**
+     * Запускает декодер на DER из недоверенной структуры.
+     * <p>
+     * Публичные методы обещают {@link PkixException}, но {@link DerCodec} на битом DER бросает
+     * unchecked-исключения, а пустой массив даёт выход за границы при чтении тега. Эти исключения
+     * переводятся здесь один раз, чтобы вызывающий мог ловить только {@code PkixException}.
+     */
+    private static <T> T decodeGuarded(String structure, byte[] der, Decoder<T> decoder)
+            throws PkixException {
+        if (der == null || der.length == 0) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR, structure + ": empty or null DER");
+        }
+        try {
+            return decoder.decode(der);
+        } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
+            throw new PkixException(
+                    PkixException.Reason.PARSE_ERROR,
+                    structure + ": malformed DER: " + e.getMessage(),
+                    e);
+        }
+    }
+
+    /**
+     * Декодирует OtherHash из DER.
+     *
+     * @param der DER-кодировка OtherHash (с обёрткой [1] или без неё)
+     * @return разобранный OtherHash
+     * @throws PkixException при пустом, повреждённом DER или хэше не из Стрибога-256/512
+     */
+    public static OtherHash decodeOtherHash(byte[] der) throws PkixException {
+        return decodeGuarded("OtherHash", der, CAdESCompleteData::decodeOtherHashImpl);
+    }
+
+    /**
+     * Декодирует OtherCertID из DER.
+     *
+     * @param der DER-кодировка OtherCertID
+     * @return разобранный OtherCertID
+     * @throws PkixException при пустом или повреждённом DER
+     */
+    public static OtherCertID decodeOtherCertID(byte[] der) throws PkixException {
+        return decodeGuarded("OtherCertID", der, CAdESCompleteData::decodeOtherCertIDImpl);
+    }
+
+    /**
+     * Декодирует CompleteCertificateRefs: SEQUENCE OF OtherCertID.
+     *
+     * @param der DER-кодировка CompleteCertificateRefs
+     * @return список ссылок на сертификаты
+     * @throws PkixException при пустом или повреждённом DER
+     */
+    public static List<OtherCertID> decodeCompleteCertificateRefs(byte[] der) throws PkixException {
+        return decodeGuarded(
+                "CompleteCertificateRefs",
+                der,
+                CAdESCompleteData::decodeCompleteCertificateRefsImpl);
+    }
+
+    /**
+     * Декодирует CompleteRevocationRefs: SEQUENCE OF CrlOcspRef.
+     *
+     * @param der DER-кодировка CompleteRevocationRefs
+     * @return список ссылок на данные отзыва
+     * @throws PkixException при пустом или повреждённом DER
+     */
+    public static List<CrlOcspRef> decodeCompleteRevocationRefs(byte[] der) throws PkixException {
+        return decodeGuarded(
+                "CompleteRevocationRefs", der, CAdESCompleteData::decodeCompleteRevocationRefsImpl);
+    }
+
+    /**
+     * Декодирует CrlOcspRef из DER.
+     *
+     * @param der DER-кодировка CrlOcspRef
+     * @return разобранный CrlOcspRef
+     * @throws PkixException при пустом или повреждённом DER
+     */
+    public static CrlOcspRef decodeCrlOcspRef(byte[] der) throws PkixException {
+        return decodeGuarded("CrlOcspRef", der, CAdESCompleteData::decodeCrlOcspRefImpl);
+    }
+
     /**
      * Декодирует OtherHash из DER.
      */
-    public static OtherHash decodeOtherHash(byte[] der) throws PkixException {
+    private static OtherHash decodeOtherHashImpl(byte[] der) throws PkixException {
         int tag = der[0] & 0xFF;
         if (tag == DerCodec.TAG_CTX_CONSTRUCTED_1) {
-            return decodeOtherHashOther(der);
+            int[] lenInfo = DerCodec.decodeLength(der, 1);
+            int contentOff = 1 + lenInfo[1];
+            int contentEnd = contentOff + lenInfo[0];
+            if (contentEnd > der.length) {
+                throw new PkixException("OtherHash otherHash: content range out of bounds");
+            }
+            return parseOtherHashAlgAndValue(Arrays.copyOfRange(der, contentOff, contentEnd));
+        } else if (tag == DerCodec.TAG_SEQUENCE) {
+            // КриптоПро кодирует OtherHash как сам OtherHashAlgAndValue без [1].
+            return parseOtherHashAlgAndValue(der);
         } else if (tag == DerCodec.TAG_CTX_PRIMITIVE_0 || tag == DerCodec.TAG_CTX_CONSTRUCTED_0) {
             throw new PkixException("OtherHash sha1Hash [0] not supported for GOST signatures");
         }
         throw new PkixException("OtherHash: unexpected CHOICE tag " + Integer.toHexString(tag));
     }
 
-    private static OtherHash decodeOtherHashOther(byte[] der) throws PkixException {
-        int[] lenInfo = DerCodec.decodeLength(der, 1);
-        int contentOff = 1 + lenInfo[1];
-        int contentEnd = contentOff + lenInfo[0];
-        if (contentEnd > der.length) {
-            throw new PkixException("OtherHash otherHash: content range out of bounds");
-        }
-
-        byte[] algAndValContent = Arrays.copyOfRange(der, contentOff, contentEnd);
+    private static OtherHash parseOtherHashAlgAndValue(byte[] algAndValContent)
+            throws PkixException {
         if (algAndValContent.length < 2 || (algAndValContent[0] & 0xFF) != DerCodec.TAG_SEQUENCE) {
-            throw new PkixException("OtherHashAlgAndValue: expected SEQUENCE inside [1]");
+            throw new PkixException("OtherHashAlgAndValue: expected SEQUENCE");
         }
 
         byte[][] algAndValParts = DerCodec.parseSequenceContents(algAndValContent, 0);
@@ -298,6 +390,15 @@ public final class CAdESCompleteData {
             throw new PkixException("OtherHashAlgAndValue: expected OID in AlgorithmIdentifier");
         }
         String hashOid = DerCodec.parseOid(algParts[0], 0);
+        // Библиотека работает только со Стрибогом: чужой OID отсекаем при разборе, чтобы ни
+        // один вызывающий не получил OtherHash, который нельзя пересчитать.
+        if (!GostOids.DIGEST_256.equals(hashOid) && !GostOids.DIGEST_512.equals(hashOid)) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "OtherHash: unsupported hash algorithm OID "
+                            + hashOid
+                            + " (only Streebog-256/512 supported)");
+        }
         byte[] hashValue = DerCodec.parseOctetString(algAndValParts[1], 0);
 
         return new OtherHash(hashOid, hashValue);
@@ -306,13 +407,13 @@ public final class CAdESCompleteData {
     /**
      * Декодирует OtherCertID из DER.
      */
-    public static OtherCertID decodeOtherCertID(byte[] der) throws PkixException {
+    private static OtherCertID decodeOtherCertIDImpl(byte[] der) throws PkixException {
         byte[][] parts = DerCodec.parseSequenceContents(der, 0);
         if (parts.length < 1) {
             throw new PkixException("OtherCertID: expected at least 1 element (otherCertHash)");
         }
 
-        OtherHash certHash = decodeOtherHash(parts[0]);
+        OtherHash certHash = decodeOtherHashImpl(parts[0]);
         IssuerSerial issuerSerial = null;
         if (parts.length >= 2) {
             issuerSerial = decodeIssuerSerial(parts[1]);
@@ -356,11 +457,12 @@ public final class CAdESCompleteData {
     /**
      * Декодирует CompleteCertificateRefs: SEQUENCE OF OtherCertID.
      */
-    public static List<OtherCertID> decodeCompleteCertificateRefs(byte[] der) throws PkixException {
+    private static List<OtherCertID> decodeCompleteCertificateRefsImpl(byte[] der)
+            throws PkixException {
         byte[][] parts = DerCodec.parseSequenceContents(der, 0);
         List<OtherCertID> refs = new ArrayList<>(parts.length);
         for (byte[] part : parts) {
-            refs.add(decodeOtherCertID(part));
+            refs.add(decodeOtherCertIDImpl(part));
         }
         return refs;
     }
@@ -368,11 +470,12 @@ public final class CAdESCompleteData {
     /**
      * Декодирует CompleteRevocationRefs: SEQUENCE OF CrlOcspRef.
      */
-    public static List<CrlOcspRef> decodeCompleteRevocationRefs(byte[] der) throws PkixException {
+    private static List<CrlOcspRef> decodeCompleteRevocationRefsImpl(byte[] der)
+            throws PkixException {
         byte[][] parts = DerCodec.parseSequenceContents(der, 0);
         List<CrlOcspRef> refs = new ArrayList<>(parts.length);
         for (byte[] part : parts) {
-            refs.add(decodeCrlOcspRef(part));
+            refs.add(decodeCrlOcspRefImpl(part));
         }
         return refs;
     }
@@ -380,7 +483,7 @@ public final class CAdESCompleteData {
     /**
      * Декодирует CrlOcspRef из DER.
      */
-    public static CrlOcspRef decodeCrlOcspRef(byte[] der) throws PkixException {
+    private static CrlOcspRef decodeCrlOcspRefImpl(byte[] der) throws PkixException {
         byte[][] parts = DerCodec.parseSequenceContents(der, 0);
         List<CrlValidatedID> crlList = new ArrayList<>();
         List<OcspResponsesID> ocspList = new ArrayList<>();
@@ -427,7 +530,7 @@ public final class CAdESCompleteData {
             if (seqParts.length < 1) {
                 throw new PkixException("CrlValidatedID: expected at least 1 element (crlHash)");
             }
-            OtherHash crlHash = decodeOtherHash(seqParts[0]);
+            OtherHash crlHash = decodeOtherHashImpl(seqParts[0]);
             CrlIdentifier crlId = null;
             if (seqParts.length >= 2) {
                 crlId = decodeCrlIdentifier(seqParts[1]);
@@ -500,7 +603,7 @@ public final class CAdESCompleteData {
 
             OtherHash ocspHash = null;
             if (seqParts.length >= 2) {
-                ocspHash = decodeOtherHash(seqParts[1]);
+                ocspHash = decodeOtherHashImpl(seqParts[1]);
             }
             result.add(new OcspResponsesID(ocspId, ocspHash));
         }
@@ -517,12 +620,48 @@ public final class CAdESCompleteData {
      * <p>Принимает цепочку сертификатов (от signer до root) и данные отзыва
      * (CRL и OCSP). Возвращает структурированный результат — переиспользуется
      * в X-Long без перевычисления хэшей.
+     *
+     * <p>Списки {@code crlsForChain} и {@code ocspForChain} обязаны иметь ту же длину,
+     * что и {@code chain} (по одному элементу на сертификат, {@code null} если данных
+     * нет). Для подписанта и промежуточных УЦ нужен CRL или OCSP, для последнего звена
+     * (доверенного корня) допустима пустая запись. Сертификаты делегированных
+     * OCSP-ответчиков передаются перегрузкой с {@code additionalCerts}: они идут после
+     * цепочки, доказательства отзыва для них не нужны, запись для каждого пустая.</p>
      */
     public static CompleteRefsResult buildCompleteRefsResult(
             List<GostCertificate> chain,
             List<GostCrl> crlsForChain,
             List<GostOcspResponse> ocspForChain)
             throws PkixException {
+        return buildCompleteRefsResult(chain, crlsForChain, ocspForChain, List.of());
+    }
+
+    /**
+     * Строит ссылки CAdES-C с дополнительными сертификатами, использованными при
+     * проверке (делегированные OCSP-ответчики).
+     *
+     * <p>КриптоПро требует, чтобы сертификат, которым подписан OCSP-ответ, был указан в
+     * CompleteCertificateRefs и лежал в certificate-values. Такие сертификаты идут после
+     * цепочки, а для каждого в CompleteRevocationRefs добавляется пустая запись:
+     * отзыв ответчика не проверяется (id-pkix-ocsp-nocheck).</p>
+     *
+     * <p>Размеры {@code crlsForChain} и {@code ocspForChain} должны совпадать с размером
+     * {@code chain}; для {@code additionalCerts} отдельных списков нет, и CRL/OCSP для них
+     * не требуются. Пустая {@code CrlOcspRef} допустима для доверенного корня и для
+     * каждого дополнительного сертификата.</p>
+     *
+     * @param additionalCerts сертификаты вне цепочки подписанта; дубликаты по DER и
+     *                        совпадающие с цепочкой схлопываются, лимит ссылок проверяется
+     *                        после дедупликации; якорями доверия не становятся, лишь
+     *                        указываются в ссылках
+     */
+    public static CompleteRefsResult buildCompleteRefsResult(
+            List<GostCertificate> chain,
+            List<GostCrl> crlsForChain,
+            List<GostOcspResponse> ocspForChain,
+            List<GostCertificate> additionalCerts)
+            throws PkixException {
+        Objects.requireNonNull(additionalCerts, "additionalCerts must not be null");
 
         Objects.requireNonNull(chain, "chain must not be null");
         Objects.requireNonNull(crlsForChain, "crlsForChain must not be null");
@@ -537,15 +676,23 @@ public final class CAdESCompleteData {
                     "ocspForChain size " + ocspForChain.size() + " != chain size " + chain.size());
         }
 
+        // Ответ службы без responseBytes (tryLater и т.п.) не имеет времени выдачи: без этой
+        // проверки ниже был бы NullPointerException вместо PkixException
+        for (GostOcspResponse ocsp : ocspForChain) {
+            CAdESSupport.requireSuccessfulOcsp(ocsp);
+        }
+
         GostCertificate signerCert = chain.get(0);
         int keySize = signerCert.getKeySize();
         String hashOid = GostSignatureHelper.keySizeToDigestOid(keySize);
 
-        // CompleteCertificateRefs: все CA кроме root
+        // CompleteCertificateRefs: все сертификаты цепочки после подписанта, включая
+        // доверенный корень (RFC 5126 §6.2.1 не исключает якорь, а КриптоПро без
+        // ссылки на корень не строит цепочку подписанта до доверенного корня).
         // chain = [signer, CA1, CA2, ..., trustedRoot]
-        // certRefs = [CA1, CA2, ..., CA_{n-1}] (без signer'а и без root'а)
+        // certRefs = [CA1, CA2, ..., trustedRoot]
         List<OtherCertID> certRefs = new ArrayList<>();
-        for (int i = 1; i < chain.size() - 1; i++) {
+        for (int i = 1; i < chain.size(); i++) {
             GostCertificate ca = chain.get(i);
             byte[] certDer = ca.getEncoded();
             byte[] hash = GostSignatureHelper.digestByOid(hashOid, certDer);
@@ -555,12 +702,36 @@ public final class CAdESCompleteData {
             certRefs.add(new OtherCertID(otherHash, issuerSerial));
         }
 
-        // CompleteRevocationRefs: CrlOcspRef[0] для signer,
-        // CrlOcspRef[1..] для каждого CA (кроме root).
-        // Для цепочки из одного самоподписанного — только signer ref.
-        int revocEnd = Math.max(1, chain.size() - 1);
+        // Дубликаты по DER (и совпадающие с цепочкой) схлопываются: ссылка на сертификат
+        // уже есть, повторная дала бы лишние OtherCertID и пустые CrlOcspRef.
+        List<GostCertificate> uniqueAdditional = new ArrayList<>();
+        for (GostCertificate extra : additionalCerts) {
+            if (!containsDer(chain, extra) && !containsDer(uniqueAdditional, extra)) {
+                uniqueAdditional.add(extra);
+            }
+        }
+        if (Math.max(0, chain.size() - 1) + uniqueAdditional.size() > CmsConstants.MAX_CERT_REFS) {
+            throw new PkixException(
+                    PkixException.Reason.OTHER,
+                    "CAdES-C: too many certificate references: "
+                            + (Math.max(0, chain.size() - 1) + uniqueAdditional.size()));
+        }
+        for (GostCertificate extra : uniqueAdditional) {
+            byte[] hash = GostSignatureHelper.digestByOid(hashOid, extra.getEncoded());
+            certRefs.add(
+                    new OtherCertID(
+                            new OtherHash(hashOid, hash),
+                            new IssuerSerial(
+                                    extra.getIssuerDnBytes(), extra.getSerialNumberBigInt())));
+        }
+
+        // CompleteRevocationRefs: CrlOcspRef[0] для signer, далее по одной записи
+        // на каждую ссылку CertificateRefs в том же порядке. Для доверенного корня
+        // доказательство не обязательно: пустая запись допустима, а переданные
+        // CRL/OCSP корня включаются. Для подписанта и промежуточных CA оно обязательно.
+        int lastIndex = chain.size() - 1;
         List<CrlOcspRef> revocRefs = new ArrayList<>();
-        for (int i = 0; i < revocEnd; i++) {
+        for (int i = 0; i < chain.size(); i++) {
             GostCrl crl = crlsForChain.get(i);
             GostOcspResponse ocsp = ocspForChain.get(i);
 
@@ -580,7 +751,10 @@ public final class CAdESCompleteData {
             }
 
             if (ocsp != null) {
-                byte[] respDer = ocsp.getEncoded();
+                // Хэш ссылки и значение в revocation-values должны быть одним и тем
+                // же DER. RevocationValues несёт BasicOCSPResponse, поэтому hash
+                // считается по getRevocationValueDer(), а не по полной обёртке.
+                byte[] respDer = ocsp.getRevocationValueDer();
                 byte[] ocspVal = GostSignatureHelper.digestByOid(hashOid, respDer);
                 ocspList.add(
                         new OcspResponsesID(
@@ -591,7 +765,8 @@ public final class CAdESCompleteData {
                                 new OtherHash(hashOid, ocspVal)));
             }
 
-            if (crlList.isEmpty() && ocspList.isEmpty()) {
+            boolean trustedRootEntry = i == lastIndex && i > 0;
+            if (crlList.isEmpty() && ocspList.isEmpty() && !trustedRootEntry) {
                 throw new PkixException(
                         "Certificate " + i + " in chain has neither CRL nor OCSP data");
             }
@@ -599,6 +774,21 @@ public final class CAdESCompleteData {
             revocRefs.add(new CrlOcspRef(crlList, ocspList));
         }
 
+        // Дополнительные сертификаты (OCSP-ответчики): отзыв не проверяется, запись пустая.
+        for (int i = 0; i < uniqueAdditional.size(); i++) {
+            revocRefs.add(new CrlOcspRef(List.of(), List.of()));
+        }
+
         return new CompleteRefsResult(certRefs, revocRefs);
+    }
+
+    private static boolean containsDer(List<GostCertificate> certs, GostCertificate cert) {
+        byte[] encoded = cert.getEncoded();
+        for (GostCertificate c : certs) {
+            if (java.util.Arrays.equals(encoded, c.getEncoded())) {
+                return true;
+            }
+        }
+        return false;
     }
 }

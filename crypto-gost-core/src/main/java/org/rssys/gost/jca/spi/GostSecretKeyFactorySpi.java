@@ -3,10 +3,11 @@ package org.rssys.gost.jca.spi;
 import java.security.InvalidKeyException;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.KeySpec;
+import java.util.Arrays;
 import javax.crypto.SecretKey;
 import javax.crypto.SecretKeyFactorySpi;
 import javax.crypto.spec.SecretKeySpec;
-import org.rssys.gost.cipher.Kuznyechik;
+import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.jca.key.GostSecretKey;
 
 /**
@@ -21,7 +22,8 @@ import org.rssys.gost.jca.key.GostSecretKey;
  * <p>
  * Поддерживаемые спецификации:
  * <ul>
- *   <li>{@link SecretKeySpec} с алгоритмом {@code "Kuznyechik"} -> {@link GostSecretKey}</li>
+ *   <li>{@link SecretKeySpec} с алгоритмом {@code "Kuznyechik"} или {@code "GOST3412-2015"}
+ *       -> {@link GostSecretKey}; спецификация с другим именем алгоритма отвергается</li>
  * </ul>
  * <p>
  * Регистрируется в провайдере как {@code "Kuznyechik"}.
@@ -32,27 +34,22 @@ public final class GostSecretKeyFactorySpi extends SecretKeyFactorySpi {
      * Генерирует симметричный ключ по спецификации.
      *
      * @param keySpec {@link SecretKeySpec} с алгоритмом "Kuznyechik" и 32 байтами ключа
-     * @throws InvalidKeySpecException если спецификация неподдерживаемого типа
-     *         или содержит неверную длину ключа
+     * @throws InvalidKeySpecException если спецификация неподдерживаемого типа, с другим именем
+     *         алгоритма или с неверной длиной ключа
      */
     @Override
     protected SecretKey engineGenerateSecret(KeySpec keySpec) throws InvalidKeySpecException {
-        if (keySpec instanceof SecretKeySpec) {
-            SecretKeySpec spec = (SecretKeySpec) keySpec;
-            byte[] raw = spec.getEncoded();
-            if (raw == null || raw.length == 0) {
-                throw new InvalidKeySpecException("SecretKeySpec contains null or empty key bytes");
-            }
-            if (raw.length != Kuznyechik.KEY_SIZE) {
-                throw new InvalidKeySpecException(
-                        "Kuznyechik requires 32-byte key, got " + raw.length);
-            }
-            return new GostSecretKey("Kuznyechik", raw);
+        if (!(keySpec instanceof SecretKeySpec spec)) {
+            throw new InvalidKeySpecException(
+                    "Unsupported KeySpec type: "
+                            + (keySpec == null ? "null" : keySpec.getClass().getName())
+                            + ". Expected SecretKeySpec");
         }
-        throw new InvalidKeySpecException(
-                "Unsupported KeySpec type: "
-                        + keySpec.getClass().getName()
-                        + ". Expected SecretKeySpec");
+        try {
+            return toGostSecretKey(spec);
+        } catch (InvalidKeyException e) {
+            throw new InvalidKeySpecException(e.getMessage(), e);
+        }
     }
 
     /**
@@ -60,11 +57,11 @@ public final class GostSecretKeyFactorySpi extends SecretKeyFactorySpi {
      * <p>
      * Принимает {@code Class<?>} согласно контракту {@link SecretKeyFactorySpi}.
      *
-     * @param key      симметричный ключ
+     * @param key      симметричный ключ Кузнечика
      * @param keySpec  запрошенный класс спецификации
-     * @throws InvalidKeySpecException если класс не поддерживается
+     * @throws InvalidKeySpecException если класс не поддерживается, ключ уничтожен, неверной длины
+     *         или принадлежит другому алгоритму
      */
-    @SuppressWarnings("unchecked")
     @Override
     protected KeySpec engineGetKeySpec(SecretKey key, Class<?> keySpec)
             throws InvalidKeySpecException {
@@ -74,37 +71,55 @@ public final class GostSecretKeyFactorySpi extends SecretKeyFactorySpi {
                             + keySpec.getName()
                             + ". Supported: SecretKeySpec");
         }
-        byte[] raw = key.getEncoded();
-        if (raw == null) {
-            throw new InvalidKeySpecException("Key encoding is not available");
+        SymmetricKey symmetricKey;
+        try {
+            symmetricKey = SymmetricKeyExtractor.forCipher(key);
+        } catch (InvalidKeyException e) {
+            throw new InvalidKeySpecException(e.getMessage(), e);
         }
-        return new SecretKeySpec(raw, "Kuznyechik");
+        byte[] raw = symmetricKey.getKey();
+        try {
+            return new SecretKeySpec(raw, GostSecretKey.KUZNYECHIK);
+        } finally {
+            Arrays.fill(raw, (byte) 0);
+            symmetricKey.destroy();
+        }
     }
 
     /**
      * Транслирует ключ в ключ провайдера.
      * <p>
-     * Если ключ уже {@link GostSecretKey} — возвращается как есть.
-     * Иначе — создаётся {@link GostSecretKey} из RAW-байт ключа.
+     * Ключ Кузнечика, уже являющийся {@link GostSecretKey}, возвращается как есть. Иначе создаётся
+     * {@link GostSecretKey} из RAW-байт ключа. Ключ с другим именем алгоритма (например,
+     * {@code AES}) отвергается: иначе он молча стал бы ключом Кузнечика.
      *
-     * @throws InvalidKeyException если ключ имеет неподдерживаемый формат
+     * @throws InvalidKeyException если ключ уничтожен, неподдерживаемого формата, с другим именем
+     *         алгоритма или неверной длины
      */
     @Override
     protected SecretKey engineTranslateKey(SecretKey key) throws InvalidKeyException {
-        if (key instanceof GostSecretKey) {
+        // Проверка имени (без учёта регистра), длины и состояния выполняется для обоих путей.
+        // Как есть возвращается только ключ с каноническим именем: ключ с алиасом или другим
+        // регистром пересобирается, чтобы у ключа провайдера имя было единым.
+        if (key instanceof GostSecretKey gostKey
+                && GostSecretKey.KUZNYECHIK.equals(gostKey.getAlgorithm())) {
+            requireValidCipherKey(key);
             return key;
         }
-        if ("RAW".equals(key.getFormat())) {
-            byte[] raw = key.getEncoded();
-            if (raw == null || raw.length == 0) {
-                throw new InvalidKeyException("Key encoding is null or empty");
-            }
-            if (raw.length != Kuznyechik.KEY_SIZE) {
-                throw new InvalidKeyException("Kuznyechik requires 32-byte key, got " + raw.length);
-            }
-            return new GostSecretKey("Kuznyechik", raw);
+        return toGostSecretKey(key);
+    }
+
+    /** Проверяет состояние, имя алгоритма и длину ключа; извлечённая для этого копия затирается. */
+    private static void requireValidCipherKey(SecretKey key) throws InvalidKeyException {
+        SymmetricKeyExtractor.forCipher(key).destroy();
+    }
+
+    private static GostSecretKey toGostSecretKey(SecretKey key) throws InvalidKeyException {
+        SymmetricKey symmetricKey = SymmetricKeyExtractor.forCipher(key);
+        try {
+            return new GostSecretKey(GostSecretKey.KUZNYECHIK, symmetricKey);
+        } finally {
+            symmetricKey.destroy();
         }
-        throw new InvalidKeyException(
-                "Cannot translate key with format '" + key.getFormat() + "'. Expected RAW format");
     }
 }

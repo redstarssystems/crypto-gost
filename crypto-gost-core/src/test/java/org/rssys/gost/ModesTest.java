@@ -21,15 +21,15 @@ import org.rssys.gost.cipher.mode.Ofb;
  *   - CFB-эталон:             ГОСТ Р 34.13-2015, Приложение А, §А.2.3 (стр. 29)
  *   - CBC, CTR, OFB:          ГОСТ Р 34.13-2015, Приложение А (расчёт по тем же данным)
  *
- * Соответствие проверено: CFB-вектор из стандарта совпадает как в CryptoTest,
- * так и здесь — это подтверждает корректность ключа и открытого текста.
+ * Тот же ключ, синхропосылка и открытый текст, что в CryptoTest, где проверен CFB-вектор
+ * стандарта (§А.2.3): это подтверждает их корректность.
  *
  * Обозначения:
  *   IV16 — синхропосылка 16 байт (один блок), §А.2.2 стандарта (первые 16 байт IV)
  *   IV8  — синхропосылка 8 байт для CTR, §А.2.5 стандарта (старшая половина счётчика)
  *   IV32 — синхропосылка 32 байта для OFB, §А.2.4 стандарта
  */
-@DisplayName("GOST R 34.13-2015 Modes: CBC, CTR, OFB")
+@DisplayName("ГОСТ Р 34.13-2015: режимы CBC, CTR, OFB")
 class ModesTest {
 
     // -----------------------------------------------------------------------
@@ -104,32 +104,16 @@ class ModesTest {
                     + "66a257ac3ca0b8b1c80fe7fc10288a13"
                     + "203ebbc066138660a0292243f6903150";
 
-    /**
-     * Эталон CFB128-шифрования — ГОСТ Р 34.13-2015, Приложение А §А.2.3, стр. 29.
-     * Тот же вектор, что в CryptoTest — используется для верификации IV.
-     */
-    private static final String CFB_CIPHER_HEX =
-            "81800a59b1842b24ff1f795e897abd95"
-                    + "ed5b47a7048cfab48fb521369d9326bf"
-                    + "79f2a8eb5cc68d38842d264e97a238b5"
-                    + "4ffebecd4e922de6c75bd9dd44fbf4d1";
-
     // -----------------------------------------------------------------------
     // Вспомогательные методы
     // -----------------------------------------------------------------------
 
     static byte[] hex(String s) {
-        s = s.replaceAll("\\s", "");
-        byte[] b = new byte[s.length() / 2];
-        for (int i = 0; i < b.length; i++)
-            b[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
-        return b;
+        return TestHex.bytes(s);
     }
 
     static String hex(byte[] b) {
-        StringBuilder sb = new StringBuilder(b.length * 2);
-        for (byte v : b) sb.append(String.format("%02x", v & 0xFF));
-        return sb.toString();
+        return TestHex.string(b);
     }
 
     static byte[] key() {
@@ -469,25 +453,6 @@ class ModesTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> ofb.init(true, new ParametersWithIV(new SymmetricKey(key()), new byte[8])));
-    }
-
-    // -----------------------------------------------------------------------
-    // CFB — совместная верификация эталона стандарта
-    // -----------------------------------------------------------------------
-
-    @Test
-    @DisplayName("CFB: контрольный вектор ГОСТ Р 34.13-2015 §А.2.3 (верификация ключа/IV)")
-    void testCFBControlVector() {
-        Cfb cfb = new Cfb(new Kuznyechik(), 128);
-        cfb.init(true, new ParametersWithIV(new SymmetricKey(key()), iv32()));
-
-        byte[] result = new byte[64];
-        cfb.processBytes(plain(), 0, 64, result, 0);
-
-        assertEquals(
-                CFB_CIPHER_HEX,
-                hex(result),
-                "CFB контрольный вектор из ГОСТ Р 34.13-2015 §А.2.3 должен совпасть");
     }
 
     // -----------------------------------------------------------------------

@@ -3,6 +3,7 @@ package org.rssys.gost.crossval.ocsp;
 import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HexFormat;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -19,6 +20,7 @@ import org.rssys.gost.pkix.cert.GostCertificateBuilder.KeyUsage;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.CryptoRandom;
 
 import static org.junit.jupiter.api.Assertions.*;
 import java.util.Arrays;
@@ -364,6 +366,101 @@ class OpenSslOcspCrossValidationTest {
             assertFalse(parsed.isSigned(),
                     "Запрос от openssl не должен быть подписан");
 
+            return null;
+        });
+    }
+
+    // ========================================================================
+    // Сценарий 9: openssl строит запрос с nonce -> библиотека парсит
+    // ========================================================================
+
+    @ParameterizedTest
+    @MethodSource("curves")
+    @EnabledIf("opensslAvailable")
+    @DisplayName("Сценарий 9: openssl строит запрос с nonce -> библиотека читает то же значение")
+    void testOcspRequestWithNonceFromOpenSsl(ECParameters params) throws Exception {
+        TempDirUtils.withTempDir("ocsp-reqout-nonce-", dir -> {
+            KeyPair caKp = genKey(params);
+            GostCertificate ca = buildCa(params, caKp, "CN=Test CA,O=Test");
+            KeyPair leafKp = genKey(params);
+            GostCertificate leaf = buildLeaf(params, leafKp, caKp, ca, "CN=leaf,O=Test");
+
+            Path caPath = dir.resolve("ca.der");
+            Files.write(caPath, ca.getEncoded());
+            Path leafPath = dir.resolve("leaf.der");
+            Files.write(leafPath, leaf.getEncoded());
+            Path reqPath = dir.resolve("req.der");
+
+            // Без -no_nonce: openssl сам добавляет nonce
+            String[] buildCmd = CrossValUtils.concat(
+                    new String[] {opensslBinary(), "ocsp", "-reqout", reqPath.toString(),
+                            "-issuer", caPath.toString(),
+                            "-cert", leafPath.toString()},
+                    OpenSslChecker.resolveEngineFlag());
+            assertEquals(0, OpenSslChecker.run(buildCmd), "openssl ocsp -reqout должен пройти");
+
+            GostOcspRequest parsed = GostOcspRequest.fromDer(Files.readAllBytes(reqPath));
+            byte[] nonce = parsed.getNonce();
+            assertNotNull(nonce, "Библиотека должна прочитать nonce из запроса openssl");
+            // OCSP_DEFAULT_NONCE_LENGTH в OpenSSL равен 16
+            assertEquals(16, nonce.length, "openssl генерирует nonce длиной 16 байт");
+
+            // openssl печатает extnValue целиком: 04 <длина> <nonce>; сверяем точное значение
+            String[] textCmd = CrossValUtils.concat(
+                    new String[] {opensslBinary(), "ocsp", "-reqin", reqPath.toString(), "-text"},
+                    OpenSslChecker.resolveEngineFlag());
+            String out = OpenSslChecker.runAndCapture(textCmd);
+            String expectedHex = "0410" + HexFormat.of().withUpperCase().formatHex(nonce);
+            assertTrue(
+                    out.replaceAll("\\s+", "").contains(expectedHex),
+                    "Значение nonce из библиотеки должно совпасть с выводом openssl, вывод:\n" + out);
+            return null;
+        });
+    }
+
+    // ========================================================================
+    // Сценарий 10: библиотека строит ответ с nonce -> openssl показывает то же значение
+    // ========================================================================
+
+    @ParameterizedTest
+    @MethodSource("curves")
+    @EnabledIf("opensslAvailable")
+    @DisplayName("Сценарий 10: ответ библиотеки с nonce -> openssl -text показывает то же значение")
+    void testOcspResponseWithNonceReadByOpenSsl(ECParameters params) throws Exception {
+        TempDirUtils.withTempDir("ocsp-resp-nonce-", dir -> {
+            KeyPair caKp = genKey(params);
+            GostCertificate ca = buildCa(params, caKp, "CN=Test CA,O=Test");
+            KeyPair leafKp = genKey(params);
+            GostCertificate leaf = buildLeaf(params, leafKp, caKp, ca, "CN=leaf,O=Test");
+
+            byte[] nonce = new byte[16];
+            CryptoRandom.INSTANCE.nextBytes(nonce);
+            byte[] ocspDer = GostOcspResponseBuilder.create(leaf.getSerialNumber())
+                    .issuerDn(ca.getSubjectDnBytes())
+                    .caPublicKey(caKp.getPublic())
+                    .producedAt("20260601000000Z")
+                    .thisUpdate("20260601000000Z")
+                    .nextUpdate("20260608000000Z")
+                    .nonce(nonce)
+                    .good()
+                    .sign(caKp.getPrivate());
+            Path ocspPath = dir.resolve("ocsp.der");
+            Files.write(ocspPath, ocspDer);
+
+            String[] cmd = CrossValUtils.concat(
+                    new String[] {opensslBinary(), "ocsp", "-respin", ocspPath.toString(),
+                            "-noverify", "-text"},
+                    OpenSslChecker.resolveEngineFlag());
+            String out = OpenSslChecker.runAndCapture(cmd);
+
+            // При одноуровневом (некорректном) кодировании префикс 04 10 в выводе отсутствовал бы
+            String expectedHex = "0410" + HexFormat.of().withUpperCase().formatHex(nonce);
+            assertTrue(
+                    out.contains("OCSP Nonce"),
+                    "openssl должен распознать расширение nonce, вывод:\n" + out);
+            assertTrue(
+                    out.replaceAll("\\s+", "").contains(expectedHex),
+                    "Точное значение nonce в выводе openssl должно совпасть, вывод:\n" + out);
             return null;
         });
     }

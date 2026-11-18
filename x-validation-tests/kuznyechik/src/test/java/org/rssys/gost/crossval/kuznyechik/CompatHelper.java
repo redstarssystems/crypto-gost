@@ -5,16 +5,14 @@ import org.rssys.gost.crossval.util.CrossValUtils;
 import org.rssys.gost.crossval.util.OpenSslChecker;
 import org.rssys.gost.crossval.util.TempDirUtils;
 
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Вспомогательный класс для кросс-версионных тестов и кросс-валидации с OpenSSL.
- * Содержит общие для тестов методы: запуск subprocess со старой версией,
- * работа с OpenSSL через subprocess.
+ * Вспомогательный класс для кросс-валидации с OpenSSL.
+ * Работа с предыдущей версией crypto-gost вынесена в {@link OldVersionWorker}.
  */
 public final class CompatHelper {
 
@@ -29,93 +27,6 @@ public final class CompatHelper {
     }
 
     private CompatHelper() {}
-
-    /**
-     * Запускает {@code CrossVersionTool} на старой версии JAR как subprocess.
-     * Через файлы на диске передаёт ключ, IV, входные данные и читает результат.
-     */
-    public static byte[] runSubprocess(
-            String oldJar, String compatClasses,
-            Cipher.Mode mode, String op,
-            byte[] key, byte[] iv, byte[] input) throws Exception {
-
-        return TempDirUtils.withTempDir("cv-", tmpDir -> {
-            Path inFile = tmpDir.resolve("in.bin");
-            Path outFile = tmpDir.resolve("out.bin");
-            Files.write(inFile, input);
-            String modeStr = mode.name().toLowerCase();
-            String keyHex = CrossValUtils.toHex(key);
-            byte[] iv16 = new byte[16];
-            System.arraycopy(iv, 0, iv16, 0, Math.min(iv.length, 16));
-            String ivHex = CrossValUtils.toHex(iv16);
-            String javaExecutable = System.getProperty("java.home")
-                    + File.separator + "bin" + File.separator + "java";
-            String classpath = oldJar + File.pathSeparator + compatClasses;
-
-            ProcessBuilder processBuilder = new ProcessBuilder(
-                    javaExecutable,
-                    "--add-opens", "java.base/java.lang=ALL-UNNAMED",
-                    "--add-opens", "java.base/java.util=ALL-UNNAMED",
-                    "--add-opens", "java.base/java.io=ALL-UNNAMED",
-                    "--add-opens", "java.base/java.text=ALL-UNNAMED",
-                    "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
-                    "-cp", classpath,
-                    CrossVersionTool.class.getName(),
-                    modeStr, op, keyHex, ivHex,
-                    inFile.toAbsolutePath().toString(),
-                    outFile.toAbsolutePath().toString()
-            );
-            processBuilder.redirectErrorStream(true);
-            Process process = processBuilder.start();
-            byte[] outputBytes = process.getInputStream().readAllBytes();
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                throw new RuntimeException("Subprocess failed (exit=" + exitCode + "): " + new String(outputBytes));
-            }
-            return Files.readAllBytes(outFile);
-        });
-    }
-
-    /**
-     * Запускает MGM-операцию на старой версии JAR crypto-gost как subprocess.
-     */
-    public static byte[] runMgmSubprocess(
-            String oldJar, String compatClasses,
-            String op, byte[] key, byte[] icn, byte[] input) throws Exception {
-
-        return TempDirUtils.withTempDir("mgm-", tmpDir -> {
-            Path inFile = tmpDir.resolve("in.bin");
-            Path outFile = tmpDir.resolve("out.bin");
-            Files.write(inFile, input);
-            String keyHex = CrossValUtils.toHex(key);
-            String icnHex = CrossValUtils.toHex(icn);
-            String javaExecutable = System.getProperty("java.home")
-                    + File.separator + "bin" + File.separator + "java";
-            String classpath = oldJar + File.pathSeparator + compatClasses;
-
-            ProcessBuilder processBuilder = new ProcessBuilder(
-                    javaExecutable,
-                    "--add-opens", "java.base/java.lang=ALL-UNNAMED",
-                    "--add-opens", "java.base/java.util=ALL-UNNAMED",
-                    "--add-opens", "java.base/java.io=ALL-UNNAMED",
-                    "--add-opens", "java.base/java.text=ALL-UNNAMED",
-                    "--add-opens", "java.base/jdk.internal.misc=ALL-UNNAMED",
-                    "-cp", classpath,
-                    CrossVersionTool.class.getName(),
-                    "mgm", op, keyHex, icnHex,
-                    inFile.toAbsolutePath().toString(),
-                    outFile.toAbsolutePath().toString()
-            );
-            processBuilder.redirectErrorStream(true);
-            Process process = processBuilder.start();
-            byte[] outputBytes = process.getInputStream().readAllBytes();
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                throw new RuntimeException("Subprocess mgm failed (exit=" + exitCode + "): " + new String(outputBytes));
-            }
-            return Files.readAllBytes(outFile);
-        });
-    }
 
     /**
      * Выполняет операцию шифрования/расшифрования через {@code openssl enc}.

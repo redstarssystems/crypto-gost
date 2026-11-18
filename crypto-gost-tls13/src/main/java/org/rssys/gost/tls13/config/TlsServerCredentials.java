@@ -3,6 +3,7 @@ package org.rssys.gost.tls13.config;
 import java.util.List;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.tls13.TlsUtils;
 
 /**
  * Набор учётных данных сервера для выбора по SNI: цепочка сертификатов,
@@ -21,7 +22,7 @@ public final class TlsServerCredentials {
     /**
      * @param certificateChain цепочка сертификатов (leaf первый, root последний)
      * @param privateKey       закрытый ключ для CertificateVerify
-     * @param ocspResponse     raw OCSP-ответ DER (может быть null)
+     * @param ocspResponse     raw OCSP-ответ DER (null = без stapling; пустой массив недопустим)
      */
     public TlsServerCredentials(
             List<GostCertificate> certificateChain,
@@ -33,6 +34,7 @@ public final class TlsServerCredentials {
         if (privateKey == null) {
             throw new IllegalArgumentException("privateKey must not be null");
         }
+        TlsUtils.validateOcspResponse(ocspResponse);
         this.certificateChain = certificateChain;
         this.privateKey = privateKey;
         this.ocspResponse = ocspResponse;

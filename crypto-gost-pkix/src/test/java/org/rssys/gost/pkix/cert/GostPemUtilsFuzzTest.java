@@ -2,6 +2,7 @@ package org.rssys.gost.pkix.cert;
 
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 
 /**
  * Fuzz-тесты для {@link GostPemUtils#pemToDer(byte[])} и
@@ -30,7 +31,7 @@ class GostPemUtilsFuzzTest {
         } catch (IllegalArgumentException e) {
             // Ожидаемо: битый Base64, превышение MAX_PEM_SIZE, неверный PEM
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -43,16 +44,7 @@ class GostPemUtilsFuzzTest {
         } catch (IllegalArgumentException e) {
             // Ожидаемо: битый Base64, превышение MAX_PEM_SIZE, нет валидных блоков
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

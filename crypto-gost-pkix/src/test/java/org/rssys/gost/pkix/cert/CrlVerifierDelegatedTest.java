@@ -16,6 +16,7 @@ import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.DerCodec;
 
 @DisplayName("CrlVerifier — делегированный CRL-подписант")
 class CrlVerifierDelegatedTest {
@@ -139,9 +140,7 @@ class CrlVerifierDelegatedTest {
                 () ->
                         CrlVerifier.verifyDelegated(
                                 crl,
-                                UNUSED_SERIAL,
-                                caPub,
-                                issuerDn,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
                                 caCert,
                                 List.of(signerCertDer)),
                 "Делегированный подписант должен проходить верификацию");
@@ -159,12 +158,16 @@ class CrlVerifierDelegatedTest {
         // Без delegated signers — CA-ключ не подходит
         assertThrows(
                 PkixException.class,
-                () -> CrlVerifier.verify(crl, UNUSED_SERIAL, caPub, issuerDn),
+                () ->
+                        CrlVerifier.verify(
+                                crl,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(caPub)),
                 "CA-ключ не должен верифицировать CRL делегированного подписанта");
 
         // С delegated signers — ok
         CrlVerifier.verifyDelegated(
-                crl, UNUSED_SERIAL, caPub, issuerDn, caCert, List.of(signerCertDer));
+                crl, CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn), caCert, List.of(signerCertDer));
     }
 
     @Test
@@ -179,9 +182,7 @@ class CrlVerifierDelegatedTest {
         // cRLNumber=3 >= min=2 — ok
         CrlVerifier.verifyDelegated(
                 crl,
-                UNUSED_SERIAL,
-                caPub,
-                issuerDn,
+                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
                 caCert,
                 List.of(signerCertDer),
                 BigInteger.valueOf(2));
@@ -192,9 +193,7 @@ class CrlVerifierDelegatedTest {
                 () ->
                         CrlVerifier.verifyDelegated(
                                 crl,
-                                UNUSED_SERIAL,
-                                caPub,
-                                issuerDn,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
                                 caCert,
                                 List.of(signerCertDer),
                                 BigInteger.valueOf(5)),
@@ -220,9 +219,7 @@ class CrlVerifierDelegatedTest {
                 () ->
                         CrlVerifier.verifyDelegated(
                                 crl,
-                                UNUSED_SERIAL,
-                                caPub,
-                                issuerDn,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
                                 caCert,
                                 List.of(leafCert.getEncoded())),
                 "Сертификат без cRLSign не должен приниматься как подписант");
@@ -242,9 +239,7 @@ class CrlVerifierDelegatedTest {
                 () ->
                         CrlVerifier.verifyDelegated(
                                 crl,
-                                UNUSED_SERIAL,
-                                caPub,
-                                issuerDn,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
                                 caCert,
                                 List.of(signerCertDer)),
                 "CRL от leaf-ключа должен быть rejected (leafKey не в списке подписантов)");
@@ -263,32 +258,193 @@ class CrlVerifierDelegatedTest {
                 PkixException.class,
                 () ->
                         CrlVerifier.verifyDelegated(
-                                crl, UNUSED_SERIAL, caPub, issuerDn, null, Collections.emptyList()),
+                                crl,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                CrlTestCerts.issuerOf(caPub),
+                                Collections.emptyList()),
                 "Пустой список подписантов должен давать SIGNATURE_INVALID");
     }
 
     @Test
-    @DisplayName("Сертификат подписанта не от того CA — reject")
-    void testSignerCertFromDifferentCaRejected() throws Exception {
-        // CRL подписан нашим signerKey, но в качестве подписанта передаём leafCert
-        // (leafCert подписан CA, но у него нет cRLSign — isCrlSigner() = false, отсев)
+    @DisplayName("Среди смешанных подписантов (без cRLSign и корректный) находится валидный")
+    void testMixedSignersValidOneFound() throws Exception {
         byte[] crl =
                 GostCrlBuilder.create(issuerDn)
                         .withCrlNumber(7)
                         .nextUpdate("270601120000Z")
                         .sign(signerKey);
 
-        // signerKey — в списке подписантов (проходит isCrlSigner, verifySignature)
-        // leafCert — нет cRLSign, будет пропущен
+        // leafCert не имеет cRLSign и будет пропущен, signerCert подходит
         assertDoesNotThrow(
                 () ->
                         CrlVerifier.verifyDelegated(
                                 crl,
-                                UNUSED_SERIAL,
-                                caPub,
-                                issuerDn,
+                                CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
                                 caCert,
                                 List.of(leafCert.getEncoded(), signerCertDer)),
                 "Среди смешанных подписантов должен найтись валидный");
+    }
+
+    // ========================================================================
+    // Строгие требования к делегированному подписанту
+    // ========================================================================
+
+    /** Подписант с заданными расширениями; сертификат подписан {@code issuerSigningKey}. */
+    private record Signer(PrivateKeyParameters key, byte[] certDer) {}
+
+    private static Signer buildSigner(
+            String cn,
+            int serial,
+            byte[] extensions,
+            PrivateKeyParameters issuerSigningKey,
+            String notBefore,
+            String notAfter)
+            throws Exception {
+        KeyPair kp = KeyGenerator.generateKeyPair(PARAMS);
+        GostCertificate cert =
+                GostCertificateBuilder.sign(
+                        GostCertificateBuilder.create(PARAMS, cn)
+                                .publicKey(kp.getPublic())
+                                .issuerDn(issuerDn)
+                                .notBefore(notBefore)
+                                .notAfter(notAfter)
+                                .serial(BigInteger.valueOf(serial))
+                                .additionalExtensions(extensions)
+                                .buildTbs(),
+                        GostSigner.of(issuerSigningKey));
+        return new Signer(kp.getPrivate(), cert.getEncoded());
+    }
+
+    private static void assertSignerRejected(Signer signer, int crlNumber, String message)
+            throws Exception {
+        byte[] crl =
+                GostCrlBuilder.create(issuerDn)
+                        .withCrlNumber(crlNumber)
+                        .nextUpdate("270601120000Z")
+                        .sign(signer.key());
+        PkixException e =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CrlVerifier.verifyDelegated(
+                                        crl,
+                                        CrlTestCerts.certFor(UNUSED_SERIAL, issuerDn),
+                                        caCert,
+                                        List.of(signer.certDer())),
+                        message);
+        assertEquals(
+                PkixException.Reason.SIGNATURE_INVALID,
+                e.reason(),
+                "Отказ должен быть по причине отсутствия допустимого подписанта");
+    }
+
+    @Test
+    @DisplayName("Подписант без KeyUsage — reject (отсутствие KeyUsage не разрешение)")
+    void testSignerWithoutKeyUsageRejected() throws Exception {
+        // Сертификат того же УЦ без KeyUsage: прежний isCrlSigner() принимал его
+        KeyPair probe = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] ext = GostCertificateBuilder.buildSkiExtension(probe.getPublic());
+        Signer signer =
+                buildSigner(
+                        "CN=No KU,O=TestOrg,C=RU",
+                        201,
+                        ext,
+                        caKey,
+                        "260601000000Z",
+                        "360601000000Z");
+        assertSignerRejected(signer, 11, "Подписант без KeyUsage не должен приниматься");
+    }
+
+    @Test
+    @DisplayName("Подписант с KeyUsage без cRLSign — reject")
+    void testSignerWithKeyUsageWithoutCrlSignRejected() throws Exception {
+        byte[] ext =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE);
+        Signer signer =
+                buildSigner(
+                        "CN=No CRLSign,O=TestOrg,C=RU",
+                        202,
+                        ext,
+                        caKey,
+                        "260601000000Z",
+                        "360601000000Z");
+        assertSignerRejected(signer, 12, "KeyUsage без cRLSign не даёт права подписывать CRL");
+    }
+
+    @Test
+    @DisplayName("Подписант с неизвестным critical-расширением — reject")
+    void testSignerWithUnknownCriticalExtensionRejected() throws Exception {
+        byte[] kuExt =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN);
+        // Неизвестное расширение 1.2.3.4.5 с critical=TRUE
+        byte[] unknownCritical =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeOid("1.2.3.4.5"),
+                        DerCodec.encodeBoolean(true),
+                        DerCodec.encodeOctetString(DerCodec.encodeNull()));
+        Signer signer =
+                buildSigner(
+                        "CN=Unknown Critical,O=TestOrg,C=RU",
+                        203,
+                        concatExtensions(kuExt, unknownCritical),
+                        caKey,
+                        "260601000000Z",
+                        "360601000000Z");
+        assertSignerRejected(signer, 13, "Неизвестное critical-расширение запрещает использование");
+    }
+
+    @Test
+    @DisplayName("Просроченный подписант — reject")
+    void testExpiredSignerRejected() throws Exception {
+        byte[] ext =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN);
+        Signer signer =
+                buildSigner(
+                        "CN=Expired,O=TestOrg,C=RU",
+                        204,
+                        ext,
+                        caKey,
+                        "240101000000Z",
+                        "250101000000Z");
+        assertSignerRejected(signer, 14, "Просроченный подписант не должен приниматься");
+    }
+
+    @Test
+    @DisplayName("Ещё не действующий подписант — reject")
+    void testNotYetValidSignerRejected() throws Exception {
+        byte[] ext =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN);
+        Signer signer =
+                buildSigner(
+                        "CN=Future,O=TestOrg,C=RU",
+                        205,
+                        ext,
+                        caKey,
+                        "400101000000Z",
+                        "450101000000Z");
+        assertSignerRejected(signer, 15, "Ещё не действующий подписант не должен приниматься");
+    }
+
+    @Test
+    @DisplayName("Сертификат подписанта выпущен другим УЦ — reject")
+    void testSignerCertFromDifferentCaRejected() throws Exception {
+        // Другой УЦ выдал подписанту cRLSign, но наш caKey его сертификат не подписывал
+        PrivateKeyParameters otherCaKey = KeyGenerator.generateKeyPair(PARAMS).getPrivate();
+        byte[] ext =
+                GostCertificateBuilder.buildKeyUsageExtension(
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN);
+        Signer signer =
+                buildSigner(
+                        "CN=Foreign Signer,O=TestOrg,C=RU",
+                        206,
+                        ext,
+                        otherCaKey,
+                        "260601000000Z",
+                        "360601000000Z");
+        assertSignerRejected(signer, 16, "Подписант чужого УЦ не должен приниматься");
     }
 }

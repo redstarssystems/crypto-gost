@@ -26,7 +26,7 @@ Tomcat SSLUtil-обёртку.
 
 === mTLS-тесты (Tomcat, Jetty)
 
-. Создаётся **самоподписанный** (self-signed) клиентский сертификат через `TlsTestHelper.createCertWithKey()`
+. Создаётся **самоподписанный** (self-signed) клиентский сертификат через `PkixCertTestHelper.createCertWithKey()`
 . Сервер доверяет публичному ключу клиента напрямую через `GostX509TrustManager(peerPub, false)` (pinning)
 . Сервер запускается с `needClientAuth=true`
 . `openssl s_client -cert -key -sigalgs gostr34102012_256b` подключается
@@ -60,7 +60,7 @@ Self-signed сертификат обходит это ограничение, �
 == Что НЕ входит
 
 * Netty — отдельный модуль `crypto-gost-netty` с собственными тестами
-* PSK resumption через s_client — покрыт в `x-validation-tests/jsse` и `examples/jsse`
+* PSK resumption через s_client в связке Tomcat/Jetty — не покрыт; возобновление `GostSSLEngine` и `TlsSession` с OpenSSL и КриптоПро проверяют модули `x-validation-tests/tls13`, `x-validation-tests/jsse` и `x-validation-tests/cryptopro`
 * Undertow mTLS — обвязка прозрачна (`addHttpsListener(ctx)`), риск дефекта ≈ 0
 * POST/chunked/raw — тестирование HTTP-парсера, не JSSE
 

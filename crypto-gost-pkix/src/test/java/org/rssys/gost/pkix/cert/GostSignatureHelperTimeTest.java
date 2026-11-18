@@ -55,4 +55,46 @@ class GostSignatureHelperTimeTest {
         String utc = GostSignatureHelper.formatUtcTime(instant);
         assertEquals(instant, GostSignatureHelper.parseAsn1Time(utc), "round-trip UTCTime");
     }
+
+    @Test
+    @DisplayName("parseAsn1Time: UTCTime 50..99 — это 1950..1999 по RFC 5280")
+    void utcTimeCenturyMapping() {
+        assertEquals(
+                Instant.parse("1950-01-01T00:00:00Z"),
+                GostSignatureHelper.parseAsn1Time("500101000000Z"));
+        assertEquals(
+                Instant.parse("1999-12-31T23:59:59Z"),
+                GostSignatureHelper.parseAsn1Time("991231235959Z"));
+        assertEquals(
+                Instant.parse("2049-12-31T23:59:59Z"),
+                GostSignatureHelper.parseAsn1Time("491231235959Z"));
+        assertEquals(
+                Instant.parse("2045-01-01T00:00:00Z"),
+                GostSignatureHelper.parseAsn1Time("450101000000Z"));
+    }
+
+    @Test
+    @DisplayName("formatRfc5280Time: UTCTime до 2049, GeneralizedTime с 2050")
+    void formatRfc5280TimeBoundaries() {
+        assertEquals(
+                "481231235959Z",
+                GostSignatureHelper.formatRfc5280Time(Instant.parse("2048-12-31T23:59:59Z")));
+        assertEquals(
+                "491231235959Z",
+                GostSignatureHelper.formatRfc5280Time(Instant.parse("2049-12-31T23:59:59Z")));
+        assertEquals(
+                "20500101000000Z",
+                GostSignatureHelper.formatRfc5280Time(Instant.parse("2050-01-01T00:00:00Z")));
+        assertEquals(
+                "19491231235959Z",
+                GostSignatureHelper.formatRfc5280Time(Instant.parse("1949-12-31T23:59:59Z")));
+    }
+
+    @Test
+    @DisplayName("normalizeRfc5280Time: GeneralizedTime до 2049 переводится в UTCTime")
+    void normalizeGeneralizedToUtc() {
+        assertEquals("260711090807Z", GostSignatureHelper.normalizeRfc5280Time("20260711090807Z"));
+        assertEquals(
+                "20500101000000Z", GostSignatureHelper.normalizeRfc5280Time("20500101000000Z"));
+    }
 }

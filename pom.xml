@@ -71,16 +71,33 @@
     </modules>
 
     <properties>
-        <revision>0.7.1</revision>
+        <revision>0.8.0</revision>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.10.2</junit.version>
-        <netty.version>4.2.13.Final</netty.version>
+        <netty.version>4.2.20.Final</netty.version>
+        <grpc.version>1.85.1</grpc.version>
         <surefire.excludedGroups>integration,stress</surefire.excludedGroups>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!-- Одна версия Netty и gRPC на весь реактор: gRPC тянет собственный netty-codec-http2,
+                 и без общей BOM Maven смешал бы его с netty-handler проекта -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.grpc</groupId>
+                <artifactId>grpc-bom</artifactId>
+                <version>${grpc.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter</artifactId>
@@ -272,6 +289,7 @@
                 <module>x-validation-tests/tls13</module>
                 <module>x-validation-tests/jsse</module>
                 <module>x-validation-tests/jsse-server</module>
+                <module>x-validation-tests/http2</module>
                 <module>x-validation-tests/cms</module>
                 <module>x-validation-tests/csr</module>
                 <module>x-validation-tests/cert</module>
@@ -279,6 +297,7 @@
                 <module>x-validation-tests/ocsp</module>
                 <module>x-validation-tests/cadest</module>
                 <module>x-validation-tests/cadesc</module>
+                <module>x-validation-tests/cryptopro</module>
             </modules>
         </profile>
     </profiles>

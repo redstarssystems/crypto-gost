@@ -20,7 +20,7 @@ import org.rssys.gost.mac.Cmac;
  *
  * Те же векторы используются в тестах проекта redpass (crypto_test.clj).
  */
-@DisplayName("GOST Crypto Tests")
+@DisplayName("ГОСТ Р 34.12-2015 и 34.13-2015: Кузнечик, CFB, CMAC")
 class CryptoTest {
 
     // -----------------------------------------------------------------------
@@ -69,18 +69,11 @@ class CryptoTest {
     // -----------------------------------------------------------------------
 
     static byte[] hex(String s) {
-        s = s.replaceAll("\\s", "");
-        byte[] b = new byte[s.length() / 2];
-        for (int i = 0; i < b.length; i++) {
-            b[i] = (byte) Integer.parseInt(s.substring(i * 2, i * 2 + 2), 16);
-        }
-        return b;
+        return TestHex.bytes(s);
     }
 
     static String hex(byte[] b) {
-        StringBuilder sb = new StringBuilder(b.length * 2);
-        for (byte v : b) sb.append(String.format("%02x", v & 0xFF));
-        return sb.toString();
+        return TestHex.string(b);
     }
 
     static byte[] key() {
@@ -418,8 +411,8 @@ class CryptoTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("CFB+CMAC: обнаружение подмены байта в шифртексте")
-    void testCFBCMACTamperDetection() {
+    @DisplayName("CFB+CMAC: обнаружение изменения байта в шифртексте")
+    void testCFBCMACChangeDetection() {
         byte[] plain = plain();
 
         // Шифруем
@@ -436,14 +429,14 @@ class CryptoTest {
         cmac.doFinal(expectedTag, 0);
 
         // Портим байт в шифртексте
-        byte[] tampered = ciphertext.clone();
-        tampered[5] ^= 0x01;
+        byte[] corrupted = ciphertext.clone();
+        corrupted[5] ^= 0x01;
 
         // Расшифровываем испорченный шифртекст
         Cfb dec = new Cfb(new Kuznyechik(), 128);
         dec.init(false, new ParametersWithIV(new SymmetricKey(key()), iv()));
-        byte[] recovered = new byte[tampered.length];
-        dec.processBytes(tampered, 0, tampered.length, recovered, 0);
+        byte[] recovered = new byte[corrupted.length];
+        dec.processBytes(corrupted, 0, corrupted.length, recovered, 0);
 
         // CMAC от расшифрованных (испорченных) данных должен отличаться
         Cmac cmac2 = new Cmac(new Kuznyechik(), 64);
@@ -454,7 +447,7 @@ class CryptoTest {
 
         assertFalse(
                 Arrays.equals(expectedTag, actualTag),
-                "Подмена байта в шифртексте должна изменить CMAC расшифрованных данных");
+                "Изменение байта в шифртексте должно изменить CMAC расшифрованных данных");
     }
 
     @Test

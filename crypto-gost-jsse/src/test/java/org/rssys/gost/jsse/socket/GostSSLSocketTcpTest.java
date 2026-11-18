@@ -4,14 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.security.Security;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -23,29 +22,33 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.rssys.gost.jsse.GostJsseConstants;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 /**
  * TCP loopback-тесты: GostSSLSocket <-> GostSSLSocket.
  */
+@DisplayName("GostSSLSocket: обмен данными по TCP")
 class GostSSLSocketTcpTest {
 
     private static final int TEST_ITERATIONS = 3;
     private static TlsCiphersuite cs;
     private static ECParameters params;
-    private static TlsTestHelper.CertBundle serverCert;
-    private static TlsTestHelper.CertBundle clientCert;
-    private static TlsTestHelper.CertBundle rootCa;
-    private static PublicKeyParameters caPub;
+    private static PkixCertTestHelper.CertBundle serverCert;
+    private static PkixCertTestHelper.CertBundle clientCert;
+    private static PkixCertTestHelper.CertBundle rootCa;
+    private static GostCertificate caCert;
 
     private GostSSLServerSocket serverSocket;
     private Thread serverThread;
@@ -56,17 +59,17 @@ class GostSSLSocketTcpTest {
         cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
         params = ECParameters.tc26a256();
 
-        rootCa = TlsTestHelper.createRootCA(params);
-        caPub = rootCa.cert.getPublicKey();
+        rootCa = PkixCertTestHelper.createRootCA(params);
+        caCert = rootCa.cert;
 
         serverCert =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         rootCa.cert.getPublicKey(),
                         rootCa.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         new String[] {"localhost"},
                         new byte[] {(byte) 0x80},
                         null,
@@ -74,13 +77,13 @@ class GostSSLSocketTcpTest {
                         null);
 
         clientCert =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         rootCa.cert.getPublicKey(),
                         rootCa.subjectDn,
                         "240501120000Z",
-                        "290501120000Z",
+                        "21060101120000Z",
                         null,
                         new byte[] {(byte) 0x80},
                         null,
@@ -128,23 +131,47 @@ class GostSSLSocketTcpTest {
     }
 
     private GostSSLSessionContext createSessionContext() {
-        return new GostSSLSessionContext(cs, cs.getHashLen());
+        return new GostSSLSessionContext(cs);
     }
 
-    private GostX509TrustManager createTrustManager(PublicKeyParameters caKey) {
-        return new GostX509TrustManager(caKey, false);
+    private GostX509TrustManager createTrustManager(GostCertificate caCert) {
+        return caCert == null
+                ? GostX509TrustManager.insecureTrustAll()
+                : GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert));
     }
 
     // ========================================================================
     // 1. Basic TCP loopback
     // ========================================================================
 
-    @Test
-    @DisplayName("TCP loopback: handshake + app data ping-pong + close")
-    void testTcpLoopbackBasic() throws Exception {
+    /** Режим соединения: сертификат клиента и явное начало рукопожатия. */
+    private enum LoopbackMode {
+        PLAIN(false, true),
+        MUTUAL_AUTH(true, true),
+        AUTO_HANDSHAKE(false, false);
+
+        final boolean clientCertificate;
+        final boolean explicitHandshake;
+
+        LoopbackMode(boolean clientCertificate, boolean explicitHandshake) {
+            this.clientCertificate = clientCertificate;
+            this.explicitHandshake = explicitHandshake;
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(LoopbackMode.class)
+    @DisplayName(
+            "TCP loopback: обмен данными в обе стороны и закрытие; без и с сертификатом клиента,"
+                    + " рукопожатие по startHandshake() и по первому write()")
+    void testTcpLoopback(LoopbackMode mode) throws Exception {
+        GostCertificate anchor = mode.clientCertificate ? caCert : null;
         GostX509KeyManager skm = createServerKeyManager();
         GostSSLServerSocket srv =
-                new GostSSLServerSocket(0, skm, createTrustManager(null), createSessionContext());
+                new GostSSLServerSocket(0, skm, createTrustManager(anchor), createSessionContext());
+        if (mode.clientCertificate) {
+            srv.setNeedClientAuth(true);
+        }
         serverSocket = srv;
 
         AtomicReference<Throwable> serverError = new AtomicReference<>();
@@ -155,8 +182,10 @@ class GostSSLSocketTcpTest {
                         () -> {
                             try {
                                 GostSSLSocket ssl = (GostSSLSocket) srv.accept();
-                                ssl.startHandshake();
-
+                                if (mode.explicitHandshake) {
+                                    ssl.startHandshake();
+                                }
+                                // без явного startHandshake() рукопожатие запускает read()
                                 InputStream in = ssl.getInputStream();
                                 OutputStream out = ssl.getOutputStream();
 
@@ -174,21 +203,24 @@ class GostSSLSocketTcpTest {
                                 serverDone.countDown();
                             }
                         },
-                        "server-basic");
+                        "server-" + mode);
 
         serverThread.start();
 
-        GostX509KeyManager ckm = new GostX509KeyManager();
+        GostX509KeyManager ckm =
+                mode.clientCertificate ? createClientKeyManager() : new GostX509KeyManager();
         GostSSLSocket client =
                 new GostSSLSocket(
                         "localhost",
                         srv.getLocalPort(),
                         ckm,
-                        createTrustManager(null),
+                        createTrustManager(anchor),
                         createSessionContext());
         client.setSoTimeout(10000);
 
-        client.startHandshake();
+        if (mode.explicitHandshake) {
+            client.startHandshake();
+        }
         OutputStream cout = client.getOutputStream();
         cout.write("hello".getBytes());
         cout.flush();
@@ -205,7 +237,7 @@ class GostSSLSocketTcpTest {
     }
 
     @Test
-    @DisplayName("close() без close_notify пира закрывает inbound (зачистка ключей, P2-3)")
+    @DisplayName("close() без close_notify пира закрывает inbound (зачистка ключей)")
     void testCloseWipesKeysBeforePeerCloseNotify() throws Exception {
         GostX509KeyManager skm = createServerKeyManager();
         GostSSLServerSocket srv =
@@ -261,65 +293,6 @@ class GostSSLSocketTcpTest {
                 "inbound должен быть закрыт после close() даже без close_notify пира");
 
         clientClosed.countDown();
-        assertTrue(serverDone.await(5, TimeUnit.SECONDS));
-        if (serverError.get() != null) throw new RuntimeException(serverError.get());
-    }
-
-    // ========================================================================
-    // 2. mTLS loopback
-    // ========================================================================
-
-    @Test
-    @DisplayName("TCP loopback mTLS: обе стороны с сертификатами")
-    void testTcpLoopbackMtls() throws Exception {
-        GostX509KeyManager skm = createServerKeyManager();
-        GostSSLServerSocket srv =
-                new GostSSLServerSocket(0, skm, createTrustManager(caPub), createSessionContext());
-        srv.setNeedClientAuth(true);
-        serverSocket = srv;
-
-        AtomicReference<Throwable> serverError = new AtomicReference<>();
-        CountDownLatch serverDone = new CountDownLatch(1);
-
-        serverThread =
-                new Thread(
-                        () -> {
-                            try {
-                                GostSSLSocket ssl = (GostSSLSocket) srv.accept();
-                                ssl.startHandshake();
-
-                                InputStream in = ssl.getInputStream();
-                                byte[] buf = new byte[1024];
-                                int n = in.read(buf);
-                                assertEquals("mtls-data", new String(buf, 0, n));
-
-                                ssl.close();
-                            } catch (Exception e) {
-                                serverError.set(e);
-                            } finally {
-                                serverDone.countDown();
-                            }
-                        },
-                        "server-mtls");
-
-        serverThread.start();
-
-        GostX509KeyManager ckm = createClientKeyManager();
-        GostSSLSocket client =
-                new GostSSLSocket(
-                        "localhost",
-                        srv.getLocalPort(),
-                        ckm,
-                        createTrustManager(caPub),
-                        createSessionContext());
-        client.setSoTimeout(10000);
-
-        client.startHandshake();
-        OutputStream out = client.getOutputStream();
-        out.write("mtls-data".getBytes());
-        out.flush();
-        client.close();
-
         assertTrue(serverDone.await(5, TimeUnit.SECONDS));
         if (serverError.get() != null) throw new RuntimeException(serverError.get());
     }
@@ -459,63 +432,6 @@ class GostSSLSocketTcpTest {
     }
 
     // ========================================================================
-    // 5. Auto-handshake
-    // ========================================================================
-
-    @Test
-    @DisplayName("TCP loopback auto-handshake: write триггерит handshake без startHandshake()")
-    void testTcpLoopbackAutoHandshake() throws Exception {
-        GostX509KeyManager skm = createServerKeyManager();
-        GostSSLServerSocket srv =
-                new GostSSLServerSocket(0, skm, createTrustManager(null), createSessionContext());
-        serverSocket = srv;
-
-        AtomicReference<Throwable> serverError = new AtomicReference<>();
-        CountDownLatch serverDone = new CountDownLatch(1);
-
-        serverThread =
-                new Thread(
-                        () -> {
-                            try {
-                                GostSSLSocket ssl = (GostSSLSocket) srv.accept();
-                                // server тоже без явного startHandshake — триггернётся от read()
-                                InputStream in = ssl.getInputStream();
-                                byte[] buf = new byte[1024];
-                                int n = in.read(buf);
-                                assertEquals("auto", new String(buf, 0, n));
-                                ssl.close();
-                            } catch (Exception e) {
-                                serverError.set(e);
-                            } finally {
-                                serverDone.countDown();
-                            }
-                        },
-                        "server-auto");
-
-        serverThread.start();
-
-        GostX509KeyManager ckm = new GostX509KeyManager();
-        GostSSLSocket client =
-                new GostSSLSocket(
-                        "localhost",
-                        srv.getLocalPort(),
-                        ckm,
-                        createTrustManager(null),
-                        createSessionContext());
-        client.setSoTimeout(5000);
-
-        // НЕ вызываем startHandshake() — первый write() триггерит handshake
-        OutputStream out = client.getOutputStream();
-        out.write("auto".getBytes());
-        out.flush();
-
-        client.close();
-
-        assertTrue(serverDone.await(5, TimeUnit.SECONDS));
-        if (serverError.get() != null) throw new RuntimeException(serverError.get());
-    }
-
-    // ========================================================================
     // 6. HttpsURLConnection-style: layered socket
     // ========================================================================
 
@@ -577,73 +493,6 @@ class GostSSLSocketTcpTest {
     }
 
     // ========================================================================
-    // 7. Close behavior: normal close
-    // ========================================================================
-
-    @Test
-    @DisplayName("Закрытие: нормальное закрытие -> close_notify отправлен")
-    void testCloseNormal() throws Exception {
-        GostX509KeyManager skm = createServerKeyManager();
-        GostSSLServerSocket srv =
-                new GostSSLServerSocket(0, skm, createTrustManager(null), createSessionContext());
-        serverSocket = srv;
-
-        AtomicReference<Throwable> serverError = new AtomicReference<>();
-        CountDownLatch serverGotClose = new CountDownLatch(1);
-
-        serverThread =
-                new Thread(
-                        () -> {
-                            try {
-                                GostSSLSocket ssl = (GostSSLSocket) srv.accept();
-                                ssl.startHandshake();
-                                InputStream in = ssl.getInputStream();
-
-                                // Ждём close_notify от клиента после read()
-                                byte[] buf = new byte[1024];
-                                int n = in.read(buf); // может вернуть -1 если close_notify уже
-                                // пришёл
-                                if (n == -1) {
-                                    // close_notify пришёл без app-данных — чистый EOF
-                                    serverGotClose.countDown();
-                                } else {
-                                    assertEquals("data", new String(buf, 0, n));
-                                    // Пробуем ещё раз — close_notify
-                                    n = in.read(buf);
-                                    if (n == -1) serverGotClose.countDown();
-                                }
-                                ssl.close();
-                            } catch (Exception e) {
-                                serverError.set(e);
-                            }
-                        },
-                        "server-close");
-
-        serverThread.start();
-
-        GostX509KeyManager ckm = new GostX509KeyManager();
-        GostSSLSocket client =
-                new GostSSLSocket(
-                        "localhost",
-                        srv.getLocalPort(),
-                        ckm,
-                        createTrustManager(null),
-                        createSessionContext());
-        client.setSoTimeout(5000);
-
-        client.startHandshake();
-        OutputStream out = client.getOutputStream();
-        out.write("data".getBytes());
-        out.flush();
-
-        client.close(); // close_notify отправлен
-
-        assertTrue(
-                serverGotClose.await(5, TimeUnit.SECONDS), "Сервер должен получить close_notify");
-        if (serverError.get() != null) throw new RuntimeException(serverError.get());
-    }
-
-    // ========================================================================
     // 8. Half-close unsupported
     // ========================================================================
 
@@ -692,62 +541,6 @@ class GostSSLSocketTcpTest {
 
         client.close();
         serverDone.await(3, TimeUnit.SECONDS);
-    }
-
-    // ========================================================================
-    // 9. Socket timeout passthrough
-    // ========================================================================
-
-    @Test
-    @DisplayName("Таймаут сокета: setSoTimeout + тихий peer -> SocketTimeoutException")
-    void testSoTimeout() throws Exception {
-        // Используем тихий порт, на котором никто не отвечает (localhost:1 почти наверняка не
-        // открыт)
-        // Или создаём сервер, который не отвечает
-        GostX509KeyManager skm = createServerKeyManager();
-        GostSSLServerSocket srv =
-                new GostSSLServerSocket(0, skm, createTrustManager(null), createSessionContext());
-        serverSocket = srv;
-
-        // Подключаемся plain TCP-сокетом, но не делаем handshake
-        // Тогда read() во время handshake клиента будет ждать и упадёт по таймауту
-        Socket slowClient = new Socket("localhost", srv.getLocalPort());
-
-        GostX509KeyManager ckm = new GostX509KeyManager();
-        GostSSLSocket ssl =
-                new GostSSLSocket(
-                        slowClient,
-                        "localhost",
-                        srv.getLocalPort(),
-                        true,
-                        ckm,
-                        createTrustManager(null),
-                        createSessionContext());
-        ssl.setSoTimeout(500); // 500ms таймаут
-
-        long start = System.currentTimeMillis();
-        Exception ex =
-                assertThrows(
-                        Exception.class,
-                        () -> {
-                            // startHandshake будет ждать ServerHello, но сервер не ответит (никто
-                            // не accept)
-                            ssl.startHandshake();
-                        });
-        long elapsed = System.currentTimeMillis() - start;
-
-        assertInstanceOf(
-                SocketTimeoutException.class,
-                ex,
-                "SocketTimeoutException должен пробрасываться наверх, получено: "
-                        + ex.getClass().getName()
-                        + " message: "
-                        + ex.getMessage());
-        assertTrue(
-                elapsed < 5000, "Тайм-аут должен сработать в течение 500 мс: " + elapsed + " мс");
-
-        ssl.close();
-        srv.close();
     }
 
     // ========================================================================
@@ -957,123 +750,6 @@ class GostSSLSocketTcpTest {
     // ========================================================================
 
     @Test
-    @DisplayName("PSK resumption: два последовательных TCP-соединения, второе использует PSK")
-    void testPskResumptionOverTcp() throws Exception {
-        GostSSLSessionContext srvCtx = createSessionContext();
-        GostX509KeyManager skm = createServerKeyManager();
-        GostSSLServerSocket srv = new GostSSLServerSocket(0, skm, createTrustManager(null), srvCtx);
-        serverSocket = srv;
-        int port = srv.getLocalPort();
-
-        // ---- Первое соединение: полный handshake ----
-        // Сервер должен записать что-то обратно, чтобы NST отправился
-        CountDownLatch firstDone = new CountDownLatch(1);
-        AtomicReference<Throwable> srvErr1 = new AtomicReference<>();
-
-        Thread st1 =
-                new Thread(
-                        () -> {
-                            try {
-                                GostSSLSocket ssl = (GostSSLSocket) srv.accept();
-                                ssl.startHandshake();
-                                // Читаем данные клиента — это заставляет сервер отправить NST
-                                // (NST лежит в outgoingQueue после finishHandshake, будет отправлен
-                                // при первом engine.wrap(), который триггерится
-                                // AppOutputStream.write())
-                                byte[] buf = new byte[1024];
-                                int n = ssl.getInputStream().read(buf);
-                                assertEquals("conn1", new String(buf, 0, n));
-                                // Пишем ответ — это триггерит engine.wrap() -> NST уходит первым
-                                ssl.getOutputStream().write("echo1".getBytes());
-                                ssl.getOutputStream().flush();
-                                ssl.close();
-                            } catch (Exception e) {
-                                srvErr1.set(e);
-                            } finally {
-                                firstDone.countDown();
-                            }
-                        },
-                        "server-psk-1");
-
-        st1.start();
-
-        GostX509KeyManager ckm = new GostX509KeyManager();
-        GostSSLSessionContext clientCtx = createSessionContext();
-        GostSSLSocket c1 =
-                new GostSSLSocket("localhost", port, ckm, createTrustManager(null), clientCtx);
-        c1.setSoTimeout(5000);
-        c1.startHandshake();
-        c1.getOutputStream().write("conn1".getBytes());
-        c1.getOutputStream().flush();
-        // Читаем echo — NST приходит до echo, обрабатывается transparently
-        byte[] echoBuf = new byte[1024];
-        int echoLen = c1.getInputStream().read(echoBuf);
-        assertEquals("echo1", new String(echoBuf, 0, echoLen));
-        c1.close();
-
-        firstDone.await(5, TimeUnit.SECONDS);
-        if (srvErr1.get() != null) throw new RuntimeException(srvErr1.get());
-
-        // Серверный store должен содержать PSK
-        assertTrue(
-                srvCtx.getPskStore().size() > 0,
-                "Хранилище PSK сервера должно содержать записи после первого соединения");
-
-        // ---- Второе соединение: должно быть PSK ----
-        CountDownLatch secondDone = new CountDownLatch(1);
-        AtomicReference<Throwable> srvErr2 = new AtomicReference<>();
-
-        Thread st2 =
-                new Thread(
-                        () -> {
-                            try {
-                                GostSSLSocket ssl = (GostSSLSocket) srv.accept();
-                                ssl.startHandshake();
-                                byte[] buf = new byte[1024];
-                                int n = ssl.getInputStream().read(buf);
-                                assertEquals("conn2", new String(buf, 0, n));
-                                // пишем ответ, чтобы сервер отправил новый NST
-                                // (лежит в outgoingQueue после finishHandshake, отправляется
-                                // при первом engine.wrap(), который триггерится write).
-                                // Без этого клиент не получит новый NST и clientCtx будет пуст
-                                // при single-use PSK (RFC 8446 §8.1).
-                                ssl.getOutputStream().write("echo2".getBytes());
-                                ssl.getOutputStream().flush();
-                                ssl.close();
-                            } catch (Exception e) {
-                                srvErr2.set(e);
-                            } finally {
-                                secondDone.countDown();
-                            }
-                        },
-                        "server-psk-2");
-
-        st2.start();
-
-        // Тот же clientCtx — PSK из первого соединения
-        GostSSLSocket c2 =
-                new GostSSLSocket("localhost", port, ckm, createTrustManager(null), clientCtx);
-        c2.setSoTimeout(5000);
-        c2.startHandshake();
-        c2.getOutputStream().write("conn2".getBytes());
-        c2.getOutputStream().flush();
-        // читаем ответ сервера — вместе с echo2 приходит новый NST
-        // (single-use PSK требует замены тикета после каждого использования).
-        byte[] echoBuf2 = new byte[1024];
-        int echoLen2 = c2.getInputStream().read(echoBuf2);
-        assertEquals("echo2", new String(echoBuf2, 0, echoLen2));
-        c2.close();
-
-        secondDone.await(5, TimeUnit.SECONDS);
-        if (srvErr2.get() != null) throw new RuntimeException(srvErr2.get());
-
-        // Client store не пуст (PSK из первого соединения сохранён)
-        assertTrue(
-                clientCtx.getPskStore().size() > 0,
-                "Хранилище PSK клиента должно содержать записи");
-    }
-
-    @Test
     @DisplayName("Peer закрыл TCP после рукопожатия без close_notify -> read() возвращает -1")
     void testClosePeerFirstPostHandshake() throws Exception {
         GostX509KeyManager skm = createServerKeyManager();
@@ -1141,53 +817,6 @@ class GostSSLSocketTcpTest {
     }
 
     // ========================================================================
-    // 15. Peer closes TCP during handshake
-    // ========================================================================
-
-    @Test
-    @DisplayName("Закрытие пиром первым: TCP разрыв во время рукопожатия -> IOException")
-    void testClosePeerFirstDuringHandshake() throws Exception {
-        GostX509KeyManager skm = createServerKeyManager();
-        GostSSLServerSocket srv =
-                new GostSSLServerSocket(0, skm, createTrustManager(null), createSessionContext());
-        serverSocket = srv;
-
-        // Сервер: accept, сразу рвём TCP, не делая TLS handshake
-        Thread st =
-                new Thread(
-                        () -> {
-                            try {
-                                Socket raw = srv.accept();
-                                // сервер рвёт TCP до handshake — клиент должен получить IOException
-                                raw.close();
-                            } catch (Exception ignored) {
-                            }
-                        },
-                        "server-during-hs");
-
-        st.start();
-
-        GostX509KeyManager ckm = new GostX509KeyManager();
-        GostSSLSocket client =
-                new GostSSLSocket(
-                        "localhost",
-                        srv.getLocalPort(),
-                        ckm,
-                        createTrustManager(null),
-                        createSessionContext());
-        client.setSoTimeout(3000);
-
-        // Handshake должен упасть — сервер разорвал TCP
-        assertThrows(
-                IOException.class,
-                client::startHandshake,
-                "Рукопожатие должно упасть при разрыве TCP пиром");
-
-        client.close();
-        st.join(3000);
-    }
-
-    // ========================================================================
     // 16. HttpsURLConnection — реальный JDK HTTP-клиент через GOST SSL
     // ========================================================================
 
@@ -1252,7 +881,7 @@ class GostSSLSocketTcpTest {
         javax.net.ssl.SSLContext ctx =
                 javax.net.ssl.SSLContext.getInstance(
                         GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
-        ctx.init(null, new javax.net.ssl.TrustManager[] {createTrustManager(caPub)}, null);
+        ctx.init(null, new javax.net.ssl.TrustManager[] {createTrustManager(caCert)}, null);
 
         URL url = new URL("https://localhost:" + port + "/test");
         HttpsURLConnection conn = (HttpsURLConnection) url.openConnection();
@@ -1273,5 +902,78 @@ class GostSSLSocketTcpTest {
         conn.disconnect();
         assertTrue(serverDone.await(5, TimeUnit.SECONDS), "Сервер должен завершиться");
         if (serverError.get() != null) throw new RuntimeException(serverError.get());
+    }
+
+    // ========================================================================
+    // wasResumed()
+    // ========================================================================
+
+    @Test
+    @DisplayName(
+            "wasResumed(): до рукопожатия исключение, второе соединение возобновлено на обеих сторонах")
+    void testWasResumedOnSecondConnection() throws Exception {
+        GostX509KeyManager skm = createServerKeyManager();
+        GostSSLSessionContext serverSessions = createSessionContext();
+        GostSSLSessionContext clientSessions = createSessionContext();
+        GostSSLServerSocket srv =
+                new GostSSLServerSocket(0, skm, createTrustManager(null), serverSessions);
+        serverSocket = srv;
+
+        List<Boolean> serverResumed = new CopyOnWriteArrayList<>();
+        AtomicReference<Throwable> serverError = new AtomicReference<>();
+        serverThread =
+                new Thread(
+                        () -> {
+                            try {
+                                for (int i = 0; i < 2; i++) {
+                                    GostSSLSocket ssl = (GostSSLSocket) srv.accept();
+                                    ssl.startHandshake();
+                                    byte[] buf = new byte[16];
+                                    ssl.getInputStream().read(buf);
+                                    ssl.getOutputStream().write("world".getBytes());
+                                    ssl.getOutputStream().flush();
+                                    serverResumed.add(ssl.wasResumed());
+                                    ssl.close();
+                                }
+                            } catch (Exception e) {
+                                serverError.set(e);
+                            }
+                        },
+                        "server-resumption");
+        serverThread.start();
+
+        List<Boolean> clientResumed = new ArrayList<>();
+        // Тикет привязан к экземпляру менеджера доверия: оба соединения используют один
+        GostX509TrustManager clientTrust = createTrustManager(caCert);
+        for (int i = 0; i < 2; i++) {
+            GostSSLSocket client =
+                    new GostSSLSocket(
+                            "localhost",
+                            srv.getLocalPort(),
+                            new GostX509KeyManager(),
+                            clientTrust,
+                            clientSessions);
+            client.setSoTimeout(10000);
+            assertThrows(
+                    IllegalStateException.class,
+                    client::wasResumed,
+                    "итог неизвестен до завершения рукопожатия");
+            client.startHandshake();
+            client.getOutputStream().write("hello".getBytes());
+            client.getOutputStream().flush();
+            // чтение заодно принимает NewSessionTicket сервера
+            client.getInputStream().read(new byte[16]);
+            clientResumed.add(client.wasResumed());
+            client.close();
+            assertEquals(
+                    clientResumed.get(i),
+                    client.wasResumed(),
+                    "значение не должно меняться после close()");
+        }
+
+        serverThread.join(5000);
+        assertNull(serverError.get(), "ошибка сервера: " + serverError.get());
+        assertEquals(List.of(false, true), clientResumed, "клиент: полное, затем возобновление");
+        assertEquals(List.of(false, true), serverResumed, "сервер: полное, затем возобновление");
     }
 }

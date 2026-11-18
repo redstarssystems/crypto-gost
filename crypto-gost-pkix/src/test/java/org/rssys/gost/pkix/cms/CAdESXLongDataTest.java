@@ -21,6 +21,7 @@ import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
 import org.rssys.gost.pkix.cert.GostSignatureHelper;
+import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -158,6 +159,62 @@ class CAdESXLongDataTest {
                 Exception.class,
                 () -> CAdESXLongData.decodeCertificateValues(wrongTag),
                 "Неправильный тег DER должен вызывать исключение");
+    }
+
+    private static void assertParseError(
+            org.junit.jupiter.api.function.Executable action, String message) {
+        PkixException e = assertThrows(PkixException.class, action, message);
+        assertEquals(
+                PkixException.Reason.PARSE_ERROR,
+                e.reason(),
+                "Структурная ошибка недоверенного атрибута — PARSE_ERROR");
+    }
+
+    @Test
+    @DisplayName(
+            "certificate-values: битый сертификат и усечённый DER дают PkixException, не unchecked")
+    void decodeCertificateValuesMalformedIsPkixException() {
+        // certificate-values — неподписанный атрибут: ввод враждебный
+        byte[] garbageCert =
+                DerCodec.encodeSequence(DerCodec.encodeSequence(DerCodec.encodeNull()));
+        assertParseError(
+                () -> CAdESXLongData.decodeCertificateValues(garbageCert),
+                "Битый сертификат внутри certificate-values");
+
+        byte[] truncated = DerCodec.encodeSequence(DerCodec.encodeInteger(BigInteger.ONE));
+        byte[] bad = Arrays.copyOf(truncated, truncated.length - 1);
+        assertParseError(
+                () -> CAdESXLongData.decodeCertificateValues(bad),
+                "Усечённый DER certificate-values");
+    }
+
+    @Test
+    @DisplayName("revocation-values: битый CRL, CRL с хвостом и усечённый DER дают PkixException")
+    void decodeRevocationValuesMalformedIsPkixException() throws Exception {
+        byte[] garbageCrl = DerCodec.encodeSequence(DerCodec.encodeNull());
+        byte[] withGarbage =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeContextConstructed(0, DerCodec.encodeSequence(garbageCrl)));
+        assertParseError(
+                () -> CAdESXLongData.decodeRevocationValues(withGarbage), "Битый CRL в crlVals");
+
+        // CRL с хвостом: хвост не принадлежит подписанной структуре
+        byte[] crlDer = crl.getEncoded();
+        byte[] crlWithTrailer = Arrays.copyOf(crlDer, crlDer.length + 2);
+        crlWithTrailer[crlDer.length] = 0x05;
+        byte[] withTrailer =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeContextConstructed(
+                                0, DerCodec.encodeSequence(crlWithTrailer)));
+        assertParseError(
+                () -> CAdESXLongData.decodeRevocationValues(withTrailer),
+                "CRL с хвостом в crlVals");
+
+        byte[] valid = CAdESXLongData.encodeRevocationValues(List.of(crl), List.of());
+        byte[] truncated = Arrays.copyOf(valid, valid.length - 1);
+        assertParseError(
+                () -> CAdESXLongData.decodeRevocationValues(truncated),
+                "Усечённый DER revocation-values");
     }
 
     @Test

@@ -31,17 +31,24 @@ public final class GostPemUtils {
 
     private static final int MAX_PEM_SIZE = 10_485_760;
 
+    private static final String PEM_BEGIN_PREFIX = "-----BEGIN ";
+
     private GostPemUtils() {}
 
     /**
-     * Декодирует PEM-формат (Base64 между заголовками) в DER-байты.
+     * Декодирует один PEM-блок (Base64 между заголовками) в DER-байты.
      *
-     * <p>Вырезает любые PEM-заголовки {@code -----BEGIN ...-----} / {@code -----END ...-----}
-     * и пробельные символы, декодирует оставшийся Base64.</p>
+     * <p>Вырезает заголовки {@code -----BEGIN ...-----} / {@code -----END ...-----} и пробельные
+     * символы, декодирует оставшийся Base64. Блок должен быть ровно один: склейка Base64 из
+     * нескольких блоков давала либо мусор, либо первый сертификат с чужим хвостом, а файл цепочки
+     * (fullchain.pem) молча читался как одиночный сертификат. Для файла с несколькими
+     * сертификатами служит {@link #decodePemBlocks(byte[])}. Данные без заголовков читаются как
+     * голый Base64.</p>
      *
      * @param pem байты PEM-данных (сертификат, ключ или любой PEM-блок)
      * @return DER-байты
-     * @throws IllegalArgumentException если размер превышает {@link #MAX_PEM_SIZE}
+     * @throws IllegalArgumentException если размер превышает {@link #MAX_PEM_SIZE}, блоков не один
+     *                                  или структура заголовков нарушена
      */
     public static byte[] pemToDer(byte[] pem) {
         if (pem.length > MAX_PEM_SIZE) {
@@ -49,6 +56,28 @@ public final class GostPemUtils {
                     "PEM data exceeds maximum size " + MAX_PEM_SIZE + ", got " + pem.length);
         }
         String text = new String(pem, StandardCharsets.US_ASCII);
+        java.util.regex.Matcher header = PEM_HEADER.matcher(text);
+        int begins = 0;
+        int ends = 0;
+        boolean wellOrdered = true;
+        while (header.find()) {
+            boolean begin = header.group().startsWith(PEM_BEGIN_PREFIX);
+            // Заголовки обязаны чередоваться BEGIN, END, BEGIN, END...
+            wellOrdered &= begin == (begins == ends);
+            if (begin) {
+                begins++;
+            } else {
+                ends++;
+            }
+        }
+        if (begins > 1) {
+            throw new IllegalArgumentException(
+                    "expected exactly one PEM block, got " + begins + "; use listFromPem");
+        }
+        if (begins != ends || !wellOrdered) {
+            throw new IllegalArgumentException(
+                    "malformed PEM: expected one BEGIN header followed by one END header");
+        }
         String b64 = WHITESPACE.matcher(PEM_HEADER.matcher(text).replaceAll("")).replaceAll("");
         return Base64.getDecoder().decode(b64);
     }

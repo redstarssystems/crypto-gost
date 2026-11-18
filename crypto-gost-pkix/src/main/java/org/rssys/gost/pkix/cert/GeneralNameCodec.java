@@ -36,29 +36,72 @@ public final class GeneralNameCodec {
     /** GeneralName tag: otherName [0] (IMPLICIT, заменяет SEQUENCE OtherName) */
     private static final int TAG_OTHER_NAME = 0xA0;
 
+    /** Начало wildcard-метки dNSName: звёздочка и точка. */
+    private static final String WILDCARD_LABEL_PREFIX = "*.";
+
+    /** Наибольший код символа US-ASCII. */
+    private static final int MAX_ASCII = 0x7F;
+
+    private static final int IPV4_LENGTH = 4;
+
+    /** Длина префикса ::ffff:0:0/96, за которым в IPv4-mapped адресе идут 32 бита IPv4. */
+    private static final int IPV4_MAPPED_PREFIX_BITS = 96;
+
     /**
      * Кодирует GeneralName типа dNSName (RFC 5280 §4.2.1.6).
      *
-     * @param dnsName DNS-имя (например, {@code "example.com"})
+     * <p>Имя приводится к lowercase A-label через {@link GostDnsName#toAsciiHostname}: имя в
+     * Unicode кодируется как punycode, а не искажается заменой символов на {@code ?}. Крайняя
+     * левая метка {@code *} допустима (wildcard-сертификат, RFC 6125 §6.4.3).</p>
+     *
+     * @param dnsName DNS-имя (например, {@code "example.com"} или {@code "*.example.com"})
      * @return DER-encoded GeneralName
+     * @throws IllegalArgumentException если имя пустое или не приводится к допустимому имени
      */
     public static byte[] encodeDnsName(String dnsName) {
-        return DerCodec.encodeTlv(TAG_DNS_NAME, dnsName.getBytes(StandardCharsets.US_ASCII));
+        String name = dnsName.strip();
+        String ascii =
+                name.startsWith(WILDCARD_LABEL_PREFIX)
+                        ? WILDCARD_LABEL_PREFIX
+                                + GostDnsName.toAsciiHostname(
+                                        name.substring(WILDCARD_LABEL_PREFIX.length()))
+                        : GostDnsName.toAsciiHostname(name);
+        return DerCodec.encodeTlv(TAG_DNS_NAME, ascii.getBytes(StandardCharsets.US_ASCII));
     }
 
     /**
      * Кодирует GeneralName типа iPAddress (RFC 5280 §4.2.1.6).
      *
-     * @param ipAddress IP-адрес в строковом представлении
+     * <p>Адрес разбирается только как литерал ({@link GostDnsName#parseIpAddress}), без обращения
+     * к DNS: строка, не являющаяся адресом, - ошибка, а не повод для сетевого запроса. IPv4-mapped
+     * IPv6 ({@code ::ffff:a.b.c.d}) кодируется как IPv4 (4 байта): так же адрес читает собственный
+     * валидатор, и сертификат нашего построителя проходит {@code permitted}-ограничение IPv4.</p>
+     *
+     * @param ipAddress IP-литерал: IPv4, IPv6 или IPv6 в квадратных скобках (без зоны)
      * @return DER-encoded GeneralName
+     * @throws IllegalArgumentException если строка не является IP-литералом
      */
     public static byte[] encodeIpAddress(String ipAddress) {
-        try {
-            byte[] ipBytes = java.net.InetAddress.getByName(ipAddress).getAddress();
-            return DerCodec.encodeTlv(TAG_IP_ADDRESS, ipBytes);
-        } catch (java.net.UnknownHostException e) {
-            throw new RuntimeException("Invalid IP address: " + ipAddress, e);
+        return DerCodec.encodeTlv(TAG_IP_ADDRESS, parseIpLiteral(ipAddress));
+    }
+
+    /** Разбирает IP-литерал без DNS; зона ({@code %eth0}) в сертификате не имеет смысла. */
+    private static byte[] parseIpLiteral(String literal) {
+        byte[] address = literal.indexOf('%') >= 0 ? null : GostDnsName.parseIpAddress(literal);
+        if (address == null) {
+            throw new IllegalArgumentException("Invalid IP address literal: " + literal);
         }
+        return address;
+    }
+
+    /** Значение для IA5String: символы US-ASCII, остальное - ошибка, а не молчаливая замена. */
+    private static byte[] ascii(String value, String what) {
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) > MAX_ASCII) {
+                throw new IllegalArgumentException(what + " must be US-ASCII (IA5String)");
+            }
+        }
+        return value.getBytes(StandardCharsets.US_ASCII);
     }
 
     /**
@@ -69,7 +112,7 @@ public final class GeneralNameCodec {
      * @return DER-encoded GeneralName
      */
     public static byte[] encodeRfc822Name(String email) {
-        return DerCodec.encodeTlv(TAG_RFC822_NAME, email.getBytes(StandardCharsets.US_ASCII));
+        return DerCodec.encodeTlv(TAG_RFC822_NAME, ascii(email, "rfc822Name"));
     }
 
     /**
@@ -80,7 +123,7 @@ public final class GeneralNameCodec {
      * @return DER-encoded GeneralName
      */
     public static byte[] encodeUri(String uri) {
-        return DerCodec.encodeTlv(TAG_URI, uri.getBytes(StandardCharsets.US_ASCII));
+        return DerCodec.encodeTlv(TAG_URI, ascii(uri, "uniformResourceIdentifier"));
     }
 
     /**
@@ -197,11 +240,18 @@ public final class GeneralNameCodec {
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("Invalid prefix length in CIDR: " + cidr);
         }
-        byte[] addr;
-        try {
-            addr = java.net.InetAddress.getByName(addrStr).getAddress();
-        } catch (java.net.UnknownHostException e) {
-            throw new IllegalArgumentException("Invalid IP address in CIDR: " + cidr);
+        byte[] addr = parseIpLiteral(addrStr);
+        // IPv4-mapped литерал кодируется как IPv4 (см. encodeIpAddress): префикс /96../128 IPv6
+        // становится префиксом /0../32 IPv4, а более короткий не выразим 4 байтами
+        if (addr.length == IPV4_LENGTH && addrStr.indexOf(':') >= 0) {
+            if (prefixLen < IPV4_MAPPED_PREFIX_BITS) {
+                throw new IllegalArgumentException(
+                        "IPv4-mapped CIDR needs prefix length of at least "
+                                + IPV4_MAPPED_PREFIX_BITS
+                                + ": "
+                                + cidr);
+            }
+            prefixLen -= IPV4_MAPPED_PREFIX_BITS;
         }
         int addrLen = addr.length;
         if (addrLen != 4 && addrLen != 16) {

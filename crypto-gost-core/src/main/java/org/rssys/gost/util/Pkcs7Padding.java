@@ -15,7 +15,7 @@ public final class Pkcs7Padding {
      * @return новый массив с добавленным padding
      * @throws IllegalArgumentException если blockSize < 1 или > 255
      */
-    public static byte[] addPadding(byte[] data, int blockSize) {
+    public static byte[] pad(byte[] data, int blockSize) {
         if (blockSize < 1 || blockSize > 255) {
             throw new IllegalArgumentException("blockSize must be between 1 and 255");
         }
@@ -34,9 +34,13 @@ public final class Pkcs7Padding {
      * @param data      данные с padding
      * @param blockSize размер блока в байтах
      * @return новый массив без padding
-     * @throws IllegalArgumentException если padding некорректен или данные пусты
+     * @throws IllegalArgumentException если blockSize вне диапазона 1..255, padding некорректен
+     *                                  или данные пусты
      */
-    public static byte[] removePadding(byte[] data, int blockSize) {
+    public static byte[] unpad(byte[] data, int blockSize) {
+        if (blockSize < 1 || blockSize > 255) {
+            throw new IllegalArgumentException("blockSize must be between 1 and 255");
+        }
         if (data == null || data.length == 0) {
             throw new IllegalArgumentException("data must not be null or empty");
         }

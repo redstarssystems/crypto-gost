@@ -205,11 +205,18 @@ class GostSslSmokeTest {
 
     @Test
     @DisplayName("GostSsl.verifyServer() — неверный CA -> GostSslException")
-    void verifyServerWrongCa() {
-        // передаём серверный сертификат вместо CA —
-        // он не является CA и не подписывал серверный cert,
-        // поэтому verifyServer должен бросить GostSslException
-        assertThrows(GostSslException.class, () -> GostSsl.verifyServer(certPem, keyPem, certPem));
+    void verifyServerWrongCa() throws Exception {
+        // Чужой CA не выпускал серверный сертификат.
+        String foreignCaPem = pem(new ExamplesCertHelper().getCaCertDer(), "CERTIFICATE");
+        assertThrows(
+                GostSslException.class, () -> GostSsl.verifyServer(certPem, keyPem, foreignCaPem));
+    }
+
+    @Test
+    @DisplayName("GostSsl.verifyServer() — закреплённый leaf-сертификат принимается")
+    void verifyServerPinnedLeaf() {
+        // Точный серверный сертификат в роли якоря — явный certificate pinning.
+        assertDoesNotThrow(() -> GostSsl.verifyServer(certPem, keyPem, certPem));
     }
 
     // ========================================================================

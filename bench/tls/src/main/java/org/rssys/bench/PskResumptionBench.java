@@ -1,6 +1,7 @@
 package org.rssys.bench;
 
 import org.openjdk.jmh.annotations.*;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsSession;
 import org.rssys.gost.tls13.config.TlsClientConfig;
@@ -41,7 +42,7 @@ public class PskResumptionBench {
         TlsServerConfig serverConfig = new TlsServerConfig(
                 cs, Collections.singletonList(serverBundle.cert), serverBundle.priv);
 
-        TlsClientConfig clientConfig = new TlsClientConfig(cs, serverBundle.caPublicKey).withoutHostnameVerification();
+        TlsClientConfig clientConfig = new TlsClientConfig(cs, TrustAnchors.ofCertificate(serverBundle.caCert)).withoutHostnameVerification();
 
         TlsSession server = TlsSession.createServer(serverConfig, pair.getServerTransport());
         server.setPskStore(serverPskStore);
@@ -77,7 +78,7 @@ public class PskResumptionBench {
         TlsServerConfig serverConfig = new TlsServerConfig(
                 cs, Collections.singletonList(serverBundle.cert), serverBundle.priv);
 
-        TlsClientConfig clientConfig = new TlsClientConfig(cs, serverBundle.caPublicKey).withoutHostnameVerification();
+        TlsClientConfig clientConfig = new TlsClientConfig(cs, TrustAnchors.ofCertificate(serverBundle.caCert)).withoutHostnameVerification();
 
         TlsSession server = TlsSession.createServer(serverConfig, pair.getServerTransport());
         // Используем serverPskStore из @Setup — в нём уже есть PSK-тикет

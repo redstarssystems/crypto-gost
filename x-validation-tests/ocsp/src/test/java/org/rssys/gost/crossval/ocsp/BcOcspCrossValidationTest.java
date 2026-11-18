@@ -155,7 +155,11 @@ class BcOcspCrossValidationTest {
         BasicOCSPResp basic = (BasicOCSPResp) new OCSPResp(ocspDer).getResponseObject();
         Extension nonceExt = basic.getExtension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce);
         assertNotNull(nonceExt);
-        assertArrayEquals(nonceVal, nonceExt.getExtnValue().getOctets());
+        // extnValue содержит DER типа Nonce (OCTET STRING): BC разбирает его как вложенный слой
+        assertArrayEquals(nonceVal,
+                org.bouncycastle.asn1.ASN1OctetString.getInstance(nonceExt.getParsedValue())
+                        .getOctets(),
+                "BC должен прочитать nonce из внутреннего OCTET STRING");
     }
 
     @Test
@@ -342,6 +346,8 @@ class BcOcspCrossValidationTest {
         GostOcspResponse resp = GostOcspResponse.fromDer(ocspDer);
         assertTrue(resp.isSuccessful());
         assertTrue(resp.getResponses().get(0).isGood());
+        assertArrayEquals(nonceVal, resp.getNonce(),
+                "Nonce, корректно закодированный BC, должен разбираться без искажений");
     }
 
     @Test
@@ -454,15 +460,15 @@ class BcOcspCrossValidationTest {
     @Test
     @DisplayName("BC-запрос -> GOST GostOcspRequest парсинг")
     void bcReqToGost() throws Exception {
-        byte[] reqDer = BcOcspHelper.buildBcOcspRequest(
+        BcOcspHelper.BcOcspRequest bcRequest = BcOcspHelper.buildBcOcspRequestWithNonce(
                 leafCert256.getEncoded(), caCert256.getEncoded());
 
-        GostOcspRequest parsed = GostOcspRequest.fromDer(reqDer);
+        GostOcspRequest parsed = GostOcspRequest.fromDer(bcRequest.der());
         assertEquals(1, parsed.getCertIds().size());
         CertId certId = parsed.getCertIds().get(0);
         assertArrayEquals(leafCert256.getSerialNumber(), certId.serialNumber());
-        assertNotNull(parsed.getNonce());
-        assertEquals(16, parsed.getNonce().length);
+        assertArrayEquals(bcRequest.nonce(), parsed.getNonce(),
+                "Nonce из BC-запроса должен совпасть побайтно");
         assertFalse(parsed.isSigned());
     }
 

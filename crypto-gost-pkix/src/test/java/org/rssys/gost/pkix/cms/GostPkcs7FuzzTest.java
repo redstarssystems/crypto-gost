@@ -3,6 +3,7 @@ package org.rssys.gost.pkix.cms;
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import org.junit.jupiter.api.BeforeAll;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 
 /**
  * Фаззинг-тесты извлечения сертификатов из PKCS#7/.p7b.

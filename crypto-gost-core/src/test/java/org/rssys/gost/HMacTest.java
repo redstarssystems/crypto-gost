@@ -6,6 +6,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.digest.Digest;
@@ -21,6 +23,7 @@ import org.rssys.gost.mac.Hmac;
  *   - Дайджест: RFC 6986 §10 (официальные эталонные векторы стандарта)
  *   - HMAC:     RFC 7836 Appendix B (HMAC-GOSTR3411-2012)
  */
+@DisplayName("HMAC-Стрибог и хэш-функция ГОСТ Р 34.11-2012: эталонные векторы и свойства")
 class HMacTest {
 
     // =========================================================================
@@ -28,24 +31,11 @@ class HMacTest {
     // =========================================================================
 
     private static String toHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) {
-            sb.append(String.format("%02x", b));
-        }
-        return sb.toString();
+        return TestHex.string(bytes);
     }
 
     private static byte[] fromHex(String hex) {
-        hex = hex.replaceAll("\\s+", "");
-        int len = hex.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] =
-                    (byte)
-                            ((Character.digit(hex.charAt(i), 16) << 4)
-                                    + Character.digit(hex.charAt(i + 1), 16));
-        }
-        return data;
+        return TestHex.bytes(hex);
     }
 
     private static byte[] digest(Digest d, byte[] msg) {
@@ -54,6 +44,20 @@ class HMacTest {
         byte[] out = new byte[d.getDigestSize()];
         d.doFinal(out, 0);
         return out;
+    }
+
+    /** Стрибог с дайджестом {@code size} байт: 32 - Стрибог-256, 64 - Стрибог-512. */
+    private static Digest streebog(int size) {
+        return size == 32 ? new Streebog256() : new Streebog512();
+    }
+
+    private static boolean isAllZero(byte[] bytes) {
+        for (byte b : bytes) {
+            if (b != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static byte[] hmac(Hmac mac, byte[] key, byte[] msg) {
@@ -65,111 +69,111 @@ class HMacTest {
     }
 
     // =========================================================================
-    // Тесты дайджеста GOST3411-2012-512 (RFC 6986 §10)
+    // Эталонные векторы RFC 6986 §10
     // =========================================================================
 
     /**
-     * RFC 6986 §10.1, пример 1.
-     * Сообщение M1 = "012345678901234567890123456789012345678901234567890123456789012"
-     * (63 ASCII-символа 0x30..0x39, всего 63 байта)
+     * RFC 6986 печатает и сообщение, и дайджест как числа, у которых старший байт идёт первым, а
+     * библиотека принимает и отдаёт байты младшим вперёд (так же, как BouncyCastle и OpenSSL).
+     * Поэтому связь такая: {@code RFC_H = reverse(H(reverse(RFC_M)))}. Тест подаёт вход и сверяет
+     * выход именно по записи стандарта, чтобы он проверял пример RFC, а не совпадение с другой
+     * реализацией.
      */
+    private static void assertRfcVector(Digest d, String rfcMessageHex, String rfcDigestHex) {
+        byte[] message = reversed(fromHex(rfcMessageHex));
+        byte[] result = digest(d, message);
+        assertEquals(rfcDigestHex.length() / 2, result.length);
+        assertEquals(rfcDigestHex, toHex(reversed(result)));
+    }
+
+    private static byte[] reversed(byte[] bytes) {
+        byte[] result = new byte[bytes.length];
+        for (int i = 0; i < bytes.length; i++) {
+            result[bytes.length - 1 - i] = bytes[i];
+        }
+        return result;
+    }
+
+    // Сообщение M1 (RFC 6986 §10.1.1) — 63 байта, в записи RFC старшим байтом вперёд; в порядке
+    // библиотеки это ASCII-строка «0123…012».
+    private static final String RFC_M1 =
+            "32313039383736353433323130393837"
+                    + "36353433323130393837363534333231"
+                    + "30393837363534333231303938373635"
+                    + "343332313039383736353433323130";
+
+    // Сообщение M2 (RFC 6986 §10.2.1) — 72 байта, в записи RFC старшим байтом вперёд; в порядке
+    // библиотеки это текст «Се ветри, Стрибожи внуци, веютъ с моря стрелами на храбрыя плъкы
+    // Игоревы» в кодировке CP1251.
+    private static final String RFC_M2 =
+            "fbe2e5f0eee3c820fbeafaebef20fffb"
+                    + "f0e1e0f0f520e0ed20e8ece0ebe5f0f2"
+                    + "f120fff0eeec20f120faf2fee5e2202c"
+                    + "e8f6f3ede220e8e6eee1e8f0f2d1202c"
+                    + "e8f0f2e5e220e5d1";
+
+    /** RFC 6986 §10.1.1, пример 1 (M1), вывод 512 бит. */
     @Test
+    @DisplayName("Стрибог-512: пример 1 из RFC 6986")
     void testDigest512_RFC6986_Example1() {
-        // Сообщение из RFC 6986 §10.1 длиной 63 байта
+        assertRfcVector(
+                new Streebog512(),
+                RFC_M1,
+                "486f64c1917879417fef082b3381a4e2"
+                        + "11c324f074654c38823a7b76f830ad00"
+                        + "fa1fbae42b1285c0352f227524bc9ab1"
+                        + "6254288dd6863dccd5b9f54a1ad0541b");
+
+        // То же значение в порядке байт библиотеки, для прямого сравнения с BC и OpenSSL.
         byte[] msg =
                 "012345678901234567890123456789012345678901234567890123456789012"
                         .getBytes(StandardCharsets.US_ASCII);
-        assertEquals(63, msg.length);
-
         String expected =
                 "1b54d01a4af5b9d5cc3d86d68d285462"
                         + "b19abc2475222f35c085122be4ba1ffa"
                         + "00ad30f8767b3a82384c6574f024c311"
                         + "e2a481332b08ef7f41797891c1646f48";
-
-        Digest d = new Streebog512();
-        byte[] result = digest(d, msg);
-        assertEquals(64, result.length);
-        assertEquals(expected, toHex(result));
+        assertEquals(expected, toHex(digest(new Streebog512(), msg)));
     }
 
-    /**
-     * RFC 6986 §10.2.1, пример 2.
-     * Сообщение M2 = fbe2e5f0eee3c820fbeafaebef20fffb...e8f0f2e5e220e5d1 (72 байта)
-     * Это русский текст в кодировке CP-866.
-     *
-     * Примечание: RFC 6986 представляет векторы в little-endian (right-to-left) нотации ГОСТ.
-     * Ожидаемое значение здесь — результат совместимый с BouncyCastle
-     * (порядок байт big-endian, проверено на BouncyCastle 1.83).
-     */
+    /** RFC 6986 §10.2.1, пример 2 (M2), вывод 512 бит. */
     @Test
+    @DisplayName("Стрибог-512: пример 2 из RFC 6986")
     void testDigest512_RFC6986_Example2() {
-        byte[] msg =
-                fromHex(
-                        "fbe2e5f0eee3c820fbeafaebef20fffb"
-                                + "f0e1e0f0f520e0ed20e8ece0ebe5f0f2"
-                                + "f120fff0eeec20f120faf2fee5e2202c"
-                                + "e8f6f3ede220e8e6eee1e8f0f2d1202c"
-                                + "e8f0f2e5e220e5d1");
-
-        // Проверено на BouncyCastle 1.83
-        String expected =
-                "9663a3abce48e5b8545169e9ede65e0c"
-                        + "96b827afdad47ac56c8ba343b3628e64"
-                        + "a25418a6ed0685e414a4420960c38e10"
-                        + "2180f7e1759f8f61262185115fea5703";
-
-        Digest d = new Streebog512();
-        byte[] result = digest(d, msg);
-        assertEquals(64, result.length);
-        assertEquals(expected, toHex(result));
+        assertRfcVector(
+                new Streebog512(),
+                RFC_M2,
+                "28fbc9bada033b1460642bdcddb90c3f"
+                        + "b3e56c497ccd0f62b8a2ad4935e85f03"
+                        + "7613966de4ee00531ae60f3b5a47f8da"
+                        + "e06915d5f2f194996fcabf2622e6881e");
     }
 
-    // =========================================================================
-    // Тесты дайджеста GOST3411-2012-256 (RFC 6986 §10)
-    // =========================================================================
-
-    /**
-     * RFC 6986 §10.2, пример 1 — то же сообщение M1 (63 байта), вывод 256 бит.
-     */
+    /** RFC 6986 §10.1.2, пример 1 (M1), вывод 256 бит. */
     @Test
+    @DisplayName("Стрибог-256: пример 1 из RFC 6986")
     void testDigest256_RFC6986_Example1() {
+        assertRfcVector(
+                new Streebog256(),
+                RFC_M1,
+                "00557be5e584fd52a449b16b0251d05d27f94ab76cbaa6da890b59d8ef1e159d");
+
+        // То же значение в порядке байт библиотеки, для прямого сравнения с BC и OpenSSL.
         byte[] msg =
                 "012345678901234567890123456789012345678901234567890123456789012"
                         .getBytes(StandardCharsets.US_ASCII);
-
         String expected = "9d151eefd8590b89daa6ba6cb74af927" + "5dd051026bb149a452fd84e5e57b5500";
-
-        Digest d = new Streebog256();
-        byte[] result = digest(d, msg);
-        assertEquals(32, result.length);
-        assertEquals(expected, toHex(result));
+        assertEquals(expected, toHex(digest(new Streebog256(), msg)));
     }
 
-    /**
-     * RFC 6986 §10.2.2, пример 2 — то же сообщение M2, вывод 256 бит.
-     *
-     * Примечание: RFC 6986 представляет векторы в little-endian (right-to-left) нотации ГОСТ.
-     * Ожидаемое значение здесь — результат совместимый с BouncyCastle
-     * (порядок байт big-endian, проверено против BouncyCastle 1.83).
-     */
+    /** RFC 6986 §10.2.2, пример 2 (M2), вывод 256 бит. */
     @Test
+    @DisplayName("Стрибог-256: пример 2 из RFC 6986")
     void testDigest256_RFC6986_Example2() {
-        byte[] msg =
-                fromHex(
-                        "fbe2e5f0eee3c820fbeafaebef20fffb"
-                                + "f0e1e0f0f520e0ed20e8ece0ebe5f0f2"
-                                + "f120fff0eeec20f120faf2fee5e2202c"
-                                + "e8f6f3ede220e8e6eee1e8f0f2d1202c"
-                                + "e8f0f2e5e220e5d1");
-
-        // Проверено против BouncyCastle 1.83
-        String expected = "0e7ab4efd0915eaac2dab58dae45d0f2" + "8d14f83c57794b3338f7872c10542c19";
-
-        Digest d = new Streebog256();
-        byte[] result = digest(d, msg);
-        assertEquals(32, result.length);
-        assertEquals(expected, toHex(result));
+        assertRfcVector(
+                new Streebog256(),
+                RFC_M2,
+                "508f7e553c06501d749a66fc28c6cac0b005746d97537fa85d9e40904efed29d");
     }
 
     // =========================================================================
@@ -177,6 +181,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("Стрибог-512: поэтапное обновление даёт тот же дайджест")
     void testDigest512_incrementalEquality() {
         byte[] msg =
                 "012345678901234567890123456789012345678901234567890123456789012"
@@ -199,6 +204,7 @@ class HMacTest {
     }
 
     @Test
+    @DisplayName("Стрибог-256: поэтапное обновление даёт тот же дайджест")
     void testDigest256_incrementalEquality() {
         byte[] msg =
                 fromHex(
@@ -229,6 +235,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("Стрибог-512: после reset() результат тот же")
     void testDigest512_resetProducesConsistentResults() {
         byte[] msg = "hello streebog".getBytes(StandardCharsets.US_ASCII);
         Digest d = new Streebog512();
@@ -242,6 +249,7 @@ class HMacTest {
     }
 
     @Test
+    @DisplayName("Стрибог-256: после reset() результат тот же")
     void testDigest256_resetProducesConsistentResults() {
         byte[] msg = "hello streebog 256".getBytes(StandardCharsets.US_ASCII);
         Digest d = new Streebog256();
@@ -258,6 +266,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("Стрибог: размер дайджеста, размер блока и имя алгоритма")
     void testDigestMetadata() {
         Digest d256 = new Streebog256();
         assertEquals("Streebog256", d256.getAlgorithmName());
@@ -274,28 +283,13 @@ class HMacTest {
     // Дайджест: пустое сообщение
     // =========================================================================
 
-    @Test
-    void testDigest512_emptyMessage() {
+    @ParameterizedTest(name = "Стрибог с дайджестом {0} байт: пустое сообщение")
+    @ValueSource(ints = {32, 64})
+    void testDigest_emptyMessage(int digestSize) {
         // Хэш пустой строки определён правилами дополнения
-        Digest d = new Streebog512();
-        byte[] result = digest(d, new byte[0]);
-        assertEquals(64, result.length);
-        // Результат не должен состоять из одних нулей
-        boolean allZero = true;
-        for (byte b : result) {
-            if (b != 0) {
-                allZero = false;
-                break;
-            }
-        }
-        assertFalse(allZero, "Хэш пустого сообщения не должен состоять из одних нулей");
-    }
-
-    @Test
-    void testDigest256_emptyMessage() {
-        Digest d = new Streebog256();
-        byte[] result = digest(d, new byte[0]);
-        assertEquals(32, result.length);
+        byte[] result = digest(streebog(digestSize), new byte[0]);
+        assertEquals(digestSize, result.length);
+        assertFalse(isAllZero(result), "Хэш пустого сообщения не должен состоять из одних нулей");
     }
 
     // =========================================================================
@@ -303,6 +297,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("Hmac: имя алгоритма и размер MAC")
     void testHmacMetadata() {
         Hmac mac256 = new Hmac(new Streebog256());
         assertEquals("Streebog256/HMAC", mac256.getAlgorithmName());
@@ -328,6 +323,7 @@ class HMacTest {
      *                       01 31 37 01 0a 83 75 4f d0 af 6d 7c d4 92 2e d9
      */
     @Test
+    @DisplayName("HMAC-Стрибог-256: вектор RFC 7836, приложение B")
     void testHmac256_RFC7836_AppendixB() {
         byte[] key = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] msg = fromHex("0126bdb87800af214341456563780100");
@@ -350,6 +346,7 @@ class HMacTest {
      *                       3a fe 93 b2 81 4f 79 f5 00 0f fc 03 66 c2 51 e6
      */
     @Test
+    @DisplayName("HMAC-Стрибог-512: вектор RFC 7836, приложение B")
     void testHmac512_RFC7836_AppendixB() {
         byte[] key = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] msg = fromHex("0126bdb87800af214341456563780100");
@@ -371,6 +368,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("HMAC-Стрибог-256: ключ длиннее блока хэшируется")
     void testHmac256_longKeyGetsHashed() {
         // Ключ длиннее 64 байт
         byte[] longKey = new byte[128];
@@ -393,6 +391,7 @@ class HMacTest {
     }
 
     @Test
+    @DisplayName("HMAC-Стрибог-512: ключ длиннее блока хэшируется")
     void testHmac512_longKeyGetsHashed() {
         byte[] longKey = new byte[200];
         Arrays.fill(longKey, (byte) 0xCD);
@@ -408,6 +407,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("HMAC-Стрибог-256: reset() позволяет переиспользовать объект")
     void testHmac256_resetAndReuse() {
         byte[] key = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] msg = fromHex("0126bdb87800af214341456563780100");
@@ -429,6 +429,7 @@ class HMacTest {
     }
 
     @Test
+    @DisplayName("HMAC-Стрибог-512: reset() позволяет переиспользовать объект")
     void testHmac512_resetAndReuse() {
         byte[] key = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] msg = fromHex("0126bdb87800af214341456563780100");
@@ -452,6 +453,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("HMAC-Стрибог-256: разные ключи дают разные MAC")
     void testHmac256_differentKeysProduceDifferentOutputs() {
         byte[] key1 = new byte[32];
         Arrays.fill(key1, (byte) 0x01);
@@ -471,6 +473,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("HMAC-Стрибог-256: разные сообщения дают разные MAC")
     void testHmac256_differentMessagesProduceDifferentOutputs() {
         byte[] key = new byte[32];
         Arrays.fill(key, (byte) 0xAA);
@@ -489,6 +492,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("HMAC-Стрибог-256: поэтапное обновление даёт тот же MAC")
     void testHmac256_incrementalEquality() {
         byte[] key = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] msg = "incremental test message for hmac".getBytes(StandardCharsets.US_ASCII);
@@ -511,6 +515,7 @@ class HMacTest {
     }
 
     @Test
+    @DisplayName("HMAC-Стрибог-512: поэтапное обновление даёт тот же MAC")
     void testHmac512_incrementalEquality() {
         byte[] key = fromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] msg = "incremental test message for hmac 512".getBytes(StandardCharsets.US_ASCII);
@@ -530,56 +535,40 @@ class HMacTest {
     }
 
     // =========================================================================
-    // Hmac: проверка целостности — подмена сообщения меняет MAC
+    // Hmac: проверка целостности — изменение сообщения меняет MAC
     // =========================================================================
 
     @Test
-    void testHmac256_tamperedMessageDetected() {
+    @DisplayName("HMAC-Стрибог-256: изменение сообщения меняет MAC")
+    void testHmac256_modifiedMessageChangesMac() {
         byte[] key = new byte[32];
         Arrays.fill(key, (byte) 0x55);
         byte[] msg = "authentic message".getBytes(StandardCharsets.US_ASCII);
-        byte[] tampered = "authentic messagX".getBytes(StandardCharsets.US_ASCII);
+        byte[] modified = "authentic messagX".getBytes(StandardCharsets.US_ASCII);
 
         Hmac mac = new Hmac(new Streebog256());
         byte[] authentic = hmac(mac, key, msg);
-        byte[] forged = hmac(mac, key, tampered);
+        byte[] changed = hmac(mac, key, modified);
 
         assertFalse(
-                Arrays.equals(authentic, forged),
-                "HMAC подменённого сообщения должен отличаться от подлинного");
+                Arrays.equals(authentic, changed),
+                "HMAC изменённого сообщения должен отличаться от исходного");
     }
 
     // =========================================================================
     // Hmac: пустое сообщение
     // =========================================================================
 
-    @Test
-    void testHmac256_emptyMessage() {
-        byte[] key = new byte[32];
+    @ParameterizedTest(name = "HMAC-Стрибог с MAC {0} байт: пустое сообщение")
+    @ValueSource(ints = {32, 64})
+    void testHmac_emptyMessage(int macSize) {
+        byte[] key = new byte[macSize];
         Arrays.fill(key, (byte) 0x11);
 
-        Hmac mac = new Hmac(new Streebog256());
-        byte[] result = hmac(mac, key, new byte[0]);
-        assertEquals(32, result.length);
+        byte[] result = hmac(new Hmac(streebog(macSize)), key, new byte[0]);
+        assertEquals(macSize, result.length);
         // Не должно бросать исключение; результат не должен быть нулевым
-        boolean allZero = true;
-        for (byte b : result) {
-            if (b != 0) {
-                allZero = false;
-                break;
-            }
-        }
-        assertFalse(allZero);
-    }
-
-    @Test
-    void testHmac512_emptyMessage() {
-        byte[] key = new byte[64];
-        Arrays.fill(key, (byte) 0x22);
-
-        Hmac mac = new Hmac(new Streebog512());
-        byte[] result = hmac(mac, key, new byte[0]);
-        assertEquals(64, result.length);
+        assertFalse(isAllZero(result), "MAC пустого сообщения не должен состоять из одних нулей");
     }
 
     // =========================================================================
@@ -587,6 +576,7 @@ class HMacTest {
     // =========================================================================
 
     @Test
+    @DisplayName("Hmac: init() требует SymmetricKey")
     void testHmac_initRequiresSymmetricKey() {
         Hmac mac = new Hmac(new Streebog256());
         assertThrows(
@@ -598,39 +588,14 @@ class HMacTest {
     // Hmac: пустой ключ (RFC 2104 §2 — ключ любой длины, пустой разрешён)
     // =========================================================================
 
-    @Test
-    @DisplayName("512: пустой ключ HMAC (RFC 2104 §2)")
-    void testHmac512_emptyKey() {
-        Hmac mac = new Hmac(new Streebog512());
+    @ParameterizedTest(name = "HMAC-Стрибог с MAC {0} байт: пустой ключ (RFC 2104 §2)")
+    @ValueSource(ints = {32, 64})
+    void testHmac_emptyKey(int macSize) {
+        Hmac mac = new Hmac(streebog(macSize));
         mac.init(new byte[0]); // не должно бросать исключение
         mac.update("test".getBytes(StandardCharsets.UTF_8), 0, 4);
-        byte[] result = new byte[64];
+        byte[] result = new byte[macSize];
         mac.doFinal(result, 0);
-        boolean allZero = true;
-        for (byte b : result) {
-            if (b != 0) {
-                allZero = false;
-                break;
-            }
-        }
-        assertFalse(allZero, "HMAC с пустым ключом не должен давать нулевой результат");
-    }
-
-    @Test
-    @DisplayName("256: пустой ключ HMAC (RFC 2104 §2)")
-    void testHmac256_emptyKey() {
-        Hmac mac = new Hmac(new Streebog256());
-        mac.init(new byte[0]);
-        mac.update("test".getBytes(StandardCharsets.UTF_8), 0, 4);
-        byte[] result = new byte[32];
-        mac.doFinal(result, 0);
-        boolean allZero = true;
-        for (byte b : result) {
-            if (b != 0) {
-                allZero = false;
-                break;
-            }
-        }
-        assertFalse(allZero, "HMAC с пустым ключом не должен давать нулевой результат");
+        assertFalse(isAllZero(result), "HMAC с пустым ключом не должен давать нулевой результат");
     }
 }

@@ -16,18 +16,21 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.engine.GostSSLEngine;
 import org.rssys.gost.jsse.engine.GostSSLSessionContext;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 class GostSslContextHandshakePskResumptionTest {
 
     private static GostSslContext serverCtx;
     private static GostSslContext clientCtx;
-    private static GostSSLSessionContext sharedSessionCtx;
+    private static GostSSLSessionContext serverSessionCtx;
+    private static GostSSLSessionContext clientSessionCtx;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -35,9 +38,9 @@ class GostSslContextHandshakePskResumptionTest {
         ECParameters params = ECParameters.tc26a256();
 
         // ----- Сертификаты -----
-        TlsTestHelper.CertBundle rootCa = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle serverCert =
-                TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle rootCa = PkixCertTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle serverCert =
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         rootCa.priv,
                         rootCa.cert.getPublicKey(),
@@ -55,19 +58,22 @@ class GostSslContextHandshakePskResumptionTest {
                 "default",
                 CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
                 serverCert.priv);
-        GostX509TrustManager trustAll = new GostX509TrustManager(rootCa.cert.getPublicKey(), false);
+        GostX509TrustManager trustRootCa =
+                GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(rootCa.cert));
 
-        // ----- Shared PSK-контекст -----
+        // ----- Раздельные PSK-контексты клиента и сервера -----
+        // Клиентская и серверная записи с одним тикетом имеют разные привязки, а ключ
+        // хранилища - байты тикета: в общем контексте они затирали бы друг друга.
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        sharedSessionCtx = new GostSSLSessionContext(cs, cs.getHashLen());
+        serverSessionCtx = new GostSSLSessionContext(cs);
+        clientSessionCtx = new GostSSLSessionContext(cs);
 
-        // ----- GostSslContext с shared-контекстом -----
         serverCtx =
-                GostSslContextBuilder.forServer(serverKm).sessionContext(sharedSessionCtx).build();
+                GostSslContextBuilder.forServer(serverKm).sessionContext(serverSessionCtx).build();
         clientCtx =
                 GostSslContextBuilder.forClient()
-                        .trustManager(trustAll)
-                        .sessionContext(sharedSessionCtx)
+                        .trustManager(trustRootCa)
+                        .sessionContext(clientSessionCtx)
                         .build();
     }
 
@@ -107,18 +113,17 @@ class GostSslContextHandshakePskResumptionTest {
         ByteBuf oneByteRecord = serverCh1.readOutbound();
         if (oneByteRecord != null) oneByteRecord.release();
         clientCh1.runPendingTasks();
-        // isResumed() в GostSSLSession — JDK 9 default, всегда false.
-        // Верифицируем через RFC 8446 §8.1: после отправки NST сервер сохраняет
-        // PSK в sharedSessionCtx.pskStore. Если redirectToSharedState не сработала
-        // — pskStore будет пуст.
+        // Клиент сохраняет тикет в своём контексте, сервер - в своём (RFC 8446 §8.1).
 
         // RFC 8446 §8.1 — PSK-тикет одноразовый. Сервер сохраняет
-        // PSK в finishHandshake() + клиент в saveNewSessionTicket().
+        // PSK в finishHandshake() + клиент в saveNewSessionTicket(, PskEntry.NO_CERTIFICATE_BOUND).
         // После второго handshake тикет будет израсходован.
-        int pskSizeBeforeClose = sharedSessionCtx.getPskStore().size();
         assertTrue(
-                pskSizeBeforeClose > 0,
-                "PSK должен быть сохранён после полного рукопожатия: " + pskSizeBeforeClose);
+                clientSessionCtx.getPskStore().size() > 0,
+                "клиент должен сохранить тикет после полного рукопожатия");
+        assertTrue(
+                serverSessionCtx.getPskStore().size() > 0,
+                "сервер должен сохранить тикет после полного рукопожатия");
 
         // без drain close() сгенерирует close_notify outbound —
         // ResourceLeakDetector (PARANOID) зафиксирует leak.
@@ -138,10 +143,13 @@ class GostSslContextHandshakePskResumptionTest {
         EmbeddedChannel serverCh2 = new EmbeddedChannel(serverSsl2);
         doHandshake(clientSsl2, serverSsl2, clientCh2, serverCh2);
 
-        // isResumed() в GostSSLSession — JDK 9 default, всегда false.
-        // Детерминированная верификация PSK-пути (peer cert отсутствует,
-        // handshake короче) на уровне Netty-интеграции не реализована.
-        // PSK-протокол верифицирован в GostSSLEnginePostHandshakeTest.
+        // Возобновление действительно произошло: сертификаты не обменивались
+        assertTrue(
+                ((GostSSLEngine) clientSsl2.engine()).wasResumed(),
+                "второе рукопожатие клиента должно быть возобновлением по PSK");
+        assertTrue(
+                ((GostSSLEngine) serverSsl2.engine()).wasResumed(),
+                "второе рукопожатие сервера должно быть возобновлением по PSK");
 
         // Данные после resumption
         clientCh2.writeOutbound(Unpooled.wrappedBuffer("world".getBytes()));

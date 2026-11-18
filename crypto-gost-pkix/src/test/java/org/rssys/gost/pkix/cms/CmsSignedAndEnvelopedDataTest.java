@@ -7,8 +7,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -44,6 +46,21 @@ class CmsSignedAndEnvelopedDataTest {
     }
 
     @Test
+    @DisplayName("decryptAndVerify без якорей отклоняется до расшифрования")
+    void decryptAndVerifyWithoutTrustAnchorsRejected() throws PkixException {
+        byte[] combined =
+                CmsSignedAndEnvelopedData.signThenEncrypt(
+                        "payload".getBytes(), signerKey, signerCert, recipientCert);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CmsSignedAndEnvelopedData.decryptAndVerify(
+                                combined, recipientKey, recipientCert),
+                "пустой список доверенных сертификатов должен отклоняться");
+    }
+
+    @Test
     @DisplayName("sign-then-encrypt: подпись -> шифрование -> расшифрование -> проверка")
     void signThenEncryptRoundTrip() throws PkixException {
         byte[] data = "Конфиденциальный подписанный документ".getBytes();
@@ -60,6 +77,33 @@ class CmsSignedAndEnvelopedDataTest {
 
         assertArrayEquals(data, result.data());
         assertNotNull(result.signerCertificate());
+    }
+
+    @Test
+    @DisplayName("decryptAndVerify: detached SignedData внутри EnvelopedData отклоняется")
+    void decryptAndVerifyRejectsDetachedSignedData() throws PkixException {
+        byte[] detachedSigned =
+                CmsSignedDataBuilder.create()
+                        .data("detached inside enveloped".getBytes())
+                        .addSigner(signerKey, signerCert)
+                        .detached(true)
+                        .build();
+        byte[] enveloped =
+                CmsEnvelopedDataBuilder.create()
+                        .data(detachedSigned)
+                        .addRecipient(recipientCert)
+                        .build();
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedAndEnvelopedData.decryptAndVerify(
+                                        enveloped, recipientKey, recipientCert, signerCert),
+                        "detached SignedData без внешнего документа недопустим");
+        assertTrue(
+                ex.getMessage() != null && ex.getMessage().contains("Detached"),
+                "ожидалась причина detached, получено: " + ex.getMessage());
     }
 
     @Test
@@ -98,8 +142,12 @@ class CmsSignedAndEnvelopedDataTest {
 
         byte[] tampered = new byte[combined.length];
         System.arraycopy(combined, 0, tampered, 0, combined.length);
-        int mid = combined.length / 2;
-        tampered[mid] ^= 0xFF;
+        // Портим последний байт зашифрованного содержимого. Середина сообщения
+        // зависит от длины DER и после перехода на UTCTime/PrintableString может
+        // попасть в незащищённую часть EnvelopedData, из-за чего подмена не
+        // обнаруживается. Последний байт всегда принадлежит ciphertext.
+        int tamperIndex = combined.length - 1;
+        tampered[tamperIndex] ^= 0xFF;
 
         assertThrows(
                 PkixException.class,
@@ -205,8 +253,64 @@ class CmsSignedAndEnvelopedDataTest {
         byte[] signedData =
                 CmsSignedDataBuilder.create().data(data).addSigner(signerKey, signerCert).build();
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, signerCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(signerCert),
+                                SignerSelection.ANY,
+                                Revocation.none()));
 
         assertArrayEquals(data, result.data());
+    }
+
+    @Test
+    @DisplayName(
+            "sign-then-encrypt: контейнер без имитовставки принимается, целостность даёт подпись")
+    void signThenEncryptWithoutIntegrityAccepted() throws PkixException {
+        byte[] data = "Подписанный документ в контейнере без OMAC".getBytes();
+        byte[] signed =
+                CmsSignedDataBuilder.create().data(data).addSigner(signerKey, signerCert).build();
+        byte[] combined =
+                CmsEnvelopedDataBuilder.create()
+                        .data(signed)
+                        .encryptedContentType(GostOids.CMS_SIGNED_DATA)
+                        .addRecipient(recipientCert)
+                        .withoutIntegrity()
+                        .build();
+
+        VerifiedSignedData result =
+                CmsSignedAndEnvelopedData.decryptAndVerify(
+                        combined, recipientKey, recipientCert, signerCert);
+
+        assertArrayEquals(
+                data, result.data(), "контейнер без OMAC от внешнего узла должен читаться");
+    }
+
+    @Test
+    @DisplayName("sign-then-encrypt: подмена режима шифра не проходит разбор или проверку подписи")
+    void signThenEncryptModeSubstitutionFails() throws PkixException {
+        byte[] combined =
+                CmsSignedAndEnvelopedData.signThenEncrypt(
+                        "Документ".getBytes(), signerKey, signerCert, recipientCert);
+        // Понижение OMAC -> обычный CTR с удалением атрибута: строгий decrypt его бы отверг, но
+        // здесь целостность обеспечивает подпись, и мусор вместо SignedData не должен пройти.
+        byte[] forged =
+                CmsEnvelopedRewriter.withoutUnprotectedAttrs(
+                        CmsEnvelopedRewriter.withContentOid(combined, GostOids.KUZ_CTR_ACPKM));
+
+        PkixException refusal =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedAndEnvelopedData.decryptAndVerify(
+                                        forged, recipientKey, recipientCert, signerCert),
+                        "подмена режима должна давать PkixException, а не непроверяемое исключение");
+        // Метод допускает режим без имитовставки, поэтому отказ обязан прийти из разбора
+        // SignedData или проверки подписи, а не из политики целостности
+        assertNotEquals(
+                PkixException.Reason.INTEGRITY_REQUIRED,
+                refusal.reason(),
+                "отказ не должен происходить из политики целостности");
     }
 }

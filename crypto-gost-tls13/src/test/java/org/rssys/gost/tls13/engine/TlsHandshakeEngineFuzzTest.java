@@ -4,6 +4,7 @@ import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import java.io.IOException;
 import java.util.List;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.tls13.message.TlsMessageBuilder;
@@ -26,10 +27,10 @@ class TlsHandshakeEngineFuzzTest {
     private static final int SIG_SCHEME = TlsConstants.SIG_GOST_TC26_A_256;
     private static final int HASH_LEN = 32;
 
-    private static TlsTestHelper.CertBundle SERVER_CERT;
+    private static PkixCertTestHelper.CertBundle SERVER_CERT;
 
     static {
-        SERVER_CERT = TlsTestHelper.createCertWithKey(EC_PARAMS);
+        SERVER_CERT = PkixCertTestHelper.createCertWithKey(EC_PARAMS);
     }
 
     private static TlsCiphersuite cs() {

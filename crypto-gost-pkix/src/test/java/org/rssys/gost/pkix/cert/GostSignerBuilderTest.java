@@ -10,6 +10,7 @@ import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
+import org.rssys.gost.pkix.SignedDerTestSupport;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
@@ -54,8 +55,38 @@ class GostSignerBuilderTest {
         byte[] viaSigner =
                 GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate())).getEncoded();
 
-        // Нонс детерминирован (RFC 6979) -> подпись, а значит и DER, идентичны.
-        assertArrayEquals(viaPriv, viaSigner, "путь priv и путь GostSigner должны совпадать");
+        // Подпись вероятностна: сравнивается всё, что подписывается (TBS, алгоритмы), побайтно, а
+        // значения подписи обнулены. Расхождение двух путей сборки по-прежнему видно.
+        SignedDerTestSupport.assertSameExceptSignature(
+                "путь priv и путь GostSigner должны совпадать", viaPriv, viaSigner);
+    }
+
+    @Test
+    @DisplayName("Подпись по умолчанию вероятностна: тот же TBS, разные подписи, обе верны")
+    void testDefaultSignatureIsProbabilistic() {
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+        byte[] subjectDn = GostDnParser.encodeDn("CN=Hedged Default");
+        byte[] tbs =
+                GostCertificateBuilder.create(params, subjectDn)
+                        .publicKey(kp.getPublic())
+                        .notBefore("20240501120000Z")
+                        .notAfter("21060101120000Z")
+                        .issuerDn(subjectDn)
+                        .serial(BigInteger.ONE)
+                        .buildTbs();
+
+        byte[] first =
+                GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate())).getEncoded();
+        byte[] second =
+                GostCertificateBuilder.sign(tbs, GostSigner.of(kp.getPrivate())).getEncoded();
+
+        assertFalse(
+                Arrays.equals(first, second),
+                "сертификат по умолчанию подписан детерминированно: гибрид не включён");
+        SignedDerTestSupport.assertSameExceptSignature("тот же TBS", first, second);
+        assertTrue(new GostCertificate(first).verifySignature(kp.getPublic()), "первый неверен");
+        assertTrue(new GostCertificate(second).verifySignature(kp.getPublic()), "второй неверен");
     }
 
     @Test
@@ -66,20 +97,29 @@ class GostSignerBuilderTest {
 
         byte[] cViaPriv = buildCert(params, kp, GostSigner.of(kp.getPrivate()));
         byte[] cViaPriv2 = buildCert(params, kp, GostSigner.of(kp.getPrivate()));
-        assertArrayEquals(cViaPriv, cViaPriv2, "детерминированная сборка cert стабильна");
+        SignedDerTestSupport.assertSameExceptSignature(
+                "сборка cert стабильна", cViaPriv, cViaPriv2);
 
         byte[] csrViaPriv = GostCsrBuilder.create("CN=Test", kp.getPublic()).sign(kp.getPrivate());
         byte[] csrViaSigner =
                 GostCsrBuilder.create("CN=Test", kp.getPublic())
                         .sign(GostSigner.of(kp.getPrivate()));
-        assertArrayEquals(csrViaPriv, csrViaSigner, "CSR: пути priv и GostSigner совпадают");
+        SignedDerTestSupport.assertSameExceptSignature(
+                "CSR: пути priv и GostSigner совпадают", csrViaPriv, csrViaSigner);
 
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlViaPriv =
-                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
+                GostCrlBuilder.create(issuerDn)
+                        .thisUpdate("20250101000000Z")
+                        .nextUpdate("20990601120000Z")
+                        .sign(kp.getPrivate());
         byte[] crlViaSigner =
-                GostCrlBuilder.create(issuerDn).nextUpdate("20990601120000Z").sign(kp.getPrivate());
-        assertArrayEquals(crlViaPriv, crlViaSigner, "CRL: пути priv и GostSigner совпадают");
+                GostCrlBuilder.create(issuerDn)
+                        .thisUpdate("20250101000000Z")
+                        .nextUpdate("20990601120000Z")
+                        .sign(GostSigner.of(kp.getPrivate()));
+        SignedDerTestSupport.assertSameExceptSignature(
+                "CRL: пути priv и GostSigner совпадают", crlViaPriv, crlViaSigner);
     }
 
     @Test
@@ -183,8 +223,7 @@ class GostSignerBuilderTest {
         byte[] crl2 = builder.sign(kp.getPrivate());
 
         // Дефолтный thisUpdate вычисляется на каждый sign(): CRL, подписанные с секундной
-        // разницей, отличаются (разный thisUpdate -> разный TBS -> разная детерминированная
-        // подпись).
+        // разницей, отличаются (разный thisUpdate -> разный TBS).
         assertFalse(
                 Arrays.equals(crl1, crl2),
                 "дефолтный thisUpdate должен браться на момент sign(), а не create()");
@@ -205,8 +244,8 @@ class GostSignerBuilderTest {
         Thread.sleep(1100);
         byte[] crl2 = builder.sign(kp.getPrivate());
 
-        assertArrayEquals(
-                crl1, crl2, "явный thisUpdate должен иметь приоритет над временем sign()");
+        SignedDerTestSupport.assertSameExceptSignature(
+                "явный thisUpdate должен иметь приоритет над временем sign()", crl1, crl2);
     }
 
     @Test

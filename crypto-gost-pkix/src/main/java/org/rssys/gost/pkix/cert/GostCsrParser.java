@@ -2,22 +2,36 @@ package org.rssys.gost.pkix.cert;
 
 import static org.rssys.gost.pkix.cert.GostDerParser.*;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.CheckReturnValue;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Парсер PKCS#10 CertificationRequest (Certificate Signing Request, RFC 2986 §4.1).
  *
  * <p>Разбирает DER-кодированный CSR и предоставляет доступ к полям:
  * subject DN, SPKI (публичный ключ), OID алгоритма подписи, значение подписи.
- * Из атрибутов распознаётся только {@code extensionRequest}
- * (1.2.840.113549.1.9.14, RFC 2985 §5.4.1) — остальные атрибуты
- * безопасно игнорируются.</p>
+ * Из атрибутов обрабатываются {@code extensionRequest} (1.2.840.113549.1.9.14, RFC 2985 §5.4.2)
+ * и {@code challengePassword} (RFC 2985 §5.4.1); остальные доступны в сыром виде через
+ * {@link #getAttributes()}.</p>
+ *
+ * <p><b>Строгий разбор.</b> Проверяется структура: блок {@code [0]} содержит подряд идущие
+ * {@code Attribute SEQUENCE { OID, SET }} без внешнего SET, значения непусты, хвостов нет,
+ * повтор OID (в том числе {@code extensionRequest}) отвергается. Порядок элементов
+ * {@code SET OF} не проверяется: чужие кодировщики не всегда сортируют, а подпись покрывает
+ * байты как есть. Ошибки — {@link IllegalArgumentException}.</p>
  *
  * <p>Симметричен {@link GostCsrBuilder}: тот строит CSR, этот — читает.</p>
  *
@@ -36,6 +50,10 @@ public final class GostCsrParser {
     private static final GostLogger LOG =
             GostLogger.getLogger("org.rssys.gost.pkix.cert.GostCsrParser");
 
+    // Длина отпечатка ключа в журнале, байт: 8 байт хэша достаточно, чтобы отличать запросы
+    // друг от друга, а запись остаётся короткой; это идентификатор для поиска, не проверка
+    private static final int LOG_FINGERPRINT_LEN = 8;
+
     private final byte[] certData;
     private final int tbsOff;
     private final int tbsLen;
@@ -50,7 +68,18 @@ public final class GostCsrParser {
     private final String subjectDnStr;
     private final GostDnParser.DnField[] subjectDnFields;
     private final PublicKeyParameters publicKey;
+    // Границы SPKI в certData: нужны, чтобы при отказе проверки подписи посчитать отпечаток ключа
+    private final int spkiStart;
+    private final int spkiEnd;
     private final GostExtensionParser.ExtensionsResult extResult;
+    private final List<CsrAttribute> attributes;
+
+    /** Признак отсутствия атрибута challengePassword. */
+    private static final int NO_PASSWORD = -1;
+
+    private final int passwordTag;
+    private final int passwordStart;
+    private final int passwordEnd;
 
     /**
      * Парсит DER-закодированный PKCS#10 CertificationRequest.
@@ -73,14 +102,14 @@ public final class GostCsrParser {
         }
 
         // Три потомка верхнего уровня: CertificationRequestInfo, SignatureAlgorithm, SignatureValue
-        int[] tbsTlv = readTlv(certData, certContentStart);
+        int[] tbsTlv = readTlv(certData, certContentStart, outer[1]);
         this.tbsOff = certContentStart;
         this.tbsLen = tbsTlv[1] - certContentStart;
 
         // SignatureAlgorithm (SEQUENCE с OID)
-        int[] sigAlgTlv = readTlv(certData, tbsTlv[1]);
+        int[] sigAlgTlv = readTlv(certData, tbsTlv[1], outer[1]);
         if (sigAlgTlv[0] < sigAlgTlv[1] && (certData[sigAlgTlv[0]] & 0xFF) == TAG_OID) {
-            int[] oidTlv = readTlv(certData, sigAlgTlv[0]);
+            int[] oidTlv = readTlv(certData, sigAlgTlv[0], sigAlgTlv[1]);
             this.sigAlgOidBytes = Arrays.copyOfRange(certData, oidTlv[0], oidTlv[1]);
         } else {
             this.sigAlgOidBytes = new byte[0];
@@ -88,13 +117,13 @@ public final class GostCsrParser {
 
         // SignatureValue (BIT STRING)
         int sigTagOffset = sigAlgTlv[1];
-        if (sigTagOffset >= certData.length) {
+        if (sigTagOffset >= outer[1]) {
             throw new IllegalArgumentException("Truncated DER encoding: missing signature");
         }
         if ((certData[sigTagOffset] & 0x1F) != TAG_BIT_STRING) {
             throw new IllegalArgumentException("Expected BIT STRING for signature");
         }
-        int[] sigValTlv = readTlv(certData, sigTagOffset);
+        int[] sigValTlv = readTlv(certData, sigTagOffset, outer[1]);
         if (sigValTlv[1] <= sigValTlv[0]) {
             throw new IllegalArgumentException(
                     "Truncated DER encoding: empty BIT STRING for signature at offset "
@@ -115,7 +144,7 @@ public final class GostCsrParser {
         if (tbsPos >= tbsEnd || (certData[tbsPos] & 0xFF) != TAG_INTEGER) {
             throw new IllegalArgumentException("Expected version INTEGER in CSR");
         }
-        int[] verTlv = readTlv(certData, tbsPos);
+        int[] verTlv = readTlv(certData, tbsPos, tbsEnd);
         if (verTlv[0] >= verTlv[1]) {
             throw new IllegalArgumentException("Empty version INTEGER in CSR");
         }
@@ -126,7 +155,7 @@ public final class GostCsrParser {
         if (tbsPos >= tbsEnd || (certData[tbsPos] & 0xFF) != TAG_SEQUENCE) {
             throw new IllegalArgumentException("Expected subject DN SEQUENCE in CSR");
         }
-        int[] dnTlv = readTlv(certData, tbsPos);
+        int[] dnTlv = readTlv(certData, tbsPos, tbsEnd);
         this.subjectDnOff = tbsPos;
         this.subjectDnLen = dnTlv[1] - tbsPos;
         tbsPos = dnTlv[1];
@@ -143,66 +172,121 @@ public final class GostCsrParser {
         if (tbsPos >= tbsEnd || (certData[tbsPos] & 0xFF) != TAG_SEQUENCE) {
             throw new IllegalArgumentException("Expected SPKI SEQUENCE in CSR");
         }
-        int[] spkiTlv = readTlv(certData, tbsPos);
+        int[] spkiTlv = readTlv(certData, tbsPos, tbsEnd);
         byte[] spkiDer = Arrays.copyOfRange(certData, tbsPos, spkiTlv[1]);
         this.publicKey = GostDerCodec.decodePublicKey(spkiDer);
+        this.spkiStart = tbsPos;
+        this.spkiEnd = spkiTlv[1];
         tbsPos = spkiTlv[1];
 
-        // [0] IMPLICIT Attributes — контент тега и есть SET OF Attribute
+        // [0] IMPLICIT Attributes: тег SET замещён тегом [0] (RFC 2986, IMPLICIT TAGS), поэтому
+        // содержимое — сразу последовательность Attribute SEQUENCE, без внешнего SET.
         GostExtensionParser.ExtensionsResult ext = GostExtensionParser.ExtensionsResult.empty();
-        if (tbsPos < tbsEnd && (certData[tbsPos] & 0xFF) == TAG_CTX_0) {
-            int[] attrTlv = readTlv(certData, tbsPos);
-            int attrOuterValueStart = attrTlv[0];
-            int attrOuterValueEnd = attrTlv[1];
-            // [0] IMPLICIT: контент — SET OF Attribute
-            int attrPos = attrOuterValueStart;
-            int attrEnd = attrOuterValueEnd;
-            if (attrPos < attrEnd && (certData[attrPos] & 0xFF) == TAG_SET) {
-                int[] setTlv = readTlv(certData, attrPos);
-                attrPos = setTlv[0];
-                attrEnd = setTlv[1];
+        List<CsrAttribute> parsedAttributes = new ArrayList<>();
+        int passwordTag = NO_PASSWORD;
+        int passwordStart = 0;
+        int passwordEnd = 0;
+        if (tbsPos < tbsEnd) {
+            if ((certData[tbsPos] & 0xFF) != TAG_CTX_0) {
+                throw new IllegalArgumentException(
+                        "Expected [0] attributes after SubjectPublicKeyInfo in CSR");
             }
-            // Ищем extensionRequest среди атрибутов
+            int[] attrTlv = readTlv(certData, tbsPos, tbsEnd);
+            if (attrTlv[1] != tbsEnd) {
+                throw new IllegalArgumentException(
+                        "Trailing bytes after attributes in CertificationRequestInfo");
+            }
+            Set<String> seenOids = new HashSet<>();
+            int attrPos = attrTlv[0];
+            int attrEnd = attrTlv[1];
             while (attrPos < attrEnd) {
+                // Внутренний SET (и любой не-SEQUENCE) здесь недопустим: это не Attribute
                 if ((certData[attrPos] & 0xFF) != TAG_SEQUENCE) {
-                    attrPos = readTlv(certData, attrPos)[1];
-                    continue;
+                    throw new IllegalArgumentException(
+                            "Expected Attribute SEQUENCE inside CSR attributes");
                 }
-                int[] attrSeqTlv = readTlv(certData, attrPos);
+                int[] attrSeqTlv = readTlv(certData, attrPos, attrEnd);
                 int attrContent = attrSeqTlv[0];
                 int attrContentEnd = attrSeqTlv[1];
 
-                // OID — первый элемент Attribute SEQUENCE
                 if (attrContent >= attrContentEnd || (certData[attrContent] & 0xFF) != TAG_OID) {
-                    attrPos = attrSeqTlv[1];
-                    continue;
+                    throw new IllegalArgumentException("Expected OID at start of CSR attribute");
                 }
-                int[] oidTlv = readTlv(certData, attrContent);
-                boolean isExtReq =
-                        matchesOid(
-                                certData,
-                                oidTlv[0],
-                                oidTlv[1] - oidTlv[0],
-                                EXTENSION_REQUEST_OID_BYTES);
+                int[] oidTlv = readTlv(certData, attrContent, attrContentEnd);
+                String oid = oidBytesToDottedString(certData, oidTlv[0], oidTlv[1] - oidTlv[0]);
+                if (!seenOids.add(oid)) {
+                    // Повтор означает, что проверяющий и выпускающий могут увидеть разные значения
+                    throw new IllegalArgumentException("Duplicate CSR attribute: " + oid);
+                }
 
-                // values SET — второй элемент Attribute SEQUENCE
-                int afterOid = oidTlv[1];
-                if (isExtReq && afterOid < attrContentEnd) {
-                    int valTag = certData[afterOid] & 0xFF;
-                    if (valTag == TAG_SET) {
-                        int[] setTlv = readTlv(certData, afterOid);
-                        int setPos = setTlv[0];
-                        int setEnd = setTlv[1];
-                        // Первый элемент SET — Extensions SEQUENCE
-                        if (setPos < setEnd && (certData[setPos] & 0xFF) == TAG_SEQUENCE) {
-                            ext = GostExtensionParser.parseExtensionsFromSequence(certData, setPos);
-                        }
-                    }
+                int setPos = oidTlv[1];
+                if (setPos >= attrContentEnd || (certData[setPos] & 0xFF) != TAG_SET) {
+                    throw new IllegalArgumentException(
+                            "CSR attribute " + oid + " must contain a SET of values");
                 }
+                int[] setTlv = readTlv(certData, setPos, attrContentEnd);
+                if (setTlv[1] != attrContentEnd) {
+                    throw new IllegalArgumentException(
+                            "Trailing bytes after values of CSR attribute " + oid);
+                }
+                if (setTlv[0] >= setTlv[1]) {
+                    throw new IllegalArgumentException(
+                            "CSR attribute " + oid + " must have at least one value");
+                }
+                // Порядок элементов SET OF сознательно не проверяется: чужие кодировщики не всегда
+                // сортируют, подпись покрывает байты как есть, а отказ дал бы ложные отказы.
+                List<byte[]> values = new ArrayList<>();
+                List<int[]> valueBounds = new ArrayList<>();
+                int valuePos = setTlv[0];
+                while (valuePos < setTlv[1]) {
+                    int[] valueTlv = readTlv(certData, valuePos, setTlv[1]);
+                    values.add(Arrays.copyOfRange(certData, valuePos, valueTlv[1]));
+                    valueBounds.add(new int[] {valuePos, valueTlv[0], valueTlv[1]});
+                    valuePos = valueTlv[1];
+                }
+
+                if (matchesOid(
+                        certData, oidTlv[0], oidTlv[1] - oidTlv[0], EXTENSION_REQUEST_OID_BYTES)) {
+                    // extensionRequest: values SET { Extensions }. Повреждённая структура —
+                    // не «нет расширений»: молча потерять запрошенные расширения нельзя.
+                    if (valueBounds.size() != 1) {
+                        throw new IllegalArgumentException(
+                                "extensionRequest must contain exactly one Extensions value");
+                    }
+                    int extensionsStart = valueBounds.get(0)[0];
+                    if ((certData[extensionsStart] & 0xFF) != TAG_SEQUENCE) {
+                        throw new IllegalArgumentException(
+                                "extensionRequest SET must contain Extensions SEQUENCE");
+                    }
+                    ext =
+                            GostExtensionParser.parseExtensionsFromSequence(
+                                    certData, extensionsStart, valueBounds.get(0)[2]);
+                } else if (matchesOid(
+                        certData, oidTlv[0], oidTlv[1] - oidTlv[0], CHALLENGE_PASSWORD_OID_BYTES)) {
+                    // Пароль проверяется здесь, а не в геттере: CSR с некорректным паролем
+                    // отвергается целиком (fail-closed), даже если пароль вызывающему не нужен.
+                    if (valueBounds.size() != 1) {
+                        throw new IllegalArgumentException(
+                                "challengePassword must contain exactly one value");
+                    }
+                    int[] bounds = valueBounds.get(0);
+                    passwordTag = certData[bounds[0]] & 0xFF;
+                    passwordStart = bounds[1];
+                    passwordEnd = bounds[2];
+                    Arrays.fill(
+                            ChallengePasswordCodec.decode(
+                                    certData, passwordTag, passwordStart, passwordEnd),
+                            '\0');
+                }
+                parsedAttributes.add(new CsrAttribute(oid, values.toArray(new byte[0][])));
                 attrPos = attrSeqTlv[1];
             }
         }
         this.extResult = ext;
+        this.attributes = Collections.unmodifiableList(parsedAttributes);
+        this.passwordTag = passwordTag;
+        this.passwordStart = passwordStart;
+        this.passwordEnd = passwordEnd;
     }
 
     // ========================================================================
@@ -325,16 +409,87 @@ public final class GostCsrParser {
      * копирование {@code getExtensions()} в {@link GostCertificateBuilder} без
      * валидации небезопасно.</p>
      *
+     * <p>Результат - независимая копия: изменение возвращённых массивов не влияет на разобранный
+     * объект и на проверку цепочки.</p>
+     *
      * @return результат парсинга расширений из extensionRequest атрибута.
      *         {@link GostExtensionParser.ExtensionsResult#empty()} если атрибут отсутствует.
      */
     public GostExtensionParser.ExtensionsResult getExtensions() {
-        return extResult;
+        return extResult.copy();
     }
 
     /** @return true если CSR содержит атрибут extensionRequest с хотя бы одним расширением */
     public boolean hasExtensions() {
         return !extResult.presentExtensionOids.isEmpty();
+    }
+
+    // ========================================================================
+    // Атрибуты PKCS#10
+    // ========================================================================
+
+    /**
+     * Возвращает все атрибуты CSR в порядке следования в запросе, включая {@code extensionRequest}.
+     *
+     * <p><b>Секрет:</b> среди атрибутов может быть {@code challengePassword} в сыром виде,
+     * обращайтесь с ним как с секретом (новой утечки нет: пароль и так лежит в
+     * {@link #getEncoded()}).</p>
+     *
+     * @return неизменяемый список, пустой если атрибутов нет
+     */
+    public List<CsrAttribute> getAttributes() {
+        return attributes;
+    }
+
+    /**
+     * Возвращает атрибут по OID.
+     *
+     * <p>Может вернуть {@code challengePassword} в сыром виде, см. {@link #getAttributes()}.</p>
+     *
+     * @param oid OID в точечной нотации
+     * @return атрибут или пустой {@link Optional}, если его нет в CSR
+     * @throws IllegalArgumentException если {@code oid} не является корректным OID
+     */
+    public Optional<CsrAttribute> getAttribute(String oid) {
+        // Корректность OID проверяется сразу: опечатка не должна выглядеть как «атрибута нет».
+        // Сравниваются кодировки, а не строки: "01.2" и "1.2" - один и тот же OID.
+        byte[] wanted = DerCodec.encodeOid(oid);
+        for (CsrAttribute attribute : attributes) {
+            if (Arrays.equals(DerCodec.encodeOid(attribute.oid()), wanted)) {
+                return Optional.of(attribute);
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Возвращает значение атрибута {@code challengePassword} (RFC 2985 §5.4.1).
+     *
+     * <p>Принимаются все альтернативы {@code DirectoryString}: UTF8String, PrintableString,
+     * TeletexString (как ISO-8859-1), BMPString и UniversalString. Значение декодируется строго
+     * сразу в {@code char[]}, без промежуточной {@link String}: её копию затереть нельзя. При
+     * чтении алфавит PrintableString X.680 не проверяется (старые кодировщики кладут в него
+     * произвольный ASCII), при записи в {@link GostCsrBuilder} проверяется строго.</p>
+     *
+     * <p>Правила проверяются в конструкторе: CSR с некорректным паролем (нет одного значения,
+     * неверная кодировка, меньше 1 или больше 255 знаков либо байт, управляющие знаки)
+     * отвергается целиком, даже если вызывающему пароль не нужен. Поэтому метод после
+     * успешного разбора не бросает исключений. Каждый вызов декодирует заново и возвращает
+     * свежий массив, секрет в разборщике не кэшируется.</p>
+     *
+     * <p>Возвращённый массив затирает вызывающий. Сам CSR ({@link #getEncoded()},
+     * {@link #toPem()}) содержит пароль всегда. Серверу сравнивать значение нужно по
+     * декодированной последовательности знаков, а не по байтам: разные кодировки одного
+     * пароля иначе дадут ложный отказ.</p>
+     *
+     * @return пароль или пустой {@link Optional}, если атрибута нет
+     */
+    public Optional<char[]> getChallengePassword() {
+        if (passwordTag == NO_PASSWORD) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                ChallengePasswordCodec.decode(certData, passwordTag, passwordStart, passwordEnd));
     }
 
     // ========================================================================
@@ -358,6 +513,7 @@ public final class GostCsrParser {
 
         byte[] sigCopy = new byte[sigLen];
         System.arraycopy(certData, sigOff, sigCopy, 0, sigLen);
+        // Подпись неверной длины - не валидная подпись: verifyHash возвращает false
         return Signature.verifyHash(hash, sigCopy, key);
     }
 
@@ -371,12 +527,35 @@ public final class GostCsrParser {
     public boolean verifySelf() {
         boolean ok = verify(publicKey);
         if (!ok) {
+            // В предупреждении отпечаток открытого ключа вместо DN: у запроса нет серийного
+            // номера, а DN заявителя несёт персональные данные (ФИО, СНИЛС, ИНН), и WARNING
+            // включён по умолчанию. Усечённый DN доступен на DEBUG
             LOG.log(
                     Level.WARNING,
-                    "CSR proof-of-possession verification failed: subject={0}",
-                    subjectDnStr != null ? GostDnParser.truncateForLog(subjectDnStr, 128) : "null");
+                    "CSR proof-of-possession verification failed: publicKeyFingerprint={0}",
+                    publicKeyFingerprint());
+            if (LOG.isLoggable(Level.DEBUG)) {
+                LOG.log(
+                        Level.DEBUG,
+                        "CSR proof-of-possession verification failed: subject={0}",
+                        subjectDnStr != null
+                                ? GostDnParser.truncateForLog(
+                                        subjectDnStr, GostCertificate.DN_LOG_MAX_CHARS)
+                                : "null");
+            }
         }
         return ok;
+    }
+
+    /**
+     * Короткий отпечаток открытого ключа запроса для журнала: первые {@link #LOG_FINGERPRINT_LEN}
+     * байт Стрибога-256 от DER {@code SubjectPublicKeyInfo} в шестнадцатеричной записи.
+     * Идентифицирует запрос без персональных данных.
+     */
+    private String publicKeyFingerprint() {
+        byte[] spki = Arrays.copyOfRange(certData, spkiStart, spkiEnd);
+        byte[] hash = Digest.digest256(spki);
+        return CertificateTextFormatter.hex(Arrays.copyOf(hash, LOG_FINGERPRINT_LEN), false);
     }
 
     // ========================================================================
@@ -402,7 +581,7 @@ public final class GostCsrParser {
     @Override
     public String toString() {
         return "GostCsrParser{subject="
-                + GostDnParser.truncateForLog(subjectDnStr, 128)
+                + GostDnParser.truncateForLog(subjectDnStr, GostCertificate.DN_LOG_MAX_CHARS)
                 + ", algorithm="
                 + (publicKey.getParams().hlen * 8)
                 + "bit}";

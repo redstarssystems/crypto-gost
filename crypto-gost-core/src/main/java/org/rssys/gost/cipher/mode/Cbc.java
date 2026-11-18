@@ -1,6 +1,6 @@
 package org.rssys.gost.cipher.mode;
 
-import org.rssys.gost.cipher.BlockCipher;
+import java.util.Arrays;
 import org.rssys.gost.cipher.CipherParameters;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
@@ -9,7 +9,7 @@ import org.rssys.gost.util.DataLengthException;
 /**
  * Режим CBC (Cipher Block Chaining, простая замена с зацеплением) по ГОСТ Р 34.13-2015 §4.2.
  */
-public class Cbc extends AbstractStreamMode {
+public final class Cbc extends AbstractRegisterMode {
 
     private boolean forEncryption;
 
@@ -19,16 +19,14 @@ public class Cbc extends AbstractStreamMode {
     /** Scratch-буфер для decryptBlock (чтобы не использовать R как scratch). */
     private final byte[] scratchBuf;
 
+    /**
+     * Создаёт режим CBC (ГОСТ Р 34.13-2015) на шифре Кузнечик.
+     *
+     * @param cipher шифр Кузнечик
+     */
     public Cbc(Kuznyechik cipher) {
         super(cipher);
         this.kuz = cipher;
-        this.scratchBuf = new byte[blockSize];
-    }
-
-    /** Legacy: для CMAC, где BlockCipher передаётся через интерфейс. */
-    public Cbc(BlockCipher cipher) {
-        super(cipher);
-        this.kuz = cipher instanceof Kuznyechik ? (Kuznyechik) cipher : null;
         this.scratchBuf = new byte[blockSize];
     }
 
@@ -38,9 +36,6 @@ public class Cbc extends AbstractStreamMode {
         reset();
         ParametersWithIV ivParams = requireIV(params, "CBC");
         byte[] iv = ivParams.getIV();
-        if (iv.length < blockSize) {
-            throw new IllegalArgumentException("IV length must be >= block size");
-        }
         this.forEncryption = forEncryption;
         initRegister(iv);
         cipher.init(forEncryption, ivParams.getParameters());
@@ -68,30 +63,15 @@ public class Cbc extends AbstractStreamMode {
                 : decryptBlock(in, inOff, out, outOff);
     }
 
-    // CBC не является потоковым режимом — calculateByte не используется
-    @Override
-    protected byte calculateByte(byte in) {
-        throw new UnsupportedOperationException("CBC does not support byte-by-byte processing");
-    }
-
     private int encryptBlock(byte[] in, int inOff, byte[] out, int outOff) {
-        // C[i] = E(K, P[i] XOR C[i-1])
-        if (kuz != null) {
-            // fast path: zero-alloc через encryptToFields
-            long inHi = (long) LONG_BE.get(in, inOff);
-            long inLo = (long) LONG_BE.get(in, inOff + 8);
-            long rHi = (long) LONG_BE.get(R, 0);
-            long rLo = (long) LONG_BE.get(R, 8);
-            kuz.encryptToFields(inHi ^ rHi, inLo ^ rLo);
-            LONG_BE.set(out, outOff, kuz.getEncBufHi());
-            LONG_BE.set(out, outOff + 8, kuz.getEncBufLo());
-        } else {
-            // fallback для не-Kuznyechik шифров (CMAC): scratchBuf уже предзадан
-            for (int i = 0; i < blockSize; i++) {
-                scratchBuf[i] = (byte) (in[inOff + i] ^ R[i]);
-            }
-            cipher.processBlock(scratchBuf, 0, out, outOff);
-        }
+        // C[i] = E(K, P[i] XOR C[i-1]); zero-alloc через encryptToFields
+        long inHi = (long) LONG_BE.get(in, inOff);
+        long inLo = (long) LONG_BE.get(in, inOff + 8);
+        long rHi = (long) LONG_BE.get(R, 0);
+        long rLo = (long) LONG_BE.get(R, 8);
+        kuz.encryptToFields(inHi ^ rHi, inLo ^ rLo);
+        LONG_BE.set(out, outOff, kuz.getEncBufHi());
+        LONG_BE.set(out, outOff + 8, kuz.getEncBufLo());
         shiftRegister(out, outOff, blockSize);
         return blockSize;
     }
@@ -112,13 +92,13 @@ public class Cbc extends AbstractStreamMode {
     @Override
     public void reset() {
         resetRegister();
-        java.util.Arrays.fill(scratchBuf, (byte) 0);
+        Arrays.fill(scratchBuf, (byte) 0);
         cipher.reset();
     }
 
     @Override
     public void destroy() {
-        java.util.Arrays.fill(scratchBuf, (byte) 0);
+        Arrays.fill(scratchBuf, (byte) 0);
         super.destroy();
     }
 }

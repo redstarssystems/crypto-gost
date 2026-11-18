@@ -301,11 +301,11 @@ POST-запроса (X-Filename только для лога).
     export JAVA_HOME
     CDIR=$HOME/projects/crypto-gost
 
-    JAR=$CDIR/examples/jsse/target/examples-jsse-0.7.0-SNAPSHOT.jar
+    JAR=$CDIR/examples/jsse/target/examples-jsse-0.8.0-SNAPSHOT.jar
     CLASSPATH=$JAR
 
-    # Только 0.7.0+ — старые версии содержат ошибку
-    for jar in $(find $HOME/.m2/repository/org/rssys -name "*-0.7.0-SNAPSHOT.jar" \
+    # Только 0.8.0+ — старые версии содержат ошибку
+    for jar in $(find $HOME/.m2/repository/org/rssys -name "*-0.8.0.jar" \
         ! -name "*sources*" ! -name "*javadoc*" ! -name "*tests*"); do
         CLASSPATH=$CLASSPATH:$jar
     done
@@ -562,9 +562,9 @@ gost-curl — отдельный проект. Репозиторий:
 
     # 3. Подписать от тестового ЦА (через crypto-gost)
     cd ~/projects/crypto-gost
-    sudo java -cp examples/pkix/target/crypto-gost-pkix-examples-0.7.1.jar:\
-    crypto-gost-pkix/target/crypto-gost-pkix-0.7.0-SNAPSHOT.jar:\
-    crypto-gost-core/target/crypto-gost-core-0.7.0-SNAPSHOT.jar \
+    sudo java -cp examples/pkix/target/crypto-gost-pkix-examples-0.8.0-SNAPSHOT.jar:\
+    crypto-gost-pkix/target/crypto-gost-pkix-0.8.0-SNAPSHOT.jar:\
+    crypto-gost-core/target/crypto-gost-core-0.8.0-SNAPSHOT.jar \
       org.rssys.gost.pkix.examples.SignContainerCert \
       --container-cert /tmp/container-cert.cer \
       --ca-key /etc/angie/ca-key.pem \

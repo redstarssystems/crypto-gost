@@ -105,9 +105,9 @@ class JettyPskResumptionTest {
         port = connector.getLocalPort();
 
         // Явный клиентский session context — хранит PSK между соединениями.
-        // Используем конструктор (TlsCiphersuite, hashLen) как в GostSSLContextSpi.
+        // Используем конструктор (TlsCiphersuite) как в GostSSLContextSpi.
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
-        clientSessionCtx = new GostSSLSessionContext(cs, cs.getHashLen());
+        clientSessionCtx = new GostSSLSessionContext(cs);
 
         // Клиентские key/trust менеджеры — одни на оба соединения
         clientKm = helper.createKeyManager();

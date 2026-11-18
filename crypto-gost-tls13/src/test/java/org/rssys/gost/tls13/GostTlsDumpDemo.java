@@ -5,6 +5,8 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HexFormat;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
@@ -33,13 +35,15 @@ public class GostTlsDumpDemo {
         TlsCiphersuite cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
 
         // Генерируем самоподписанный ГОСТ-сертификат
-        TlsTestHelper.CertBundle bundle = TlsTestHelper.createCertWithKey(ECParameters.tc26a256());
+        PkixCertTestHelper.CertBundle bundle =
+                PkixCertTestHelper.createCertWithKey(ECParameters.tc26a256());
 
         TlsServerConfig serverConfig =
                 new TlsServerConfig(cs, Collections.singletonList(bundle.cert), bundle.priv);
 
         TlsClientConfig clientConfig =
-                new TlsClientConfig(cs, bundle.cert.getPublicKey()).withoutHostnameVerification();
+                new TlsClientConfig(cs, TrustAnchors.ofCertificate(bundle.cert))
+                        .withoutHostnameVerification();
 
         // Сервер на случайном порту
         ServerSocket serverSocket = new ServerSocket(0);

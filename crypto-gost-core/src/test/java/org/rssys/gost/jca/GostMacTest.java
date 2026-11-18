@@ -2,14 +2,15 @@ package org.rssys.gost.jca;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.security.Security;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.rssys.gost.JcaTestSupport;
+import org.rssys.gost.TestHex;
 import org.rssys.gost.api.CmacApi;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
@@ -17,18 +18,12 @@ import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.jca.key.GostSecretKey;
 
 @DisplayName("GostMacSpi — HMAC и CMAC через JCA Mac")
+@ExtendWith(JcaTestSupport.class)
 class GostMacTest {
 
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
     private static final byte[] DATA =
             "тест MAC ГОСТ".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
-    @BeforeAll
-    static void registerProvider() {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
-    }
 
     // -----------------------------------------------------------------------
     // HMAC-Стрибог — параметризованные тесты
@@ -190,24 +185,85 @@ class GostMacTest {
     }
 
     // -----------------------------------------------------------------------
+    // Неудачная инициализация: MAC считается неинициализированным
+    // -----------------------------------------------------------------------
+
+    @Test
+    @DisplayName("неудачный init с параметрами: прежний ключ не используется")
+    void failedInitWithParamsLeavesMacUninitialized() throws Exception {
+        Mac mac = initializedHmac();
+
+        assertThrows(
+                java.security.InvalidAlgorithmParameterException.class,
+                () ->
+                        mac.init(
+                                new SecretKeySpec(new byte[32], "HmacGOST3411-2012-256"),
+                                new javax.crypto.spec.IvParameterSpec(new byte[8])));
+
+        assertThrows(
+                IllegalStateException.class,
+                () -> mac.update(DATA),
+                "После неудачного init update не должен работать со старым ключом");
+        assertThrows(IllegalStateException.class, mac::doFinal);
+        assertDoesNotThrow(mac::reset, "reset не должен падать на неинициализированном MAC");
+    }
+
+    @Test
+    @DisplayName("неудачный init с неподдерживаемым ключом: прежний ключ не используется")
+    void failedInitWithUnsupportedKeyLeavesMacUninitialized() throws Exception {
+        Mac mac = initializedHmac();
+
+        assertThrows(java.security.InvalidKeyException.class, () -> mac.init(new NonSecretKey()));
+
+        assertThrows(IllegalStateException.class, () -> mac.update(DATA));
+        assertThrows(IllegalStateException.class, mac::doFinal);
+        assertDoesNotThrow(mac::reset);
+    }
+
+    @Test
+    @DisplayName("после неудачного init успешная повторная инициализация возвращает MAC в работу")
+    void successfulInitAfterFailedInitWorks() throws Exception {
+        Mac mac = initializedHmac();
+        assertThrows(java.security.InvalidKeyException.class, () -> mac.init(new NonSecretKey()));
+
+        mac.init(new SecretKeySpec(new byte[32], "HmacGOST3411-2012-256"));
+
+        assertEquals(32, mac.doFinal(DATA).length);
+    }
+
+    private static Mac initializedHmac() throws Exception {
+        Mac mac = Mac.getInstance("HmacGOST3411-2012-256", PROVIDER);
+        mac.init(new SecretKeySpec(new byte[32], "HmacGOST3411-2012-256"));
+        return mac;
+    }
+
+    /** Ключ, не являющийся SecretKey: GostMacSpi обязан его отвергнуть. */
+    private static final class NonSecretKey implements java.security.Key {
+        @Override
+        public String getAlgorithm() {
+            return "HmacGOST3411-2012-256";
+        }
+
+        @Override
+        public String getFormat() {
+            return "RAW";
+        }
+
+        @Override
+        public byte[] getEncoded() {
+            return new byte[32];
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Вспомогательные методы
     // -----------------------------------------------------------------------
 
     private static String toHex(byte[] bytes) {
-        StringBuilder sb = new StringBuilder(bytes.length * 2);
-        for (byte b : bytes) sb.append(String.format("%02x", b));
-        return sb.toString();
+        return TestHex.string(bytes);
     }
 
     private static byte[] fromHex(String hex) {
-        hex = hex.replaceAll("\\s+", "");
-        byte[] data = new byte[hex.length() / 2];
-        for (int i = 0; i < data.length; i++) {
-            data[i] =
-                    (byte)
-                            ((Character.digit(hex.charAt(i * 2), 16) << 4)
-                                    + Character.digit(hex.charAt(i * 2 + 1), 16));
-        }
-        return data;
+        return TestHex.bytes(hex);
     }
 }

@@ -13,16 +13,16 @@ import org.rssys.gost.api.Signature;
 import org.rssys.gost.jca.spec.GostDerCodec;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.util.DerCodec;
 
 /**
  * Генерация тестовых сертификатов с ГОСТ-ключами (CA + серверный).
  * <p>
- * DER-кодирование вручную (RFC 5280) — через {@link TlsTestHelper} и {@link DerCodec}.
+ * DER-кодирование вручную (RFC 5280) — через {@link PkixCertTestHelper} и {@link DerCodec}.
  * Вся криптография через crypto-gost-core (KeyGenerator, Signature).
  */
 public final class GostTestCerts {
@@ -36,7 +36,10 @@ public final class GostTestCerts {
      * приватный ключ сервера, публичный ключ CA.
      */
     public record CertChain(
-            List<GostCertificate> chain, PrivateKeyParameters key, PublicKeyParameters caKey) {
+            List<GostCertificate> chain,
+            PrivateKeyParameters key,
+            PublicKeyParameters caKey,
+            GostCertificate caCert) {
 
         /**
          * Конвертирует GostCertificate[] -> X509Certificate[] через
@@ -69,15 +72,25 @@ public final class GostTestCerts {
         PrivateKeyParameters caPriv = caKp.getPrivate();
         PublicKeyParameters caPub = caKp.getPublic();
 
-        byte[] caName = TlsTestHelper.buildDN("JsseTestRootCA " + (++certSerial));
+        byte[] caName = PkixCertTestHelper.buildDN("JsseTestRootCA " + (++certSerial));
         byte[] bcExt = buildBasicConstraintsExt(true);
-        GostCertificate caCert = createCert(caPriv, caPub, caPub, params, caName, caName, bcExt);
+        // Поле [3] содержит Extensions = SEQUENCE OF Extension (RFC 5280 §4.1),
+        // строгий разбор отвергает одиночное расширение без обёртки
+        GostCertificate caCert =
+                createCert(
+                        caPriv,
+                        caPub,
+                        caPub,
+                        params,
+                        caName,
+                        caName,
+                        PkixCertTestHelper.derSequence(bcExt));
 
         KeyPair serverKp = KeyGenerator.generateKeyPair(params);
         PrivateKeyParameters serverPriv = serverKp.getPrivate();
         PublicKeyParameters serverPub = serverKp.getPublic();
 
-        byte[] serverName = TlsTestHelper.buildDN("JsseTestServer " + (++certSerial));
+        byte[] serverName = PkixCertTestHelper.buildDN("JsseTestServer " + (++certSerial));
         byte[] sanExt = buildSanExt("localhost");
         byte[] kuExt = buildKeyUsageExt(new byte[] {(byte) 0x80});
         GostCertificate serverCert =
@@ -88,11 +101,11 @@ public final class GostTestCerts {
                         params,
                         caName,
                         serverName,
-                        TlsTestHelper.derSequence(sanExt, kuExt));
+                        PkixCertTestHelper.derSequence(sanExt, kuExt));
 
         List<GostCertificate> chain = new ArrayList<>();
         chain.add(serverCert);
-        return new CertChain(chain, serverPriv, caCert.getPublicKey());
+        return new CertChain(chain, serverPriv, caCert.getPublicKey(), caCert);
     }
 
     // ========================================================================
@@ -107,10 +120,10 @@ public final class GostTestCerts {
         String signOid = GostOids.PUBLIC_KEY_256;
         String curveOid = GostOids.CURVE_256A;
         String digestOid = GostOids.DIGEST_256;
-        return TlsTestHelper.derSequence(
-                TlsTestHelper.derOid(signOid),
-                TlsTestHelper.derSequence(
-                        TlsTestHelper.derOid(curveOid), TlsTestHelper.derOid(digestOid)));
+        return PkixCertTestHelper.derSequence(
+                PkixCertTestHelper.derOid(signOid),
+                PkixCertTestHelper.derSequence(
+                        PkixCertTestHelper.derOid(curveOid), PkixCertTestHelper.derOid(digestOid)));
     }
 
     // TBSCertificate (RFC 5280 §4.1.2): version [0], serial, sigAlg,
@@ -132,16 +145,16 @@ public final class GostTestCerts {
         out.write(buildAlgId(params));
         out.write(issuerDn);
         out.write(
-                TlsTestHelper.derSequence(
-                        TlsTestHelper.derTime("20250101120000Z"),
-                        TlsTestHelper.derTime("21060101120000Z")));
+                PkixCertTestHelper.derSequence(
+                        PkixCertTestHelper.derTime("20250101120000Z"),
+                        PkixCertTestHelper.derTime("21060101120000Z")));
         out.write(subjectDn);
         byte[] spki = GostDerCodec.encodePublicKey(pub);
         out.write(spki, 0, spki.length);
         if (additionalExtensions != null) {
             out.write(DerCodec.encodeTlv(TAG_CTX_3, additionalExtensions));
         }
-        return TlsTestHelper.derSequence(out.toByteArray());
+        return PkixCertTestHelper.derSequence(out.toByteArray());
     }
 
     // Certificate = SEQUENCE { tbs, signatureAlgId, signature }
@@ -156,28 +169,29 @@ public final class GostTestCerts {
             byte[] exts)
             throws Exception {
         byte[] tbs = buildTbs(subjectPub, params, issuerDn, subjectDn, exts);
-        byte[] hash = TlsTestHelper.doHash(tbs, 32);
+        byte[] hash = PkixCertTestHelper.doHash(tbs, 32);
         byte[] sig = Signature.signHash(hash, issuerPriv);
         byte[] certDer =
-                TlsTestHelper.derSequence(tbs, buildAlgId(params), TlsTestHelper.derBitString(sig));
+                PkixCertTestHelper.derSequence(
+                        tbs, buildAlgId(params), PkixCertTestHelper.derBitString(sig));
         return new GostCertificate(certDer);
     }
 
     // BasicConstraints (2.5.29.19): cA=TRUE для CA, cA=FALSE для остальных
     private static byte[] buildBasicConstraintsExt(boolean isCA) throws IOException {
         byte[] bc = isCA ? DerCodec.encodeTlv(0x01, new byte[] {(byte) 0xFF}) : new byte[0];
-        byte[] extValue = DerCodec.encodeOctetString(TlsTestHelper.derSequence(bc));
-        return TlsTestHelper.derSequence(
-                TlsTestHelper.derOid(GostOids.EXT_BC),
+        byte[] extValue = DerCodec.encodeOctetString(PkixCertTestHelper.derSequence(bc));
+        return PkixCertTestHelper.derSequence(
+                PkixCertTestHelper.derOid(GostOids.EXT_BC),
                 isCA ? DerCodec.encodeTlv(0x01, new byte[] {(byte) 0xFF}) : new byte[0],
                 extValue);
     }
 
     // KeyUsage (2.5.29.15): битовая маска с critical-флагом
     private static byte[] buildKeyUsageExt(byte[] kuBits) {
-        byte[] extValue = DerCodec.encodeOctetString(TlsTestHelper.derBitString(kuBits));
-        return TlsTestHelper.derSequence(
-                TlsTestHelper.derOid(GostOids.EXT_KU),
+        byte[] extValue = DerCodec.encodeOctetString(PkixCertTestHelper.derBitString(kuBits));
+        return PkixCertTestHelper.derSequence(
+                PkixCertTestHelper.derOid(GostOids.EXT_KU),
                 DerCodec.encodeTlv(0x01, new byte[] {(byte) 0xFF}),
                 extValue);
     }
@@ -188,7 +202,9 @@ public final class GostTestCerts {
         for (String name : dnsNames) {
             gn.write(DerCodec.encodeTlv(0x82, name.getBytes(StandardCharsets.US_ASCII)));
         }
-        byte[] extValue = DerCodec.encodeOctetString(TlsTestHelper.derSequence(gn.toByteArray()));
-        return TlsTestHelper.derSequence(TlsTestHelper.derOid(GostOids.EXT_SAN), extValue);
+        byte[] extValue =
+                DerCodec.encodeOctetString(PkixCertTestHelper.derSequence(gn.toByteArray()));
+        return PkixCertTestHelper.derSequence(
+                PkixCertTestHelper.derOid(GostOids.EXT_SAN), extValue);
     }
 }

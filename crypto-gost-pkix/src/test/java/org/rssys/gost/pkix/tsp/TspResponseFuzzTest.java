@@ -3,6 +3,7 @@ package org.rssys.gost.pkix.tsp;
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 
 /**
  * Fuzz-тесты для {@link TspResponse}.
@@ -15,9 +16,6 @@ import org.rssys.gost.pkix.cert.PkixException;
  * <p>ПОЧЕМУ два метода: {@code parse()} и {@code parseTimeStampToken()} парсят разные
  * ASN.1-структуры (TimeStampResp с PKIStatusInfo vs TimeStampToken = CMS SignedData
  * напрямую) — разные кодовые пути.
- *
- * <p>ПОЧЕМУ rethrowIfBug локально: пакет {@code tsp} не видит package-private
- * {@code FuzzTestUtils} из {@code cms}.
  */
 class TspResponseFuzzTest {
 
@@ -30,7 +28,7 @@ class TspResponseFuzzTest {
         } catch (PkixException e) {
             // ожидаемо: битый DER, неверная структура
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -43,25 +41,7 @@ class TspResponseFuzzTest {
         } catch (PkixException e) {
             // ожидаемо: битый DER, неверная структура
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    /**
-     * Перебрасывает RuntimeException, если это баг (AIOOBE, NPE,
-     * NegativeArraySizeException, IndexOutOfBoundsException,
-     * ClassCastException, ArithmeticException, BufferOverflowException).
-     * Иначе — проглатывает (ожидаемо для DER-парсинга на битом входе).
-     */
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException
-                || e instanceof ClassCastException
-                || e instanceof ArithmeticException
-                || e instanceof java.nio.BufferOverflowException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

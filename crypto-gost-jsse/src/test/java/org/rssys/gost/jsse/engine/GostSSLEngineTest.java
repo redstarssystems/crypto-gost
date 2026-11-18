@@ -15,19 +15,19 @@ import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsCiphersuite;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsSession;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.config.TlsServerConfig;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
 /**
  * Интеграционные тесты GostSSLEngine.
  */
+@DisplayName("GostSSLEngine: совместимость с TlsSession")
 class GostSSLEngineTest {
 
     private static GostCertificate serverCert;
@@ -35,16 +35,14 @@ class GostSSLEngineTest {
     private static TlsCiphersuite cs;
 
     private static GostCertificate caCert;
-    private static PrivateKeyParameters caPriv;
-    private static PublicKeyParameters caPub;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
         cs = TlsCiphersuite.TLS_GOST_2012_KUZNYECHIK_MGM_STREEBOG_256_L;
 
-        TlsTestHelper.CertBundle bundle =
-                TlsTestHelper.createCertWithKey(
+        PkixCertTestHelper.CertBundle bundle =
+                PkixCertTestHelper.createCertWithKey(
                         ECParameters.tc26a256(),
                         "20250101000000Z",
                         "21010101000000Z",
@@ -53,32 +51,9 @@ class GostSSLEngineTest {
         serverPriv = bundle.priv;
 
         // собственный CA для теста цепочки — нужна подпись, которой мы доверяем
-        TlsTestHelper.CertBundle caBundle = TlsTestHelper.createRootCA(ECParameters.tc26a256());
+        PkixCertTestHelper.CertBundle caBundle =
+                PkixCertTestHelper.createRootCA(ECParameters.tc26a256());
         caCert = caBundle.cert;
-        caPriv = caBundle.priv;
-        caPub = caCert.getPublicKey();
-    }
-
-    @Test
-    @DisplayName(
-            "GostSSLEngine после beginHandshake переходит в NEED_WRAP и генерирует ClientHello")
-    void testEngineProducesClientHello() throws Exception {
-        GostSSLEngine engine =
-                new GostSSLEngine(
-                        new GostX509KeyManager(),
-                        new GostX509TrustManager(null, false),
-                        "localhost",
-                        0,
-                        true);
-        engine.beginHandshake();
-        assertEquals(SSLEngineResult.HandshakeStatus.NEED_WRAP, engine.getHandshakeStatus());
-
-        ByteBuffer dst =
-                ByteBuffer.allocate(
-                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
-        SSLEngineResult r = engine.wrap(ByteBuffer.allocate(0), dst);
-        dst.flip();
-        assertTrue(dst.hasRemaining(), "wrap должен произвести данные");
     }
 
     @Test
@@ -104,7 +79,7 @@ class GostSSLEngineTest {
                         "tls-server");
         serverThread.start();
 
-        GostX509TrustManager trustManager = new GostX509TrustManager(null, false);
+        GostX509TrustManager trustManager = GostX509TrustManager.insecureTrustAll();
         GostX509KeyManager keyManager = new GostX509KeyManager();
         GostSSLEngine clientEngine =
                 GostSSLEngine.createForClient(keyManager, trustManager, "localhost", 0, null);
@@ -221,53 +196,5 @@ class GostSSLEngineTest {
             }
         }
         throw new RuntimeException("Рукопожатие не завершено за 50 итераций");
-    }
-
-    @Test
-    @DisplayName("TrustManager валидирует цепочку с реальным CA")
-    void testTrustManagerWithCA() throws Exception {
-        ECParameters params = ECParameters.tc26a256();
-        // собственный CA — нужна независимая подпись для теста валидации
-        TlsTestHelper.CertBundle rootCa = TlsTestHelper.createRootCA(params);
-        TlsTestHelper.CertBundle server =
-                TlsTestHelper.createCertSignedBy(
-                        params,
-                        rootCa.priv,
-                        rootCa.cert.getPublicKey(),
-                        rootCa.subjectDn,
-                        "240501120000Z",
-                        "290501120000Z",
-                        new String[] {"localhost"},
-                        new byte[] {(byte) 0x80},
-                        null,
-                        false,
-                        null);
-        java.security.cert.X509Certificate[] jcaChain =
-                org.rssys.gost.jsse.bridge.CertificateBridge.toJca(
-                        java.util.List.of(server.cert, rootCa.cert));
-        GostX509TrustManager trustManager =
-                new GostX509TrustManager(rootCa.cert.getPublicKey(), false);
-        trustManager.checkServerTrusted(jcaChain, "ECGOST3410-2012-256");
-    }
-
-    @Test
-    @DisplayName("OCSP staple через setOcspResponse")
-    void testOcspStapleViaSetter() throws Exception {
-        GostX509KeyManager km = new GostX509KeyManager();
-        GostX509TrustManager tm = new GostX509TrustManager(caPub, true);
-
-        GostSSLEngine engine = new GostSSLEngine(km, tm, "localhost", 0, false);
-        engine.beginHandshake();
-
-        byte[] dummyOcsp = TlsTestHelper.buildDummyOcspResponse();
-        engine.setOcspResponse(dummyOcsp);
-
-        assertNotNull(
-                engine.getOcspResponseForTest(),
-                "OCSP response должен быть установлен после setOcspResponse");
-        assertSame(
-                dummyOcsp,
-                engine.getOcspResponseForTest(),
-                "getOcspResponseForTest должен вернуть тот же массив (no clone)");
     }
 }

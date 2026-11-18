@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.TestHex;
 import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.mac.Hmac;
 
@@ -17,16 +18,7 @@ import org.rssys.gost.mac.Hmac;
 class Pbkdf2StreebogTest {
 
     private static byte[] hex(String s) {
-        s = s.replaceAll("\\s+", "");
-        int len = s.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] =
-                    (byte)
-                            ((Character.digit(s.charAt(i), 16) << 4)
-                                    | Character.digit(s.charAt(i + 1), 16));
-        }
-        return data;
+        return TestHex.bytes(s);
     }
 
     // ========================================================================

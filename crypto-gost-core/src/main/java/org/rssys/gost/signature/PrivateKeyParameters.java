@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.util.Arrays;
 import javax.security.auth.Destroyable;
 import org.rssys.gost.cipher.CipherParameters;
+import org.rssys.gost.util.Pack;
 
 /**
  * Параметры секретного ключа для алгоритма электронной подписи ГОСТ Р 34.10-2012.
@@ -17,6 +18,11 @@ import org.rssys.gost.cipher.CipherParameters;
  * Ограничение JVM: BigInteger, возвращаемый {@link #getD()}, останется в heap до GC.
  * Для минимизации времени жизни ключевого материала вызывайте {@link #destroy()} как
  * можно раньше после завершения криптографических операций.
+ * <p>
+ * <b>Потокобезопасность.</b> Объект не синхронизирован: {@link #destroy()} не должен пересекаться
+ * ни с одной операцией над ключом, в том числе с {@code Signature.sign}, который сам потокобезопасен
+ * только для неизменяемых и не уничтожаемых параллельно ключей. Параллельное уничтожение дало бы
+ * подпись под частично обнулённым ключом.
  */
 public final class PrivateKeyParameters implements CipherParameters, Destroyable {
     private byte[] dBytes;
@@ -30,22 +36,16 @@ public final class PrivateKeyParameters implements CipherParameters, Destroyable
     public PrivateKeyParameters(BigInteger d, ECParameters params) {
         if (d == null) throw new IllegalArgumentException("d must not be null");
         if (params == null) throw new IllegalArgumentException("params must not be null");
-        // Сохраняем как byte[] для возможности обнуления
-        byte[] raw = d.toByteArray();
-        // toByteArray() может содержать ведущий 0x00 для знакового представления — убираем
-        int rolen = (params.n.bitLength() + 7) / 8;
-        this.dBytes = new byte[rolen];
-        if (raw.length <= rolen) {
-            System.arraycopy(raw, 0, this.dBytes, rolen - raw.length, raw.length);
-        } else {
-            // обрезаем ведущий 0x00
-            System.arraycopy(raw, raw.length - rolen, this.dBytes, 0, rolen);
-        }
-        // Fail-fast: проверяем 0 < d < n после нормализации byte[]
-        BigInteger dNorm = new BigInteger(1, this.dBytes);
-        if (dNorm.signum() == 0 || dNorm.compareTo(params.n) >= 0) {
+        // Диапазон проверяется по исходному значению, до сериализации: иначе усечение до rolen байт
+        // превращает 2^(8·rolen)+5 в 5, а потеря знака превращает -1 в 255, и неверный скаляр
+        // проходит проверку как валидный ключ.
+        if (d.signum() <= 0 || d.compareTo(params.n) >= 0) {
             throw new IllegalArgumentException("d must satisfy 0 < d < n");
         }
+        // Сохраняем как byte[] для возможности обнуления
+        int rolen = (params.n.bitLength() + 7) / 8;
+        // строгое преобразование: 0 < d < n уже проверено, усечение старших байт невозможно
+        this.dBytes = Pack.toFixedLengthBigEndian(d, rolen);
         this.params = params;
     }
 
@@ -69,6 +69,25 @@ public final class PrivateKeyParameters implements CipherParameters, Destroyable
     public byte[] getDBytes() {
         if (destroyed) throw new IllegalStateException("PrivateKeyParameters has been destroyed");
         return Arrays.copyOf(dBytes, dBytes.length);
+    }
+
+    /**
+     * Вычисляет открытый ключ {@code Q = d·G}.
+     * <p>
+     * Внешних точек метод не принимает: {@code Q} считается из собственного {@code d}.
+     * Поэтому для зарегистрированных кривых принадлежность подгруппе гарантирована построением,
+     * и дорогая проверка {@code multiply(n)} на кривых с кофактором 4 не повторяется;
+     * принадлежность кривой проверяется всегда. Самодельная кривая или равная по значению
+     * копия проходит ту же проверку, что и внешний ключ: подгруппа проверяется по
+     * объявленному кофактору (при {@code h = 1} достаточно принадлежности кривой, при
+     * {@code h > 1} выполняется {@code multiply(n)}). Верность объявленного кофактора
+     * остаётся на совести создателя самодельных параметров.
+     *
+     * @return открытый ключ, соответствующий этому закрытому
+     * @throws IllegalStateException если закрытый ключ уничтожен
+     */
+    public PublicKeyParameters derivePublicKey() {
+        return PublicKeyParameters.derivedFrom(this);
     }
 
     public ECParameters getParams() {

@@ -5,13 +5,18 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.math.BigInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.rssys.gost.TestHex;
+import org.rssys.gost.jca.RssysGostProvider;
+import org.rssys.gost.jca.key.GostECPrivateKey;
+import org.rssys.gost.jca.key.GostECPublicKey;
+import org.rssys.gost.jca.spec.GostUkmParameterSpec;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.ECPoint;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.Pack;
 
-@DisplayName("KeyAgreement: ECDH shared secret")
+@DisplayName("KeyAgreement: общий секрет ECDH")
 class KeyAgreementTest {
 
     // ========================================================================
@@ -32,7 +37,7 @@ class KeyAgreementTest {
             hex("985A8659D55A8D48E0E6771396580B2CDCDA37E92AEE1814D10E1BF2A44F0D24");
 
     @Test
-    @DisplayName("KAT vector: CryptoPro-A, d=0x02×32")
+    @DisplayName("Контрольный вектор: CryptoPro-A, d=0x02×32")
     void sharedSecret_gc256b_kat() {
         ECParameters params = ECParameters.cryptoProA();
         PrivateKeyParameters clientPriv = new PrivateKeyParameters(D_C_GC256B, params);
@@ -356,6 +361,11 @@ class KeyAgreementTest {
     private static final byte[] KEK_VKO_TC26A512 =
             hex("c9a9a77320e2cc559ed72dce6f47e2192ccea95fa648670582c054c0ef36c221");
 
+    private static final byte[] KEK_VKO_512_TC26A512 =
+            hex(
+                    "79f002a96940ce7bde3259a52e015297adaad84597a0d205b50e3e1719f97bfa"
+                            + "7ee1d2661fa9979a5aa235b558a7e6d9f88f982dd63fc35a8ec0dd5e242d3bdf");
+
     @Test
     @DisplayName("VKO: UKM=1 даёт 32 байта для любой кривой")
     void vkoGostR3410_2012_256_length32() {
@@ -584,16 +594,7 @@ class KeyAgreementTest {
     }
 
     private static byte[] hex(String s) {
-        String cleaned = s.replaceAll("\\s+", "");
-        int len = cleaned.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] =
-                    (byte)
-                            ((Character.digit(cleaned.charAt(i), 16) << 4)
-                                    + Character.digit(cleaned.charAt(i + 1), 16));
-        }
-        return data;
+        return TestHex.bytes(s);
     }
 
     private static String hexStr(byte[] bytes) {
@@ -602,5 +603,204 @@ class KeyAgreementTest {
             sb.append(String.format("%02X", b & 0xFF));
         }
         return sb.toString();
+    }
+
+    /** Копия кривой с теми же p, n, hlen, но другим кофактором: прежняя эвристика p/n/hlen её не отличала. */
+    private static ECParameters lookalikeOf(ECParameters real) {
+        return new ECParameters(
+                real.p.toString(16),
+                real.a.toString(16),
+                real.b.toString(16),
+                real.gx.toString(16),
+                real.gy.toString(16),
+                real.n.toString(16),
+                real.hlen,
+                real.cofactor + 1);
+    }
+
+    private static PublicKeyParameters basePointKey(ECParameters params) {
+        return new PublicKeyParameters(ECPoint.affine(params.gx, params.gy, params), params);
+    }
+
+    @Test
+    @DisplayName("Самодельная кривая с теми же p, n, hlen, но другим кофактором -> отказ")
+    void sharedSecret_lookalikeCurveRejected() {
+        ECParameters real = ECParameters.cryptoProA();
+        KeyPair mine = KeyGenerator.generateKeyPair(real);
+        PublicKeyParameters foreignPub = basePointKey(lookalikeOf(real));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> KeyAgreement.computeSharedSecret(mine.getPrivate(), foreignPub),
+                "кривая с другим кофактором не должна считаться той же, что и у закрытого ключа");
+    }
+
+    @Test
+    @DisplayName("VKO-512 KAT: RFC 7836 Appendix B Test #8, tc26a512, UKM=8 байт")
+    void vkoGostR3410_2012_512_kat() {
+        ECParameters params = ECParameters.tc26a512();
+        PrivateKeyParameters privA = new PrivateKeyParameters(D_A_TC26A512, params);
+        PrivateKeyParameters privB = new PrivateKeyParameters(D_B_TC26A512, params);
+        PublicKeyParameters pubA = decodePublicKeyLe(Q_A_LE_TC26A512, params);
+        PublicKeyParameters pubB = decodePublicKeyLe(Q_B_LE_TC26A512, params);
+        BigInteger ukm = leBytesToBigInteger(UKM_8BYTES);
+
+        byte[] kekA = KeyAgreement.vkoGostR3410_2012_512(privA, pubB, ukm);
+        assertArrayEquals(
+                KEK_VKO_512_TC26A512,
+                kekA,
+                () -> "Ожидал " + hexStr(KEK_VKO_512_TC26A512) + ", получил " + hexStr(kekA));
+
+        byte[] kekB = KeyAgreement.vkoGostR3410_2012_512(privB, pubA, ukm);
+        assertArrayEquals(
+                KEK_VKO_512_TC26A512, kekB, "VKO-512 должен быть симметричным на эталонных ключах");
+    }
+
+    @Test
+    @DisplayName("VKO-512 на 256-битной кривой -> IllegalArgumentException, а VKO-256 работает")
+    void vko512_on256BitCurve_rejected() {
+        BigInteger ukm = BigInteger.valueOf(0x0102030405060708L);
+        for (ECParameters params :
+                new ECParameters[] {ECParameters.cryptoProA(), ECParameters.tc26a256()}) {
+            KeyPair mine = KeyGenerator.generateKeyPair(params);
+            KeyPair peer = KeyGenerator.generateKeyPair(params);
+            try {
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () ->
+                                KeyAgreement.vkoGostR3410_2012_512(
+                                        mine.getPrivate(), peer.getPublic(), ukm),
+                        "VKO-512 на 256-битной кривой должен быть отвергнут");
+                assertEquals(
+                        32,
+                        KeyAgreement.vkoGostR3410_2012_256(mine.getPrivate(), peer.getPublic(), ukm)
+                                .length,
+                        "VKO-256 на 256-битной кривой допустим");
+            } finally {
+                mine.getPrivate().destroy();
+                peer.getPrivate().destroy();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("JCA VKOGOST3410-2012-256 на 512-битных ключах: Пример 7 RFC 7836, 32 байта")
+    void jcaVko256_on512BitKeys_kat() throws Exception {
+        ECParameters params = ECParameters.tc26a512();
+        PrivateKeyParameters privA = new PrivateKeyParameters(D_A_TC26A512, params);
+        PublicKeyParameters pubB = decodePublicKeyLe(Q_B_LE_TC26A512, params);
+
+        javax.crypto.KeyAgreement agreement =
+                javax.crypto.KeyAgreement.getInstance(
+                        "VKOGOST3410-2012-256", new RssysGostProvider());
+        agreement.init(
+                new GostECPrivateKey(privA),
+                new GostUkmParameterSpec(leBytesToBigInteger(UKM_8BYTES)));
+        agreement.doPhase(new GostECPublicKey(pubB), true);
+        byte[] kek = agreement.generateSecret();
+
+        assertArrayEquals(
+                KEK_VKO_TC26A512,
+                kek,
+                () -> "Ожидал " + hexStr(KEK_VKO_TC26A512) + ", получил " + hexStr(kek));
+    }
+
+    @Test
+    @DisplayName("VKO-512: null ключи, UKM null/0/отрицательный -> IllegalArgumentException")
+    void vko512_argumentValidation() {
+        ECParameters params = ECParameters.tc26a512();
+        KeyPair mine = KeyGenerator.generateKeyPair(params);
+        KeyPair peer = KeyGenerator.generateKeyPair(params);
+        try {
+            PrivateKeyParameters priv = mine.getPrivate();
+            PublicKeyParameters pub = peer.getPublic();
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> KeyAgreement.vkoGostR3410_2012_512(null, pub, BigInteger.ONE),
+                    "null закрытый ключ");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> KeyAgreement.vkoGostR3410_2012_512(priv, null, BigInteger.ONE),
+                    "null открытый ключ");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> KeyAgreement.vkoGostR3410_2012_512(priv, pub, null),
+                    "UKM null");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> KeyAgreement.vkoGostR3410_2012_512(priv, pub, BigInteger.ZERO),
+                    "UKM ноль");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> KeyAgreement.vkoGostR3410_2012_512(priv, pub, BigInteger.ONE.negate()),
+                    "UKM отрицательный");
+        } finally {
+            mine.getPrivate().destroy();
+            peer.getPrivate().destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("VKO-512: уничтоженный закрытый ключ -> IllegalStateException")
+    void vko512_destroyedPrivate() {
+        ECParameters params = ECParameters.tc26a512();
+        PrivateKeyParameters priv = new PrivateKeyParameters(D_A_TC26A512, params);
+        PublicKeyParameters pub = decodePublicKeyLe(Q_B_LE_TC26A512, params);
+        priv.destroy();
+        assertThrows(
+                IllegalStateException.class,
+                () -> KeyAgreement.vkoGostR3410_2012_512(priv, pub, BigInteger.ONE),
+                "Уничтоженный ключ должен давать IllegalStateException");
+    }
+
+    @Test
+    @DisplayName("VKO-512: отказ по длине хэша кривой наступает после проверки аргументов")
+    void vko512_argumentChecksPrecedeCurveCheck() {
+        // null и UKM проверяются раньше кривой: 256-битные ключи с UKM=0 дают ошибку про UKM,
+        // а с корректным UKM - ошибку про кривую; обе IllegalArgumentException, различаем текстом
+        ECParameters params = ECParameters.cryptoProA();
+        KeyPair mine = KeyGenerator.generateKeyPair(params);
+        KeyPair peer = KeyGenerator.generateKeyPair(params);
+        try {
+            IllegalArgumentException zeroUkm =
+                    assertThrows(
+                            IllegalArgumentException.class,
+                            () ->
+                                    KeyAgreement.vkoGostR3410_2012_512(
+                                            mine.getPrivate(), peer.getPublic(), BigInteger.ZERO));
+            assertTrue(zeroUkm.getMessage().contains("UKM"), "ошибка про UKM: " + zeroUkm);
+            IllegalArgumentException curve =
+                    assertThrows(
+                            IllegalArgumentException.class,
+                            () ->
+                                    KeyAgreement.vkoGostR3410_2012_512(
+                                            mine.getPrivate(), peer.getPublic(), BigInteger.ONE));
+            assertFalse(curve.getMessage().contains("UKM"), "ошибка про кривую: " + curve);
+        } finally {
+            mine.getPrivate().destroy();
+            peer.getPrivate().destroy();
+        }
+    }
+
+    @Test
+    @DisplayName("VKO 256 и 512: самодельная кривая с другим кофактором -> отказ")
+    void vko_lookalikeCurveRejected() {
+        BigInteger ukm = BigInteger.valueOf(0x0102030405060708L);
+
+        ECParameters real256 = ECParameters.cryptoProA();
+        KeyPair mine256 = KeyGenerator.generateKeyPair(real256);
+        PublicKeyParameters foreign256 = basePointKey(lookalikeOf(real256));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> KeyAgreement.vkoGostR3410_2012_256(mine256.getPrivate(), foreign256, ukm),
+                "VKO 256: кривая с другим кофактором должна быть отвергнута");
+
+        ECParameters real512 = ECParameters.tc26a512();
+        KeyPair mine512 = KeyGenerator.generateKeyPair(real512);
+        PublicKeyParameters foreign512 = basePointKey(lookalikeOf(real512));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> KeyAgreement.vkoGostR3410_2012_512(mine512.getPrivate(), foreign512, ukm),
+                "VKO 512: кривая с другим кофактором должна быть отвергнута");
     }
 }

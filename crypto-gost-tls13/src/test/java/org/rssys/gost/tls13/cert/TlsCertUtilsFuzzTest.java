@@ -3,8 +3,9 @@ package org.rssys.gost.tls13.cert;
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.config.OIDFilter;
 
 /**
@@ -32,8 +33,8 @@ class TlsCertUtilsFuzzTest {
     static {
         // @BeforeAll не поддерживается Jazzer
         ECParameters params = ECParameters.tc26a256();
-        TlsTestHelper.CertBundle bundle =
-                TlsTestHelper.createCertWithKey(
+        PkixCertTestHelper.CertBundle bundle =
+                PkixCertTestHelper.createCertWithKey(
                         params,
                         "20250101000000Z",
                         "21010101000000Z",

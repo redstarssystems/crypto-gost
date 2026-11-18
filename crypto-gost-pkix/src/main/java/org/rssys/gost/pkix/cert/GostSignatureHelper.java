@@ -1,19 +1,21 @@
 package org.rssys.gost.pkix.cert;
 
-import java.time.DateTimeException;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.GostSigner;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
-import org.rssys.gost.pkix.util.GostLogger;
-import org.rssys.gost.pkix.util.GostLogger.Level;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.SignatureCodec;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.GostLogger;
+import org.rssys.gost.util.GostLogger.Level;
 
 /**
  * Вспомогательные методы для построения ГОСТ-подписей в X.509-объектах.
@@ -31,13 +33,23 @@ public final class GostSignatureHelper {
 
     private GostSignatureHelper() {}
 
+    private static final int UTC_TIME_LENGTH = 13;
+    private static final int GENERALIZED_TIME_LENGTH = 15;
+
     /** GeneralizedTime: YYYYMMDDHHMMSSZ (RFC 5280 §4.1.2.5.2). */
     private static final DateTimeFormatter GEN_TIME =
             DateTimeFormatter.ofPattern("yyyyMMddHHmmss'Z'").withZone(ZoneOffset.UTC);
 
-    /** UTCTime: YYMMDDHHMMSSZ (RFC 5280 §4.1.2.5.1). */
+    /**
+     * UTCTime: YYMMDDHHMMSSZ (RFC 5280 §4.1.2.5.1). База 1950 обязательна:
+     * RFC 5280 трактует 50..99 как 1950..1999, а 00..49 как 2000..2049.
+     */
     static final DateTimeFormatter UTC_TIME_FORMATTER =
-            DateTimeFormatter.ofPattern("yyMMddHHmmssX").withZone(ZoneOffset.UTC);
+            new DateTimeFormatterBuilder()
+                    .appendValueReduced(ChronoField.YEAR, 2, 2, 1950)
+                    .appendPattern("MMddHHmmssX")
+                    .toFormatter()
+                    .withZone(ZoneOffset.UTC);
 
     /** Текущее время в UTC как GeneralizedTime строка ("yyyyMMddHHmmssZ"). */
     public static String nowGeneralizedTime() {
@@ -52,6 +64,33 @@ public final class GostSignatureHelper {
     /** {@link Instant} в UTC как UTCTime строка ("yyMMddHHmmssZ"). */
     public static String formatUtcTime(Instant instant) {
         return instant.atZone(ZoneOffset.UTC).format(UTC_TIME_FORMATTER);
+    }
+
+    /**
+     * Время в кодировке по RFC 5280 §4.1.2.5: 1950..2049 — UTCTime,
+     * остальные годы — GeneralizedTime.
+     *
+     * @param instant момент времени
+     * @return строка ASN.1 Time без тега
+     */
+    public static String formatRfc5280Time(Instant instant) {
+        int year = instant.atZone(ZoneOffset.UTC).getYear();
+        return (year >= 1950 && year <= 2049)
+                ? formatUtcTime(instant)
+                : formatGeneralizedTime(instant);
+    }
+
+    /**
+     * Приводит строку ASN.1 Time к кодировке RFC 5280 §4.1.2.5.
+     *
+     * <p>Нужна builder'ам: они принимают и UTCTime, и GeneralizedTime, но
+     * в DER обязаны писать канонический для года вариант.</p>
+     *
+     * @param timeStr время в формате UTCTime или GeneralizedTime
+     * @return нормализованная строка ASN.1 Time
+     */
+    public static String normalizeRfc5280Time(String timeStr) {
+        return formatRfc5280Time(parseAsn1Time(timeStr));
     }
 
     /** Текущее время + n лет в UTC как GeneralizedTime строка. */
@@ -73,20 +112,20 @@ public final class GostSignatureHelper {
             throw new IllegalArgumentException("Time string must end with 'Z': " + timeStr);
         }
         int len = timeStr.length();
-        DateTimeFormatter fmt;
-        if (len == 13) {
-            fmt = UTC_TIME_FORMATTER;
-        } else if (len == 15) {
-            fmt = GEN_TIME;
+        boolean generalized;
+        if (len == UTC_TIME_LENGTH) {
+            generalized = false;
+        } else if (len == GENERALIZED_TIME_LENGTH) {
+            generalized = true;
         } else {
             throw new IllegalArgumentException(
                     "Time string must be 13 or 15 chars (UTCTime or GeneralizedTime): " + timeStr);
         }
-        try {
-            return Instant.from(fmt.parse(timeStr));
-        } catch (DateTimeException e) {
-            throw new IllegalArgumentException("Invalid time string: " + timeStr, e);
-        }
+        // Разбор общий с GostDerParser.parseTime: одна строгая трактовка даты на всю библиотеку.
+        // Символ вне ASCII превращается в '?' и отвергается как нецифра.
+        byte[] ascii = timeStr.getBytes(StandardCharsets.US_ASCII);
+        return Instant.ofEpochSecond(
+                GostDerParser.parseTimeSeconds(ascii, 0, ascii.length, generalized));
     }
 
     /**
@@ -216,13 +255,12 @@ public final class GostSignatureHelper {
         byte[] sig = signer.signHash(hash);
         // Длину проверяем тем же кодеком, что задаёт формат в контракте GostSigner.signHash,
         // чтобы формула rolen не дублировалась и не разошлась при будущих правках.
-        try {
-            SignatureCodec.decode(sig, signer.getParams());
-        } catch (IllegalArgumentException e) {
-            // Перевыброс как IllegalStateException: это дефект внешнего подписанта
-            // (вернул подпись неверной формы), а не ошибка аргумента вызывающего билдер.
+        if (!SignatureCodec.hasValidLength(sig, signer.getParams())) {
+            // Это дефект внешнего подписанта (вернул подпись неверной формы), а не ошибка
+            // аргумента вызывающего билдер, поэтому IllegalStateException.
             throw new IllegalStateException(
-                    "GostSigner returned malformed signature: " + e.getMessage(), e);
+                    "GostSigner returned malformed signature: length "
+                            + (sig == null ? "null" : sig.length));
         }
         if (!Signature.verifyHash(hash, sig, signer.getPublicKey())) {
             LOG.log(

@@ -34,6 +34,13 @@
         </dependency>
         <dependency>
             <groupId>org.rssys</groupId>
+            <artifactId>crypto-gost-pkix</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.rssys</groupId>
             <artifactId>gost-crossval-utils</artifactId>
             <version>${project.version}</version>
             <optional>true</optional>

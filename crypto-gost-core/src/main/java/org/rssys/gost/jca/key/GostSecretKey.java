@@ -40,6 +40,12 @@ public final class GostSecretKey implements SecretKey, Destroyable {
 
     private static final long serialVersionUID = 1L;
 
+    /** Имя алгоритма ключа шифра Кузнечик в JCA. */
+    public static final String KUZNYECHIK = "Kuznyechik";
+
+    /** Альтернативное имя Кузнечика (ГОСТ Р 34.12-2015), зарегистрированное в провайдере как псевдоним. */
+    public static final String GOST3412_2015 = "GOST3412-2015";
+
     /** Название алгоритма: "Kuznyechik", "HmacGOST3411-2012-256" и т.п. */
     private final String algorithm;
 
@@ -70,14 +76,7 @@ public final class GostSecretKey implements SecretKey, Destroyable {
      * @throws IllegalArgumentException если {@code algorithm} пустой или {@code keyBytes} пустой
      */
     public GostSecretKey(String algorithm, byte[] keyBytes) {
-        if (algorithm == null || algorithm.isEmpty()) {
-            throw new IllegalArgumentException("Algorithm name must not be null or empty");
-        }
-        if (keyBytes == null || keyBytes.length == 0) {
-            throw new IllegalArgumentException("Key bytes must not be null or empty");
-        }
-        this.algorithm = algorithm;
-        this.keyBytes = Arrays.copyOf(keyBytes, keyBytes.length);
+        this(keyBytes == null ? null : keyBytes.clone(), algorithm);
     }
 
     /**
@@ -89,7 +88,32 @@ public final class GostSecretKey implements SecretKey, Destroyable {
      * @throws IllegalStateException если {@code keyParam} уже уничтожен
      */
     public GostSecretKey(String algorithm, SymmetricKey keyParam) {
-        this(algorithm, keyParam.getKey());
+        // getKey() отдаёт свежую копию: берём её во владение, а не копируем повторно, иначе
+        // промежуточная копия осталась бы в куче незатёртой
+        this(keyParam.getKey(), algorithm);
+    }
+
+    /**
+     * Принимает {@code ownedKeyBytes} во владение без копирования: вызывающий передаёт массив,
+     * который нигде больше не используется.
+     */
+    private GostSecretKey(byte[] ownedKeyBytes, String algorithm) {
+        if (algorithm == null || algorithm.isEmpty()) {
+            throw wipedFailure(ownedKeyBytes, "Algorithm name must not be null or empty");
+        }
+        if (ownedKeyBytes == null || ownedKeyBytes.length == 0) {
+            throw wipedFailure(ownedKeyBytes, "Key bytes must not be null or empty");
+        }
+        this.algorithm = algorithm;
+        this.keyBytes = ownedKeyBytes;
+    }
+
+    /** Затирает принятую копию ключа перед отказом: иначе она осталась бы в куче. */
+    private static IllegalArgumentException wipedFailure(byte[] ownedKeyBytes, String message) {
+        if (ownedKeyBytes != null) {
+            Arrays.fill(ownedKeyBytes, (byte) 0);
+        }
+        return new IllegalArgumentException(message);
     }
 
     /** @return имя алгоритма, например {@code "Kuznyechik"} */

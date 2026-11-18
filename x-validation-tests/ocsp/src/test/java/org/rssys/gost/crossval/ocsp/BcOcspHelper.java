@@ -24,20 +24,18 @@ import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.CertIdHasher;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.CryptoRandom;
 
 /**
  * Stateless хелпер для OCSP-операций с BouncyCastle.
  *
- * <h3>Известное ограничение: issuerKeyHash</h3>
- * {@code OcspVerifier.verify()} вычисляет issuerKeyHash как хэш полного
- * value BIT STRING SubjectPublicKeyInfo (включая unused-bits байт — RFC 6960 §4.1.1).
- * BC {@code CertificateID} использует {@code DERBitString.getBytes()}, который
- * отбрасывает unused-bits байт. Из-за этого расхождения issuerKeyHash от BC
- * и от библиотеки не совпадают, и {@code OcspVerifier.verify()} отклоняет
- * BC-построенные OCSP-ответы с ошибкой {@code issuerKeyHash mismatch}.
- * Методы с суффиксом {@code WithGostCertId} вычисляют хэши через
- * {@link CertIdHasher} и обходят это ограничение — обеспечивают
- * кросс-инструментальное покрытие {@code verify()}.
+ * <h3>issuerKeyHash</h3>
+ * По RFC 6960 §4.1.1 issuerKeyHash — хэш значения subjectPublicKey без тега, длины и октета
+ * неиспользуемых бит; {@link CertIdHasher} считает именно так (для 256-битного ГОСТ-ключа это
+ * {@code 04 40 || x || y}, как в примере приложения В Р 1323565.1.059-2024).
+ * Методы с суффиксом {@code WithGostCertId} берут хэши CertID у {@link CertIdHasher},
+ * а не у BC {@code CertificateID}, чтобы ответ гарантированно проходил
+ * {@code OcspVerifier.verify()} и покрывал его кросс-инструментально.
  */
 final class BcOcspHelper {
 
@@ -52,7 +50,7 @@ final class BcOcspHelper {
                 ? "Tc26-Gost-3410-12-256-paramSetA"
                 : "Tc26-Gost-3410-12-512-paramSetA";
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", "BC");
-        kpg.initialize(new ECNamedCurveGenParameterSpec(curveName), new SecureRandom());
+        kpg.initialize(new ECNamedCurveGenParameterSpec(curveName), CryptoRandom.INSTANCE);
         return kpg.generateKeyPair();
     }
 
@@ -174,7 +172,7 @@ final class BcOcspHelper {
     /**
      * Строит OCSP-ответ через BC с ГОСТ-совместимым CertID —
      * issuerNameHash и issuerKeyHash вычислены через {@link CertIdHasher}
-     * (с unused-bits байтом BIT STRING), а не через BC {@code CertificateID}.
+     * (хэш значения BIT STRING без октета неиспользуемых бит), а не через BC {@code CertificateID}.
      * Позволяет {@code OcspVerifier.verify()} успешно проверить ответ.
      */
     static byte[] buildBcOcspResponseWithGostCertId(
@@ -214,7 +212,7 @@ final class BcOcspHelper {
         BigInteger serial = new BigInteger(1, leafGc.getSerialNumber());
         GostCertificate caGc = new GostCertificate(caCertDer);
 
-        // ГОСТ-совместимые хэши CertID (с unused-bits байтом BIT STRING)
+        // Хэши CertID по CertIdHasher (ключ без октета неиспользуемых бит, RFC 6960 §4.1.1)
         byte[] issuerNameHash = CertIdHasher.hashIssuerName(caGc);
         byte[] issuerKeyHash = CertIdHasher.hashIssuerPublicKey(caGc);
 
@@ -247,8 +245,7 @@ final class BcOcspHelper {
 
         Extensions responseExts = null;
         if (nonce != null) {
-            responseExts = new Extensions(new Extension(
-                    OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false, nonce));
+            responseExts = new Extensions(nonceExtension(nonce));
         }
         if (responseExts != null) {
             builder.setResponseExtensions(responseExts);
@@ -339,8 +336,7 @@ final class BcOcspHelper {
 
         Extensions responseExts = null;
         if (nonce != null) {
-            responseExts = new Extensions(new Extension(
-                    OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false, nonce));
+            responseExts = new Extensions(nonceExtension(nonce));
         }
         if (responseExts != null) {
             builder.setResponseExtensions(responseExts);
@@ -386,22 +382,30 @@ final class BcOcspHelper {
         return ocspResp.getEncoded();
     }
 
+    /** Запрос BC: DER и nonce (сырые байты значения Nonce), который BC положил в запрос. */
+    record BcOcspRequest(byte[] der, byte[] nonce) {}
+
     /**
      * Строит OCSP-запрос через BC OCSPReqBuilder.
      */
     static byte[] buildBcOcspRequest(byte[] leafCertDer, byte[] caCertDer) throws Exception {
+        return buildBcOcspRequestWithNonce(leafCertDer, caCertDer).der();
+    }
+
+    static BcOcspRequest buildBcOcspRequestWithNonce(byte[] leafCertDer, byte[] caCertDer)
+            throws Exception {
         return buildBcOcspRequestImpl(leafCertDer, caCertDer,
                 createStreebog256DigestCalculator(), true);
     }
 
     static byte[] buildBcOcspRequestSha256(byte[] leafCertDer, byte[] caCertDer) throws Exception {
         return buildBcOcspRequestImpl(leafCertDer, caCertDer,
-                createSha256DigestCalculator(), false);
+                createSha256DigestCalculator(), false).der();
     }
 
-    private static byte[] buildBcOcspRequestImpl(byte[] leafCertDer, byte[] caCertDer,
-                                                  DigestCalculator digestCalc,
-                                                  boolean includeNonce) throws Exception {
+    private static BcOcspRequest buildBcOcspRequestImpl(byte[] leafCertDer, byte[] caCertDer,
+                                                         DigestCalculator digestCalc,
+                                                         boolean includeNonce) throws Exception {
         GostCertificate leafGc = new GostCertificate(leafCertDer);
         BigInteger serial = new BigInteger(1, leafGc.getSerialNumber());
 
@@ -414,15 +418,26 @@ final class BcOcspHelper {
         OCSPReqBuilder builder = new OCSPReqBuilder();
         builder.addRequest(certId);
 
+        byte[] nonceVal = null;
         if (includeNonce) {
-            byte[] nonceVal = new byte[16];
-            new SecureRandom().nextBytes(nonceVal);
-            Extensions exts = new Extensions(new Extension(
-                    OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false, nonceVal));
-            builder.setRequestExtensions(exts);
+            nonceVal = new byte[16];
+            CryptoRandom.INSTANCE.nextBytes(nonceVal);
+            builder.setRequestExtensions(new Extensions(nonceExtension(nonceVal)));
         }
 
-        return builder.build().getEncoded();
+        return new BcOcspRequest(builder.build().getEncoded(), nonceVal);
+    }
+
+    /**
+     * Расширение id-pkix-ocsp-nonce с корректной двойной обёрткой (RFC 8954).
+     *
+     * <p>Конструктор {@code Extension(oid, critical, byte[])} кладёт байты в extnValue как есть,
+     * поэтому внутренний OCTET STRING с Nonce кодируем явно; перегрузка с
+     * {@code ASN1OctetString} дала бы тот же один уровень.
+     */
+    static Extension nonceExtension(byte[] nonce) throws java.io.IOException {
+        return new Extension(OCSPObjectIdentifiers.id_pkix_ocsp_nonce, false,
+                new org.bouncycastle.asn1.DEROctetString(nonce).getEncoded());
     }
 
     // ========================================================================

@@ -10,8 +10,12 @@
 реализации стандартов. Библиотека написана мной для личных проектов и в
 академических целях. Лицензия полностью разрешительная. Использование
 библиотеки для любых проектов лицензия не запрещает, но каждому
-разработчику необходимо руководствоваться юридическими нормами для вашей
-конкретной организации, ситуации и проекта.**
+разработчику необходимо руководствоваться рисками, а также юридическими
+нормами для вашей конкретной организации и проекта.**
+
+**Библиотека до версии 0.7.1 включительно имеет критические уязвимости!
+Необходимо обновиться как минимум до 0.8.0. Смотри CHANGELOG за
+подробностями.**
 
 Библиотека состоит из модулей:
 
@@ -32,7 +36,7 @@
 - `crypto-gost-core` - криптографическое ядро алгоритмов ГОСТ: Стрибог,
   Кузнечик, ГОСТ Р 34.10-2012, JCA-провайдер.
 
-**Целевая JDK при сборке модулей библиотеки: JDK 21 и Android 12+ (кроме
+**Целевая JDK при сборке модулей библиотеки: JDK 21 и Android 14+ (кроме
 Netty)**.
 
 Основной репозиторий хранения исходного кода и артефактов:
@@ -111,25 +115,25 @@ Netty)**.
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-core</artifactId>
-        <version>0.7.1</version>
+        <version>0.8.0</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-tls13</artifactId>
-        <version>0.7.1</version>
+        <version>0.8.0</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-jsse</artifactId>
-        <version>0.7.1</version>
+        <version>0.8.0</version>
     </dependency>
 
     <dependency>
         <groupId>org.rssys</groupId>
         <artifactId>crypto-gost-pkix</artifactId>
-        <version>0.7.1</version>
+        <version>0.8.0</version>
     </dependency>
 
 - **Для Android.** Подключитесь к Maven-репозиторию GitFlic и добавьте
@@ -145,10 +149,10 @@ Netty)**.
 
 Зависимости:
 
-    implementation("org.rssys:crypto-gost-core-android:0.7.1")
-    implementation("org.rssys:crypto-gost-pkix-android:0.7.1")
-    implementation("org.rssys:crypto-gost-tls13-android:0.7.1")
-    implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
+    implementation("org.rssys:crypto-gost-core-android:0.8.0")
+    implementation("org.rssys:crypto-gost-pkix-android:0.8.0")
+    implementation("org.rssys:crypto-gost-tls13-android:0.8.0")
+    implementation("org.rssys:crypto-gost-jsse-android:0.8.0")
 
 - **Способ 2.** Клонируйте репозиторий и выполните сборку и установку в
   локальный .m2:  
@@ -160,7 +164,7 @@ Netty)**.
   При необходимости проверить подпись релизного тега можно так:
 
       gpg --import KEYS
-      gpg -v v0.7.1
+      gpg -v v0.8.0
 
 # Методики кросс-валидации
 
@@ -285,11 +289,13 @@ BouncyCastle.
 Код данной библиотеки разработан с учетом текущих требований по
 безопасности. Реализация претендует на соответствие стандартам ГОСТ и
 RFC, но это никто не проверял. Арифметика эллиптических кривых приведена
-в сторону безопасности, число `k` выполнено детерминированным (не путать
-с константным) по RFC 6979 вместо `SecureRandom`, ускорены алгоритмы
-шифрования. Устранены все найденные утечки по сторонним каналам,
-намколько это возможно на чистой Java. В данной реализации библиотеке
-упала скорость электронной подписи в угоду безопасности.
+в сторону безопасности, число `k` по умолчанию вырабатывается гибридно:
+HMAC-DRBG по схеме RFC 6979 с затравкой из числа `e` уравнения подписи
+плюс свежие случайные байты (воспроизводимый детерминированный режим
+включается явно), без опоры на качество `SecureRandom`, ускорены
+алгоритмы шифрования. Устранены все найденные утечки по сторонним
+каналам, насколько это возможно на чистой Java. В данной реализации
+библиотеке упала скорость электронной подписи в угоду безопасности.
 
 ## Улучшения в безопасности электронной подписи в crypto-gost
 
@@ -375,14 +381,16 @@ k</p></td>
 <td style="text-align: left;"><p>Генерация эфемерного ключа
 <em>k</em></p></td>
 <td style="text-align: center;"><p>Защищено<br />
-RFC 6979 (детерминированный HMAC-DRBG)</p></td>
+RFC 6979 (HMAC-DRBG) + свежие случайные байты (гибридный режим по
+умолчанию)</p></td>
 <td style="text-align: center;"><p><code>SecureRandom</code><br />
 (зависит от ГСЧ и окружения)</p></td>
 </tr>
 <tr>
 <td style="text-align: left;"><p>Устойчивость к атакам на RNG</p></td>
 <td style="text-align: center;"><p>Защищено<br />
-(<em>k</em> не зависит от ГСЧ/RNG)</p></td>
+(слабый или повторяющийся ГСЧ даёт подпись не хуже детерминированной:
+ключ и <em>e</em> остаются во входе <em>k</em>)</p></td>
 <td style="text-align: center;"><p>Зависит от качества источника
 энтропии в окружении.</p></td>
 </tr>
@@ -477,7 +485,7 @@ style="text-align: center;"><p><code>ECAlgorithms.implShamirsTrickWNaf</code>,<b
 
 В каталоге *android-demo/* находится тестовое Android-приложение
 (instrumented tests) для проверки библиотеки на реальном ART (Android
-Runtime). Запускается на эмуляторе API 31+ или физическом устройстве.
+Runtime). Запускается на эмуляторе API 34+ или физическом устройстве.
 
 ## Работа с Android
 
@@ -509,7 +517,7 @@ Runtime). Запускается на эмуляторе API 31+ или физи
 
 Запуск headless-эмулятора (если не запущен):
 
-    emulator -avd test_api31 -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim &
+    emulator -avd test_api34 -no-window -gpu swiftshader_indirect -no-audio -no-boot-anim &
 
 ### Сборка и установка APK
 
@@ -555,10 +563,10 @@ Runtime). Запускается на эмуляторе API 31+ или физи
 `android-demo/app/build.gradle.kts` блок `implementation(files(...))` на
 зависимости с Maven-координатами. Например:
 
-    implementation("org.rssys:crypto-gost-core-android:0.7.1")
-    implementation("org.rssys:crypto-gost-pkix-android:0.7.1")
-    implementation("org.rssys:crypto-gost-tls13-android:0.7.1")
-    implementation("org.rssys:crypto-gost-jsse-android:0.7.1")
+    implementation("org.rssys:crypto-gost-core-android:0.8.0")
+    implementation("org.rssys:crypto-gost-pkix-android:0.8.0")
+    implementation("org.rssys:crypto-gost-tls13-android:0.8.0")
+    implementation("org.rssys:crypto-gost-jsse-android:0.8.0")
 
 и выполните сборку:
 

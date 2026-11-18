@@ -1,16 +1,11 @@
 package org.rssys.gost.tls13;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.rssys.gost.tls13.TlsTestHelper.hex;
-import static org.rssys.gost.tls13.TlsTestHelper.hexStr;
+import static org.rssys.gost.pkix.cert.PkixCertTestHelper.hex;
+import static org.rssys.gost.pkix.cert.PkixCertTestHelper.hexStr;
 
-import java.math.BigInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.ECPoint;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.cert.*;
 import org.rssys.gost.tls13.config.*;
 import org.rssys.gost.tls13.crypto.*;
@@ -29,7 +24,7 @@ import org.rssys.gost.tls13.record.*;
  */
 public class TlsKATExample1Test {
 
-    // hex/hexStr утилиты вынесены в TlsTestHelper
+    // hex/hexStr утилиты вынесены в PkixCertTestHelper
 
     // ========================================================================
     // Исходные данные (RFC 9367 A.1.2)
@@ -501,76 +496,5 @@ public class TlsKATExample1Test {
                 SERVER_VERIFY_DATA, ks.computeVerifyData(SHTS, HM_FINISHED), "verify_data сервера");
         assertArrayEquals(
                 CLIENT_VERIFY_DATA, ks.computeVerifyData(CHTS, HM2), "verify_data клиента");
-    }
-
-    // ========================================================================
-    // Фаза 6: ECDHE shared secret (RFC 9367 §6.1.1)
-    // ========================================================================
-
-    // Example 2: GC256B, d_C = 0x02×32
-    private static final BigInteger D_C_GC256B =
-            new BigInteger(
-                    1, hex("0202020202020202020202020202020202020202020202020202020202020202"));
-
-    // Q_S для GC256B (LE X || LE Y, 64 байта)
-    private static final byte[] Q_S_LE_GC256B =
-            hex(
-                    "3D2FB067E106CC9980FB8842811164BA708BBB5038D5EDFBEE1D5E5DFBE6F74F"
-                            + "1931217C67C2BDF46253DB9CE3487241F2DBD84E2DABDF65455851B0B19AEFEC");
-
-    // Пример 2: ожидаемый ECDHE shared secret (LE X, 32 байта)
-    private static final byte[] ECDHE_GC256B =
-            hex("985A8659D55A8D48E0E6771396580B2CDCDA37E92AEE1814D10E1BF2A44F0D24");
-
-    @Test
-    @DisplayName("ECDHE общий секрет: пример 2, GC256B")
-    void testEcdheExample2() throws Exception {
-        int hlen = 32;
-        ECParameters params = ECParameters.cryptoProA();
-        PrivateKeyParameters clientPriv = new PrivateKeyParameters(D_C_GC256B, params);
-
-        byte[] xLe = new byte[hlen];
-        byte[] yLe = new byte[hlen];
-        System.arraycopy(Q_S_LE_GC256B, 0, xLe, 0, hlen);
-        System.arraycopy(Q_S_LE_GC256B, hlen, yLe, 0, hlen);
-        byte[] xBe = org.rssys.gost.util.Pack.reverseBytes(xLe);
-        byte[] yBe = org.rssys.gost.util.Pack.reverseBytes(yLe);
-        ECPoint serverQ = ECPoint.affine(new BigInteger(1, xBe), new BigInteger(1, yBe), params);
-        PublicKeyParameters serverPub = new PublicKeyParameters(serverQ, params);
-
-        byte[] shared = computeEcdheShared(clientPriv, serverPub, hlen);
-        assertArrayEquals(
-                ECDHE_GC256B,
-                shared,
-                () -> "Ожидал " + hexStr(ECDHE_GC256B) + ", получил " + hexStr(shared));
-    }
-
-    // Локальная копия метода, удалённого из TlsEncoding при реструктуризации
-    private static byte[] computeEcdheShared(
-            PrivateKeyParameters myPriv, PublicKeyParameters peerPub, int hashLen)
-            throws Exception {
-        org.rssys.gost.signature.ECPoint shared = peerPub.getQ().multiply(myPriv.getD());
-        shared = shared.normalize();
-        if (shared.isInfinity()) {
-            throw new TlsException(
-                    TlsConstants.ALERT_HANDSHAKE_FAILURE,
-                    "ECDHE shared secret is point at infinity");
-        }
-        java.math.BigInteger x = shared.getX();
-        byte[] xRawBe = toFixedLengthBytes(x, hashLen);
-        byte[] xRawLe = org.rssys.gost.util.Pack.reverseBytes(xRawBe);
-        return xRawLe;
-    }
-
-    private static byte[] toFixedLengthBytes(java.math.BigInteger value, int len) {
-        byte[] raw = value.toByteArray();
-        if (raw.length == len) return raw;
-        byte[] result = new byte[len];
-        if (raw.length < len) {
-            System.arraycopy(raw, 0, result, len - raw.length, raw.length);
-        } else {
-            System.arraycopy(raw, raw.length - len, result, 0, len);
-        }
-        return result;
     }
 }

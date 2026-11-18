@@ -1,9 +1,7 @@
 package org.rssys.gost.tls13.engine;
 
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import org.rssys.gost.digest.Digest;
 import org.rssys.gost.digest.Streebog256;
@@ -12,7 +10,6 @@ import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
 import org.rssys.gost.tls13.TlsUtils;
-import org.rssys.gost.tls13.config.OIDFilter;
 import org.rssys.gost.tls13.crypto.TlsKeySchedule;
 
 /**
@@ -38,8 +35,6 @@ public final class HandshakeContext {
     private int transcriptSize;
     private Digest hsDigest;
     private TlsKeySchedule keySchedule;
-    private List<byte[]> acceptedCaDns = Collections.emptyList();
-    private List<OIDFilter> oidFilters = Collections.emptyList();
 
     public HandshakeContext(int hashLen) {
         this.hsDigest =
@@ -66,11 +61,6 @@ public final class HandshakeContext {
         return ecdheKeyMap.get(namedGroup);
     }
 
-    /** Проверяет, есть ли ECDHE-ключ для указанной группы. */
-    public boolean hasEcdheKey(int namedGroup) {
-        return ecdheKeyMap.containsKey(namedGroup);
-    }
-
     /** Затирает и удаляет все ECDHE-ключи из multi key_share. */
     public void destroyEcdheKeys() {
         for (PrivateKeyParameters key : ecdheKeyMap.values()) {
@@ -93,25 +83,6 @@ public final class HandshakeContext {
 
     public TlsKeySchedule getKeySchedule() {
         return keySchedule;
-    }
-
-    public void setAcceptedCaDns(List<byte[]> acceptedCaDns) {
-        this.acceptedCaDns = acceptedCaDns;
-    }
-
-    /** Возвращает список DistinguishedName из certificate_authorities extension
-     *  CertificateRequest (RFC 8446 §4.2.4).
-     *  Пустой список если extension отсутствует — семантика "сервер не указал предпочтений". */
-    public List<byte[]> getAcceptedCaDns() {
-        return acceptedCaDns;
-    }
-
-    public void setOidFilters(List<OIDFilter> filters) {
-        this.oidFilters = filters != null ? filters : Collections.emptyList();
-    }
-
-    public List<OIDFilter> getOidFilters() {
-        return oidFilters;
     }
 
     /**
@@ -165,6 +136,21 @@ public final class HandshakeContext {
     }
 
     /**
+     * Возвращает копию накопленного транскрипта без хэширования.
+     * <p>
+     * Нужна для PSK binder второго ClientHello: RFC 8446 §4.2.11.2 требует
+     * {@code Hash(message_hash || HRR || Truncate(CH2))} одним хэшем, поэтому готовый
+     * {@code Hash(message_hash || HRR)} использовать нельзя. Транскрипт здесь =
+     * {@code message_hash} (4-байтовый заголовок + {@code Hash(CH1)}) || полный кадр HRR;
+     * CH2 ещё не добавлен. Копия не секретна, но вызывающий затирает её сам.
+     *
+     * @return копия транскрипта
+     */
+    byte[] transcriptPrefix() {
+        return Arrays.copyOf(transcriptBuf, transcriptSize);
+    }
+
+    /**
      * Заменяет текущий транскрипт на сообщение message_hash (RFC 8446 §4.4.1).
      * <p>
      * При HRR (HelloRetryRequest) первый ClientHello заменяется на
@@ -212,7 +198,7 @@ public final class HandshakeContext {
             keySchedule = null;
         }
         if (transcriptBuf != null) {
-            Arrays.fill(transcriptBuf, (byte) 0);
+            TlsUtils.wipeArray(transcriptBuf);
             transcriptBuf = null;
         }
         peerEcdhePublicKey = null;

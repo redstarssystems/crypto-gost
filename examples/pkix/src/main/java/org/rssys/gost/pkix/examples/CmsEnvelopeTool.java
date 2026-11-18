@@ -11,8 +11,6 @@ import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.PkixException;
 import org.rssys.gost.pkix.cms.CmsEnvelopedDataBuilder;
 import org.rssys.gost.pkix.cms.CmsEnvelopedDataDecryptor;
-import org.rssys.gost.pkix.cms.CmsKeyWrap;
-import org.rssys.gost.pkix.cms.Kexp15CmsKeyWrap;
 import org.rssys.gost.signature.PrivateKeyParameters;
 
 /**
@@ -30,8 +28,9 @@ import org.rssys.gost.signature.PrivateKeyParameters;
  * 3. Расшифровать файл с помощью crypto-gost:
  *   java CmsEnvelopeTool decrypt --in secret.txt.p7e --key key.der --cert cert.der
  *
- * 4. Зашифровать с имитовставкой (OMAC):
- *   java CmsEnvelopeTool encrypt --in secret.txt --cert cert.der --omac
+ * 4. Зашифровать без имитовставки (по умолчанию применяется OMAC; режим без неё — только явный выбор):
+ *   java CmsEnvelopeTool encrypt --in secret.txt --cert cert.der --no-integrity
+ *   java CmsEnvelopeTool decrypt --in secret.txt.p7e --key key.der --cert cert.der --no-integrity
  *
  * 5. Зашифровать в формате KeyAgreeRecipientInfo (kari):
  *   java CmsEnvelopeTool encrypt --in secret.txt --cert cert.der --kari
@@ -47,6 +46,9 @@ import org.rssys.gost.signature.PrivateKeyParameters;
  * </pre>
  */
 public final class CmsEnvelopeTool {
+    // Флаг отказа от имитовставки: при шифровании — без OMAC, при расшифровании — принять контейнер
+    // без OMAC
+    private static final String FLAG_NO_INTEGRITY = "--no-integrity";
 
     static {
         Security.insertProviderAt(new RssysGostProvider(), 1);
@@ -114,7 +116,7 @@ public final class CmsEnvelopeTool {
     private static void cmdEncrypt(String[] args, boolean cryptopro) throws Exception {
         String inFile = getArg(args, "--in");
         String certFile = getArg(args, "--cert");
-        boolean omac = hasFlag(args, "--omac");
+        boolean noIntegrity = hasFlag(args, FLAG_NO_INTEGRITY);
         boolean kari = hasFlag(args, "--kari");
 
         if (inFile == null || certFile == null) {
@@ -132,15 +134,13 @@ public final class CmsEnvelopeTool {
                         + " байт для получателя: "
                         + cert.getSubjectDn().toString());
 
-        CmsKeyWrap keyWrap = new Kexp15CmsKeyWrap();
         var builder =
                 (kari ? CmsEnvelopedDataBuilder.createKari() : CmsEnvelopedDataBuilder.create())
                         .data(data)
-                        .addRecipient(cert)
-                        .keyWrap(keyWrap);
-        if (omac) builder = builder.withOmac();
+                        .addRecipient(cert);
+        if (noIntegrity) builder = builder.withoutIntegrity();
 
-        String mode = (kari ? "kari" : "ktri") + (omac ? "+omac" : "");
+        String mode = (kari ? "kari" : "ktri") + (noIntegrity ? ", без имитовставки" : "+omac");
         System.out.println("Режим: " + mode);
 
         byte[] enveloped = builder.build();
@@ -168,7 +168,11 @@ public final class CmsEnvelopeTool {
         GostCertificate cert = GostCertificate.fromDer(certDer);
 
         try {
-            byte[] dec = CmsEnvelopedDataDecryptor.decrypt(p7e, key, cert, new Kexp15CmsKeyWrap());
+            // Контейнер без имитовставки принимается только по явному флагу
+            byte[] dec =
+                    hasFlag(args, FLAG_NO_INTEGRITY)
+                            ? CmsEnvelopedDataDecryptor.decryptAllowingNoIntegrity(p7e, key, cert)
+                            : CmsEnvelopedDataDecryptor.decrypt(p7e, key, cert);
             String outFile = getArg(args, "--out");
             if (outFile == null) outFile = inFile.replace(".p7e", "");
             Files.write(Path.of(outFile), dec);
@@ -283,10 +287,10 @@ public final class CmsEnvelopeTool {
                              --key KEY.der  --cert CERT.der
 
                   encrypt     Зашифровать файл (crypto-gost, ktri по умолчанию)
-                             --in FILE  --cert CERT.der [--out OUT.p7e] [--omac] [--kari] [--ktri]
+                             --in FILE  --cert CERT.der [--out OUT.p7e] [--no-integrity] [--kari] [--ktri]
 
                   decrypt     Расшифровать файл (crypto-gost, авто ktri/kari)
-                             --in FILE.p7e  --key KEY.der  --cert CERT.der [--out FILE]
+                             --in FILE.p7e  --key KEY.der  --cert CERT.der [--out FILE] [--no-integrity]
 
                   encrypt-cp  Зашифровать файл (КриптоПРО cryptcp)
                              --in FILE  --cert CERT.der
@@ -295,7 +299,8 @@ public final class CmsEnvelopeTool {
                              --in FILE.p7e  --container NAME
 
                 Режимы:
-                  --omac      Шифрование с имитовставкой (Encrypt-then-MAC, ТК26 §8.3.1)
+                  --no-integrity  Без имитовставки (по умолчанию OMAC, ТК26 §8.3.1);
+                                  при расшифровании — принять контейнер без OMAC
                   --kari      Формат KeyAgreeRecipientInfo
                   --ktri      Формат KeyTransRecipientInfo (используется по умолчанию)
 
@@ -303,7 +308,7 @@ public final class CmsEnvelopeTool {
                   java CmsEnvelopeTool gen --key mykey.der --cert mycert.cer
                   java CmsEnvelopeTool encrypt --in secret.txt --cert mycert.cer
                   java CmsEnvelopeTool decrypt --in secret.txt.p7e --key mykey.der --cert mycert.cer
-                  java CmsEnvelopeTool encrypt --in secret.txt --cert mycert.cer --omac
+                  java CmsEnvelopeTool encrypt --in secret.txt --cert mycert.cer --no-integrity
                   java CmsEnvelopeTool encrypt --in secret.txt --cert mycert.cer --ktri
                   java CmsEnvelopeTool encrypt --in secret.txt --cert mycert.cer --kari
                   java CmsEnvelopeTool encrypt-cp --in secret.txt --cert mycert.cer

@@ -5,49 +5,32 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.nio.ByteBuffer;
 import java.security.Security;
 import java.util.Arrays;
-import java.util.List;
 import javax.net.ssl.SSLEngineResult;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.jsse.testkit.EngineServerPki;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsTestHelper;
 import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 
+@DisplayName("GostSSLEngine: склеенные записи в одном буфере")
 class GostSSLEngineCoalescingTest {
 
-    private static TlsTestHelper.CertBundle rootCa;
-    private static TlsTestHelper.CertBundle serverCert;
+    private static PkixCertTestHelper.CertBundle rootCa;
+    private static PkixCertTestHelper.CertBundle serverCert;
     private static GostX509KeyManager serverKm;
 
     @BeforeAll
     static void setUp() throws Exception {
         Security.addProvider(new RssysGostJsseProvider());
-        ECParameters params = ECParameters.tc26a256();
-        rootCa = TlsTestHelper.createRootCA(params);
-        serverCert =
-                TlsTestHelper.createCertSignedBy(
-                        params,
-                        rootCa.priv,
-                        rootCa.cert.getPublicKey(),
-                        rootCa.subjectDn,
-                        "240501120000Z",
-                        "290501120000Z",
-                        new String[] {"localhost"},
-                        new byte[] {(byte) 0x80},
-                        null,
-                        false,
-                        null);
-        serverKm = new GostX509KeyManager();
-        serverKm.addKeyEntry(
-                "default",
-                CertificateBridge.toJca(List.of(serverCert.cert, rootCa.cert)),
-                serverCert.priv);
+        EngineServerPki pki = EngineServerPki.create();
+        rootCa = pki.rootCa();
+        serverCert = pki.serverCert();
+        serverKm = pki.serverKm();
     }
 
     @Test
@@ -196,7 +179,7 @@ class GostSSLEngineCoalescingTest {
     private static GostSSLEngine createClient() {
         return new GostSSLEngine(
                 new GostX509KeyManager(),
-                new GostX509TrustManager(null, false),
+                GostX509TrustManager.insecureTrustAll(),
                 "localhost",
                 0,
                 true);
@@ -204,102 +187,12 @@ class GostSSLEngineCoalescingTest {
 
     private static GostSSLEngine createServer() {
         return new GostSSLEngine(
-                serverKm, new GostX509TrustManager(null, false), "localhost", 0, false);
+                serverKm, GostX509TrustManager.insecureTrustAll(), "localhost", 0, false);
     }
 
     private static void doHandshake(
             GostSSLEngine client, GostSSLEngine server, InMemoryTlsTransport.Pair pair)
             throws Exception {
-        client.beginHandshake();
-        server.beginHandshake();
-
-        java.util.concurrent.atomic.AtomicReference<Throwable> clientError =
-                new java.util.concurrent.atomic.AtomicReference<>();
-        java.util.concurrent.atomic.AtomicReference<Throwable> serverError =
-                new java.util.concurrent.atomic.AtomicReference<>();
-
-        Thread ct =
-                new Thread(
-                        () -> {
-                            try {
-                                handshakeLoop(client, pair.getClientTransport());
-                            } catch (Exception e) {
-                                clientError.set(e);
-                            }
-                        },
-                        "hs-client");
-        Thread st =
-                new Thread(
-                        () -> {
-                            try {
-                                handshakeLoop(server, pair.getServerTransport());
-                            } catch (Exception e) {
-                                serverError.set(e);
-                            }
-                        },
-                        "hs-server");
-
-        ct.start();
-        st.start();
-        ct.join(10000);
-        st.join(10000);
-        if (ct.isAlive()) {
-            ct.interrupt();
-            fail("Тайм-аут рукопожатия клиента");
-        }
-        if (st.isAlive()) {
-            st.interrupt();
-            fail("Тайм-аут рукопожатия сервера");
-        }
-        if (clientError.get() != null) throw new RuntimeException(clientError.get());
-        if (serverError.get() != null) throw new RuntimeException(serverError.get());
-    }
-
-    private static void handshakeLoop(GostSSLEngine engine, InMemoryTlsTransport transport)
-            throws Exception {
-        ByteBuffer netBuf =
-                ByteBuffer.allocate(
-                        TlsConstants.MAX_CIPHERTEXT_LENGTH + TlsConstants.RECORD_BUFFER_HEADROOM);
-        ByteBuffer appBuf = ByteBuffer.allocate(TlsConstants.MAX_PLAINTEXT_LENGTH);
-
-        for (int i = 0; i < 80; i++) {
-            SSLEngineResult.HandshakeStatus hs = engine.getHandshakeStatus();
-            if (hs == SSLEngineResult.HandshakeStatus.FINISHED
-                    || hs == SSLEngineResult.HandshakeStatus.NOT_HANDSHAKING) return;
-
-            switch (hs) {
-                case NEED_WRAP:
-                    netBuf.clear();
-                    engine.wrap(ByteBuffer.allocate(0), netBuf);
-                    netBuf.flip();
-                    if (netBuf.hasRemaining()) {
-                        byte[] out = new byte[netBuf.remaining()];
-                        netBuf.get(out);
-                        transport.sendRecord(out);
-                    }
-                    break;
-                case NEED_UNWRAP:
-                    {
-                        byte[] in = transport.receiveRecord();
-                        if (in != null) {
-                            netBuf.clear();
-                            netBuf.put(in);
-                            netBuf.flip();
-                            appBuf.clear();
-                            engine.unwrap(netBuf, appBuf);
-                        } else {
-                            Thread.sleep(10);
-                        }
-                        break;
-                    }
-                case NEED_TASK:
-                    {
-                        Runnable t = engine.getDelegatedTask();
-                        if (t != null) t.run();
-                        break;
-                    }
-            }
-        }
-        throw new RuntimeException("Тайм-аут рукопожатия");
+        GostSSLEngineLoopbackTest.doLoopback(client, server, pair);
     }
 }

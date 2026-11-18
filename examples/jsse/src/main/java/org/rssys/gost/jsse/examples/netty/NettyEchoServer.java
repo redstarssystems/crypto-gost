@@ -9,8 +9,9 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
@@ -42,16 +43,16 @@ public final class NettyEchoServer {
         GostX509KeyManager km = helper.createKeyManager();
         GostX509TrustManager tm = helper.createTrustManager();
 
-        // GostSslContextBuilder.build() сам регистрирует RssysGostJsseProvider
+        // Провайдер в Security не регистрируется: builder создаёт собственный экземпляр
         GostSslContext serverCtx = GostSslContextBuilder.forServer(km).trustManager(tm).build();
 
         GostSslContext clientCtx = GostSslContextBuilder.forClient().trustManager(tm).build();
 
-        // Boss = 1 thread (accept), worker = сколько даст NioEventLoopGroup
+        // Boss = 1 thread (accept), worker = сколько даст MultiThreadIoEventLoopGroup
         // Клиент — отдельная группа, чтобы не конкурировать с worker'ами сервера
-        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-        EventLoopGroup workerGroup = new NioEventLoopGroup();
-        EventLoopGroup clientGroup = new NioEventLoopGroup(1);
+        EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
+        EventLoopGroup clientGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
 
         CountDownLatch serverReady = new CountDownLatch(1);
         AtomicReference<ChannelFuture> serverBindRef = new AtomicReference<>();

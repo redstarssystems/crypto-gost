@@ -23,12 +23,14 @@ import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
+import org.rssys.gost.pkix.tsp.TspRequest;
 import org.rssys.gost.pkix.tsp.TspTransport;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.util.DerCodec;
 
-@DisplayName("CAdESXLongFuzz: fuzz-тесты verifyCAdESXLong")
+@DisplayName("CAdESXLongFuzz: fuzz-тесты verifyXLong")
 class CAdESXLongFuzzTest {
 
     private static final ECParameters PARAMS = ECParameters.tc26a256();
@@ -72,7 +74,9 @@ class CAdESXLongFuzzTest {
     void validXLongPassesVerification() throws Exception {
         byte[] cadesXLong = buildValidXLong();
         assertDoesNotThrow(
-                () -> CAdESExtender.verifyCAdESXLong(cadesXLong, signerCert, tsaCert),
+                () ->
+                        CAdESVerifier.verifyXLong(
+                                cadesXLong, TrustAnchors.ofCertificates(signerCert, tsaCert)),
                 "Валидный X-Long DER должен проходить верификацию");
     }
 
@@ -80,24 +84,34 @@ class CAdESXLongFuzzTest {
     @DisplayName("Мутация certificate-values (переворот случайного байта) вызывает PkixException")
     void mutateCertificateValuesThrowsPkixException() throws Exception {
         byte[] cadesXLong = buildValidXLong();
-        byte[] mutated = mutateAttributeValue(cadesXLong, GostOids.CERTIFICATE_VALUES);
+        Mutation mutation = mutateAttributeValue(cadesXLong, GostOids.CERTIFICATE_VALUES);
 
         assertThrows(
                 Exception.class,
-                () -> CAdESExtender.verifyCAdESXLong(mutated, signerCert, tsaCert),
-                "Испорченный certificate-values должен вызывать исключение");
+                () ->
+                        CAdESVerifier.verifyXLong(
+                                mutation.data(), TrustAnchors.ofCertificates(signerCert, tsaCert)),
+                "Испорченный certificate-values должен вызывать исключение"
+                        + " (byte offset "
+                        + mutation.offset()
+                        + ")");
     }
 
     @Test
     @DisplayName("Мутация revocation-values (переворот случайного байта) вызывает PkixException")
     void mutateRevocationValuesThrowsPkixException() throws Exception {
         byte[] cadesXLong = buildValidXLong();
-        byte[] mutated = mutateAttributeValue(cadesXLong, GostOids.REVOCATION_VALUES);
+        Mutation mutation = mutateAttributeValue(cadesXLong, GostOids.REVOCATION_VALUES);
 
         assertThrows(
                 Exception.class,
-                () -> CAdESExtender.verifyCAdESXLong(mutated, signerCert, tsaCert),
-                "Испорченный revocation-values должен вызывать исключение");
+                () ->
+                        CAdESVerifier.verifyXLong(
+                                mutation.data(), TrustAnchors.ofCertificates(signerCert, tsaCert)),
+                "Испорченный revocation-values должен вызывать исключение"
+                        + " (byte offset "
+                        + mutation.offset()
+                        + ")");
     }
 
     @Test
@@ -108,7 +122,9 @@ class CAdESXLongFuzzTest {
 
         assertThrows(
                 Exception.class,
-                () -> CAdESExtender.verifyCAdESXLong(truncated, signerCert, tsaCert),
+                () ->
+                        CAdESVerifier.verifyXLong(
+                                truncated, TrustAnchors.ofCertificates(signerCert, tsaCert)),
                 "Усечённый DER должен вызывать исключение");
     }
 
@@ -155,18 +171,6 @@ class CAdESXLongFuzzTest {
                         .withCAdES()
                         .build();
 
-        byte[] sigHash = extractAndHashSignature(cadesBes);
-        TspTransport mockTransport =
-                (req, url) -> {
-                    try {
-                        BigInteger reqNonce = parseNonceFromRequest(req);
-                        byte[] token = buildTimeStampToken(sigHash, reqNonce);
-                        return buildTspResponse(sigHash, token, reqNonce);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                };
-
         List<GostCertificate> chain = List.of(leafCert, issuerCert);
         List<GostCrl> crls = Arrays.asList(crl, null);
         List<GostOcspResponse> ocspList = Arrays.asList(ocsp, null);
@@ -178,11 +182,13 @@ class CAdESXLongFuzzTest {
                         crls,
                         ocspList,
                         "http://local.tsa",
-                        mockTransport,
+                        dynamicTsTransport(),
                         tsaCert);
 
         assertDoesNotThrow(
-                () -> CAdESExtender.verifyCAdESXLong(cadesXLong, issuerCert, tsaCert),
+                () ->
+                        CAdESVerifier.verifyXLong(
+                                cadesXLong, TrustAnchors.ofCertificates(issuerCert, tsaCert)),
                 "Цепочка из двух сертификатов должна проходить верификацию");
     }
 
@@ -197,7 +203,9 @@ class CAdESXLongFuzzTest {
 
         assertThrows(
                 Exception.class,
-                () -> CAdESExtender.verifyCAdESXLong(cadesXLong, signerCert, tsaCert),
+                () ->
+                        CAdESVerifier.verifyXLong(
+                                cadesXLong, TrustAnchors.ofCertificates(signerCert, tsaCert)),
                 "Превышение лимита размера certificate-values должно вызывать исключение");
     }
 
@@ -213,24 +221,12 @@ class CAdESXLongFuzzTest {
                         .withCAdES()
                         .build();
 
-        byte[] sigHash = extractAndHashSignature(cadesBes);
-        TspTransport mockTransport =
-                (req, url) -> {
-                    try {
-                        BigInteger reqNonce = parseNonceFromRequest(req);
-                        byte[] token = buildTimeStampToken(sigHash, reqNonce);
-                        return buildTspResponse(sigHash, token, reqNonce);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                };
-
         List<GostCertificate> chain = List.of(signerCert);
         List<GostCrl> crls = List.of(signerCrl);
         List<GostOcspResponse> ocspList = List.of(signerOcsp);
 
         return CAdESExtender.embedXLongType1(
-                cadesBes, chain, crls, ocspList, "http://local.tsa", mockTransport, tsaCert);
+                cadesBes, chain, crls, ocspList, "http://local.tsa", dynamicTsTransport(), tsaCert);
     }
 
     private byte[] buildXLongWithCustomCertValues(List<GostCertificate> certValues)
@@ -329,7 +325,9 @@ class CAdESXLongFuzzTest {
         return CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, newSignedData);
     }
 
-    private byte[] mutateAttributeValue(byte[] xLongDer, String attrOid) throws Exception {
+    private record Mutation(byte[] data, int offset) {}
+
+    private Mutation mutateAttributeValue(byte[] xLongDer, String attrOid) throws Exception {
         byte[] oidDer = DerCodec.encodeOid(attrOid);
         byte[] mutated = xLongDer.clone();
 
@@ -355,10 +353,10 @@ class CAdESXLongFuzzTest {
         int contentOff = octetStringPos + 1 + lenInfo[1];
         int contentLen = lenInfo[0];
 
-        int offset = CryptoRandom.INSTANCE.nextInt(contentLen);
-        mutated[contentOff + offset] ^= 0xFF;
+        int offset = contentOff + CryptoRandom.INSTANCE.nextInt(contentLen);
+        mutated[offset] ^= 0xFF;
 
-        return mutated;
+        return new Mutation(mutated, offset);
     }
 
     private static int indexOf(byte[] data, byte[] pattern, int fromIndex) {
@@ -511,6 +509,20 @@ class CAdESXLongFuzzTest {
         byte[] nonceDer = DerCodec.encodeInteger(nonce);
         return DerCodec.encodeSequence(
                 version, policy, messageImprint, serial, genTimeDer, nonceDer);
+    }
+
+    private TspTransport dynamicTsTransport() {
+        return (req, url) -> {
+            try {
+                TspRequest request = TspRequest.fromDer(req);
+                byte[] hash = request.messageImprintHash();
+                BigInteger nonce = parseNonceFromRequest(req);
+                byte[] token = buildTimeStampToken(hash, nonce);
+                return buildTspResponse(hash, token, nonce);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        };
     }
 
     private static BigInteger parseNonceFromRequest(byte[] tspReqDer) {

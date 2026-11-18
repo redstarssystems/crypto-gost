@@ -11,19 +11,20 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.jsse.RssysGostJsseProvider;
 import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
 
 /**
  * Тесты фильтрации алиасов по issuers в GostX509KeyManager.
  */
+@DisplayName("GostX509KeyManager: фильтрация записей по издателю")
 class GostX509KeyManagerIssuerTest {
 
-    private static TlsTestHelper.CertBundle caA;
-    private static TlsTestHelper.CertBundle caB;
-    private static TlsTestHelper.CertBundle leafA;
-    private static TlsTestHelper.CertBundle leafB;
-    private static TlsTestHelper.CertBundle leafRoot;
+    private static PkixCertTestHelper.CertBundle caA;
+    private static PkixCertTestHelper.CertBundle caB;
+    private static PkixCertTestHelper.CertBundle leafA;
+    private static PkixCertTestHelper.CertBundle leafB;
+    private static PkixCertTestHelper.CertBundle leafRoot;
     private static X509Certificate caAJca;
     private static X509Certificate caBJca;
     private static X509Certificate rootJca;
@@ -33,13 +34,13 @@ class GostX509KeyManagerIssuerTest {
         Security.addProvider(new RssysGostJsseProvider());
         ECParameters params = ECParameters.tc26a256();
 
-        caA = TlsTestHelper.createRootCA(params);
-        caB = TlsTestHelper.createRootCA(params);
+        caA = PkixCertTestHelper.createRootCA(params);
+        caB = PkixCertTestHelper.createRootCA(params);
         caAJca = CertificateBridge.toJca(caA.cert);
         caBJca = CertificateBridge.toJca(caB.cert);
 
         leafA =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         caA.priv,
                         caA.cert.getPublicKey(),
@@ -53,7 +54,7 @@ class GostX509KeyManagerIssuerTest {
                         false,
                         null);
         leafB =
-                TlsTestHelper.createCertSignedBy(
+                PkixCertTestHelper.createCertSignedBy(
                         params,
                         caB.priv,
                         caB.cert.getPublicKey(),

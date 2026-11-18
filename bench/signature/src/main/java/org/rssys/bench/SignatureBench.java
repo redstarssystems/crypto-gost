@@ -110,8 +110,8 @@ public class SignatureBench {
 
         // --- BouncyCastle: те же ключи ---
         BigInteger d  = gostPriv.getD();
-        BigInteger qx = gostPub.getQ().normalize().getX();
-        BigInteger qy = gostPub.getQ().normalize().getY();
+        BigInteger qx = gostPub.getQ().getX();
+        BigInteger qy = gostPub.getQ().getY();
 
         ECCurve curve = new ECCurve.Fp(params.p, params.a, params.b);
         org.bouncycastle.math.ec.ECPoint g = curve.createPoint(params.gx, params.gy);

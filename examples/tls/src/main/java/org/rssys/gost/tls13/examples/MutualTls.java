@@ -3,6 +3,7 @@ package org.rssys.gost.tls13.examples;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.concurrent.*;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.tls13.*;
 import org.rssys.gost.tls13.config.TlsClientConfig;
 import org.rssys.gost.tls13.config.TlsServerConfig;
@@ -11,9 +12,9 @@ import org.rssys.gost.tls13.transport.InMemoryTlsTransport;
 /**
  * Взаимная аутентификация (mTLS).
  * <p>
- * Сервер отправляет CertificateRequest и проверяет клиентский сертификат через CA public key.
+ * Сервер отправляет CertificateRequest и проверяет клиентский сертификат по CA-якорю.
  * Клиент отправляет свой сертификат + CertificateVerify.
- * TlsServerConfig.withCaPublicKey() и TlsClientConfig.withClientCertificateChain().
+ * TlsServerConfig.needClientAuth(TrustAnchors) и TlsClientConfig.withClientCertificateChain().
  */
 public final class MutualTls {
 
@@ -39,11 +40,12 @@ public final class MutualTls {
                                                 cs,
                                                 Collections.singletonList(serverBundle.cert()),
                                                 serverBundle.priv())
-                                        .withCaPublicKey(caBundle.cert().getPublicKey()),
+                                        .needClientAuth(
+                                                TrustAnchors.ofCertificate(caBundle.cert())),
                                 serverTp);
                 TlsSession client =
                         TlsSession.createClient(
-                                new TlsClientConfig(cs, caBundle.cert().getPublicKey())
+                                new TlsClientConfig(cs, TrustAnchors.ofCertificate(caBundle.cert()))
                                         .withServerHostname("localhost")
                                         .withClientCertificateChain(clientBundle.cert())
                                         .withClientPrivateKey(clientBundle.priv()),

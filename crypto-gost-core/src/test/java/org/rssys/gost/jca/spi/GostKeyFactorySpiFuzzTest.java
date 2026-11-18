@@ -3,11 +3,10 @@ package org.rssys.gost.jca.spi;
 import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import java.security.KeyFactory;
-import java.security.Security;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
-import org.rssys.gost.jca.RssysGostProvider;
+import org.rssys.gost.JcaTestSupport;
 
 /**
  * Fuzz-тесты для {@link GostKeyFactorySpi}.
@@ -30,9 +29,9 @@ class GostKeyFactorySpiFuzzTest {
     private static final KeyFactory KEY_FACTORY;
 
     static {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
+        // Статические поля ниже создаются при загрузке класса, раньше жизненного цикла JUnit и
+        // раньше запуска под Jazzer: провайдер должен быть зарегистрирован уже здесь
+        JcaTestSupport.ensureProvider();
         try {
             KEY_FACTORY = KeyFactory.getInstance("ECGOST3410-2012");
         } catch (Exception e) {

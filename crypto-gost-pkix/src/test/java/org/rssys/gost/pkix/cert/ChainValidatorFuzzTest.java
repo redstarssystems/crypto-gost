@@ -4,18 +4,17 @@ import com.code_intelligence.jazzer.api.FuzzedDataProvider;
 import com.code_intelligence.jazzer.junit.FuzzTest;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import org.rssys.gost.api.KeyGenerator;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
- * Fuzz-тесты для {@link ChainValidator#validateChain(List, List)}.
+ * Fuzz-тесты для {@link ChainValidator#validateChain(List, TrustAnchors, String...)}.
  *
  * <p>Ядро валидации цепочек сертификатов (RFC 5280). Принимает цепочку leaf-first
- * и список доверенных CA-ключей. Проверяет: подписи, DN-совпадения, CA-флаги,
- * pathLen, NameConstraints, срок действия, algorithm consistency.</p>
+ * и набор доверенных сертификатов-якорей. Проверяет: подписи, DN-совпадения,
+ * CA-флаги, pathLen, NameConstraints, срок действия, algorithm consistency.</p>
  *
  * <p>Проверяет фиксы 0.6.2:
  * <ul>
@@ -30,12 +29,22 @@ import org.rssys.gost.signature.PublicKeyParameters;
  */
 class ChainValidatorFuzzTest {
 
-    private static final PublicKeyParameters CA_KEY_256;
-    private static final PublicKeyParameters CA_KEY_512;
+    private static final GostCertificate CA_CERT_256 = createCaCert(ECParameters.tc26a256());
+    private static final GostCertificate CA_CERT_512 = createCaCert(ECParameters.tc26a512());
 
-    static {
-        CA_KEY_256 = KeyGenerator.generateKeyPair(ECParameters.tc26a256()).getPublic();
-        CA_KEY_512 = KeyGenerator.generateKeyPair(ECParameters.tc26a512()).getPublic();
+    private static GostCertificate createCaCert(ECParameters params) {
+        var kp = KeyGenerator.generateKeyPair(params);
+        byte[] dn = GostDnParser.encodeDn("CN=Fuzz CA");
+        return GostCertificateBuilder.create(params, dn)
+                .publicKey(kp.getPublic())
+                .notBefore("20240101000000Z")
+                .notAfter("21010101000000Z")
+                .basicConstraints(true, null)
+                .keyUsage(
+                        GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                        GostCertificateBuilder.KeyUsage.CRL_SIGN)
+                .randomSerial()
+                .sign(kp.getPrivate());
     }
 
     /**
@@ -65,21 +74,21 @@ class ChainValidatorFuzzTest {
         }
         if (chain.isEmpty()) return;
 
-        List<PublicKeyParameters> caKeys = Arrays.asList(CA_KEY_256, CA_KEY_512);
+        TrustAnchors anchors = TrustAnchors.ofCertificates(Arrays.asList(CA_CERT_256, CA_CERT_512));
         try {
-            ChainValidator.validateChain(chain, caKeys);
+            ChainValidator.validateChain(chain, anchors);
         } catch (PkixException e) {
             // Ожидаемо: подписи не совпадают, DN mismatch, pathLen exceeded, etc.
         } catch (IllegalArgumentException e) {
             // Ожидаемо: неверный тег в DER (GostDerParser)
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
     /**
-     * Фаззинг валидации цепочки с пустым списком CA-ключей (граничный случай
-     * для defence-in-depth: пустой список — нелегитимный вызов извне).
+     * Фаззинг валидации цепочки с пустым набором якорей (граничный случай
+     * для defence-in-depth: пустой набор — нелегитимный вызов извне).
      */
     @FuzzTest
     void fuzzValidateChainEmptyCa(FuzzedDataProvider data) {
@@ -102,21 +111,13 @@ class ChainValidatorFuzzTest {
         if (chain.isEmpty()) return;
 
         try {
-            ChainValidator.validateChain(chain, Collections.emptyList());
+            ChainValidator.validateChain(chain, TrustAnchors.empty());
         } catch (PkixException | IllegalArgumentException e) {
-            // Ожидаемо: пустой список CA или битая цепочка
+            // Ожидаемо: пустой набор якорей или битая цепочка
         } catch (NullPointerException e) {
-            // Пустой CA-список — допустимый fail-closed (NPE до проверки — ожидаемо)
+            // Пустой набор якорей — допустимый fail-closed (NPE до проверки — ожидаемо)
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
-        }
-    }
-
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException) {
-            throw e;
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 }

@@ -1,5 +1,6 @@
 package org.rssys.gost.cipher.mode;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import org.rssys.gost.cipher.CipherParameters;
@@ -20,13 +21,15 @@ import org.rssys.gost.util.AuthenticationException;
  *   <li><b>Без OMAC</b> ({@code id-gostr3412-2015-kuznyechik-ctracpkm}):
  *       ГОСТ Р 34.13-2015 CTR с S' = ukm[0..7]. Ключ = DK.</li>
  *   <li><b>С OMAC</b> ({@code id-gostr3412-2015-kuznyechik-ctracpkm-omac}):
- *       KDF_TREE(DK, "kdf tree", ukm[8..15]) ~> K(1)||K(2).
- *       Encrypt-then-MAC: шифрование CTR с K(1), CMAC с K(2).</li>
+ *       KDF_TREE(DK, "kdf tree", ukm[8..15]) -> K(1)||K(2). Схема RFC 9337 §5.1.1:
+ *       CMAC с ключом K(2) считается по <b>открытому</b> тексту M, затем {@code M ‖ MAC}
+ *       шифруется одним потоком CTR-ACPKM с ключом K(1). Тег шифруется продолжением
+ *       того же потока (в том числе после смены ключа ACPKM) и в CMAC не попадает.</li>
  * </ul>
  * Симметричен: encrypt = decrypt для CTR-части.
  * <p>
  * Секционная смена ключа ACPKM выполняется каждые {@code sectionSize} байт
- * (ГОСТ Р 34.13-2015 §6.2, RFC 8645 §6.2.2). Размер секции задаётся при
+ * (Р 1323565.1.017-2018, RFC 8645 §6.2.2). Размер секции задаётся при
  * конструировании через константы {@link AcpkmSectionSize}.
  * {@code sectionSize} обязан быть кратен размеру блока (16 байт).
  */
@@ -40,8 +43,7 @@ public final class CtrAcpkmMode {
     /** Размер CMAC-тега для Кузнечика (128 бит). */
     private static final int MAC_TAG_LEN = 16;
 
-    private static final byte[] KDF_TREE_LABEL =
-            "kdf tree".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+    private static final byte[] KDF_TREE_LABEL = "kdf tree".getBytes(StandardCharsets.US_ASCII);
 
     /**
      * Константа ACPKM_D_2018 — первые 256 бит D (RFC 8645).
@@ -68,7 +70,16 @@ public final class CtrAcpkmMode {
     private int processedBytes;
 
     private Mac mac;
-    private byte[] computedTag;
+
+    /**
+     * Ключ нулевой секции (DK или K(1)). Нужен {@link #reset()}: после ACPKM-смены ключа
+     * в {@code cipher} лежит уже производный ключ, а возврат в начальное состояние
+     * обязан вернуть именно исходный.
+     */
+    private byte[] initialKey;
+
+    /** MAC финализирован: дальнейшая обработка данных сделала бы тег недостоверным. */
+    private boolean finished;
 
     private boolean initialized;
     private boolean forEncryption;
@@ -109,84 +120,90 @@ public final class CtrAcpkmMode {
     }
 
     /**
-     * Инициализирует CTR-ACPKM.
+     * Инициализирует CTR-ACPKM. Повторный вызов полностью сбрасывает прежнее состояние
+     * (гамма, счётчик, MAC, ключ нулевой секции).
+     * <p>
+     * UKM обязателен: режим без него детерминирован (одна и та же гамма на ключ).
+     * Без OMAC UKM не короче 8 байт (используются первые 8 — IV счётчика);
+     * с OMAC — ровно 16 байт (IV ‖ seed для KDF_TREE, RFC 9337 §5.1.1).
      *
      * @param forEncryption {@code true} — шифрование, {@code false} — расшифрование
-     * @param dk            ключ (DK) из PBKDF2, {@link SymmetricKey} или {@link ParametersWithIV}
-     * @throws IllegalArgumentException если параметры некорректны
+     * @param dk            {@link ParametersWithIV}: {@link SymmetricKey} (DK) и UKM
+     * @throws IllegalArgumentException если параметры некорректны или UKM отсутствует
      */
     public void init(boolean forEncryption, CipherParameters dk) {
-        byte[] dkBytes;
-        byte[] ukm;
-
-        if (dk instanceof ParametersWithIV pv) {
-            dkBytes = ((SymmetricKey) pv.getParameters()).getKey();
-            ukm = pv.getIV();
-        } else if (dk instanceof SymmetricKey sk) {
-            dkBytes = sk.getKey();
-            ukm = null;
-        } else {
+        if (!(dk instanceof ParametersWithIV pv)
+                || !(pv.getParameters() instanceof SymmetricKey sk)) {
             throw new IllegalArgumentException(
-                    "CTR-ACPKM requires SymmetricKey or ParametersWithIV");
+                    "CTR-ACPKM requires ParametersWithIV with SymmetricKey (UKM is mandatory)");
         }
-
-        if (dkBytes.length != KEY_LEN) {
-            throw new IllegalArgumentException("CTR-ACPKM key must be " + KEY_LEN + " bytes");
-        }
-
-        this.forEncryption = forEncryption;
-        this.computedTag = null;
-        this.processedBytes = 0;
-
+        byte[] ukm = pv.getIV();
         if (useOmac) {
-            if (ukm == null || ukm.length != UKM_LEN) {
+            if (ukm.length != UKM_LEN) {
                 throw new IllegalArgumentException(
-                        "CTR-ACPKM-OMAC requires 16-byte UKM in ParametersWithIV");
+                        "CTR-ACPKM-OMAC requires 16-byte UKM, got " + ukm.length);
             }
-            // UKM[0..7] = S' (IV для CTR); UKM[8..15] = seed для KDF_TREE (RFC 9337 §5.1.1)
-            byte[] seed = Arrays.copyOfRange(ukm, 8, 16);
-            // KDF_TREE разделяет DK на ключ шифрования K(1) и ключ MAC K(2).
-            // count=2 безопасно при R=1: счётчик занимает 1 октет, i in {1,2} влезает.
-            byte[] derived =
-                    KdfTreeGostR3411_2012_256.generate(dkBytes, KDF_TREE_LABEL, seed, 2, KEY_LEN);
-            byte[] encKey = Arrays.copyOfRange(derived, 0, KEY_LEN);
-            byte[] macKey = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
-            Arrays.fill(derived, (byte) 0);
-
-            SymmetricKey encKeyObj = new SymmetricKey(encKey);
-            SymmetricKey macKeyObj = new SymmetricKey(macKey);
-            Arrays.fill(encKey, (byte) 0);
-            Arrays.fill(macKey, (byte) 0);
-
-            // Отдельный экземпляр Kuznyechik: иначе cipher.init(encKey) ниже перезатёр бы
-            // общее расписание раундовых ключей, и CMAC считался бы под ключом шифрования,
-            // а не под MAC-ключом K(2) — разделение ключей KDF_TREE было бы потеряно.
-            this.mac = new Cmac(new Kuznyechik());
-            this.mac.init(macKeyObj);
-
-            cipher.init(true, encKeyObj);
-            initCounter(Arrays.copyOf(ukm, 8));
-        } else {
-            byte[] iv;
-            if (ukm != null) {
-                if (ukm.length < IV_LEN) {
-                    throw new IllegalArgumentException("UKM too short for CTR-ACPKM");
-                }
-                iv = Arrays.copyOf(ukm, IV_LEN);
-            } else {
-                iv = new byte[IV_LEN];
-            }
-            cipher.init(true, dk instanceof ParametersWithIV pv2 ? pv2.getParameters() : dk);
-            initCounter(iv);
+        } else if (ukm.length < IV_LEN) {
+            throw new IllegalArgumentException(
+                    "UKM too short for CTR-ACPKM: need at least " + IV_LEN + " bytes");
         }
 
-        this.initialized = true;
+        byte[] dkBytes = sk.getKey();
+        try {
+            if (dkBytes.length != KEY_LEN) {
+                throw new IllegalArgumentException("CTR-ACPKM key must be " + KEY_LEN + " bytes");
+            }
+
+            // Прежнее состояние (в т.ч. остаток гаммы и MAC) не должно просочиться в новый сеанс.
+            initialized = false;
+            wipeSessionState();
+            this.forEncryption = forEncryption;
+
+            if (useOmac) {
+                // UKM[0..7] = S' (IV для CTR); UKM[8..15] = seed для KDF_TREE (RFC 9337 §5.1.1)
+                byte[] seed = Arrays.copyOfRange(ukm, IV_LEN, UKM_LEN);
+                // KDF_TREE разделяет DK на ключ шифрования K(1) и ключ MAC K(2).
+                // count=2 безопасно при R=1: счётчик занимает 1 октет, i in {1,2} влезает.
+                byte[] derived =
+                        KdfTreeGostR3411_2012_256.generate(
+                                dkBytes, KDF_TREE_LABEL, seed, 2, KEY_LEN);
+                byte[] encKey = Arrays.copyOfRange(derived, 0, KEY_LEN);
+                byte[] macKey = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
+                Arrays.fill(derived, (byte) 0);
+
+                SymmetricKey encKeyObj = new SymmetricKey(encKey);
+                SymmetricKey macKeyObj = new SymmetricKey(macKey);
+                Arrays.fill(macKey, (byte) 0);
+                try {
+                    // Отдельный экземпляр Kuznyechik: иначе cipher.init(encKey) ниже перезатёр бы
+                    // общее расписание раундовых ключей, и CMAC считался бы под ключом шифрования,
+                    // а не под MAC-ключом K(2) — разделение ключей KDF_TREE было бы потеряно.
+                    this.mac = new Cmac(new Kuznyechik());
+                    this.mac.init(macKeyObj);
+                    cipher.init(true, encKeyObj);
+                } finally {
+                    encKeyObj.destroy();
+                    macKeyObj.destroy();
+                }
+                this.initialKey = encKey;
+            } else {
+                cipher.init(true, sk);
+                this.initialKey = dkBytes.clone();
+            }
+            initCounter(Arrays.copyOf(ukm, IV_LEN));
+            this.initialized = true;
+        } finally {
+            Arrays.fill(dkBytes, (byte) 0);
+        }
     }
 
     /**
      * Обрабатывает данные (шифрование/расшифрование).
-     * Для OMAC-варианта: при шифровании MAC считается по выходному шифртексту,
-     * при расшифровании — по входному шифртексту (Encrypt-then-MAC).
+     * Для OMAC-варианта CMAC всегда считается по открытому тексту: при шифровании - по входу,
+     * при расшифровании - по выходу (RFC 9337 §5.1.1, §5.1.2). Тег к потоку добавляют
+     * {@link #finishEncryption()} и {@link #verifyEncryptedTag(byte[])}.
+     * <p>
+     * Вход и выход могут совпадать ({@code input == output}).
      *
      * @param input  входные данные
      * @param inOff  смещение во входном буфере
@@ -194,10 +211,27 @@ public final class CtrAcpkmMode {
      * @param output выходной буфер
      * @param outOff смещение в выходном буфере
      * @return количество записанных байт
+     * @throws IllegalStateException если режим не инициализирован или тег уже финализирован
      */
     public int processBytes(byte[] input, int inOff, int len, byte[] output, int outOff) {
         checkInitialized();
+        if (finished) {
+            throw new IllegalStateException(
+                    "OMAC tag already finalized — call reset() or init() before processing more data");
+        }
+        return process(input, inOff, len, output, outOff, useOmac);
+    }
 
+    /**
+     * Один общий цикл CTR-ACPKM для данных и для тега: проверка границы секции,
+     * смена ключа, счётчик и остаток гаммы ведутся в одном месте. Отдельная обработка
+     * тега напрямую через блочный шифр зашифровала бы его не тем ключом на границе секции.
+     *
+     * @param updateMac {@code true} - обновлять CMAC открытым текстом; {@code false} - только
+     *                  поток CTR (так шифруется и расшифровывается сам тег)
+     */
+    private int process(
+            byte[] input, int inOff, int len, byte[] output, int outOff, boolean updateMac) {
         if (len == 0) return 0;
 
         int remaining = len;
@@ -211,17 +245,18 @@ public final class CtrAcpkmMode {
             }
 
             int chunk = Math.min(remaining, sectionSize - processedBytes);
+            // При шифровании открытый текст - это вход, и MAC обязан увидеть его до записи
+            // выхода: при input == output цикл ниже перезапишет вход шифртекстом.
+            if (updateMac && forEncryption) {
+                mac.update(input, inPos, chunk);
+            }
             for (int i = 0; i < chunk; i++) {
                 output[outPos + i] = calculateByte(input[inPos + i]);
             }
             processedBytes += chunk;
-
-            if (useOmac) {
-                if (forEncryption) {
-                    mac.update(output, outPos, chunk);
-                } else {
-                    mac.update(input, inPos, chunk);
-                }
+            // При расшифровании открытый текст появляется только на выходе.
+            if (updateMac && !forEncryption) {
+                mac.update(output, outPos, chunk);
             }
 
             inPos += chunk;
@@ -287,7 +322,7 @@ public final class CtrAcpkmMode {
             CipherParameters dk, byte[] ukm, byte[] data, int sectionSize) {
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), false, sectionSize);
         try {
-            mode.init(false, ukm != null ? new ParametersWithIV(dk, ukm) : dk);
+            mode.init(false, new ParametersWithIV(dk, requireUkm(ukm)));
             byte[] result = new byte[data.length];
             mode.processBytes(data, 0, data.length, result, 0);
             return result;
@@ -297,7 +332,7 @@ public final class CtrAcpkmMode {
     }
 
     /**
-     * Секционная смена ключа ACPKM (ГОСТ Р 34.13-2015 §6.2, RFC 8645 §6.2.1).
+     * Секционная смена ключа ACPKM (Р 1323565.1.017-2018, RFC 8645).
      *
      * <p>Вычисляет новый ключ K' = E_K(D[0..15]) || E_K(D[16..31]),
      * затирает временный буфер и заменяет раундовые ключи Кузнечика.
@@ -311,79 +346,133 @@ public final class CtrAcpkmMode {
         cipher.processBlock(ACPKM_D_2018, BLOCK_SIZE, newKey, BLOCK_SIZE);
         SymmetricKey newSymKey = new SymmetricKey(newKey);
         Arrays.fill(newKey, (byte) 0);
-        cipher.init(true, newSymKey);
+        try {
+            cipher.init(true, newSymKey);
+        } finally {
+            newSymKey.destroy();
+        }
     }
 
     /**
-     * Возвращает CMAC-тег для OMAC-варианта.
-     * Вызывается однократно после processBytes при шифровании.
-     * Результат кешируется — повторный вызов возвращает тот же тег.
+     * Завершает шифрование OMAC-варианта: финализирует CMAC по всему открытому тексту
+     * и возвращает тег, зашифрованный продолжением того же потока CTR-ACPKM
+     * (RFC 9337 §5.1.1: шифруется {@code M ‖ MAC}). Тег в CMAC не попадает.
+     * <p>
+     * После вызова {@link #processBytes} запрещён до {@link #reset()} или {@link #init}.
      *
-     * @return CMAC-тег (16 байт)
-     * @throws IllegalStateException если не используется OMAC или не было данных
+     * @return зашифрованный тег (16 байт), добавляется к шифртексту
+     * @throws IllegalStateException если режим не OMAC, не инициализирован, настроен на
+     *                               расшифрование или тег уже финализирован
      */
-    public byte[] getMacTag() {
+    public byte[] finishEncryption() {
+        requireTagStage(true);
+        byte[] tag = new byte[MAC_TAG_LEN];
+        byte[] encryptedTag = new byte[MAC_TAG_LEN];
+        try {
+            mac.doFinal(tag, 0);
+            process(tag, 0, MAC_TAG_LEN, encryptedTag, 0, false);
+            finished = true;
+            return encryptedTag;
+        } finally {
+            Arrays.fill(tag, (byte) 0);
+        }
+    }
+
+    /**
+     * Завершает расшифрование OMAC-варианта: расшифровывает тег продолжением потока,
+     * финализирует CMAC по полученному открытому тексту и сравнивает за постоянное время.
+     * <p>
+     * После вызова {@link #processBytes} запрещён до {@link #reset()} или {@link #init}.
+     *
+     * @param encryptedTag зашифрованный тег (ровно 16 байт), следующий за шифртекстом
+     * @throws AuthenticationException если тег неверной длины или не совпал
+     * @throws IllegalStateException   если режим не OMAC, не инициализирован, настроен на
+     *                                 шифрование или тег уже финализирован
+     */
+    public void verifyEncryptedTag(byte[] encryptedTag) throws AuthenticationException {
+        requireTagStage(false);
+        if (encryptedTag == null || encryptedTag.length != MAC_TAG_LEN) {
+            throw new AuthenticationException("CTR-ACPKM-OMAC tag must be 16 bytes");
+        }
+        byte[] received = new byte[MAC_TAG_LEN];
+        byte[] computed = new byte[MAC_TAG_LEN];
+        try {
+            process(encryptedTag, 0, MAC_TAG_LEN, received, 0, false);
+            mac.doFinal(computed, 0);
+            finished = true;
+            if (!MessageDigest.isEqual(computed, received)) {
+                throw new AuthenticationException("CTR-ACPKM-OMAC authentication tag mismatch");
+            }
+        } finally {
+            Arrays.fill(received, (byte) 0);
+            Arrays.fill(computed, (byte) 0);
+        }
+    }
+
+    private void requireTagStage(boolean encryption) {
         if (!useOmac || mac == null) {
             throw new IllegalStateException("No OMAC tag available");
         }
-        if (computedTag == null) {
-            computedTag = new byte[MAC_TAG_LEN];
-            mac.doFinal(computedTag, 0);
+        checkInitialized();
+        if (forEncryption != encryption) {
+            throw new IllegalStateException(
+                    encryption
+                            ? "finishEncryption() requires an encrypting mode"
+                            : "verifyEncryptedTag() requires a decrypting mode");
         }
-        return computedTag;
+        if (finished) {
+            throw new IllegalStateException("OMAC tag already finalized");
+        }
     }
 
     /**
-     * Шифрование с CMAC (OMAC-вариант).
-     * Возвращает шифртекст || 16-байтовый MAC.
-     * Размер секции ACPKM — по умолчанию (4096 байт).
+     * Шифрование OMAC-варианта по RFC 9337 §5.1.1: CMAC по открытому тексту,
+     * шифруется {@code M ‖ MAC}. Размер секции ACPKM - по умолчанию (4096 байт).
      *
-     * @param dk   ключ (SymmetricKey)
-     * @param ukm  UKM (16 байт)
+     * @param dk   ключ DK (SymmetricKey)
+     * @param ukm  UKM (ровно 16 байт: IV ‖ seed KDF_TREE)
      * @param data открытые данные
-     * @return шифртекст + CMAC (последние 16 байт)
+     * @return шифртекст ‖ зашифрованный тег (16 байт), длина {@code data.length + 16}
      */
     public static byte[] encryptWithMac(CipherParameters dk, byte[] ukm, byte[] data) {
         return encryptWithMac(dk, ukm, data, AcpkmSectionSize.DEFAULT);
     }
 
     /**
-     * Шифрование с CMAC (OMAC-вариант) с заданным размером секции.
-     * Возвращает шифртекст || 16-байтовый MAC.
+     * Шифрование OMAC-варианта по RFC 9337 §5.1.1 с заданным размером секции.
      *
-     * @param dk          ключ (SymmetricKey)
-     * @param ukm         UKM (16 байт)
+     * @param dk          ключ DK (SymmetricKey)
+     * @param ukm         UKM (ровно 16 байт)
      * @param data        открытые данные
      * @param sectionSize размер секции ACPKM в байтах
-     * @return шифртекст + CMAC (последние 16 байт)
+     * @return шифртекст ‖ зашифрованный тег (16 байт), длина {@code data.length + 16}
      */
     public static byte[] encryptWithMac(
             CipherParameters dk, byte[] ukm, byte[] data, int sectionSize) {
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true, sectionSize);
         try {
-            mode.init(true, new ParametersWithIV(dk, ukm));
+            mode.init(true, new ParametersWithIV(dk, requireUkm(ukm)));
 
-            byte[] ct = new byte[data.length + MAC_TAG_LEN];
-            mode.processBytes(data, 0, data.length, ct, 0);
+            byte[] out = new byte[data.length + MAC_TAG_LEN];
+            mode.processBytes(data, 0, data.length, out, 0);
 
-            byte[] tag = mode.getMacTag();
-            System.arraycopy(tag, 0, ct, data.length, MAC_TAG_LEN);
-            return ct;
+            byte[] encryptedTag = mode.finishEncryption();
+            System.arraycopy(encryptedTag, 0, out, data.length, MAC_TAG_LEN);
+            return out;
         } finally {
             mode.destroy();
         }
     }
 
     /**
-     * Расшифрование с проверкой CMAC (OMAC-вариант).
-     * Ожидает на входе шифртекст || 16-байтовый MAC.
-     * Размер секции ACPKM — по умолчанию (4096 байт).
+     * Расшифрование OMAC-варианта по RFC 9337 §5.1.2 с проверкой тега.
+     * Размер секции ACPKM - по умолчанию (4096 байт).
      *
-     * @param dk   ключ (SymmetricKey)
-     * @param ukm  UKM (16 байт)
-     * @param data зашифрованные данные + MAC (последние 16 байт)
-     * @return расшифрованные данные (без MAC)
-     * @throws AuthenticationException если MAC не совпадает
+     * @param dk   ключ DK (SymmetricKey)
+     * @param ukm  UKM (ровно 16 байт)
+     * @param data шифртекст ‖ зашифрованный тег (последние 16 байт)
+     * @return расшифрованные данные (без тега)
+     * @throws AuthenticationException если вход короче тега или тег не совпал
      */
     public static byte[] decryptWithMac(CipherParameters dk, byte[] ukm, byte[] data)
             throws AuthenticationException {
@@ -391,15 +480,14 @@ public final class CtrAcpkmMode {
     }
 
     /**
-     * Расшифрование с проверкой CMAC (OMAC-вариант) с заданным размером секции.
-     * Ожидает на входе шифртекст || 16-байтовый MAC.
+     * Расшифрование OMAC-варианта по RFC 9337 §5.1.2 с заданным размером секции.
      *
-     * @param dk          ключ (SymmetricKey)
-     * @param ukm         UKM (16 байт)
-     * @param data        зашифрованные данные + MAC (последние 16 байт)
+     * @param dk          ключ DK (SymmetricKey)
+     * @param ukm         UKM (ровно 16 байт)
+     * @param data        шифртекст ‖ зашифрованный тег (последние 16 байт)
      * @param sectionSize размер секции ACPKM в байтах
-     * @return расшифрованные данные (без MAC)
-     * @throws AuthenticationException если MAC не совпадает
+     * @return расшифрованные данные (без тега)
+     * @throws AuthenticationException если вход короче тега или тег не совпал
      */
     public static byte[] decryptWithMac(
             CipherParameters dk, byte[] ukm, byte[] data, int sectionSize)
@@ -408,80 +496,42 @@ public final class CtrAcpkmMode {
             throw new AuthenticationException("Data too short for OMAC verification");
         }
 
-        byte[] ct = Arrays.copyOf(data, data.length - MAC_TAG_LEN);
-        byte[] expectedTag = Arrays.copyOfRange(data, data.length - MAC_TAG_LEN, data.length);
+        int textLen = data.length - MAC_TAG_LEN;
+        byte[] encryptedTag = Arrays.copyOfRange(data, textLen, data.length);
 
         CtrAcpkmMode mode = new CtrAcpkmMode(new Kuznyechik(), true, sectionSize);
+        byte[] plaintext = null;
+        boolean authenticated = false;
         try {
-            mode.init(false, new ParametersWithIV(dk, ukm));
+            mode.init(false, new ParametersWithIV(dk, requireUkm(ukm)));
 
-            byte[] plaintext = new byte[ct.length];
-            mode.processBytes(ct, 0, ct.length, plaintext, 0);
+            plaintext = new byte[textLen];
+            mode.processBytes(data, 0, textLen, plaintext, 0);
+            mode.verifyEncryptedTag(encryptedTag);
 
-            byte[] computedTag = mode.getMacTag();
-
-            if (!MessageDigest.isEqual(computedTag, expectedTag)) {
-                throw new AuthenticationException("CTR-ACPKM-OMAC authentication tag mismatch");
-            }
-
+            authenticated = true;
             return plaintext;
         } finally {
+            // Непроверенный открытый текст не должен остаться в куче; на успешном пути
+            // plaintext - возвращаемый результат, его затирать нельзя.
+            if (!authenticated && plaintext != null) {
+                Arrays.fill(plaintext, (byte) 0);
+            }
+            Arrays.fill(encryptedTag, (byte) 0);
             mode.destroy();
-        }
-    }
-
-    /**
-     * Вырабатывает ключи шифрования K(1) и имитовставки K(2) из CEK через KDF_TREE.
-     * RFC 9337 §5.1.1: KDF_TREE(cek, "kdf tree", kdfSeed, 2, 32) -> K(1)||K(2).
-     * Каждый ключ — 32 байта.
-     *
-     * @param cek     контентный ключ шифрования (CEK), 32 байта
-     * @param kdfSeed 8-байтовый seed для KDF_TREE (ukm[8..15])
-     * @return массив из двух ключей: [0] = K(1) (шифрование), [1] = K(2) (имитовставка)
-     */
-    public static byte[][] deriveContentKeys(byte[] cek, byte[] kdfSeed) {
-        if (cek.length != KEY_LEN) {
-            throw new IllegalArgumentException("CEK must be " + KEY_LEN + " bytes");
-        }
-        if (kdfSeed.length != 8) {
-            throw new IllegalArgumentException("KDF seed must be 8 bytes");
-        }
-        byte[] derived =
-                KdfTreeGostR3411_2012_256.generate(cek, KDF_TREE_LABEL, kdfSeed, 2, KEY_LEN);
-        byte[] encKey = Arrays.copyOfRange(derived, 0, KEY_LEN);
-        byte[] macKey = Arrays.copyOfRange(derived, KEY_LEN, KEY_LEN * 2);
-        Arrays.fill(derived, (byte) 0);
-        return new byte[][] {encKey, macKey};
-    }
-
-    /**
-     * Вычисляет CMAC (ГОСТ Р 34.13-2015 §5.1) с ключом Кузнечика над переданными данными.
-     * Возвращает 16-байтовый тег. Экземпляр Cmac создаётся и затирается внутри вызова.
-     *
-     * @param macKey ключ имитовставки (32 байта), затирается после использования
-     * @param data   данные, по которым вычисляется имитовставка
-     * @return 16-байтовый CMAC-тег
-     */
-    public static byte[] computeCmac(byte[] macKey, byte[] data) {
-        Kuznyechik cmacCipher = new Kuznyechik();
-        Cmac cmac = new Cmac(cmacCipher);
-        SymmetricKey key = new SymmetricKey(macKey);
-        try {
-            cmac.init(key);
-            cmac.update(data, 0, data.length);
-            byte[] tag = new byte[MAC_TAG_LEN];
-            cmac.doFinal(tag, 0);
-            return tag;
-        } finally {
-            key.destroy();
-            cmac.destroy();
-            cmacCipher.destroy();
         }
     }
 
     /** @return имя алгоритма */
     public String getAlgorithmName() {
         return "Kuznyechik/CTR-ACPKM" + (useOmac ? "-OMAC" : "");
+    }
+
+    private static byte[] requireUkm(byte[] ukm) {
+        if (ukm == null) {
+            throw new IllegalArgumentException("UKM must not be null");
+        }
+        return ukm;
     }
 
     private void initCounter(byte[] iv) {
@@ -517,13 +567,27 @@ public final class CtrAcpkmMode {
         }
     }
 
+    /**
+     * Возвращает режим в состояние сразу после {@link #init}: ключ нулевой секции, счётчик
+     * из того же IV, пустая гамма, чистый MAC. Нужен повторному расшифрованию тем же
+     * UKM; для шифрования повторное использование того же UKM недопустимо (повтор гаммы).
+     *
+     * @throws IllegalStateException если режим не инициализирован
+     */
     public void reset() {
+        checkInitialized();
         Arrays.fill(gammaBuf, (byte) 0);
         byteCount = 0;
         processedBytes = 0;
-        computedTag = null;
+        finished = false;
         initCounter(Arrays.copyOf(ctr, IV_LEN));
-        cipher.reset();
+        // После ACPKM-смены в шифре лежит производный ключ, поэтому восстанавливаем исходный.
+        SymmetricKey restored = new SymmetricKey(initialKey);
+        try {
+            cipher.init(true, restored);
+        } finally {
+            restored.destroy();
+        }
         if (mac != null) {
             mac.reset();
         }
@@ -534,13 +598,24 @@ public final class CtrAcpkmMode {
      */
     public void destroy() {
         cipher.destroy();
+        wipeSessionState();
+        initialized = false;
+    }
+
+    /** Затирает всё, что относится к текущему сеансу, кроме самого шифра. */
+    private void wipeSessionState() {
         Arrays.fill(ctr, (byte) 0);
         Arrays.fill(gammaBuf, (byte) 0);
+        byteCount = 0;
         processedBytes = 0;
+        finished = false;
+        if (initialKey != null) {
+            Arrays.fill(initialKey, (byte) 0);
+            initialKey = null;
+        }
         if (mac != null) {
             mac.destroy();
+            mac = null;
         }
-        computedTag = null;
-        initialized = false;
     }
 }

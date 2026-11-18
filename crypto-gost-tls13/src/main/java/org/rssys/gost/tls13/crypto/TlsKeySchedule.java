@@ -169,21 +169,41 @@ public final class TlsKeySchedule {
      */
     public byte[] computeVerifyData(byte[] trafficSecret, byte[] transcript) {
         checkNotDestroyed();
+        return finishedMac(trafficSecret, transcript, hashLen);
+    }
+
+    /**
+     * HMAC-Streebog по ключу {@code finished_key}, выведенному из секрета (RFC 8446 §4.4.4):
+     * {@code finished_key = HKDF-Expand-Label(secret, "finished", "", hashLen)}.
+     * <p>
+     * Одна реализация для verify_data Finished и для PSK binder: у них различается только
+     * секрет (traffic secret и binder_key) и подписываемые данные.
+     *
+     * @param secret  traffic secret или binder_key (не затирается внутри)
+     * @param data    подписываемые данные (хеш транскрипта)
+     * @param hashLen 32 для Streebog-256, 64 для Streebog-512
+     * @return verify_data или binder длиной {@code hashLen}
+     */
+    static byte[] finishedMac(byte[] secret, byte[] data, int hashLen) {
         byte[] finishedKey =
                 HkdfStreebog.expandLabel(
-                        trafficSecret,
+                        secret,
                         HkdfStreebog.PREFIXED_FINISHED,
                         HkdfStreebog.EMPTY_CONTEXT,
                         hashLen,
                         hashLen);
         Hmac hmac = HkdfStreebog.newHmac(hashLen);
-        hmac.init(finishedKey);
-        hmac.update(transcript, 0, transcript.length);
-        byte[] verifyData = new byte[hashLen];
-        hmac.doFinal(verifyData, 0);
-        hmac.clear();
-        TlsUtils.wipeArray(finishedKey);
-        return verifyData;
+        try {
+            hmac.init(finishedKey);
+            hmac.update(data, 0, data.length);
+            byte[] mac = new byte[hashLen];
+            hmac.doFinal(mac, 0);
+            return mac;
+        } finally {
+            // finished_key и производные от него ipad/opad чистим и при исключении
+            hmac.clear();
+            TlsUtils.wipeArray(finishedKey);
+        }
     }
 
     // ========================================================================
@@ -208,6 +228,57 @@ public final class TlsKeySchedule {
     }
 
     /**
+     * PSK binder (RFC 8446 §4.2.11.2): {@code HMAC(finished_key(binder_key), transcriptHash)},
+     * где {@code binder_key = Derive-Secret(HKDF-Extract(0, PSK), "res binder", "")}.
+     * <p>
+     * Не требует экземпляра: binder считается до того, как key schedule рукопожатия существует.
+     * Промежуточные секреты затираются.
+     *
+     * @param psk            предварительный общий ключ
+     * @param transcriptHash хеш усечённого ClientHello (с префиксом после HRR)
+     * @param hashLen        32 для Streebog-256, 64 для Streebog-512
+     * @return binder длиной {@code hashLen}
+     */
+    public static byte[] computePskBinder(byte[] psk, byte[] transcriptHash, int hashLen) {
+        byte[] earlySecret = null;
+        byte[] binderKey = null;
+        try {
+            earlySecret = HkdfStreebog.extract(new byte[hashLen], psk, hashLen);
+            byte[] emptyHash = new byte[hashLen];
+            HkdfStreebog.newDigest(hashLen).doFinal(emptyHash, 0);
+            binderKey =
+                    HkdfStreebog.deriveSecret(
+                            earlySecret, HkdfStreebog.PREFIXED_RES_BINDER, emptyHash, hashLen);
+            return finishedMac(binderKey, transcriptHash, hashLen);
+        } finally {
+            TlsUtils.wipeArray(earlySecret);
+            TlsUtils.wipeArray(binderKey);
+        }
+    }
+
+    /**
+     * PSK возобновления (RFC 8446 §4.6.1):
+     * {@code HKDF-Expand-Label(resumption_master_secret, "resumption", ticket_nonce, Hash.length)}.
+     *
+     * Вывод без проверки аргументов. Для вызовов извне модуля предназначен
+     * {@link org.rssys.gost.tls13.psk.TlsPskHelper#derivePsk}, который принимает {@code null}
+     * вместо секрета и делегирует сюда.
+     *
+     * @param resumptionMasterSecret Resumption Master Secret (не затирается внутри)
+     * @param ticketNonce            nonce из NewSessionTicket
+     * @param hashLen                32 для Streebog-256, 64 для Streebog-512
+     * @return PSK; вызывающий обязан затереть значение
+     */
+    public static byte[] derivePsk(byte[] resumptionMasterSecret, byte[] ticketNonce, int hashLen) {
+        return HkdfStreebog.expandLabel(
+                resumptionMasterSecret,
+                HkdfStreebog.PREFIXED_RESUMPTION,
+                ticketNonce,
+                hashLen,
+                hashLen);
+    }
+
+    /**
      * Resumption Master Secret = Derive-Secret(master_secret, "res master", transcriptHash)
      * (RFC 8446 §7.1).
      *
@@ -223,10 +294,22 @@ public final class TlsKeySchedule {
                 masterSecret, HkdfStreebog.PREFIXED_RES_MASTER, transcriptHash, hashLen);
     }
 
-    // exporter_secret = Derive-Secret(master, "exp master", "") (RFC 8446 §7.5)
-    // не реализован — библиотека не имеет потребителей channel binding.
-    // Добавить PREFIXED_EXP_MASTER в HkdfStreebog и getExporterMasterSecret() здесь
-    // при появлении exportKeyingMaterial() на уровне SSLEngine.
+    /**
+     * Exporter Master Secret = Derive-Secret(master_secret, "exp master", transcriptHash)
+     * (RFC 8446 §7.1).
+     *
+     * @param transcriptHash хэш ClientHello..server Finished (тот же, что для application
+     *     traffic secrets), а не хэш до client Finished и не хэш пустой строки
+     * @return exporter master secret; вызывающий обязан затереть значение
+     */
+    public byte[] getExporterMasterSecret(byte[] transcriptHash) {
+        checkNotDestroyed();
+        if (masterSecret == null) {
+            throw new IllegalStateException("Master secret not yet derived");
+        }
+        return HkdfStreebog.deriveSecret(
+                masterSecret, HkdfStreebog.PREFIXED_EXP_MASTER, transcriptHash, hashLen);
+    }
 
     // ========================================================================
     // Жизненный цикл
@@ -269,6 +352,20 @@ public final class TlsKeySchedule {
      * @return traffic keys (key + IV)
      */
     public TlsTrafficKeys deriveTrafficKeys(byte[] trafficSecret) {
+        return deriveTrafficKeys(trafficSecret, ciphersuite);
+    }
+
+    /**
+     * То же без экземпляра: нужно там, где key schedule рукопожатия уже уничтожен (KeyUpdate
+     * в движке после завершения handshake). Возвращаемые ключи принадлежат вызывающему.
+     *
+     * @param trafficSecret traffic secret (не затирается внутри)
+     * @param ciphersuite   согласованный cipher suite: задаёт длины ключа, IV и хеша
+     * @return traffic keys (key + IV)
+     */
+    public static TlsTrafficKeys deriveTrafficKeys(
+            byte[] trafficSecret, TlsCiphersuite ciphersuite) {
+        int hashLen = ciphersuite.getHashLen();
         byte[] key =
                 HkdfStreebog.expandLabel(
                         trafficSecret,
@@ -284,6 +381,26 @@ public final class TlsKeySchedule {
                         ciphersuite.getIvLen(),
                         hashLen);
         return new TlsTrafficKeys(key, iv);
+    }
+
+    /**
+     * Следующий traffic secret при KeyUpdate (RFC 8446 §7.2):
+     * {@code HKDF-Expand-Label(traffic_secret_N, "traffic upd", "", Hash.length)}.
+     * <p>
+     * Прежний секрет не затирается: им владеет вызывающий (читающая сторона заменяет и затирает
+     * его, пишущая держит новый как отложенный до отправки KeyUpdate).
+     *
+     * @param trafficSecret текущий traffic secret
+     * @param hashLen       32 для Streebog-256, 64 для Streebog-512
+     * @return следующий traffic secret; вызывающий обязан затереть значение
+     */
+    public static byte[] nextTrafficSecret(byte[] trafficSecret, int hashLen) {
+        return HkdfStreebog.expandLabel(
+                trafficSecret,
+                HkdfStreebog.PREFIXED_TRAFFIC_UPD,
+                HkdfStreebog.EMPTY_CONTEXT,
+                hashLen,
+                hashLen);
     }
 
     /**

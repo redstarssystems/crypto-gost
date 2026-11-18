@@ -11,7 +11,7 @@ import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
 
-@DisplayName("Digest Tests")
+@DisplayName("Digest: тесты")
 class DigestTest {
 
     private static final byte[] MSG = "hello gost".getBytes(StandardCharsets.UTF_8);

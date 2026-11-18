@@ -20,8 +20,8 @@ import org.rssys.gost.jsse.bridge.CertificateBridge;
 import org.rssys.gost.jsse.manager.GostX509KeyManager;
 import org.rssys.gost.jsse.manager.GostX509TrustManager;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
 
 /**
  * Консольный HTTP-клиент с поддержкой ГОСТ TLS 1.3 — gost-curl.
@@ -142,7 +142,7 @@ public final class GostCurl {
         GostX509TrustManager tm;
 
         if (opts.insecure) {
-            tm = new GostX509TrustManager(null, false);
+            tm = GostX509TrustManager.insecureTrustAll();
         } else if (opts.caFile != null) {
             tm = createTrustManager(Files.readAllBytes(Path.of(opts.caFile)));
         } else {
@@ -174,8 +174,8 @@ public final class GostCurl {
     }
 
     private static GostX509TrustManager createTrustManager(byte[] raw) throws Exception {
-        PublicKeyParameters caKey = new GostCertificate(pemToDer(raw)).getPublicKey();
-        return new GostX509TrustManager(caKey, false);
+        GostCertificate caCert = new GostCertificate(pemToDer(raw));
+        return GostX509TrustManager.fromTrustAnchors(TrustAnchors.ofCertificate(caCert));
     }
 
     private static byte[] pemToDer(byte[] raw) {

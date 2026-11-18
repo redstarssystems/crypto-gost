@@ -135,7 +135,7 @@ class GostPkcs12ParserTest {
     void testParsePfx() {
         byte[] salt = hex("01 02 03 04 05 06 07 08");
         byte[] digestVal = hex("AA BB CC DD");
-        byte[] macData = buildMacData(salt, 100, GostOids.HMAC_STREEBOG_512, digestVal);
+        byte[] macData = buildMacData(salt, 100, GostOids.DIGEST_512, digestVal);
 
         byte[] pfx = buildFullPfx(encodeSequence(), macData);
 
@@ -148,7 +148,7 @@ class GostPkcs12ParserTest {
         MacData md = result.getMacData();
         assertEquals(100, md.getIterations());
         assertArrayEquals(salt, md.getSalt());
-        assertEquals(GostOids.HMAC_STREEBOG_512, md.getDigestAlgorithm());
+        assertEquals(GostOids.DIGEST_512, md.getDigestAlgorithm());
         assertArrayEquals(digestVal, md.getDigestValue());
 
         List<ContentInfoData> cis = result.getAuthSafe().getContentInfos();
@@ -186,13 +186,129 @@ class GostPkcs12ParserTest {
         // MacData без iterations: SEQUENCE { DigestInfo, OCTET STRING salt }
         byte[] macData =
                 encodeSequence(
-                        buildDigestInfo(GostOids.HMAC_STREEBOG_512, digestVal),
-                        encodeOctetString(salt));
+                        buildDigestInfo(GostOids.DIGEST_512, digestVal), encodeOctetString(salt));
 
         byte[] pfx = buildFullPfx(encodeSequence(), macData);
         IllegalArgumentException ex =
                 assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx));
         assertTrue(ex.getMessage().contains("MacData iterations too low"));
+    }
+
+    // ========================================================================
+    // Строгий разбор MacData (RFC 9548 §7: параметры алгоритма опущены; OpenSSL пишет NULL)
+    // ========================================================================
+
+    /** MacData с произвольным AlgorithmIdentifier внутри DigestInfo. */
+    private static byte[] macDataWithAlgId(byte[] algId, byte[] salt) {
+        byte[] digestInfo = encodeSequence(algId, encodeOctetString(hex("11 22 33 44")));
+        return encodeSequence(digestInfo, encodeOctetString(salt), encodeInteger(100));
+    }
+
+    @Test
+    @DisplayName("MacData: AlgorithmIdentifier с параметрами NULL принимается (так пишет OpenSSL)")
+    void testMacDataNullParamsAccepted() {
+        byte[] algId = encodeSequence(encodeOid(GostOids.DIGEST_512), encodeNull());
+        byte[] pfx =
+                buildFullPfx(
+                        encodeSequence(), macDataWithAlgId(algId, hex("01 02 03 04 05 06 07 08")));
+
+        PfxData result = GostPkcs12Parser.parsePfx(pfx, 50);
+
+        assertEquals(
+                GostOids.DIGEST_512,
+                result.getMacData().getDigestAlgorithm(),
+                "OID должен читаться при параметрах NULL");
+    }
+
+    @Test
+    @DisplayName("MacData: параметры алгоритма, не равные NULL -> отказ")
+    void testMacDataNonNullParamsRejected() {
+        byte[] algId = encodeSequence(encodeOid(GostOids.DIGEST_512), encodeOctetString(hex("00")));
+        byte[] pfx =
+                buildFullPfx(
+                        encodeSequence(), macDataWithAlgId(algId, hex("01 02 03 04 05 06 07 08")));
+
+        IllegalArgumentException ex =
+                assertThrows(
+                        IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx, 50));
+        assertTrue(
+                ex.getMessage().contains("absent or NULL parameters"),
+                "ожидался отказ по параметрам: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("MacData: лишний элемент в AlgorithmIdentifier -> отказ")
+    void testMacDataExtraAlgIdElementRejected() {
+        byte[] algId = encodeSequence(encodeOid(GostOids.DIGEST_512), encodeNull(), encodeNull());
+        byte[] pfx =
+                buildFullPfx(
+                        encodeSequence(), macDataWithAlgId(algId, hex("01 02 03 04 05 06 07 08")));
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostPkcs12Parser.parsePfx(pfx, 50),
+                "три элемента в AlgorithmIdentifier недопустимы");
+    }
+
+    @Test
+    @DisplayName("MacData: лишний элемент в DigestInfo -> отказ")
+    void testMacDataExtraDigestInfoElementRejected() {
+        byte[] digestInfo =
+                encodeSequence(
+                        encodeSequence(encodeOid(GostOids.DIGEST_512)),
+                        encodeOctetString(hex("11 22 33 44")),
+                        encodeNull());
+        byte[] macData =
+                encodeSequence(
+                        digestInfo,
+                        encodeOctetString(hex("01 02 03 04 05 06 07 08")),
+                        encodeInteger(100));
+        byte[] pfx = buildFullPfx(encodeSequence(), macData);
+
+        IllegalArgumentException ex =
+                assertThrows(
+                        IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx, 50));
+        assertTrue(
+                ex.getMessage().contains("exactly"),
+                "DigestInfo должен состоять ровно из двух элементов: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("MacData: четыре элемента -> отказ")
+    void testMacDataFourElementsRejected() {
+        byte[] macData =
+                encodeSequence(
+                        buildDigestInfo(GostOids.DIGEST_512, hex("11 22 33 44")),
+                        encodeOctetString(hex("01 02 03 04 05 06 07 08")),
+                        encodeInteger(100),
+                        encodeNull());
+        byte[] pfx = buildFullPfx(encodeSequence(), macData);
+
+        assertThrows(IllegalArgumentException.class, () -> GostPkcs12Parser.parsePfx(pfx, 50));
+    }
+
+    @Test
+    @DisplayName("MacData: соль 7 байт и 33 байта вне диапазона 8..32 -> отказ, 8 и 32 принимаются")
+    void testMacDataSaltBounds() {
+        for (int length : new int[] {7, 33}) {
+            byte[] macData =
+                    buildMacData(new byte[length], 100, GostOids.DIGEST_512, hex("11 22 33 44"));
+            byte[] pfx = buildFullPfx(encodeSequence(), macData);
+            IllegalArgumentException ex =
+                    assertThrows(
+                            IllegalArgumentException.class,
+                            () -> GostPkcs12Parser.parsePfx(pfx, 50),
+                            "соль длиной " + length + " должна отвергаться");
+            assertTrue(ex.getMessage().contains("salt length"), ex.getMessage());
+        }
+        for (int length : new int[] {8, 32}) {
+            byte[] macData =
+                    buildMacData(new byte[length], 100, GostOids.DIGEST_512, hex("11 22 33 44"));
+            byte[] pfx = buildFullPfx(encodeSequence(), macData);
+            assertDoesNotThrow(
+                    () -> GostPkcs12Parser.parsePfx(pfx, 50),
+                    "соль длиной " + length + " входит в диапазон RFC");
+        }
     }
 
     @Test
@@ -252,6 +368,40 @@ class GostPkcs12ParserTest {
         assertEquals(GostOids.PBES2, epki.getEncryptionAlgorithmOid());
         assertArrayEquals(encData, epki.getEncryptedData());
         assertNotNull(epki.getEncryptionParams());
+    }
+
+    @Test
+    @DisplayName(
+            "parsePbes2Params: соль 7 и 33 байта вне диапазона 8..32 -> отказ, 8 и 32 принимаются")
+    void testParsePbes2ParamsSaltBounds() {
+        byte[] ukm = new byte[16];
+        for (int length : new int[] {7, 33}) {
+            byte[] params =
+                    buildPbes2Params(
+                            new byte[length],
+                            1000,
+                            ukm,
+                            GostOids.HMAC_STREEBOG_512,
+                            GostOids.KUZ_CTR_ACPKM_OMAC);
+            IllegalArgumentException ex =
+                    assertThrows(
+                            IllegalArgumentException.class,
+                            () -> GostPkcs12Parser.parsePbes2Params(params, 50),
+                            "соль длиной " + length + " должна отвергаться");
+            assertTrue(ex.getMessage().contains("salt length"), ex.getMessage());
+        }
+        for (int length : new int[] {8, 32}) {
+            byte[] params =
+                    buildPbes2Params(
+                            new byte[length],
+                            1000,
+                            ukm,
+                            GostOids.HMAC_STREEBOG_512,
+                            GostOids.KUZ_CTR_ACPKM_OMAC);
+            assertDoesNotThrow(
+                    () -> GostPkcs12Parser.parsePbes2Params(params, 50),
+                    "соль длиной " + length + " входит в диапазон RFC 9337");
+        }
     }
 
     @Test
@@ -372,7 +522,7 @@ class GostPkcs12ParserTest {
         byte[] digestVal = hex("11 22 33 44");
         byte[] macDataDer =
                 encodeSequence(
-                        buildDigestInfo(GostOids.HMAC_STREEBOG_512, digestVal),
+                        buildDigestInfo(GostOids.DIGEST_512, digestVal),
                         encodeOctetString(salt),
                         encodeInteger(new java.math.BigInteger("1000003E8", 16)));
         byte[] pfx = buildFullPfx(encodeSequence(), macDataDer);

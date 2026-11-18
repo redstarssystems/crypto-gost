@@ -44,14 +44,18 @@ import org.rssys.gost.mac.Mac;
  *     m.update(buf, 0, n);
  * }
  * byte[] mac = m.digest();
+ * m.destroy();
  * }</pre>
+ *
+ * <p>Экземпляр хранит состояние хэша, а для HMAC и выведенные из ключа значения: после
+ * использования вызовите {@link #destroy()} или используйте его в try-with-resources.
  *
  * <h3>Thread-safety:</h3>
  * Статические методы потокобезопасны.
  * Инстанс {@code Digest} <b>не является</b> потокобезопасным —
  * создавайте отдельный экземпляр на каждый поток.
  */
-public final class Digest {
+public final class Digest implements AutoCloseable {
 
     /**
      * Алгоритм хэширования или HMAC.
@@ -79,8 +83,11 @@ public final class Digest {
     /** MAC для HMAC_256 / HMAC_512, null для дайджестов. */
     private final Mac mac;
 
-    /** Алгоритм этого экземпляра. */
-    private final Algorithm algorithm;
+    /**
+     * Экземпляр уничтожен. Ведётся здесь, а не в реализации: дайджест без ключа после
+     * {@code destroy()} оставался бы пригодным, а HMAC нет, и один метод вёл бы себя по-разному.
+     */
+    private boolean destroyed;
 
     // -----------------------------------------------------------------------
     // Конструкторы (инкрементальный режим)
@@ -97,7 +104,6 @@ public final class Digest {
             throw new IllegalArgumentException(
                     algorithm + " requires a key — use Digest(Algorithm, SymmetricKey)");
         }
-        this.algorithm = algorithm;
         this.digestImpl = createDigestImpl(algorithm);
         this.mac = null;
     }
@@ -114,7 +120,6 @@ public final class Digest {
             throw new IllegalArgumentException(
                     algorithm + " does not use a key — use Digest(Algorithm)");
         }
-        this.algorithm = algorithm;
         this.digestImpl = null;
         this.mac = createHmac(algorithm, key);
     }
@@ -138,6 +143,7 @@ public final class Digest {
      * @return this
      */
     public Digest update(byte[] data, int off, int len) {
+        checkNotDestroyed();
         if (digestImpl != null) {
             digestImpl.update(data, off, len);
         } else {
@@ -153,6 +159,7 @@ public final class Digest {
      * @return хэш или MAC в виде byte[]
      */
     public byte[] digest() {
+        checkNotDestroyed();
         if (digestImpl != null) {
             byte[] out = new byte[digestImpl.getDigestSize()];
             digestImpl.doFinal(out, 0); // doFinal вызывает reset() внутри
@@ -168,11 +175,35 @@ public final class Digest {
      * Сбрасывает внутреннее состояние без вычисления результата.
      */
     public void reset() {
+        checkNotDestroyed();
         if (digestImpl != null) {
             digestImpl.reset();
         } else {
             mac.reset();
         }
+    }
+
+    /**
+     * Затирает внутреннее состояние: хвост входных данных и, для HMAC, ipad и opad, выведенные из
+     * ключа. Идемпотентен. После вызова экземпляр непригоден для всех алгоритмов: {@code update},
+     * {@code digest} и {@code reset} бросают {@link IllegalStateException}. Нужен, когда
+     * хэшируются секретные данные или используется ключ: {@link #reset()} рабочие буферы не
+     * очищает.
+     */
+    public void destroy() {
+        if (destroyed) return;
+        destroyed = true;
+        if (digestImpl != null) {
+            digestImpl.destroy();
+        } else {
+            mac.destroy();
+        }
+    }
+
+    /** То же, что {@link #destroy()}: позволяет использовать экземпляр в try-with-resources. */
+    @Override
+    public void close() {
+        destroy();
     }
 
     // -----------------------------------------------------------------------
@@ -227,18 +258,29 @@ public final class Digest {
 
     private static byte[] digest(byte[] data, Algorithm algorithm) {
         org.rssys.gost.digest.Digest d = createDigestImpl(algorithm);
-        d.update(data, 0, data.length);
-        byte[] out = new byte[d.getDigestSize()];
-        d.doFinal(out, 0);
-        return out;
+        try {
+            d.update(data, 0, data.length);
+            byte[] out = new byte[d.getDigestSize()];
+            d.doFinal(out, 0);
+            return out;
+        } finally {
+            // reset() рабочие буферы не очищает: в них остаётся хвост входа (последний неполный
+            // блок) и производные от него значения; хешируются в том числе секретные данные
+            d.destroy();
+        }
     }
 
     private static byte[] hmac(byte[] data, SymmetricKey key, Algorithm algorithm) {
         Mac m = createHmac(algorithm, key);
-        m.update(data, 0, data.length);
-        byte[] out = new byte[m.getMacSize()];
-        m.doFinal(out, 0);
-        return out;
+        try {
+            m.update(data, 0, data.length);
+            byte[] out = new byte[m.getMacSize()];
+            m.doFinal(out, 0);
+            return out;
+        } finally {
+            // ipad/opad выведены из ключа и не должны пережить вызов
+            m.destroy();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -246,29 +288,30 @@ public final class Digest {
     // -----------------------------------------------------------------------
 
     private static org.rssys.gost.digest.Digest createDigestImpl(Algorithm algorithm) {
-        switch (algorithm) {
-            case STREEBOG_256:
-                return new Streebog256();
-            case STREEBOG_512:
-                return new Streebog512();
-            default:
-                throw new IllegalArgumentException("Not a digest algorithm: " + algorithm);
-        }
+        return switch (algorithm) {
+            case STREEBOG_256 -> new Streebog256();
+            case STREEBOG_512 -> new Streebog512();
+            case HMAC_256, HMAC_512 ->
+                    throw new IllegalArgumentException("Not a digest algorithm: " + algorithm);
+        };
     }
 
     private static Mac createHmac(Algorithm algorithm, SymmetricKey key) {
-        Mac m;
-        switch (algorithm) {
-            case HMAC_256:
-                m = new Hmac(new Streebog256());
-                break;
-            case HMAC_512:
-                m = new Hmac(new Streebog512());
-                break;
-            default:
-                throw new IllegalArgumentException("Not an HMAC algorithm: " + algorithm);
-        }
+        Mac m =
+                switch (algorithm) {
+                    case HMAC_256 -> new Hmac(new Streebog256());
+                    case HMAC_512 -> new Hmac(new Streebog512());
+                    case STREEBOG_256, STREEBOG_512 ->
+                            throw new IllegalArgumentException(
+                                    "Not an HMAC algorithm: " + algorithm);
+                };
         m.init(key);
         return m;
+    }
+
+    private void checkNotDestroyed() {
+        if (destroyed) {
+            throw new IllegalStateException("Digest has been destroyed");
+        }
     }
 }

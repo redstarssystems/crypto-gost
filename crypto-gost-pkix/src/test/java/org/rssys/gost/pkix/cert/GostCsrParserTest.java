@@ -209,9 +209,9 @@ class GostCsrParserTest {
                         DerCodec.encodeOid("1.2.840.113549.1.9.14"), // extensionRequest OID
                         attrValues);
 
-        // Attributes ::= [0] IMPLICIT SET OF Attribute
-        byte[] attributes =
-                DerCodec.encodeContextConstructed(0, DerCodec.encodeSet(extensionRequestAttr));
+        // Attributes ::= [0] IMPLICIT SET OF Attribute: тег SET замещён тегом [0], поэтому
+        // содержимое — сразу Attribute SEQUENCE, без внешнего SET
+        byte[] attributes = DerCodec.encodeContextConstructed(0, extensionRequestAttr);
 
         // Собираем TBS
         byte[] spki = GostDerCodec.encodePublicKey(kp.getPublic());
@@ -384,5 +384,28 @@ class GostCsrParserTest {
         assertTrue(dn.contains("TestCN"));
         assertTrue(dn.contains("TestOrg"));
         assertTrue(csr.verifySelf());
+    }
+
+    @Test
+    @DisplayName("CSR: CertificationRequestInfo, поглотивший подпись, не принимается")
+    void testCsrInfoSwallowingSignatureRejected() {
+        KeyPair kp = KeyGenerator.generateKeyPair(ECParameters.tc26a256());
+        byte[] csrDer = GostCsrBuilder.create("CN=Bounds", kp.getPublic()).sign(kp.getPrivate());
+        byte[][] parts = DerCodec.parseSequenceContents(csrDer, 0);
+        byte[][] infoFields = DerCodec.parseSequenceContents(parts[0], 0);
+        java.util.List<byte[]> swallowed = new java.util.ArrayList<>(java.util.List.of(infoFields));
+        swallowed.add(parts[1]);
+        swallowed.add(parts[2]);
+        byte[] forgedInfo = DerCodec.encodeSequence(swallowed.toArray(new byte[0][]));
+        byte[] outer = DerCodec.encodeSequence(forgedInfo);
+        byte[] forged = new byte[outer.length + parts[1].length + parts[2].length];
+        System.arraycopy(outer, 0, forged, 0, outer.length);
+        System.arraycopy(parts[1], 0, forged, outer.length, parts[1].length);
+        System.arraycopy(parts[2], 0, forged, outer.length + parts[1].length, parts[2].length);
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> GostCsrParser.fromDer(forged),
+                "подпись за границей внешней SEQUENCE CSR не должна читаться");
     }
 }

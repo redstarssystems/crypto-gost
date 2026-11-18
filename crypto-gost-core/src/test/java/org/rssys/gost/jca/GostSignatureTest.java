@@ -7,38 +7,33 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.security.Security;
 import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.rssys.gost.JcaTestSupport;
 import org.rssys.gost.jca.key.GostECPrivateKey;
 import org.rssys.gost.jca.key.GostECPrivateKeySpec;
 import org.rssys.gost.jca.key.GostECPublicKey;
 import org.rssys.gost.jca.key.GostECPublicKeySpec;
-import org.rssys.gost.signature.ECPoint;
+import org.rssys.gost.jca.spec.GostSignatureParameterSpec;
+import org.rssys.gost.signature.NonceMode;
 
 @DisplayName("GostSignatureSpi — ГОСТ Р 34.10-2012 через JCA Signature")
+@ExtendWith(JcaTestSupport.class)
 class GostSignatureTest {
 
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
     private static final byte[] MSG =
             "тестовое сообщение ГОСТ ЭП".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
-    @BeforeAll
-    static void registerProvider() {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Параметризованные roundtrip-тесты — все кривые
@@ -164,7 +159,7 @@ class GostSignatureTest {
     // -----------------------------------------------------------------------
 
     @ParameterizedTest
-    @DisplayName("подпись детерминирована — одни данные + ключ -> одна подпись")
+    @DisplayName("подпись в детерминированном режиме — одни данные + ключ -> одна подпись")
     @CsvSource({"ECGOST3410-2012-256, cryptopro-A", "ECGOST3410-2012-512, tc26-gost-A-512"})
     void testSignDeterministic(String sigAlgo, String curveName) throws Exception {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", PROVIDER);
@@ -172,11 +167,13 @@ class GostSignatureTest {
         KeyPair pair = kpg.generateKeyPair();
 
         Signature signer1 = Signature.getInstance(sigAlgo, PROVIDER);
+        signer1.setParameter(new GostSignatureParameterSpec(NonceMode.DETERMINISTIC));
         signer1.initSign(pair.getPrivate());
         signer1.update(MSG);
         byte[] sig1 = signer1.sign();
 
         Signature signer2 = Signature.getInstance(sigAlgo, PROVIDER);
+        signer2.setParameter(new GostSignatureParameterSpec(NonceMode.DETERMINISTIC));
         signer2.initSign(pair.getPrivate());
         signer2.update(MSG);
         byte[] sig2 = signer2.sign();
@@ -190,7 +187,8 @@ class GostSignatureTest {
     // -----------------------------------------------------------------------
 
     @Test
-    @DisplayName("KeyFactory: GostECPublicKey -> X509EncodedKeySpec -> GostECPublicKey roundtrip")
+    @DisplayName(
+            "KeyFactory: GostECPublicKey -> X509EncodedKeySpec -> GostECPublicKey — обратное преобразование")
     void testPublicKeyX509Roundtrip() throws Exception {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", PROVIDER);
         kpg.initialize(new ECGenParameterSpec("cryptopro-A"));
@@ -208,14 +206,15 @@ class GostSignatureTest {
         GostECPublicKey orig = (GostECPublicKey) pair.getPublic();
         GostECPublicKey restoredKey = (GostECPublicKey) restored;
 
-        ECPoint q1 = orig.toPublicKeyParameters().getQ().normalize();
-        ECPoint q2 = restoredKey.toPublicKeyParameters().getQ().normalize();
-        assertEquals(q1.getX(), q2.getX(), "Qx должен совпадать после roundtrip");
-        assertEquals(q1.getY(), q2.getY(), "Qy должен совпадать после roundtrip");
+        assertEquals(
+                orig.toPublicKeyParameters(),
+                restoredKey.toPublicKeyParameters(),
+                "Q должен совпадать после — обратное преобразование");
     }
 
     @Test
-    @DisplayName("KeyFactory: GostECPublicKey -> GostECPublicKeySpec -> GostECPublicKey roundtrip")
+    @DisplayName(
+            "KeyFactory: GostECPublicKey -> GostECPublicKeySpec -> GostECPublicKey — обратное преобразование")
     void testPublicKeySpecRoundtrip() throws Exception {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", PROVIDER);
         kpg.initialize(new ECGenParameterSpec("cryptopro-A"));
@@ -233,10 +232,10 @@ class GostSignatureTest {
 
         GostECPublicKey orig = (GostECPublicKey) pair.getPublic();
         GostECPublicKey restoredKey = (GostECPublicKey) restored;
-        ECPoint q1 = orig.toPublicKeyParameters().getQ().normalize();
-        ECPoint q2 = restoredKey.toPublicKeyParameters().getQ().normalize();
-        assertEquals(q1.getX(), q2.getX(), "Qx должен совпадать после spec roundtrip");
-        assertEquals(q1.getY(), q2.getY(), "Qy должен совпадать после spec roundtrip");
+        assertEquals(
+                orig.toPublicKeyParameters(),
+                restoredKey.toPublicKeyParameters(),
+                "Q должен совпадать после spec — обратное преобразование");
     }
 
     // -----------------------------------------------------------------------
@@ -245,7 +244,7 @@ class GostSignatureTest {
 
     @Test
     @DisplayName(
-            "KeyFactory: GostECPrivateKey -> PKCS8EncodedKeySpec -> GostECPrivateKey roundtrip")
+            "KeyFactory: GostECPrivateKey -> PKCS8EncodedKeySpec -> GostECPrivateKey — обратное преобразование")
     void testPrivateKeyPkcs8Roundtrip() throws Exception {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", PROVIDER);
         kpg.initialize(new ECGenParameterSpec("cryptopro-A"));
@@ -278,7 +277,7 @@ class GostSignatureTest {
 
     @Test
     @DisplayName(
-            "KeyFactory: GostECPrivateKey -> GostECPrivateKeySpec -> GostECPrivateKey roundtrip")
+            "KeyFactory: GostECPrivateKey -> GostECPrivateKeySpec -> GostECPrivateKey — обратное преобразование")
     void testPrivateKeySpecRoundtrip() throws Exception {
         KeyPairGenerator kpg = KeyPairGenerator.getInstance("ECGOST3410-2012", PROVIDER);
         kpg.initialize(new ECGenParameterSpec("cryptopro-A"));
@@ -300,7 +299,7 @@ class GostSignatureTest {
         assertEquals(
                 orig.toPrivateKeyParameters().getD(),
                 restoredKey.toPrivateKeyParameters().getD(),
-                "d должен совпадать после spec roundtrip");
+                "d должен совпадать после spec — обратное преобразование");
 
         restoredKey.destroy();
     }

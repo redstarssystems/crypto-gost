@@ -9,6 +9,7 @@ import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.util.Pack;
 
 /**
  * Кодек подписи ГОСТ Р 34.10-2012 для TLS 1.3 (RFC 9367 §3.2).
@@ -35,8 +36,8 @@ public final class TlsSignatureCodec {
             throw new IllegalArgumentException("r and s must not be null, rolen > 0");
         }
         byte[] out = new byte[2 * rolen];
-        byte[] rLe = toLE(r, rolen);
-        byte[] sLe = toLE(s, rolen);
+        byte[] rLe = Pack.reverseBytes(Pack.toFixedLengthBigEndian(r, rolen));
+        byte[] sLe = Pack.reverseBytes(Pack.toFixedLengthBigEndian(s, rolen));
         System.arraycopy(rLe, 0, out, 0, rolen);
         System.arraycopy(sLe, 0, out, rolen, rolen);
         return out;
@@ -79,6 +80,7 @@ public final class TlsSignatureCodec {
             throw new IllegalArgumentException("hash and priv must not be null, rolen > 0");
         }
         ECParameters params = priv.getParams();
+        requireRolenMatchesCurve(rolen, params);
         Supplier<org.rssys.gost.digest.Digest> factory = digestFactory(params);
         ECDSASigner rawSigner = new ECDSASigner(factory);
         rawSigner.init(true, priv);
@@ -104,6 +106,7 @@ public final class TlsSignatureCodec {
             throw new IllegalArgumentException("hash, pub must not be null, rolen > 0");
         }
         ECParameters params = pub.getParams();
+        requireRolenMatchesCurve(rolen, params);
         Supplier<org.rssys.gost.digest.Digest> factory = digestFactory(params);
         ECDSASigner rawSigner = new ECDSASigner(factory);
         rawSigner.init(false, pub);
@@ -113,23 +116,6 @@ public final class TlsSignatureCodec {
         } finally {
             rawSigner.destroy();
         }
-    }
-
-    /**
-     * Преобразует BigInteger в little-endian массив фиксированной длины.
-     * Старшие байты BigInteger (big-endian) реверсируются, недостающие
-     * дополняются нулями, лишние обрезаются.
-     *
-     * @return little-endian массив фиксированной длины
-     */
-    private static byte[] toLE(BigInteger val, int len) {
-        byte[] be = val.toByteArray();
-        byte[] le = new byte[len];
-        int copyLen = Math.min(be.length, len);
-        for (int i = 0; i < copyLen; i++) {
-            le[i] = be[be.length - 1 - i];
-        }
-        return le;
     }
 
     /**
@@ -144,6 +130,19 @@ public final class TlsSignatureCodec {
             dst[i] = src[src.length - 1 - i];
         }
         return dst;
+    }
+
+    /**
+     * Длина компоненты подписи обязана совпадать с длиной порядка кривой: иначе подпись другого
+     * размера, чем требует RFC 9367 для данной кривой, либо тихо принимается, либо отвергается
+     * лишь случайным несовпадением длин при разборе. Конструктор {@link ECParameters} гарантирует,
+     * что размер порядка кривой в байтах равен {@code hlen}, поэтому сравнение идёт с ним.
+     */
+    private static void requireRolenMatchesCurve(int rolen, ECParameters params) {
+        if (rolen != params.hlen) {
+            throw new IllegalArgumentException(
+                    "rolen " + rolen + " does not match curve component length " + params.hlen);
+        }
     }
 
     /**

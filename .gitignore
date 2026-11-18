@@ -63,3 +63,13 @@ README.xml
 **/crash-*
 test-certs
 
+
+# дампы кучи и аварийные журналы JVM (могут оказаться в рабочем каталоге при падении тестов и замеров)
+*.hprof
+hs_err_pid*.log
+
+# файл, который maven-shade-plugin создаёт при сборке examples/jsse
+examples/jsse/dependency-reduced-pom.xml
+
+# Метка тестового корня КриптоПро (рабочий файл прогона crossval-cades)
+x-validation-tests/.crossval-root-mark.*

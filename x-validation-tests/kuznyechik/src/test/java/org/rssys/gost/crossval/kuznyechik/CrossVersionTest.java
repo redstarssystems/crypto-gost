@@ -1,5 +1,6 @@
 package org.rssys.gost.crossval.kuznyechik;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -8,6 +9,7 @@ import org.rssys.gost.api.Cipher;
 import org.rssys.gost.api.MgmCipher;
 import org.rssys.gost.cipher.SymmetricKey;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -29,15 +31,19 @@ import org.rssys.gost.util.CryptoRandom;
  *
  * JAR предыдущей версии подкладывается через maven-dependency-plugin
  * и передаётся в system property {@code previous.ver}.
+ *
+ * <p>Предыдущая версия живёт в одном долгоживущем worker-процессе на весь класс
+ * ({@link OldVersionWorker}): поднимать JVM на каждый кейс слишком дорого.
  */
 class CrossVersionTest {
     private static String OLD_JAR;
     private static String COMPAT_CLASSES;
+    private static OldVersionWorker worker;
 
     @BeforeAll
-    static void checkPrereqs() {
+    static void startWorker() {
         String path = System.getProperty("previous.ver");
-        if (!Files.exists(Path.of(path))) {
+        if (path == null || !Files.exists(Path.of(path))) {
             System.err.println("=".repeat(70));
             System.err.println("  ⚠ КРОСС-ВЕРСИОННЫЕ ТЕСТЫ ПРОПУЩЕНЫ");
             System.err.println("  ⚠ JAR предыдущей версии не найден:");
@@ -57,6 +63,18 @@ class CrossVersionTest {
         } catch (Exception e) {
             fail("Не удалось определить путь к классам compat", e);
         }
+        try {
+            worker = new OldVersionWorker(OLD_JAR, COMPAT_CLASSES);
+        } catch (IOException e) {
+            fail("Не удалось запустить worker предыдущей версии", e);
+        }
+    }
+
+    @AfterAll
+    static void stopWorker() {
+        if (worker != null) {
+            worker.close();
+        }
     }
 
     @ParameterizedTest
@@ -70,24 +88,29 @@ class CrossVersionTest {
         byte[] plaintext = TestData.randomBytes(size, CryptoRandom.INSTANCE);
 
         SymmetricKey symmetricKey = new SymmetricKey(key);
-        Cipher.Padding padding = TestData.paddingFor(mode);
-        String kv = "key=" + CrossValUtils.toHex(key) + " iv=" + CrossValUtils.toHex(iv);
-        byte[] ivForGost = mode == Cipher.Mode.CTR ? Arrays.copyOf(iv, 8) : iv;
+        try {
+            Cipher.Padding padding = TestData.paddingFor(mode);
+            String kv = "key=" + CrossValUtils.toHex(key) + " iv=" + CrossValUtils.toHex(iv);
+            byte[] ivForGost = mode == Cipher.Mode.CTR ? Arrays.copyOf(iv, 8) : iv;
 
-        byte[] ciphertextCurrent = Cipher.encrypt(plaintext, symmetricKey, ivForGost, mode, padding);
-        byte[] ciphertextOld = CompatHelper.runSubprocess(OLD_JAR, COMPAT_CLASSES, mode, "encrypt", key, iv, plaintext);
+            byte[] ciphertextCurrent = Cipher.encrypt(plaintext, symmetricKey, ivForGost, mode, padding);
+            byte[] ciphertextOld = worker.call(mode, "encrypt", key, iv, plaintext);
 
-        assertArrayEquals(ciphertextCurrent, ciphertextOld,
-                () -> "Несовпадение шифртекста: mode=" + mode + " size=" + size
-                        + " " + CrossValUtils.diffContext(ciphertextCurrent, ciphertextOld) + " " + kv);
-        byte[] decryptedOld = Cipher.decrypt(ciphertextOld, symmetricKey, ivForGost, mode, padding);
-        assertArrayEquals(plaintext, decryptedOld,
-                () -> "Ошибка расшифровки шифртекста предыдущей версии: mode=" + mode + " size=" + size
-                        + " " + CrossValUtils.diffContext(plaintext, decryptedOld) + " " + kv);
-        byte[] decryptedCurrent = CompatHelper.runSubprocess(OLD_JAR, COMPAT_CLASSES, mode, "decrypt", key, iv, ciphertextCurrent);
-        assertArrayEquals(plaintext, decryptedCurrent,
-                () -> "Предыдущая версия не может расшифровать наш шифртекст: mode=" + mode + " size=" + size
-                        + " " + CrossValUtils.diffContext(plaintext, decryptedCurrent) + " " + kv);
+            assertArrayEquals(ciphertextCurrent, ciphertextOld,
+                    () -> "Несовпадение шифртекста: mode=" + mode + " size=" + size
+                            + " " + CrossValUtils.diffContext(ciphertextCurrent, ciphertextOld) + " " + kv);
+            byte[] decryptedOld = Cipher.decrypt(ciphertextOld, symmetricKey, ivForGost, mode, padding);
+            assertArrayEquals(plaintext, decryptedOld,
+                    () -> "Ошибка расшифровки шифртекста предыдущей версии: mode=" + mode + " size=" + size
+                            + " " + CrossValUtils.diffContext(plaintext, decryptedOld) + " " + kv);
+            byte[] decryptedCurrent = worker.call(mode, "decrypt", key, iv, ciphertextCurrent);
+            assertArrayEquals(plaintext, decryptedCurrent,
+                    () -> "Предыдущая версия не может расшифровать наш шифртекст: mode=" + mode + " size=" + size
+                            + " " + CrossValUtils.diffContext(plaintext, decryptedCurrent) + " " + kv);
+        } finally {
+            symmetricKey.destroy();
+            Arrays.fill(key, (byte) 0);
+        }
     }
 
     static Stream<Integer> mgmParams() {
@@ -107,20 +130,27 @@ class CrossVersionTest {
         byte[] plaintext = TestData.randomBytes(size, CryptoRandom.INSTANCE);
         SymmetricKey symmetricKey = new SymmetricKey(key);
 
-        String kicn = "key=" + CrossValUtils.toHex(key) + " icn=" + CrossValUtils.toHex(icn);
-        byte[] mgmPacketCurrent = MgmCipher.sealWithIcn(plaintext, symmetricKey, icn, new byte[0]);
-        byte[] mgmPacketOld = CompatHelper.runMgmSubprocess(OLD_JAR, COMPAT_CLASSES, "seal", key, icn, plaintext);
+        try {
+            String kicn = "key=" + CrossValUtils.toHex(key) + " icn=" + CrossValUtils.toHex(icn);
+            // Для пустого открытого текста обе стороны используют непустой AAD (RFC 9058 §6)
+            byte[] aad = CrossVersionTool.mgmAadFor(size);
+            byte[] mgmPacketCurrent = MgmCipher.sealWithIcn(plaintext, symmetricKey, icn, aad);
+            byte[] mgmPacketOld = worker.callMgm("seal", key, icn, plaintext);
 
-        assertArrayEquals(mgmPacketCurrent, mgmPacketOld,
-                () -> "Несовпадение пакета MGM: size=" + size
-                        + " " + CrossValUtils.diffContext(mgmPacketCurrent, mgmPacketOld) + " " + kicn);
-        byte[] openedOld = MgmCipher.open(mgmPacketOld, symmetricKey, new byte[0]);
-        assertArrayEquals(plaintext, openedOld,
-                () -> "Ошибка расшифрования MGM-пакета предыдущей версии: size=" + size
-                        + " " + CrossValUtils.diffContext(plaintext, openedOld) + " " + kicn);
-        byte[] openedCurrent = CompatHelper.runMgmSubprocess(OLD_JAR, COMPAT_CLASSES, "open", key, icn, mgmPacketCurrent);
-        assertArrayEquals(plaintext, openedCurrent,
-                () -> "Предыдущая версия не может расшифровать наш MGM-пакет: size=" + size
-                        + " " + CrossValUtils.diffContext(plaintext, openedCurrent) + " " + kicn);
+            assertArrayEquals(mgmPacketCurrent, mgmPacketOld,
+                    () -> "Несовпадение пакета MGM: size=" + size
+                            + " " + CrossValUtils.diffContext(mgmPacketCurrent, mgmPacketOld) + " " + kicn);
+            byte[] openedOld = MgmCipher.open(mgmPacketOld, symmetricKey, aad);
+            assertArrayEquals(plaintext, openedOld,
+                    () -> "Ошибка расшифрования MGM-пакета предыдущей версии: size=" + size
+                            + " " + CrossValUtils.diffContext(plaintext, openedOld) + " " + kicn);
+            byte[] openedCurrent = worker.callMgm("open", key, icn, mgmPacketCurrent);
+            assertArrayEquals(plaintext, openedCurrent,
+                    () -> "Предыдущая версия не может расшифровать наш MGM-пакет: size=" + size
+                            + " " + CrossValUtils.diffContext(plaintext, openedCurrent) + " " + kicn);
+        } finally {
+            symmetricKey.destroy();
+            Arrays.fill(key, (byte) 0);
+        }
     }
 }

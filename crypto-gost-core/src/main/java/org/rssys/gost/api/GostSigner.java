@@ -1,6 +1,7 @@
 package org.rssys.gost.api;
 
 import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.NonceMode;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 
@@ -18,8 +19,25 @@ import org.rssys.gost.signature.PublicKeyParameters;
  * <h3>Контракт формата подписи</h3>
  * {@link #signHash(byte[])} обязан вернуть подпись в X.509-формате {@code s ∥ r} big-endian
  * (как {@code SignatureCodec.encode}): каждая компонента {@code ceil(n.bitLength()/8)} байт,
- * итог 64 байта для 256-битных кривых, 128 для 512-битных. Способ выработки нонса k внутри
- * подписанта не регламентируется (случайный или детерминированный) — важен только формат.
+ * итог 64 байта для 256-битных кривых, 128 для 512-битных.
+ *
+ * <h3>Контракт нонса</h3>
+ * Нонс k — секретный эфемерный ключ, его повтор при разных хэшах раскрывает закрытый ключ.
+ * Реализация по умолчанию ({@link #of(PrivateKeyParameters)}) вырабатывает нонс гибридно: во
+ * вход подмешиваются свежие случайные байты, подпись одного хэша каждый раз другая; воспроизводимую
+ * подпись даёт {@link #of(PrivateKeyParameters, NonceMode)} с {@link NonceMode#DETERMINISTIC}.
+ * Детерминированный нонс обязан зависеть только от {@code (d, e)} и параметров кривой, где
+ * {@code e} — число из уравнения подписи {@code s = r·d + k·e} (хэш, прочитанный младшим байтом
+ * вперёд, по модулю порядка кривой, нуль заменяется единицей). Запрещён детерминированный нонс,
+ * выведенный из байт хэша в обход {@code e}: у двух хэшей с разными {@code e} он может совпасть.
+ * Запрещён и нонс, не зависящий от кривой: один закрытый ключ на двух кривых одной длины при
+ * равном {@code e} дал бы общий нонс (реализация библиотеки добавляет в затравку идентификатор
+ * кривой). Случайный нонс допустим, если он взят из криптостойкого источника.
+ *
+ * <h3>Доступ к подписанту</h3>
+ * {@link #signHash(byte[])} подписывает любой хэш, который ему передали, то есть служит
+ * оракулом подписи. Его нельзя отдавать недоверенной стороне без авторизации и проверки того,
+ * что именно подписывается.
  *
  * <h3>Контракт исключений</h3>
  * Исключения при подписи (HSM недоступен, таймаут, извлечённая смарт-карта) пропагируются
@@ -77,6 +95,18 @@ public interface GostSigner {
      * @throws IllegalArgumentException если {@code priv} равен {@code null}
      */
     static GostSigner of(PrivateKeyParameters priv) {
-        return new PrivateKeySigner(priv);
+        return of(priv, NonceMode.DEFAULT);
+    }
+
+    /**
+     * Дефолтная реализация поверх закрытого ключа в памяти JVM с явно заданным режимом нонса,
+     * см. {@link #of(PrivateKeyParameters)} и {@link NonceMode}.
+     *
+     * @param priv закрытый ключ; не может быть {@code null}
+     * @param mode режим нонса; не может быть {@code null}
+     * @throws IllegalArgumentException если {@code priv} или {@code mode} равен {@code null}
+     */
+    static GostSigner of(PrivateKeyParameters priv, NonceMode mode) {
+        return new PrivateKeySigner(priv, mode);
     }
 }

@@ -15,7 +15,9 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -69,7 +71,8 @@ class CountersignatureTest {
         assertNotNull(countersigned);
 
         VerifiedCAdESData result =
-                CAdESExtender.verifyCountersignature(countersigned, signerCert, countersignerCert);
+                CAdESVerifier.verifyCountersignature(
+                        countersigned, TrustAnchors.ofCertificates(signerCert, countersignerCert));
         assertNotNull(result);
         assertArrayEquals(data, result.data());
         assertEquals(1, result.signers().size());
@@ -83,6 +86,42 @@ class CountersignatureTest {
         assertTrue(
                 csResult.signedAttributes().size() >= 1,
                 "Countersignature должен содержать хотя бы message-digest");
+    }
+
+    @Test
+    @DisplayName(
+            "Detached countersignature: verifyCountersignatureDetached привязывает к документу")
+    void detachedCountersignature() throws Exception {
+        byte[] data = "detached countersignature".getBytes();
+        byte[] cadesBes =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(signerKp.getPrivate(), signerCert)
+                        .withCAdES()
+                        .detached(true)
+                        .build();
+        byte[] countersigned =
+                CAdESExtender.embedCountersignature(
+                        cadesBes, countersignerKp.getPrivate(), countersignerCert);
+
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyCountersignatureDetached(
+                        countersigned,
+                        data,
+                        TrustAnchors.ofCertificates(signerCert, countersignerCert));
+        assertArrayEquals(data, result.data(), "detached-метод должен вернуть документ");
+        assertEquals(1, result.signers().get(0).countersignatures().size());
+        assertEquals(
+                countersignerCert,
+                result.signers().get(0).countersignatures().get(0).signerCertificate());
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CAdESVerifier.verifyCountersignatureDetached(
+                                countersigned,
+                                "tampered".getBytes(),
+                                TrustAnchors.ofCertificates(signerCert, countersignerCert)),
+                "подменённый документ должен отклоняться");
     }
 
     @Test
@@ -105,8 +144,9 @@ class CountersignatureTest {
         assertNotNull(countersigned);
 
         VerifiedCAdESData result =
-                CAdESExtender.verifyCountersignature(
-                        countersigned, signerCert, signer2Cert, countersignerCert);
+                CAdESVerifier.verifyCountersignature(
+                        countersigned,
+                        TrustAnchors.ofCertificates(signerCert, signer2Cert, countersignerCert));
         assertEquals(2, result.signers().size());
 
         for (CAdESSignerResult sr : result.signers()) {
@@ -142,7 +182,8 @@ class CountersignatureTest {
         assertNotNull(countersigned);
 
         VerifiedCAdESData result =
-                CAdESExtender.verifyCountersignature(countersigned, signer512Cert, cs512Cert);
+                CAdESVerifier.verifyCountersignature(
+                        countersigned, TrustAnchors.ofCertificates(signer512Cert, cs512Cert));
         assertNotNull(result);
         assertEquals(1, result.signers().size());
         assertEquals(1, result.signers().get(0).countersignatures().size());
@@ -280,8 +321,9 @@ class CountersignatureTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CAdESExtender.verifyCountersignature(
-                                        tamperedCountersigned, signerCert, countersignerCert),
+                                CAdESVerifier.verifyCountersignature(
+                                        tamperedCountersigned,
+                                        TrustAnchors.ofCertificates(signerCert, countersignerCert)),
                         "Подмена signatureValue родителя должна сломать countersignature");
         assertTrue(
                 ex.getMessage().contains("messageDigest")
@@ -339,8 +381,9 @@ class CountersignatureTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CAdESExtender.verifyCountersignature(
-                                        tamperedCountersigned, signerCert, countersignerCert),
+                                CAdESVerifier.verifyCountersignature(
+                                        tamperedCountersigned,
+                                        TrustAnchors.ofCertificates(signerCert, countersignerCert)),
                         "Подмена eContent должна сломать CMS-подпись");
         assertTrue(
                 ex.getMessage().contains("digest")
@@ -369,7 +412,9 @@ class CountersignatureTest {
         // Передаём только signerCert, но не countersignerCert в trusted
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCountersignature(countersigned, signerCert),
+                () ->
+                        CAdESVerifier.verifyCountersignature(
+                                countersigned, TrustAnchors.ofCertificates(signerCert)),
                 "Countersigner не в trustedCerts — цепочка не должна построиться");
     }
 
@@ -388,7 +433,10 @@ class CountersignatureTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CAdESExtender.verifyCountersignature(cadesBes, signerCert, countersignerCert),
+                () ->
+                        CAdESVerifier.verifyCountersignature(
+                                cadesBes,
+                                TrustAnchors.ofCertificates(signerCert, countersignerCert)),
                 "verifyCountersignature должен требовать countersignature");
     }
 
@@ -433,9 +481,170 @@ class CountersignatureTest {
         assertThrows(
                 PkixException.class,
                 () ->
-                        CAdESExtender.verifyCountersignature(
-                                tamperedCountersigned, signerCert, countersignerCert),
+                        CAdESVerifier.verifyCountersignature(
+                                tamperedCountersigned,
+                                TrustAnchors.ofCertificates(signerCert, countersignerCert)),
                 "Битый DER countersignature должен давать ошибку");
+    }
+
+    // ========================================================================
+    // KeyUsage и signatureAlgorithm контрподписанта (parity с основной подписью)
+    // ========================================================================
+
+    private static GostCertificate countersignerCertWithKeyUsage(
+            KeyPair kp, GostCertificateBuilder.KeyUsage usage) throws Exception {
+        byte[] dn = CmsTestUtils.buildDn("Countersigner KU");
+        return GostCertificateBuilder.create(PARAMS, dn)
+                .issuerDn(dn)
+                .publicKey(kp.getPublic())
+                .randomSerial()
+                .notBeforeNow()
+                .validForDays(365)
+                .keyUsage(usage)
+                .sign(kp.getPrivate());
+    }
+
+    private static byte[] countersignWith(GostCertificate cert, KeyPair kp, byte[] data)
+            throws Exception {
+        byte[] cadesBes =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(signerKp.getPrivate(), signerCert)
+                        .withCAdES()
+                        .build();
+        return CAdESExtender.embedCountersignature(cadesBes, kp.getPrivate(), cert);
+    }
+
+    @Test
+    @DisplayName("Контрподписант с KeyUsage без digitalSignature/nonRepudiation отвергается")
+    void countersignerWithoutSigningKeyUsageRejected() throws Exception {
+        KeyPair kp = KeyGenerator.generateKeyPair(PARAMS);
+        GostCertificate cert =
+                countersignerCertWithKeyUsage(kp, GostCertificateBuilder.KeyUsage.KEY_ENCIPHERMENT);
+        byte[] countersigned = countersignWith(cert, kp, "ku reject".getBytes());
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CAdESVerifier.verifyCountersignature(
+                                        countersigned,
+                                        TrustAnchors.ofCertificates(signerCert, cert)),
+                        "Контрподписант без права подписи должен быть отвергнут");
+        assertTrue(
+                ex.getMessage().contains("KeyUsage"),
+                "Причина отказа - KeyUsage контрподписанта: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("Контрподписант с KeyUsage nonRepudiation принимается")
+    void countersignerWithNonRepudiationAccepted() throws Exception {
+        KeyPair kp = KeyGenerator.generateKeyPair(PARAMS);
+        GostCertificate cert =
+                countersignerCertWithKeyUsage(kp, GostCertificateBuilder.KeyUsage.NON_REPUDIATION);
+        byte[] countersigned = countersignWith(cert, kp, "ku nonrep".getBytes());
+
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyCountersignature(
+                        countersigned, TrustAnchors.ofCertificates(signerCert, cert));
+        assertEquals(1, result.signers().get(0).countersignatures().size());
+    }
+
+    @Test
+    @DisplayName("OID signatureAlgorithm не из семейства ГОСТ-подписи отвергается")
+    void countersignatureWithForeignAlgorithmOidRejected() throws Exception {
+        byte[] countersigned =
+                countersignWith(countersignerCert, countersignerKp, "oid".getBytes());
+        byte[] tampered = replaceCountersignatureAlgorithm(countersigned, GostOids.DIGEST_256);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CAdESVerifier.verifyCountersignature(
+                                        tampered,
+                                        TrustAnchors.ofCertificates(
+                                                signerCert, countersignerCert)));
+        assertTrue(
+                ex.getMessage().contains("signatureAlgorithm"),
+                "Причина отказа - OID алгоритма контрподписи: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("OID 512-бит при 256-бит ключе контрподписанта отвергается")
+    void countersignatureWithMismatchedKeySizeOidRejected() throws Exception {
+        byte[] countersigned =
+                countersignWith(countersignerCert, countersignerKp, "oid size".getBytes());
+        byte[] tampered = replaceCountersignatureAlgorithm(countersigned, GostOids.PUBLIC_KEY_512);
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CAdESVerifier.verifyCountersignature(
+                                        tampered,
+                                        TrustAnchors.ofCertificates(
+                                                signerCert, countersignerCert)));
+        assertTrue(
+                ex.getMessage().contains("does not match signer key size"),
+                "Причина отказа - битность OID не совпала с ключом: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("OID другого семейства (signWithDigest) той же битности принимается")
+    void countersignatureWithSignWithDigestOidAccepted() throws Exception {
+        byte[] countersigned =
+                countersignWith(countersignerCert, countersignerKp, "oid ok".getBytes());
+        byte[] rewritten =
+                replaceCountersignatureAlgorithm(countersigned, GostOids.SIGN_WITH_DIGEST_256);
+
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyCountersignature(
+                        rewritten, TrustAnchors.ofCertificates(signerCert, countersignerCert));
+        assertEquals(1, result.signers().get(0).countersignatures().size());
+    }
+
+    /**
+     * Подменяет signatureAlgorithm во вложенной контрподписи. Поле не покрыто подписью
+     * контрподписанта, поэтому подмена не ломает её криптографически и проверяется именно
+     * сверкой OID.
+     */
+    private static byte[] replaceCountersignatureAlgorithm(byte[] countersigned, String algOid)
+            throws PkixException {
+        CmsContentInfo ci = CmsContentInfo.decode(countersigned);
+        byte[][] sdParts = DerCodec.parseSequenceContents(ci.content(), 0);
+        byte[][] signerInfos = DerCodec.parseSetContents(sdParts[sdParts.length - 1], 0);
+        byte[][] siParts = DerCodec.parseSequenceContents(signerInfos[0], 0);
+
+        for (int i = 0; i < siParts.length; i++) {
+            if (siParts[i].length == 0
+                    || (siParts[i][0] & 0xFF) != DerCodec.TAG_CTX_CONSTRUCTED_1) {
+                continue;
+            }
+            byte[] field = siParts[i];
+            int pos = 1 + DerCodec.decodeLength(field, 1)[1];
+            List<byte[]> attrs = new java.util.ArrayList<>();
+            while (pos < field.length) {
+                int[] attrLen = DerCodec.decodeLength(field, pos + 1);
+                int total = 1 + attrLen[1] + attrLen[0];
+                byte[] attrDer = Arrays.copyOfRange(field, pos, pos + total);
+                CmsAttribute attr = CmsAttribute.decode(attrDer);
+                if (GostOids.ATTR_COUNTERSIGNATURE.equals(attr.attrType())) {
+                    byte[][] csParts = DerCodec.parseSequenceContents(attr.attrValues()[0], 0);
+                    csParts[4] = CmsAlgorithmIdentifier.encode(algOid);
+                    attrDer =
+                            CmsAttribute.encode(
+                                    GostOids.ATTR_COUNTERSIGNATURE,
+                                    DerCodec.encodeSequence(csParts));
+                }
+                attrs.add(attrDer);
+                pos += total;
+            }
+            byte[][] sorted = attrs.toArray(new byte[0][]);
+            DerCodec.sortDer(sorted);
+            siParts[i] = DerCodec.encodeContextConstructed(1, DerCodec.concat(sorted));
+        }
+        return rebuildSignedData(ci, new byte[][] {DerCodec.encodeSequence(siParts)});
     }
 
     // ========================================================================

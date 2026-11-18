@@ -63,7 +63,7 @@ public final class KdfTreeGostR3411_2012_256 {
         // [L]_b — суммарная длина ВСЕГО выходного материала в битах, минимальное
         // big-endian без ведущих нулей (RFC 7836 §4.5). Фиксирован для всех итераций.
         int outBits = count * keyLen * 8;
-        byte[] lBytes = bigEndian(outBits);
+        byte[] lBytes = BigEndianEncoding.minimal(outBits);
 
         // Буфер: [i](1) || label || 0x00 || seed || [L]_b.
         // Счётчик стоит первым (RFC 7836 §4.5); между блоками меняется только buf[0].
@@ -98,21 +98,5 @@ public final class KdfTreeGostR3411_2012_256 {
             Arrays.fill(block, (byte) 0);
             hmac.clear();
         }
-    }
-
-    /**
-     * Кодирует положительное целое в минимальном big-endian без ведущих нулей
-     * (RFC 7836: {@code [L]_b} — network byte order, variable length).
-     */
-    private static byte[] bigEndian(int value) {
-        if (value == 0) return new byte[] {0};
-        int bits = 32 - Integer.numberOfLeadingZeros(value);
-        int bytes = (bits + 7) / 8;
-        byte[] result = new byte[bytes];
-        for (int i = bytes - 1; i >= 0; i--) {
-            result[i] = (byte) (value & 0xFF);
-            value >>>= 8;
-        }
-        return result;
     }
 }

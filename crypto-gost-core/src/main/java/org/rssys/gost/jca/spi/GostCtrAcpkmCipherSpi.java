@@ -4,20 +4,21 @@ import java.security.AlgorithmParameters;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.Key;
-import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.spec.AlgorithmParameterSpec;
 import java.util.Arrays;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.BadPaddingException;
-import javax.crypto.CipherSpi;
 import javax.crypto.IllegalBlockSizeException;
+import javax.crypto.NoSuchPaddingException;
 import javax.crypto.ShortBufferException;
 import javax.crypto.spec.IvParameterSpec;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
 import org.rssys.gost.cipher.mode.CtrAcpkmMode;
+import org.rssys.gost.util.AuthenticationException;
 import org.rssys.gost.util.CryptoRandom;
 
 /**
@@ -37,10 +38,22 @@ import org.rssys.gost.util.CryptoRandom;
  * JCA на маршаллинг ключей и параметров.
  * <p>
  * Секционная смена ключа ACPKM выполняется каждые 4096 байт
- * (ГОСТ Р 34.13-2015 §6.2). Для PBES2-сценария данные всегда
- * умещаются в одну секцию, поведение идентично предыдущим версиям.
+ * (RFC 8645 §6.2.2). Для PBES2-сценария данные всегда
+ * умещаются в одну секцию.
+ * <p>
+ * <b>Состояние после {@code doFinal}.</b> Расшифрование возвращается в состояние после
+ * {@code init} (тот же ключ и UKM), как требует контракт JCA. Шифрование сознательно
+ * отклоняется от него: повторный {@code update}/{@code doFinal} без {@code init} бросает
+ * {@link IllegalStateException}, потому что сброс на тот же UKM повторил бы гамму.
+ * Повторный {@code init} на шифрование с тем же ключом и тем же UKM, на которых уже выдан
+ * шифртекст, отвергается ({@link InvalidAlgorithmParameterException}); новый UKM или ключ
+ * допустимы. Помнится только последняя использованная пара: после A, затем B пара A снова
+ * принимается. Хранится отпечаток ключа, а не ключ (общая защита {@code EncryptionReuseGuard}).
+ * Без OMAC гамма зависит только от первых 8 байт UKM, поэтому сравниваются они, а не весь UKM:
+ * UKM {@code X} и {@code X ‖ Y} дают одну гамму и считаются одной парой. Уникальность UKM по всем
+ * сообщениям обеспечивает вызывающий.
  */
-public class GostCtrAcpkmCipherSpi extends CipherSpi {
+public class GostCtrAcpkmCipherSpi extends AbstractGostCipherSpi {
 
     /** Без OMAC — чистый CTR (ГОСТ Р 34.13-2015). */
     public static final class WithoutOmac extends GostCtrAcpkmCipherSpi {
@@ -49,7 +62,7 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
         }
     }
 
-    /** С OMAC — CTR + CMAC, Encrypt-then-MAC. */
+    /** С OMAC - CMAC по открытому тексту, шифруется M || MAC (RFC 9337 §5.1.1). */
     public static final class WithOmac extends GostCtrAcpkmCipherSpi {
         public WithOmac() {
             super(true);
@@ -57,16 +70,36 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     }
 
     private static final int UKM_LEN = 16;
-    private static final int TAG_LEN = 16;
+    private static final int TAG_LEN = Kuznyechik.BLOCK_SIZE;
+
+    /** Минимальная длина UKM без OMAC: 8 байт IV счётчика (RFC 8645 §6.2.2, n/2 бит). */
+    private static final int MIN_UKM_LEN = 8;
 
     private final boolean useOmac;
     private boolean forEncryption;
-    private SymmetricKey keyParam;
     private CtrAcpkmMode mode;
     private byte[] ukm;
     private boolean initialized;
 
-    private byte[] inputBuffer = new byte[0];
+    /** Шифрование завершено: повторное использование того же UKM дало бы повтор гаммы. */
+    private boolean encryptionCompleted;
+
+    /**
+     * Защита от повтора пары «ключ + эффективный nonce» при шифровании (аналог защиты SunJCE GCM):
+     * повтор дал бы ту же гамму. Помнится отпечаток ключа, а не ключ; действует в пределах одного
+     * экземпляра {@code Cipher}, помнит последнюю использованную пару. Использованная пара
+     * переживает {@code init} на расшифрование, иначе защита обходится цепочкой
+     * encrypt -> init(DECRYPT) -> init(ENCRYPT).
+     */
+    private final EncryptionReuseGuard reuseGuard =
+            new EncryptionReuseGuard("UKM", "CTR-ACPKM encryption");
+
+    /**
+     * Накопленный ввод режима с OMAC (без OMAC шифр потоковый и не буферизует): тег проверяется в
+     * {@code doFinal}, поэтому сообщение целиком остаётся в памяти до него.
+     */
+    private final GrowableInputBuffer inputBuffer =
+            new GrowableInputBuffer(GrowableInputBuffer.MAX_SIZE - TAG_LEN);
 
     GostCtrAcpkmCipherSpi(boolean useOmac) {
         this.useOmac = useOmac;
@@ -77,9 +110,9 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
      * трансформации (Cipher.alg/mode/padding), но обязан быть реализован.
      */
     @Override
-    protected void engineSetMode(String modeStr) throws java.security.NoSuchAlgorithmException {
+    protected void engineSetMode(String modeStr) throws NoSuchAlgorithmException {
         if (!"CTR-ACPKM".equalsIgnoreCase(modeStr) && !"CTR-ACPKM-OMAC".equalsIgnoreCase(modeStr)) {
-            throw new java.security.NoSuchAlgorithmException(
+            throw new NoSuchAlgorithmException(
                     "Only CTR-ACPKM/CTR-ACPKM-OMAC supported, got: " + modeStr);
         }
     }
@@ -89,9 +122,9 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
      * трансформации, но обязан быть реализован.
      */
     @Override
-    protected void engineSetPadding(String padding) throws javax.crypto.NoSuchPaddingException {
+    protected void engineSetPadding(String padding) throws NoSuchPaddingException {
         if (!"NoPadding".equalsIgnoreCase(padding)) {
-            throw new javax.crypto.NoSuchPaddingException("Only NoPadding supported for CTR-ACPKM");
+            throw new NoSuchPaddingException("Only NoPadding supported for CTR-ACPKM");
         }
     }
 
@@ -107,10 +140,13 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
 
     @Override
     protected int engineGetOutputSize(int inputLen) {
-        int total = inputBuffer.length + inputLen;
-        if (useOmac && forEncryption) return total + TAG_LEN;
-        if (useOmac && !forEncryption) return Math.max(0, total - TAG_LEN);
-        return total;
+        // long: сумма размера и длины ввода, а потом тега, не должна переполнить int
+        long total = (long) inputBuffer.size() + inputLen;
+        long needed = total;
+        if (useOmac) {
+            needed = forEncryption ? total + TAG_LEN : Math.max(0, total - TAG_LEN);
+        }
+        return (int) Math.min(needed, Integer.MAX_VALUE);
     }
 
     @Override
@@ -122,73 +158,106 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     protected void engineInit(
             int opmode, Key key, AlgorithmParameterSpec params, SecureRandom random)
             throws InvalidKeyException, InvalidAlgorithmParameterException {
-        this.keyParam = extractSymmetricKey(key);
-        forEncryption =
-                (opmode == javax.crypto.Cipher.ENCRYPT_MODE
-                        || opmode == javax.crypto.Cipher.WRAP_MODE);
+        boolean encrypt = isEncrypting(opmode);
+        SymmetricKey keyParam = SymmetricKeyExtractor.forCipher(key);
+        try {
+            byte[] newUkm = resolveUkm(params, encrypt, random);
+            // Эффективный nonce: гамма зависит только от первых 8 байт UKM без OMAC (счётчик
+            // строится из них), а с OMAC - от всех 16 (последние 8 - seed KDF_TREE). Сравнивать
+            // полный UKM без OMAC нельзя: X и X ‖ Y дали бы одну гамму как разные пары.
+            byte[] token = encrypt ? reuseGuard.prepare(keyParam, effectiveNonce(newUkm)) : null;
+            boolean tokenHandedOver = false;
+            try {
+                // Новый экземпляр режима создаём до замены состояния: при ошибке
+                // инициализации прежнее состояние Cipher остаётся нетронутым.
+                CtrAcpkmMode newMode = new CtrAcpkmMode(new Kuznyechik(), useOmac);
+                newMode.init(encrypt, new ParametersWithIV(keyParam, newUkm));
+                releaseState();
+                this.mode = newMode;
+                this.forEncryption = encrypt;
+                this.ukm = newUkm;
+                if (encrypt) {
+                    reuseGuard.setPending(token);
+                    tokenHandedOver = true;
+                }
+                this.encryptionCompleted = false;
+                this.initialized = true;
+            } finally {
+                if (!tokenHandedOver) {
+                    EncryptionReuseGuard.wipe(token);
+                }
+            }
+        } finally {
+            keyParam.destroy();
+        }
+    }
 
+    /** Проверяет и возвращает UKM: заданный вызывающим либо сгенерированный при шифровании. */
+    private byte[] resolveUkm(AlgorithmParameterSpec params, boolean encrypt, SecureRandom random)
+            throws InvalidAlgorithmParameterException {
         if (params instanceof IvParameterSpec ivp) {
             byte[] iv = ivp.getIV();
             if (useOmac && iv.length != UKM_LEN) {
                 throw new InvalidAlgorithmParameterException(
                         "CTR-ACPKM-OMAC requires 16-byte UKM, got " + iv.length);
             }
-            if (!useOmac && iv.length < 8) {
+            if (!useOmac && iv.length < MIN_UKM_LEN) {
                 throw new InvalidAlgorithmParameterException(
-                        "CTR-ACPKM requires UKM of at least 8 bytes, got " + iv.length);
+                        "CTR-ACPKM requires UKM of at least "
+                                + MIN_UKM_LEN
+                                + " bytes, got "
+                                + iv.length);
             }
-            this.ukm = Arrays.copyOf(iv, iv.length);
-        } else if (params == null) {
-            if (forEncryption) {
-                this.ukm = new byte[useOmac ? UKM_LEN : 8];
-                (random != null ? random : CryptoRandom.INSTANCE).nextBytes(ukm);
-            } else {
+            return iv;
+        }
+        if (params == null) {
+            if (!encrypt) {
                 throw new InvalidAlgorithmParameterException(
                         "CTR-ACPKM decryption requires UKM (IvParameterSpec)");
             }
-        } else {
-            throw new InvalidAlgorithmParameterException("Use IvParameterSpec for CTR-ACPKM");
+            byte[] generated = new byte[useOmac ? UKM_LEN : MIN_UKM_LEN];
+            (random != null ? random : CryptoRandom.INSTANCE).nextBytes(generated);
+            return generated;
         }
-
-        if (this.mode != null) {
-            this.mode.destroy();
-        }
-        this.mode = new CtrAcpkmMode(new Kuznyechik(), useOmac);
-        this.mode.init(forEncryption, new ParametersWithIV(keyParam, ukm));
-        // Затираем прежний буфер (мог содержать plaintext/ciphertext) перед сбросом.
-        Arrays.fill(this.inputBuffer, (byte) 0);
-        this.inputBuffer = new byte[0];
-        this.initialized = true;
+        throw new InvalidAlgorithmParameterException("Use IvParameterSpec for CTR-ACPKM");
     }
 
-    @Override
-    protected void engineInit(int opmode, Key key, AlgorithmParameters params, SecureRandom random)
-            throws InvalidKeyException, InvalidAlgorithmParameterException {
-        AlgorithmParameterSpec spec = null;
-        if (params != null) {
-            try {
-                spec = params.getParameterSpec(IvParameterSpec.class);
-            } catch (Exception e) {
-                throw new InvalidAlgorithmParameterException("Cannot extract IvParameterSpec", e);
-            }
-        }
-        engineInit(opmode, key, spec, random);
+    /**
+     * Часть UKM, от которой зависит гамма: без OMAC - первые 8 байт (IV счётчика), с OMAC - весь
+     * UKM строгой длины 16 байт.
+     */
+    private byte[] effectiveNonce(byte[] ukmValue) {
+        return useOmac ? ukmValue : Arrays.copyOf(ukmValue, MIN_UKM_LEN);
     }
 
-    @Override
-    protected void engineInit(int opmode, Key key, SecureRandom random) throws InvalidKeyException {
-        try {
-            engineInit(opmode, key, (AlgorithmParameterSpec) null, random);
-        } catch (InvalidAlgorithmParameterException e) {
-            throw new InvalidKeyException("Init failed: " + e.getMessage(), e);
+    /**
+     * Затирает режим, буфер и ожидающую пару. Использованная пара сохраняется: она нужна
+     * защите от повтора UKM и после {@code init} на расшифрование. Пара переводится в
+     * использованную только когда шифртекст выдан (см. {@code commitIfCiphertextProduced}):
+     * до этого гамма наружу не попадала, и повторный {@code init} с той же парой безопасен.
+     */
+    private void releaseState() {
+        if (mode != null) {
+            mode.destroy();
+            mode = null;
         }
+        inputBuffer.clear();
+        reuseGuard.discardPending();
+        initialized = false;
     }
 
     @Override
     protected byte[] engineUpdate(byte[] input, int inputOffset, int inputLen) {
+        byte[] result = updateWithoutCommit(input, inputOffset, inputLen);
+        commitIfCiphertextProduced(result.length);
+        return result;
+    }
+
+    /** Обрабатывает порцию, не фиксируя использование пары: фиксирует вызывающий после выдачи. */
+    private byte[] updateWithoutCommit(byte[] input, int inputOffset, int inputLen) {
         checkInitialized();
         if (useOmac) {
-            appendToBuffer(input, inputOffset, inputLen);
+            inputBuffer.append(input, inputOffset, inputLen);
             return new byte[0];
         }
         byte[] result = new byte[inputLen];
@@ -196,15 +265,27 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
         return result;
     }
 
+    /** Пара считается использованной, когда непустой шифртекст успешно сформирован. */
+    private void commitIfCiphertextProduced(int producedLength) {
+        if (forEncryption && producedLength > 0) {
+            reuseGuard.commit();
+        }
+    }
+
     @Override
     protected int engineUpdate(
             byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
             throws ShortBufferException {
-        byte[] result = engineUpdate(input, inputOffset, inputLen);
-        if (result.length > output.length - outputOffset) {
+        checkInitialized();
+        // Размер проверяем до обработки: иначе гамма уже продвинулась бы, и повтор
+        // вызова с достаточным буфером дал бы испорченные данные.
+        if (!useOmac && inputLen > output.length - outputOffset) {
             throw new ShortBufferException("Output buffer too short");
         }
+        byte[] result = updateWithoutCommit(input, inputOffset, inputLen);
         System.arraycopy(result, 0, output, outputOffset, result.length);
+        // Фиксируем после успешной выдачи в буфер вызывающего, не раньше.
+        commitIfCiphertextProduced(result.length);
         return result.length;
     }
 
@@ -212,46 +293,68 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     protected byte[] engineDoFinal(byte[] input, int inputOffset, int inputLen)
             throws IllegalBlockSizeException, BadPaddingException {
         checkInitialized();
-        if (input != null && inputLen > 0) {
-            appendToBuffer(input, inputOffset, inputLen);
-        }
 
+        byte[] plaintext = null;
+        boolean success = false;
         try {
+            // Внутри try: отказ по размеру тоже завершает операцию, буфер с данными затирается
+            if (input != null && inputLen > 0) {
+                inputBuffer.append(input, inputOffset, inputLen);
+            }
             if (!useOmac) {
-                byte[] result = new byte[inputBuffer.length];
-                mode.processBytes(inputBuffer, 0, inputBuffer.length, result, 0);
+                byte[] result = new byte[inputBuffer.size()];
+                mode.processBytes(inputBuffer.array(), 0, inputBuffer.size(), result, 0);
+                success = true;
+                commitIfCiphertextProduced(result.length);
                 return result;
             }
             if (forEncryption) {
-                byte[] ct = new byte[inputBuffer.length];
-                mode.processBytes(inputBuffer, 0, inputBuffer.length, ct, 0);
-                byte[] tag = mode.getMacTag();
-                byte[] out = new byte[ct.length + TAG_LEN];
-                System.arraycopy(ct, 0, out, 0, ct.length);
-                System.arraycopy(tag, 0, out, ct.length, TAG_LEN);
+                // RFC 9337 §5.1.1: CMAC по открытому тексту, шифруется M || MAC одним потоком.
+                byte[] out = new byte[inputBuffer.size() + TAG_LEN];
+                mode.processBytes(inputBuffer.array(), 0, inputBuffer.size(), out, 0);
+                byte[] encryptedTag = mode.finishEncryption();
+                System.arraycopy(encryptedTag, 0, out, inputBuffer.size(), TAG_LEN);
+                success = true;
+                // OMAC всегда выдаёт хотя бы тег, поэтому пара использована.
+                commitIfCiphertextProduced(out.length);
                 return out;
             }
-            int ctLen = inputBuffer.length - TAG_LEN;
+            int ctLen = inputBuffer.size() - TAG_LEN;
             if (ctLen < 0) {
                 throw new AEADBadTagException("CTR-ACPKM-OMAC data too short for tag");
             }
-            byte[] ct = Arrays.copyOf(inputBuffer, ctLen);
-            byte[] expectedTag = Arrays.copyOfRange(inputBuffer, ctLen, inputBuffer.length);
-
-            byte[] plaintext = new byte[ctLen];
-            mode.processBytes(ct, 0, ctLen, plaintext, 0);
-            byte[] computedTag = mode.getMacTag();
-
-            if (!MessageDigest.isEqual(computedTag, expectedTag)) {
+            plaintext = new byte[ctLen];
+            mode.processBytes(inputBuffer.array(), 0, ctLen, plaintext, 0);
+            try {
+                mode.verifyEncryptedTag(
+                        Arrays.copyOfRange(inputBuffer.array(), ctLen, inputBuffer.size()));
+            } catch (AuthenticationException e) {
                 throw new AEADBadTagException("CTR-ACPKM-OMAC tag mismatch");
             }
+            success = true;
             return plaintext;
-        } catch (AEADBadTagException e) {
-            throw e;
         } finally {
-            Arrays.fill(inputBuffer, (byte) 0);
-            inputBuffer = new byte[0];
-            keyParam = null;
+            if (!success && plaintext != null) {
+                // Непроверенный открытый текст не должен остаться в куче.
+                Arrays.fill(plaintext, (byte) 0);
+            }
+            inputBuffer.clear();
+            finishOperation();
+        }
+    }
+
+    /**
+     * Завершает операцию: расшифрование возвращается в состояние после {@code init}
+     * (в том числе после ошибки тега — без кешированного тега и продвинутой гаммы),
+     * шифрование блокируется до нового {@code init}.
+     */
+    private void finishOperation() {
+        if (forEncryption) {
+            mode.destroy();
+            initialized = false;
+            encryptionCompleted = true;
+        } else {
+            mode.reset();
         }
     }
 
@@ -259,30 +362,30 @@ public class GostCtrAcpkmCipherSpi extends CipherSpi {
     protected int engineDoFinal(
             byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
             throws ShortBufferException, IllegalBlockSizeException, BadPaddingException {
-        byte[] result = engineDoFinal(input, inputOffset, inputLen);
-        if (result.length > output.length - outputOffset) {
-            throw new ShortBufferException(
-                    "Output buffer too small: need " + result.length + " bytes");
+        checkInitialized();
+        // Размер проверяем до обработки: при ShortBufferException состояние не меняется,
+        // и вызов можно повторить с достаточным буфером.
+        int needed = engineGetOutputSize(Math.max(inputLen, 0));
+        if (needed > output.length - outputOffset) {
+            throw new ShortBufferException("Output buffer too small: need " + needed + " bytes");
         }
-        System.arraycopy(result, 0, output, outputOffset, result.length);
-        return result.length;
-    }
-
-    private static SymmetricKey extractSymmetricKey(Key key) throws InvalidKeyException {
-        return SymmetricKeyExtractor.fromKey(key);
-    }
-
-    private void appendToBuffer(byte[] input, int offset, int len) {
-        if (len <= 0) return;
-        byte[] newBuf = new byte[inputBuffer.length + len];
-        System.arraycopy(inputBuffer, 0, newBuf, 0, inputBuffer.length);
-        System.arraycopy(input, offset, newBuf, inputBuffer.length, len);
-        inputBuffer = newBuf;
+        byte[] result = engineDoFinal(input, inputOffset, inputLen);
+        try {
+            System.arraycopy(result, 0, output, outputOffset, result.length);
+            return result.length;
+        } finally {
+            if (!forEncryption) {
+                Arrays.fill(result, (byte) 0);
+            }
+        }
     }
 
     private void checkInitialized() {
         if (!initialized) {
-            throw new IllegalStateException("Cipher not initialized");
+            throw new IllegalStateException(
+                    encryptionCompleted
+                            ? "CTR-ACPKM encryption completed: re-init with a new UKM is required"
+                            : "Cipher not initialized");
         }
     }
 }

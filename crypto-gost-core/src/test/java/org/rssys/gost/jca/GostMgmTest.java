@@ -2,14 +2,14 @@ package org.rssys.gost.jca;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.security.Security;
 import java.util.Arrays;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.spec.IvParameterSpec;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.rssys.gost.JcaTestSupport;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.MgmCipher;
 import org.rssys.gost.cipher.SymmetricKey;
@@ -29,6 +29,7 @@ import org.rssys.gost.util.CryptoRandom;
  * </ul>
  */
 @DisplayName("GostMgmCipherSpi — Кузнечик-MGM через JCA Cipher")
+@ExtendWith(JcaTestSupport.class)
 class GostMgmTest {
 
     private static final String PROVIDER = RssysGostProvider.PROVIDER_NAME;
@@ -38,13 +39,6 @@ class GostMgmTest {
             "тест MGM через JCA".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     private static final byte[] AAD =
             "ассоциированные данные".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-
-    @BeforeAll
-    static void registerProvider() {
-        if (Security.getProvider(RssysGostProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new RssysGostProvider());
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Базовый roundtrip

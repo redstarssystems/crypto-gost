@@ -3,7 +3,6 @@ package org.rssys.gost.cipher.mode;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
-import java.security.MessageDigest;
 import java.util.Arrays;
 import org.rssys.gost.cipher.CipherParameters;
 import org.rssys.gost.cipher.Kuznyechik;
@@ -27,33 +26,29 @@ import org.rssys.gost.util.AuthenticationException;
  *   <li>Р 1323565.1.026-2019 — Режимы аутентифицированного шифрования блочного шифра</li>
  * </ul>
  *
- * <h2>Ключевые оптимизации относительно исходной реализации</h2>
+ * <h2>Устройство реализации</h2>
  *
  * <h3>Long-арифметика вместо byte[] на горячем пути</h3>
- * Исходная реализация хранила счётчики Y, Z и аккумулятор sum как {@code byte[16]},
- * создавая на каждый блок несколько временных массивов (H, gamma, ctBlock, product).
- * Теперь все блоки хранятся как пары {@code (hi, lo) : long} — поля экземпляра.
- * Никаких {@code new byte[]} в {@code processBytes} или {@code updateAAD}.
+ * Счётчики Y, Z и аккумулятор sum хранятся как пары {@code (hi, lo) : long} в полях экземпляра.
+ * {@code processBytes} и {@code updateAAD} не создают массивов.
  *
- * <h3>Zero-allocation шифрование через {@link Kuznyechik#encryptToFields}</h3>
- * Исходная реализация вызывала {@code cipher.processBlock(src, 0, dst, 0)} — два
- * byte[]-прохода с копированием. Теперь {@link Kuznyechik#encryptToFields} пишет
- * результат напрямую в поля {@code encBufHi}/{@code encBufLo}, читаемые через
- * геттеры. Ни одной аллокации на вызов шифра.
+ * <h3>Шифрование без массивов через {@link Kuznyechik#encryptToFields}</h3>
+ * Метод пишет результат прямо в поля {@code encBufHi}/{@code encBufLo}, которые читаются
+ * геттерами: на вызов шифра нет ни выделений, ни копирования блока.
  *
  * <h3>GF(2^128) на long-арифметике</h3>
- * Исходный алгоритм итерировал 128 бит побитово, на каждом шаге сдвигая {@code byte[16]}
- * через {@code multiplyByW} (16 байтовых операций). Теперь: два {@code long}-сдвига +
- * одна XOR с константой {@code 0x87L} на итерацию — примерно в 4 раза меньше операций.
+ * Умножение - 4-битный Horner с таблицей tab16 ({@code tab[k] = k · Y}): на каждый из 32
+ * ниббл множителя приходятся четыре умножения на w и XOR строки таблицы. Умножение на w - два
+ * сдвига слов {@code long} и условный XOR с константой {@code 0x87L}, без работы с
+ * {@code byte[16]}.
  *
- * <h3>Batch CTR — 4 блока гаммы за раз</h3>
- * Для типичного TLS-record ≈ 88 блоков: 22 batch-итерации вместо 88 вызовов шифра.
- * Улучшает branch prediction и I-cache locality горячего цикла.
+ * <h3>Гамма пачками по 4 блока</h3>
+ * Блоки гаммы вычисляются по {@code BATCH} штук за итерацию: короче горячий цикл, лучше
+ * предсказание переходов и локальность кода.
  *
- * <h3>incr_r / incr_l как long++</h3>
- * Исходная реализация инкрементировала счётчики побайтовым циклом с переносом.
- * Теперь: {@code yLo++} (incr_r) и {@code zHi++} (incr_l). Корректно при числе
- * блоков < 2^64, что всегда выполняется в реальных сценариях.
+ * <h3>incr_r и incr_l как long++</h3>
+ * Счётчики растут операциями {@code yLo++} (incr_r) и {@code zHi++} (incr_l). Это корректно, пока
+ * число блоков меньше 2^64, а в реальных сообщениях так и есть.
  */
 public final class Mgm {
 
@@ -64,7 +59,7 @@ public final class Mgm {
     private static final VarHandle LONG_BE =
             MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.BIG_ENDIAN);
 
-    private static final int BLOCK = 16;
+    private static final int BLOCK = Kuznyechik.BLOCK_SIZE;
 
     // Число блоков гаммы, генерируемых за один batch.
     // Значение 4 подобрано эмпирически: баланс между I-cache нагрузкой и branch overhead.
@@ -94,6 +89,13 @@ public final class Mgm {
     private boolean aadFinished;
 
     private boolean finished;
+
+    /**
+     * Обработан неполный блок данных. Он дополнен нулями, и на него израсходованы счётчики Y и Z,
+     * поэтому продолжать поток после него нельзя: следующий вызов начал бы новый блок, и шифртекст
+     * с тегом разошлись бы с RFC 9058.
+     */
+    private boolean partialBlockProcessed;
 
     // Scratch-буфер для неполных блоков AAD/CT — выделяется один раз в конструкторе
     private final byte[] partial = new byte[BLOCK];
@@ -189,6 +191,12 @@ public final class Mgm {
      * <p>Используется на hot path TLS 1.3 с TLSTREE: 8191/8192 записей
      * используют тот же ключ, меняется только ICN (sequence number).
      *
+     * <p><b>Уникальность ICN.</b> {@code newIcn} обязан отличаться от предыдущего (RFC 9058 §4.1).
+     * Повтор ICN под тем же ключом повторяет гамму Y_i и последовательность
+     * H_i = E_K(Z_i), по которой считается тег: раскрывается XOR открытых текстов, и режим теряет
+     * свойства безопасности, на которые рассчитаны границы §6. Проверка повтора не выполняется:
+     * уникальность ICN обеспечивает вызывающий.
+     *
      * @param newIcn новый ICN ({@code blockSize} байт, MSB=0)
      * @throws IllegalStateException    если MGM не был инициализирован через {@link #init}
      * @throws IllegalArgumentException если ICN некорректной длины или MSB != 0
@@ -224,6 +232,7 @@ public final class Mgm {
      */
     public void updateAAD(byte[] aad, int offset, int len) {
         checkInitialized();
+        checkNotFinished();
         if (aadFinished) {
             throw new IllegalStateException("AAD must be provided before ciphertext processing");
         }
@@ -269,8 +278,12 @@ public final class Mgm {
      * Шифрует или расшифровывает данные.
      *
      * <p>При первом вызове AAD автоматически финализируется.
-     * Неполный последний блок поддерживается.
      * MAC вычисляется по принципу EtM: всегда над шифртекстом.
+     *
+     * <p><b>Неполный блок.</b> Все вызовы, кроме последнего, должны подавать данные длиной,
+     * кратной размеру блока: неполный блок дополняется нулями и сразу входит в MAC, поэтому после
+     * него продолжить сообщение нельзя. Следующий непустой вызов бросает
+     * {@link IllegalStateException}.
      *
      * @param input  входные данные
      * @param inOff  смещение
@@ -278,11 +291,19 @@ public final class Mgm {
      * @param output выходной буфер (длина >= len)
      * @param outOff смещение в выходном буфере
      * @return количество записанных байт (равно len)
+     * @throws IllegalStateException если шифр не инициализирован, сообщение завершено или
+     *                               предыдущий вызов обработал неполный блок
      */
     public int processBytes(byte[] input, int inOff, int len, byte[] output, int outOff) {
         checkInitialized();
+        checkNotFinished();
         ensureAadFinished();
         if (len == 0) return 0;
+        if (partialBlockProcessed) {
+            throw new IllegalStateException(
+                    "MGM: data after a partial block is not allowed; only the last processBytes"
+                            + " call may be shorter than the block size");
+        }
 
         int pos = 0;
 
@@ -344,6 +365,7 @@ public final class Mgm {
                 LONG_BE.set(output, outOff + pos, ohi);
                 LONG_BE.set(output, outOff + pos + 8, olo);
             } else {
+                partialBlockProcessed = true;
                 // Записываем только blen байт выходных данных
                 LONG_BE.set(partial, 0, ohi);
                 LONG_BE.set(partial, 8, olo);
@@ -369,57 +391,87 @@ public final class Mgm {
      * Завершает шифрование и записывает тег аутентификации.
      *
      * @param output выходной буфер
-     * @param outOff смещение (должно быть достаточно места для {@link #getTagSize()} байт)
+     * @param outOff смещение (в буфере должно быть место под {@code tagSize} байт)
      * @return размер тега в байтах
-     * @throws IllegalStateException если MGM не инициализирован или уже завершён
+     * @throws IllegalStateException    если MGM не инициализирован или уже завершён
+     * @throws IllegalArgumentException если и открытый текст, и AAD пусты (RFC 9058 §6) либо тег не
+     *                                  умещается в {@code output} с позиции {@code outOff}
      */
     public int finishEncryption(byte[] output, int outOff) {
-        if (finished)
-            throw new IllegalStateException("Already finished; call init() for new message");
-        finished = true;
+        // Состояние и границы буфера проверяем до установки finished: отказ неинициализированного
+        // объекта или ошибка аргумента не должны превращаться при повторе в «Already finished».
         checkInitialized();
+        checkNotFinished();
+        checkTagRange(output, outOff);
+        finished = true;
         ensureAadFinished();
+        // finished уже выставлен: после отказа объект считается завершённым, повтор даёт
+        // «Already finished», а не тег по уже сдвинутым счётчикам.
+        if (aadBitLen == 0 && ctBitLen == 0) {
+            throw new IllegalArgumentException(
+                    "MGM must not process empty plaintext and empty associated data at the same"
+                            + " time (RFC 9058 §6)");
+        }
         writeTag(output, outOff);
         return tagSize;
+    }
+
+    /** Тег размером {@code tagSize} должен целиком умещаться в {@code buffer} с позиции {@code offset}. */
+    private void checkTagRange(byte[] buffer, int offset) {
+        if (buffer == null || offset < 0 || tagSize > buffer.length - offset) {
+            throw new IllegalArgumentException(
+                    "Tag range out of bounds: offset=" + offset + ", tagSize=" + tagSize);
+        }
     }
 
     /**
      * Завершает расшифрование и проверяет тег аутентификации.
      *
-     * <p>Сравнение выполняется за constant-time через {@link MessageDigest#isEqual}.
+     * <p>Сравнение выполняется за постоянное время: слова тега складываются через XOR без ветвлений
+     * и без временных массивов.
      *
      * @param tag    буфер с принятым тегом
      * @param offset смещение тега
-     * @throws AuthenticationException если тег не совпадает
+     * @throws AuthenticationException если тег не совпадает или и шифртекст, и AAD пусты
+     *                                 (RFC 9058 §6)
+     * @throws IllegalArgumentException если тег не умещается в {@code tag} с позиции {@code offset}
      * @throws IllegalStateException   если MGM не инициализирован или уже завершён
      */
     public void finishDecryption(byte[] tag, int offset) throws AuthenticationException {
-        if (finished)
-            throw new IllegalStateException("Already finished; call init() for new message");
-        finished = true;
         checkInitialized();
+        checkNotFinished();
+        // Ошибка аргумента не должна завершать расшифрование: вызывающий может повторить с верным
+        // буфером, а завершённый объект отвечал бы ему «Already finished».
+        checkTagRange(tag, offset);
+        finished = true;
         ensureAadFinished();
-        byte[] computed = new byte[BLOCK];
-        writeTag(computed, 0);
-        byte[] received = Arrays.copyOfRange(tag, offset, offset + tagSize);
-        if (!MessageDigest.isEqual(Arrays.copyOf(computed, tagSize), received)) {
+        // Тег пустого сообщения без AAD не зависит от ICN (RFC 9058 §6): один перехваченный тег
+        // принимался бы под любым ICN, поэтому такое сообщение не аутентифицируется.
+        if (aadBitLen == 0 && ctBitLen == 0) {
+            throw new AuthenticationException(
+                    "MGM must not authenticate empty ciphertext with empty associated data"
+                            + " (RFC 9058 §6)");
+        }
+        finalizeTag();
+        // Тег сравнивается словами без ветвлений и без временных массивов: у короткого тега
+        // (tagSize < 16) значение имеют только старшие байты второго слова, остальные
+        // отсекаются маской
+        int lowBytes = tagSize - Long.BYTES;
+        long givenLo = 0;
+        for (int i = 0; i < lowBytes; i++) {
+            givenLo |= (tag[offset + Long.BYTES + i] & 0xFFL) << (Long.SIZE - Byte.SIZE * (i + 1));
+        }
+        long lowMask = lowBytes == 0 ? 0L : -1L << (Long.SIZE - Byte.SIZE * lowBytes);
+        long diff =
+                (cipher.getEncBufHi() ^ (long) LONG_BE.get(tag, offset))
+                        | ((cipher.getEncBufLo() ^ givenLo) & lowMask);
+        // Вычисленный тег лежит в рабочих полях шифра: для неверного тега это действительный
+        // тег MGM под ключом пользователя для чужих данных, и в куче он не нужен. Ключ reset() не
+        // трогает, поэтому reinitICN после проверки по-прежнему работает.
+        cipher.reset();
+        if (diff != 0L) {
             throw new AuthenticationException("MGM authentication tag mismatch");
         }
-    }
-
-    /** @return размер тега в байтах */
-    public int getTagSize() {
-        return tagSize;
-    }
-
-    /** @return имя алгоритма {@code "GOST3412-2015/MGM"} */
-    public String getAlgorithmName() {
-        return "GOST3412-2015/MGM";
-    }
-
-    /** @return размер блока шифра в байтах */
-    public int getBlockSize() {
-        return BLOCK;
     }
 
     // -----------------------------------------------------------------------
@@ -456,6 +508,7 @@ public final class Mgm {
         aadBitLen = 0L;
         ctBitLen = 0L;
         aadBufLen = 0;
+        partialBlockProcessed = false;
     }
 
     /**
@@ -510,6 +563,26 @@ public final class Mgm {
      * len(A) и len(C) — длины в битах, каждая как {@code n/2 = 8} байт в big-endian.
      */
     private void writeTag(byte[] out, int off) {
+        finalizeTag();
+        // Записываем tagSize байт (8..16, конструктор других размеров не допускает): сначала hi
+        // (байты 0..7), затем начало lo (байты 8..tagSize-1)
+        LONG_BE.set(out, off, cipher.getEncBufHi());
+        if (tagSize == BLOCK) {
+            LONG_BE.set(out, off + 8, cipher.getEncBufLo());
+        } else {
+            long lo = cipher.getEncBufLo();
+            for (int i = 0; i < tagSize - Long.BYTES; i++) {
+                out[off + Long.BYTES + i] = (byte) (lo >>> (Long.SIZE - Byte.SIZE * (i + 1)));
+            }
+        }
+    }
+
+    /**
+     * Считает полный блок тега: результат остаётся в {@code cipher.getEncBufHi()} и
+     * {@code cipher.getEncBufLo()}, откуда его читают {@link #writeTag} и
+     * {@link #finishDecryption}.
+     */
+    private void finalizeTag() {
         // H = E(K, Z_{h+q+1})
         cipher.encryptToFields(zHi, zLo);
         long hhi = cipher.getEncBufHi();
@@ -523,40 +596,23 @@ public final class Mgm {
 
         // T = MSB_S(E(K, finSum))
         cipher.encryptToFields(fsHi, fsLo);
-        // Записываем tagSize байт: сначала hi (байты 0..7), затем lo (байты 8..15)
-        if (tagSize >= 8) {
-            LONG_BE.set(out, off, cipher.getEncBufHi());
-            if (tagSize == BLOCK) {
-                LONG_BE.set(out, off + 8, cipher.getEncBufLo());
-            } else {
-                byte[] tmp8 = new byte[8];
-                LONG_BE.set(tmp8, 0, cipher.getEncBufLo());
-                System.arraycopy(tmp8, 0, out, off + 8, tagSize - 8);
-            }
-        } else {
-            byte[] tmp8 = new byte[8];
-            LONG_BE.set(tmp8, 0, cipher.getEncBufHi());
-            System.arraycopy(tmp8, 0, out, off, tagSize);
-        }
     }
 
     // -----------------------------------------------------------------------
-    // GF(2^128) умножение — long-арифметика, алгоритм «right-to-left comb»
+    // GF(2^128) умножение — long-арифметика, 4-битный Horner с таблицей из 16 строк
     //
     // Поле GF(2^128) задаётся неприводимым многочленом
     // f(w) = w^128 + w^7 + w^2 + w + 1 (RFC 9058 §3).
     // Представление: big-endian, бит 127 — MSB первого байта, бит 0 — LSB последнего.
     // В long-парах: бит 127 = MSB xHi, бит 0 = LSB xLo.
     //
-    // Алгоритм: итерируем по 64 битам xLo (w^0..w^63), затем по 64 битам xHi (w^64..w^127).
-    // На каждом шаге: если бит == 1, XOR result с V; затем V = V · w.
+    // Алгоритм описан в gf128MulTo: таблица tab[k] = k · Y и 32 ниббла множителя X от старшего
+    // к младшему, на ниббл четыре умножения на w и XOR строки таблицы.
     //
     // multiply-by-w в GF(2^128):
     //   128-битный сдвиг влево: (vHi, vLo) -> ((vHi<<1)|(vLo>>>63), vLo<<1)
     //   Если выдвинулся MSB vHi: XOR с редукционным полиномом 0x87 в LSB vLo.
-    //
-    // Это в ~4 раза эффективнее побайтового multiplyByW из исходной реализации:
-    // 2 long-сдвига + 1 условный XOR вместо 16 байтовых операций.
+    //   Это два сдвига long и условный XOR масками, без ветвлений.
     // -----------------------------------------------------------------------
 
     /**
@@ -656,72 +712,6 @@ public final class Mgm {
         sumLo ^= mulResLo;
     }
 
-    // -----------------------------------------------------------------------
-    // Публичный byte[]-адаптер для тестов
-    // -----------------------------------------------------------------------
-
-    /**
-     * Умножение двух элементов GF(2^128) с полиномом f(w) = w^128+w^7+w^2+w+1
-     * (RFC 9058 §3).
-     *
-     * <p>Алгоритм «right-to-left comb»: итерируем по битам X от w^0 к w^127.
-     * На каждом шаге: если бит X_i = 1, XOR результата с текущим Y·w^i;
-     * затем сдвигаем Y влево на w с редукцией.
-     * Этот порядок гарантирует коммутативность.
-     *
-     * <p>Метод предназначен для тестов корректности GF-арифметики.
-     * На горячем пути MGM используется {@link #gf128MulAccum}.
-     *
-     * @param X левый множитель (16 байт, big-endian)
-     * @param Y правый множитель (16 байт, big-endian)
-     * @return X ⊗ Y в GF(2^128), 16 байт, big-endian
-     */
-    public static byte[] gf128Mul(byte[] X, byte[] Y) {
-        if (X.length != 16 || Y.length != 16) {
-            throw new IllegalArgumentException(
-                    "gf128Mul: both arguments must be 16 bytes, got X.length="
-                            + X.length
-                            + ", Y.length="
-                            + Y.length);
-        }
-        long xHi = (long) LONG_BE.get(X, 0);
-        long xLo = (long) LONG_BE.get(X, 8);
-        long yHi = (long) LONG_BE.get(Y, 0);
-        long yLo = (long) LONG_BE.get(Y, 8);
-
-        long rHi = 0L, rLo = 0L;
-        long vHi = yHi, vLo = yLo;
-        long x = xLo;
-        for (int i = 0; i < 64; i++) {
-            // ct сравнение: if ((x & 1L) != 0) { rHi ^= vHi; rLo ^= vLo; }
-            long bit = -(x & 1L);
-            rHi ^= vHi & bit;
-            rLo ^= vLo & bit;
-
-            long mask = -(vHi >>> 63); // 0xFFFF...FF если MSB=1, иначе 0
-            vHi = (vHi << 1) | (vLo >>> 63);
-            vLo = (vLo << 1) ^ (GF128_POLY & mask);
-            x >>>= 1;
-        }
-        x = xHi;
-        for (int i = 0; i < 64; i++) {
-            // ct сравнение: if ((x & 1L) != 0) { rHi ^= vHi; rLo ^= vLo; }
-            long bit = -(x & 1L);
-            rHi ^= vHi & bit;
-            rLo ^= vLo & bit;
-
-            long mask = -(vHi >>> 63); // 0xFFFF...FF если MSB=1, иначе 0
-            vHi = (vHi << 1) | (vLo >>> 63);
-            vLo = (vLo << 1) ^ (GF128_POLY & mask);
-            x >>>= 1;
-        }
-
-        byte[] result = new byte[16];
-        LONG_BE.set(result, 0, rHi);
-        LONG_BE.set(result, 8, rLo);
-        return result;
-    }
-
     /**
      * Обнуляет всё состояние: делегирует {@link Kuznyechik#destroy()},
      * затирает счётчики, аккумулятор MAC, ICN и scratch-буферы.
@@ -753,11 +743,18 @@ public final class Mgm {
         forEncryption = false;
         aadFinished = false;
         finished = false;
+        partialBlockProcessed = false;
     }
 
     private void checkInitialized() {
         if (!initialized) {
             throw new IllegalStateException("MGM not initialized — call init() first");
+        }
+    }
+
+    private void checkNotFinished() {
+        if (finished) {
+            throw new IllegalStateException("Already finished; call init() for new message");
         }
     }
 }

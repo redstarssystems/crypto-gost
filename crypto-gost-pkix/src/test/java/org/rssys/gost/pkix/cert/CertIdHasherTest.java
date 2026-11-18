@@ -269,4 +269,67 @@ class CertIdHasherTest {
         }
         return result;
     }
+
+    // ---------------------------------------------------------------
+    // issuerKeyHash по RFC 6960 §4.1.1 (known-answer)
+    // ---------------------------------------------------------------
+
+    /** Тестовый корень без персональных данных; ожидаемые хеши посчитаны OpenSSL gost-engine. */
+    private static final String KAT_ROOT_B64 =
+            "MIIByzCCAXigAwIBAgIBATAKBggqhQMHAQEDAjBDMR4wHAYDVQQDDBVDcm9zc3ZhbCBUZXN0IFJvb3QgQ0ExFDASBgNVBAoMC2NyeXB0by1nb3N0MQswCQYDVQQGEwJSVTAeFw0yNTAxMDEwMDAwMDBaFw00NTAxMDEwMDAwMDBaMEMxHjAcBgNVBAMMFUNyb3NzdmFsIFRlc3QgUm9vdCBDQTEUMBIGA1UECgwLY3J5cHRvLWdvc3QxCzAJBgNVBAYTAlJVMGgwIQYIKoUDBwEBAQEwFQYJKoUDBwECAQEBBggqhQMHAQECAgNDAARAhHRofJlqpssQ6NKZ0jr/MOEBV0aR5VwUsoX7PAugvdytoVME4702DCxiUhqvZyDb4jH5p2M/CpiLxupmmLAVbKNOMEwwDgYDVR0PAQH/BAQDAgCGMA8GA1UdEwEB/wQFMAMBAf8wKQYDVR0OBCIEIOs4HqLj0zgWrWjt+T+9MxBsnAQfKHj0d96CuXqZeG54MAoGCCqFAwcBAQMCA0EABiYRmx0lANp6UUT9yhvRqfF3oMEcTiJgvpVgKGLown8Ss51QA1hvWEp/kCdpybd7pzOkyFGCa/bJ4p9dWsEPgw==";
+
+    private static final String KAT_KEY_BITS_HASH =
+            "16604e77aaefe8d417d32767d5830169d8ef5077c5c7d4561b8cefee1048dc48";
+
+    @Test
+    @DisplayName("issuerKeyHash: Стрибог-256 от битов ключа 04 40 ... без октета unused-bits")
+    void issuerKeyHashExcludesUnusedBitsOctet() {
+        GostCertificate root =
+                new GostCertificate(java.util.Base64.getDecoder().decode(KAT_ROOT_B64));
+
+        byte[] bits = root.getSpkiKeyBits();
+        assertEquals(66, bits.length, "биты ключа: OCTET STRING из 64 байт точки");
+        assertEquals(0x04, bits[0] & 0xFF);
+        assertEquals(0x40, bits[1] & 0xFF);
+        assertEquals(
+                KAT_KEY_BITS_HASH,
+                java.util.HexFormat.of().formatHex(CertIdHasher.hashIssuerPublicKey(root)),
+                "хеш должен совпасть с эталоном КриптоПро/OpenSSL");
+        assertEquals(
+                KAT_KEY_BITS_HASH,
+                java.util.HexFormat.of()
+                        .formatHex(CertIdHasher.hashIssuerPublicKey(root.getEncoded())),
+                "вариант по DER должен совпадать с вариантом по сертификату");
+    }
+
+    @Test
+    @DisplayName("getSpkiKeyBits отличается от getSpkiKeyValue ровно ведущим октетом unused-bits")
+    void keyBitsAreKeyValueWithoutLeadingZero() {
+        GostCertificate root =
+                new GostCertificate(java.util.Base64.getDecoder().decode(KAT_ROOT_B64));
+
+        byte[] value = root.getSpkiKeyValue();
+        assertEquals(0, value[0], "старый метод сохраняет октет unused-bits");
+        assertArrayEquals(
+                java.util.Arrays.copyOfRange(value, 1, value.length), root.getSpkiKeyBits());
+    }
+
+    @Test
+    @DisplayName("Ответ OCSP: issuerKeyHash в CertID совпадает с эталонным")
+    void ocspResponseCertIdUsesRfcKeyHash() throws Exception {
+        GostCertificate root =
+                new GostCertificate(java.util.Base64.getDecoder().decode(KAT_ROOT_B64));
+        ECParameters params = ECParameters.tc26a256();
+        KeyPair kp = KeyGenerator.generateKeyPair(params);
+
+        byte[] der =
+                GostOcspResponseBuilder.create(new byte[] {2})
+                        .issuerDn(root.getSubjectDnBytes())
+                        .caPublicKey(root.getPublicKey())
+                        .good()
+                        .sign(kp.getPrivate());
+        byte[] keyHash = new GostOcspResponse(der).getResponses().get(0).issuerKeyHash();
+
+        assertEquals(KAT_KEY_BITS_HASH, java.util.HexFormat.of().formatHex(keyHash));
+    }
 }

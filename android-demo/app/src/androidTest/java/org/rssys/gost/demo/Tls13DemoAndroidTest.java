@@ -14,6 +14,7 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.jca.RssysGostProvider;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.cert.GostDnParser;
 import org.rssys.gost.pkix.cert.GostOcspResponseBuilder;
 import org.rssys.gost.signature.ECParameters;
@@ -234,7 +235,7 @@ public final class Tls13DemoAndroidTest {
                 new TlsServerConfig(CS, List.of(serverCert), serverKp.getPrivate()),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey)
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert))
                              .withServerHostname("localhost"),
                      pair.getClientTransport())) {
 
@@ -258,7 +259,7 @@ public final class Tls13DemoAndroidTest {
      * банковские и ведомственные API требуют
      * двусторонней аутентификации — не только клиент проверяет сервер,
      * но и сервер проверяет клиента. Сервер запрашивает сертификат
-     * через {@code withCaPublicKey()}, клиент отправляет свой
+     * через {@code needClientAuth(TrustAnchors)}, клиент отправляет свой
      * через {@code withClientCertificateChain()} + {@code withClientPrivateKey()}.
      */
     @Test
@@ -275,10 +276,10 @@ public final class Tls13DemoAndroidTest {
 
         try (TlsSession server = TlsSession.createServer(
                 new TlsServerConfig(CS, List.of(serverCert), serverKp.getPrivate())
-                        .withCaPublicKey(caPubKey),
+                        .needClientAuth(TrustAnchors.ofCertificate(caCert)),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey)
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert))
                              .withServerHostname("localhost")
                              .withClientCertificateChain(clientCert)
                              .withClientPrivateKey(clientKp.getPrivate()),
@@ -322,9 +323,9 @@ public final class Tls13DemoAndroidTest {
         var serverKp = KeyGenerator.generateKeyPair(PARAMS);
         GostCertificate serverCert = createServerCert(serverKp.getPrivate(), serverKp.getPublic());
 
-        // Shared PskStore — одно хранилище для сервера и клиента.
-        // В production у клиента и сервера — разные хранилища.
-        PskStore sharedStore = new InMemoryPskStore(256);
+        // Раздельные хранилища, как в production: запись клиента (с привязкой) и запись сервера затирали бы друг друга
+        PskStore serverStore = new InMemoryPskStore(256);
+        PskStore clientStore = new InMemoryPskStore(256);
 
         // ---- Первое соединение: полный handshake + NewSessionTicket ----
         InMemoryTlsTransport.Pair pair1 = InMemoryTlsTransport.newPair();
@@ -333,16 +334,21 @@ public final class Tls13DemoAndroidTest {
                         .withTicketsToSend(1),
                 pair1.getServerTransport());
              TlsSession client1 = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey).withServerHostname("localhost"),
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert)).withServerHostname("localhost"),
                      pair1.getClientTransport())) {
-            server1.setPskStore(sharedStore);
-            client1.setPskStore(sharedStore);
+            server1.setPskStore(serverStore);
+            client1.setPskStore(clientStore);
 
             doHandshake(client1, server1, "first".getBytes(StandardCharsets.UTF_8));
+
+            // NewSessionTicket - сообщение после рукопожатия: клиент разбирает его только при
+            // чтении. Без обратного обмена тикет остался бы необработанным к проверке хранилища.
+            server1.write("ticket".getBytes(StandardCharsets.UTF_8));
+            client1.read();
         }
 
-        assertTrue("PSK сохранён после первого handshake", sharedStore.size() > 0);
-        System.out.println("  После первого handshake PSK-тикетов: " + sharedStore.size());
+        assertTrue("PSK сохранён после первого handshake", clientStore.size() > 0);
+        System.out.println("  После первого handshake PSK-тикетов: " + clientStore.size());
 
         // ---- Второе соединение: аббревиатурный handshake (PSK) ----
         InMemoryTlsTransport.Pair pair2 = InMemoryTlsTransport.newPair();
@@ -351,10 +357,10 @@ public final class Tls13DemoAndroidTest {
                         .withTicketsToSend(1),
                 pair2.getServerTransport());
              TlsSession client2 = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey).withServerHostname("localhost"),
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert)).withServerHostname("localhost"),
                      pair2.getClientTransport())) {
-            server2.setPskStore(sharedStore);
-            client2.setPskStore(sharedStore);
+            server2.setPskStore(serverStore);
+            client2.setPskStore(clientStore);
 
             byte[] response = doHandshake(client2, server2,
                     "resumed via PSK".getBytes(StandardCharsets.UTF_8));
@@ -401,7 +407,7 @@ public final class Tls13DemoAndroidTest {
                         .withOcspStaplingResponse(ocspDer),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey).withServerHostname("localhost"),
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert)).withServerHostname("localhost"),
                      pair.getClientTransport())) {
 
             byte[] response = doHandshake(client, server,
@@ -439,7 +445,7 @@ public final class Tls13DemoAndroidTest {
                         .withAlpnProtocols(List.of("http/1.1")),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey)
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert))
                              .withServerHostname("localhost")
                              .withAlpnProtocols(List.of("h2", "http/1.1")),
                      pair.getClientTransport())) {
@@ -480,7 +486,7 @@ public final class Tls13DemoAndroidTest {
                 new TlsServerConfig(CS, List.of(serverCert), serverKp.getPrivate()),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey).withServerHostname("localhost"),
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert)).withServerHostname("localhost"),
                      pair.getClientTransport())) {
 
             // Handshake
@@ -570,7 +576,7 @@ public final class Tls13DemoAndroidTest {
                         serverKp.getPrivate()),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, rootCert.getPublicKey())
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(rootCert))
                              .withServerHostname("localhost"),
                      pair.getClientTransport())) {
 
@@ -616,7 +622,7 @@ public final class Tls13DemoAndroidTest {
                 new TlsServerConfig(CS, List.of(serverCert), serverKp.getPrivate()),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey)
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert))
                              .withServerHostname("127.0.0.1"),
                      pair.getClientTransport())) {
 
@@ -653,7 +659,7 @@ public final class Tls13DemoAndroidTest {
                 new TlsServerConfig(CS, List.of(serverCert), serverKp.getPrivate()),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey).withServerHostname("localhost"),
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert)).withServerHostname("localhost"),
                      pair.getClientTransport())) {
 
             ExecutorService exec = Executors.newSingleThreadExecutor();
@@ -721,7 +727,7 @@ public final class Tls13DemoAndroidTest {
                 new TlsServerConfig(CS, List.of(serverCert), serverKp.getPrivate()),
                 pair.getServerTransport());
              TlsSession client = TlsSession.createClient(
-                     new TlsClientConfig(CS, caPubKey).withServerHostname("localhost"),
+                     new TlsClientConfig(CS, TrustAnchors.ofCertificate(caCert)).withServerHostname("localhost"),
                      pair.getClientTransport())) {
 
             ExecutorService exec = Executors.newSingleThreadExecutor();

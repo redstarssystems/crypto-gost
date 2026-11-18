@@ -6,8 +6,10 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.pkix.cms.CAdESExtender;
 import org.rssys.gost.pkix.cms.CAdESSignerResult;
+import org.rssys.gost.pkix.cms.CAdESVerifier;
 import org.rssys.gost.pkix.cms.CmsSignedDataBuilder;
 import org.rssys.gost.pkix.cms.VerifiedCAdESData;
 import org.rssys.gost.pkix.tsp.JdkHttpTspTransport;
@@ -79,8 +81,9 @@ public final class TspRealServerDemo {
         // 3. Проверка CAdES-T
         // ---------------------------------------------------------------
         VerifiedCAdESData result =
-                CAdESExtender.verifyCAdEST(cadesT, signerCert, sertumCa, guc2022);
-        System.out.println("verifyCAdEST: пройдена");
+                CAdESVerifier.verifyT(
+                        cadesT, TrustAnchors.ofCertificates(signerCert, sertumCa, guc2022));
+        System.out.println("verifyT: пройдена");
         System.out.println("Данные: " + new String(result.data(), StandardCharsets.UTF_8));
         System.out.println("Подписант: " + result.signerCertificate().getSubjectDnForLog(60));
 

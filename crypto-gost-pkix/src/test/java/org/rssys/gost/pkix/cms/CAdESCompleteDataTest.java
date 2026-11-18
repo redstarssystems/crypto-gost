@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -24,6 +27,8 @@ import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.GostOcspResponse;
 import org.rssys.gost.pkix.cert.GostSignatureHelper;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.TrustAnchors;
+import org.rssys.gost.pkix.tsp.TspTransport;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.util.DerCodec;
 
@@ -36,6 +41,8 @@ class CAdESCompleteDataTest {
     private static KeyPair signerKp;
     private static GostCertificate signerCert;
     private static GostCrl crl;
+    private static KeyPair tsaKp;
+    private static GostCertificate tsaCert;
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -64,6 +71,24 @@ class CAdESCompleteDataTest {
                                 BigInteger.valueOf(99), GostSignatureHelper.nowGeneralizedTime())
                         .sign(caKp.getPrivate());
         crl = new GostCrl(crlDer);
+
+        tsaKp = KeyGenerator.generateKeyPair(PARAMS);
+        tsaCert = CmsTestUtils.createTsaCert(tsaKp.getPrivate(), tsaKp.getPublic());
+    }
+
+    private byte[] addLocalTimestamp(byte[] cadesBesDer) throws Exception {
+        byte[] sigHash = extractAndHashSignature(cadesBesDer);
+        TspTransport mockTransport =
+                (req, url) -> {
+                    try {
+                        BigInteger reqNonce = parseNonceFromRequest(req);
+                        byte[] token = buildTimeStampToken(sigHash, reqNonce);
+                        return buildTspResponse(token);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                };
+        return CAdESExtender.addTimestamp(cadesBesDer, "http://local.tsa", mockTransport, tsaCert);
     }
 
     @Test
@@ -77,28 +102,58 @@ class CAdESCompleteDataTest {
     }
 
     @Test
-    @DisplayName("Регресс: OtherHashAlgAndValue.hashAlgorithm несёт NULL-параметры")
-    void otherHashAlgorithmHasNullParams() throws Exception {
-        // OtherHashAlgAndValue (CAdES-C complete-refs, точки certificateRefs/
-        // revocationRefs) — тот же AlgorithmIdentifier с GOST-digest-OID, что и
-        // остальные digest-поля CMS; по Р 1323565.1.025 §4 параметры = NULL.
-        // Ассерт фиксирует форму {OID, NULL} и защищает от молчаливого возврата
-        // к кодированию без параметров при будущем рефакторинге (внешнего
-        // эталона для CAdES-C нет — только собственный регресс).
-        byte[] hash = Digest.digest256("null-param".getBytes());
+    @DisplayName("OtherHash кодируется по RFC 5126 без тега [1]")
+    void otherHashUntagged() throws Exception {
+        byte[] hash = Digest.digest256("untagged".getBytes());
         byte[] der = CAdESCompleteData.encodeOtherHashStreebog(hash, GostOids.DIGEST_256);
 
-        // der = [1] IMPLICIT OtherHashAlgAndValue; снимаем контекстную обёртку [1]
-        int[] len = DerCodec.decodeLength(der, 1);
-        int seqOffset = 1 + len[1];
-        byte[][] algAndValue = DerCodec.parseSequenceContents(der, seqOffset);
+        assertEquals(
+                DerCodec.TAG_SEQUENCE,
+                der[0] & 0xFF,
+                "OtherHash — непосредственный OtherHashAlgAndValue");
+        byte[][] algAndValue = DerCodec.parseSequenceContents(der, 0);
+        assertEquals(2, algAndValue.length, "OtherHashAlgAndValue: algId + hashValue");
+        assertTrue(Arrays.equals(hash, DerCodec.parseOctetString(algAndValue[1], 0)));
+    }
+
+    @Test
+    @DisplayName("OtherHashAlgAndValue.hashAlgorithm кодируется без параметров (форма КриптоПро)")
+    void otherHashAlgorithmHasNoParams() throws Exception {
+        // КриптоПро не принимает NULL в AlgorithmIdentifier внутри OtherHash:
+        // cryptcp отвечает 0x80070490 «Элемент не найден». Декодер при этом
+        // обязан читать и старую форму с NULL.
+        byte[] hash = Digest.digest256("no-param".getBytes());
+        byte[] der = CAdESCompleteData.encodeOtherHashStreebog(hash, GostOids.DIGEST_256);
+
+        byte[][] algAndValue = DerCodec.parseSequenceContents(der, 0);
         byte[][] hashAlgId = DerCodec.parseSequenceContents(algAndValue[0], 0);
 
-        assertEquals(2, hashAlgId.length, "hashAlgorithm должен нести OID и параметры");
-        assertEquals(
-                DerCodec.TAG_NULL,
-                hashAlgId[1][0] & 0xFF,
-                "параметры hashAlgorithm должны быть NULL");
+        assertEquals(1, hashAlgId.length, "hashAlgorithm должен содержать только OID");
+        assertEquals(DerCodec.TAG_OID, hashAlgId[0][0] & 0xFF, "элемент AlgorithmIdentifier — OID");
+    }
+
+    @Test
+    @DisplayName("decode OtherHash со старыми NULL-параметрами AlgorithmIdentifier читается")
+    void otherHashNullParamsDecoded() throws Exception {
+        byte[] hash = Digest.digest256("legacy-null".getBytes());
+        byte[] algId = CmsAlgorithmIdentifier.encode(GostOids.DIGEST_256);
+        byte[] der = DerCodec.encodeSequence(algId, DerCodec.encodeOctetString(hash));
+
+        CAdESCompleteData.OtherHash decoded = CAdESCompleteData.decodeOtherHash(der);
+        assertEquals(GostOids.DIGEST_256, decoded.hashOid());
+        assertTrue(Arrays.equals(hash, decoded.hashValue()));
+    }
+
+    @Test
+    @DisplayName("Старая форма OtherHash с тегом [1] читается")
+    void otherHashLegacyTagDecoded() throws Exception {
+        byte[] hash = Digest.digest256("legacy-tag".getBytes());
+        byte[] untagged = CAdESCompleteData.encodeOtherHashStreebog(hash, GostOids.DIGEST_256);
+        byte[] legacy = DerCodec.encodeContextConstructed(1, untagged);
+
+        CAdESCompleteData.OtherHash decoded = CAdESCompleteData.decodeOtherHash(legacy);
+        assertEquals(GostOids.DIGEST_256, decoded.hashOid());
+        assertTrue(Arrays.equals(hash, decoded.hashValue()));
     }
 
     @Test
@@ -187,7 +242,7 @@ class CAdESCompleteDataTest {
     }
 
     @Test
-    @DisplayName("Полный roundtrip CAdES-C: BES -> embedCompleteRefs -> verifyCAdESC")
+    @DisplayName("Полный roundtrip CAdES-C: BES -> embedCompleteRefs -> verifyC")
     void fullCadesCRoundtrip() throws Exception {
         byte[] cadesBes =
                 CmsSignedDataBuilder.create()
@@ -201,11 +256,12 @@ class CAdESCompleteDataTest {
         List<GostCrl> crlsForChain = Arrays.asList(crl, null);
         List<GostOcspResponse> ocspForChain = Arrays.asList(null, null);
 
-        byte[] cadesC =
-                CAdESExtender.embedCompleteRefs(cadesBes, chain, crlsForChain, ocspForChain);
+        byte[] cadesT = addLocalTimestamp(cadesBes);
+        byte[] cadesC = CAdESExtender.embedCompleteRefs(cadesT, chain, crlsForChain, ocspForChain);
         assertNotNull(cadesC);
 
-        VerifiedCAdESData result = CAdESExtender.verifyCAdESC(cadesC, caCert);
+        VerifiedCAdESData result =
+                CAdESVerifier.verifyC(cadesC, TrustAnchors.ofCertificates(caCert, tsaCert));
         assertNotNull(result);
         assertEquals(1, result.signers().size());
         assertNotNull(result.signers().get(0).completeCertRefs());
@@ -229,9 +285,11 @@ class CAdESCompleteDataTest {
                         new org.rssys.gost.pkix.cert.CertRevocationData(null, crl.getEncoded()),
                         null);
 
-        byte[] cadesC = CAdESExtender.embedCompleteRefs(cadesBes, chain, revData);
+        byte[] cadesC =
+                CAdESExtender.embedCompleteRefs(addLocalTimestamp(cadesBes), chain, revData);
         assertNotNull(cadesC);
-        assertDoesNotThrow(() -> CAdESExtender.verifyCAdESC(cadesC, caCert));
+        assertDoesNotThrow(
+                () -> CAdESVerifier.verifyC(cadesC, TrustAnchors.ofCertificates(caCert, tsaCert)));
     }
 
     @Test
@@ -244,7 +302,10 @@ class CAdESCompleteDataTest {
                         .addCertificate(caCert)
                         .withCAdES()
                         .build();
-        assertThrows(PkixException.class, () -> CAdESExtender.verifyCAdESC(cadesBes, caCert));
+        byte[] cadesT = addLocalTimestamp(cadesBes);
+        assertThrows(
+                PkixException.class,
+                () -> CAdESVerifier.verifyC(cadesT, TrustAnchors.ofCertificates(caCert, tsaCert)));
     }
 
     @Test
@@ -258,8 +319,91 @@ class CAdESCompleteDataTest {
                                 chain, Arrays.asList(null, null), Arrays.asList(null, null)));
     }
 
+    @Test
+    @DisplayName("Ссылки включают доверенный корень; для корня пустая CrlOcspRef")
+    void refsIncludeTrustedRootWithEmptyRevocationRef() throws Exception {
+        CAdESCompleteData.CompleteRefsResult result =
+                CAdESCompleteData.buildCompleteRefsResult(
+                        Arrays.asList(signerCert, caCert),
+                        Arrays.asList(crl, null),
+                        Arrays.asList(null, null));
+
+        assertEquals(1, result.certRefs().size(), "в ссылках должен быть корень без подписанта");
+        assertEquals(
+                caCert.getSerialNumberBigInt(),
+                result.certRefs().get(0).issuerSerial().serial(),
+                "ссылка должна указывать на корень");
+        assertEquals(2, result.revocRefs().size(), "записей отзыва: подписант и корень");
+        assertEquals(1, result.revocRefs().get(0).crlList().size());
+        assertTrue(result.revocRefs().get(1).crlList().isEmpty());
+        assertTrue(result.revocRefs().get(1).ocspList().isEmpty());
+    }
+
+    @Test
+    @DisplayName("additionalCerts: дубликаты по DER и совпадающие с цепочкой схлопываются")
+    void additionalCertsAreDeduplicated() throws Exception {
+        CAdESCompleteData.CompleteRefsResult result =
+                CAdESCompleteData.buildCompleteRefsResult(
+                        Arrays.asList(signerCert, caCert),
+                        Arrays.asList(crl, null),
+                        Arrays.asList(null, null),
+                        List.of(tsaCert, tsaCert, caCert, signerCert));
+
+        assertEquals(2, result.certRefs().size(), "корень и один дополнительный (TSA)");
+        assertEquals(3, result.revocRefs().size(), "подписант, корень, один дополнительный");
+    }
+
+    @Test
+    @DisplayName("Переданный CRL корня включается в ссылки")
+    void refsIncludeRootCrlWhenProvided() throws Exception {
+        CAdESCompleteData.CompleteRefsResult result =
+                CAdESCompleteData.buildCompleteRefsResult(
+                        Arrays.asList(signerCert, caCert),
+                        Arrays.asList(crl, crl),
+                        Arrays.asList(null, null));
+
+        assertEquals(1, result.revocRefs().get(1).crlList().size());
+    }
+
+    @Test
+    @DisplayName(
+            "Промежуточный УЦ без CRL/OCSP отклоняется (fail-closed), пустая запись только у корня")
+    void intermediateWithoutEvidenceRejected() {
+        List<GostCertificate> chain = Arrays.asList(signerCert, caCert, caCert);
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CAdESCompleteData.buildCompleteRefsResult(
+                                        chain,
+                                        Arrays.asList(crl, null, null),
+                                        Arrays.asList(null, null, null)));
+        assertTrue(ex.getMessage().contains("Certificate 1"), "ожидается отказ на промежуточном");
+    }
+
+    @Test
+    @DisplayName(
+            "Дополнительные сертификаты (OCSP-ответчики) идут после цепочки с пустыми CrlOcspRef")
+    void additionalCertsAppendedWithEmptyRevocationRefs() throws Exception {
+        CAdESCompleteData.CompleteRefsResult result =
+                CAdESCompleteData.buildCompleteRefsResult(
+                        Arrays.asList(signerCert, caCert),
+                        Arrays.asList(crl, null),
+                        Arrays.asList(null, null),
+                        List.of(tsaCert));
+
+        assertEquals(2, result.certRefs().size(), "корень и дополнительный сертификат");
+        assertEquals(
+                tsaCert.getSerialNumberBigInt(),
+                result.certRefs().get(1).issuerSerial().serial(),
+                "дополнительный сертификат идёт после цепочки");
+        assertEquals(3, result.revocRefs().size(), "подписант, корень, дополнительный");
+        assertTrue(result.revocRefs().get(2).crlList().isEmpty());
+        assertTrue(result.revocRefs().get(2).ocspList().isEmpty());
+    }
+
     // ========================================================================
-    // Security-регрессионные тесты (реальные вызовы verifyCAdESC)
+    // Security-регрессионные тесты (реальные вызовы verifyC)
     // ========================================================================
 
     @Test
@@ -283,8 +427,12 @@ class CAdESCompleteDataTest {
         byte[] fakeRefs = CAdESCompleteData.encodeCompleteCertificateRefs(List.of(fakeCertID));
         byte[] fakeAttr = CmsAttribute.encode(GostOids.COMPLETE_CERTIFICATE_REFS, fakeRefs);
 
-        byte[] tampered = injectUnsignedAttrIntoBes(cadesBes, fakeAttr);
-        assertThrows(PkixException.class, () -> CAdESExtender.verifyCAdESC(tampered, caCert));
+        byte[] tampered = injectUnsignedAttrIntoBes(addLocalTimestamp(cadesBes), fakeAttr);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CAdESVerifier.verifyC(
+                                tampered, TrustAnchors.ofCertificates(caCert, tsaCert)));
     }
 
     @Test
@@ -313,10 +461,13 @@ class CAdESCompleteDataTest {
         byte[] fakeRefs = CAdESCompleteData.encodeCompleteCertificateRefs(List.of(fakeCertId));
         byte[] fakeAttr = CmsAttribute.encode(GostOids.COMPLETE_CERTIFICATE_REFS, fakeRefs);
 
-        byte[] tampered = injectUnsignedAttrIntoBes(cadesBes, fakeAttr);
+        byte[] tampered = injectUnsignedAttrIntoBes(addLocalTimestamp(cadesBes), fakeAttr);
         PkixException ex =
                 assertThrows(
-                        PkixException.class, () -> CAdESExtender.verifyCAdESC(tampered, caCert));
+                        PkixException.class,
+                        () ->
+                                CAdESVerifier.verifyC(
+                                        tampered, TrustAnchors.ofCertificates(caCert, tsaCert)));
         assertTrue(
                 ex.getMessage().contains("certHash") || ex.getMessage().contains("not matched"),
                 "Причина падения — несовпадение certHash: " + ex.getMessage());
@@ -344,8 +495,14 @@ class CAdESCompleteDataTest {
         byte[] emptyRevocAttr =
                 CmsAttribute.encode(GostOids.COMPLETE_REVOCATION_REFS, emptyRevocDer);
 
-        byte[] tampered = injectUnsignedAttrsIntoBes(cadesBes, certRefsAttr, emptyRevocAttr);
-        assertThrows(PkixException.class, () -> CAdESExtender.verifyCAdESC(tampered, caCert));
+        byte[] tampered =
+                injectUnsignedAttrsIntoBes(
+                        addLocalTimestamp(cadesBes), certRefsAttr, emptyRevocAttr);
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CAdESVerifier.verifyC(
+                                tampered, TrustAnchors.ofCertificates(caCert, tsaCert)));
     }
 
     @Test
@@ -364,17 +521,53 @@ class CAdESCompleteDataTest {
         byte[] dupRefs = CAdESCompleteData.encodeCompleteCertificateRefs(List.of(der1, der2));
         byte[] fakeAttr = CmsAttribute.encode(GostOids.COMPLETE_CERTIFICATE_REFS, dupRefs);
 
-        byte[] tampered = injectUnsignedAttrIntoBes(cadesBes, fakeAttr);
+        byte[] tampered = injectUnsignedAttrIntoBes(addLocalTimestamp(cadesBes), fakeAttr);
         PkixException ex =
                 assertThrows(
-                        PkixException.class, () -> CAdESExtender.verifyCAdESC(tampered, caCert));
+                        PkixException.class,
+                        () ->
+                                CAdESVerifier.verifyC(
+                                        tampered, TrustAnchors.ofCertificates(caCert, tsaCert)));
         assertTrue(
                 ex.getMessage().contains("duplicate"),
                 "Причина падения — дубликат OtherCertID: " + ex.getMessage());
     }
 
     @Test
-    @DisplayName("Revoked-сертификат проходит verifyCAdESC")
+    @DisplayName("PkixException при дубликате OtherCertID без issuerSerial (по хэшу)")
+    void duplicateOtherCertIdWithoutIssuerSerial() throws Exception {
+        byte[] cadesBes =
+                CmsSignedDataBuilder.create()
+                        .data("dup hash only".getBytes())
+                        .addSigner(signerKp.getPrivate(), signerCert)
+                        .addCertificate(caCert)
+                        .withCAdES()
+                        .build();
+
+        // OtherCertID без необязательного issuerSerial: DerCodec.encodeSequence берёт один элемент
+        byte[] hashDer =
+                CAdESCompleteData.encodeOtherHashStreebog(
+                        Digest.digest256(caCert.getEncoded()), GostOids.DIGEST_256);
+        byte[] hashOnlyCertId = DerCodec.encodeSequence(hashDer);
+        byte[] dupRefs =
+                CAdESCompleteData.encodeCompleteCertificateRefs(
+                        List.of(hashOnlyCertId, hashOnlyCertId));
+        byte[] fakeAttr = CmsAttribute.encode(GostOids.COMPLETE_CERTIFICATE_REFS, dupRefs);
+
+        byte[] tampered = injectUnsignedAttrIntoBes(addLocalTimestamp(cadesBes), fakeAttr);
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CAdESVerifier.verifyC(
+                                        tampered, TrustAnchors.ofCertificates(caCert, tsaCert)));
+        assertTrue(
+                ex.getMessage().contains("duplicate"),
+                "Причина падения - дубликат OtherCertID без issuerSerial: " + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("Revoked-сертификат проходит verifyC")
     void revokedCertStillPassesCadesC() throws Exception {
         byte[] revokingCrlDer =
                 GostCrlBuilder.create(caCert.getSubjectDnBytes())
@@ -398,11 +591,12 @@ class CAdESCompleteDataTest {
         List<GostCertificate> chain = List.of(signerCert, caCert);
         byte[] cadesC =
                 CAdESExtender.embedCompleteRefs(
-                        cadesBes,
+                        addLocalTimestamp(cadesBes),
                         chain,
                         Arrays.asList(revokingCrl, null),
                         Arrays.asList(null, null));
-        assertDoesNotThrow(() -> CAdESExtender.verifyCAdESC(cadesC, caCert));
+        assertDoesNotThrow(
+                () -> CAdESVerifier.verifyC(cadesC, TrustAnchors.ofCertificates(caCert, tsaCert)));
     }
 
     @Test
@@ -431,12 +625,13 @@ class CAdESCompleteDataTest {
 
         byte[] cadesC =
                 CAdESExtender.embedCompleteRefs(
-                        cadesBes,
+                        addLocalTimestamp(cadesBes),
                         List.of(cert512),
                         List.of(crl512),
                         Arrays.asList((GostOcspResponse) null));
         assertNotNull(cadesC);
-        assertDoesNotThrow(() -> CAdESExtender.verifyCAdESC(cadesC, cert512));
+        assertDoesNotThrow(
+                () -> CAdESVerifier.verifyC(cadesC, TrustAnchors.ofCertificates(cert512, tsaCert)));
     }
 
     @Test
@@ -533,5 +728,75 @@ class CAdESCompleteDataTest {
             result = injectUnsignedAttrIntoBes(result, attr);
         }
         return result;
+    }
+
+    // ========================================================================
+    // Локальный TSA для фикстур CAdES-T
+    // ========================================================================
+
+    private byte[] extractAndHashSignature(byte[] signedDataDer) throws Exception {
+        CmsContentInfo ci = CmsContentInfo.decode(signedDataDer);
+        byte[][] sdParts = DerCodec.parseSequenceContents(ci.content(), 0);
+        byte[] signerInfosField = sdParts[sdParts.length - 1];
+        byte[][] signerInfos = DerCodec.parseSetContents(signerInfosField, 0);
+        byte[][] siParts = DerCodec.parseSequenceContents(signerInfos[0], 0);
+        byte[] sigOctet = null;
+        for (int i = siParts.length - 1; i >= 0; i--) {
+            if ((siParts[i][0] & 0xFF) == DerCodec.TAG_OCTET_STRING) {
+                sigOctet = siParts[i];
+                break;
+            }
+        }
+        byte[] sig = DerCodec.parseOctetString(sigOctet, 0);
+        return sig.length == 64 ? Digest.digest256(sig) : Digest.digest512(sig);
+    }
+
+    private byte[] buildTimeStampToken(byte[] sigHash, BigInteger nonce) throws Exception {
+        byte[] tstInfo = buildTstInfo(sigHash, nonce);
+        return CmsSignedDataBuilder.create()
+                .data(tstInfo)
+                .contentType(GostOids.TST_INFO)
+                .addSigner(tsaKp.getPrivate(), tsaCert)
+                .build();
+    }
+
+    private byte[] buildTspResponse(byte[] timeStampToken) {
+        byte[] pkiStatus =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeInteger(BigInteger.valueOf(GostOids.PKI_STATUS_GRANTED)));
+        return DerCodec.encodeSequence(pkiStatus, timeStampToken);
+    }
+
+    private byte[] buildTstInfo(byte[] hash, BigInteger nonce) {
+        DateTimeFormatter fmt =
+                DateTimeFormatter.ofPattern("yyyyMMddHHmmss'Z'").withZone(ZoneOffset.UTC);
+        String genTime = fmt.format(Instant.now());
+        byte[] version = DerCodec.encodeInteger(1);
+        byte[] policy = DerCodec.encodeOid("1.3.6.1.4.1.4146.1.2.1");
+        byte[] hashAlg =
+                CmsAlgorithmIdentifier.encode(
+                        hash.length == 32 ? GostOids.DIGEST_256 : GostOids.DIGEST_512);
+        byte[] hashedMsg = DerCodec.encodeOctetString(hash);
+        byte[] messageImprint = DerCodec.encodeSequence(hashAlg, hashedMsg);
+        byte[] serial = DerCodec.encodeInteger(BigInteger.ONE);
+        byte[] genTimeDer = DerCodec.encodeGeneralizedTime(genTime);
+        byte[] nonceDer = DerCodec.encodeInteger(nonce);
+        return DerCodec.encodeSequence(
+                version, policy, messageImprint, serial, genTimeDer, nonceDer);
+    }
+
+    private static BigInteger parseNonceFromRequest(byte[] tspReqDer) {
+        try {
+            byte[][] parts = DerCodec.parseSequenceContents(tspReqDer, 0);
+            if (parts.length < 3) return BigInteger.ZERO;
+            for (int i = 2; i < parts.length; i++) {
+                if (parts[i].length > 0 && (parts[i][0] & 0xFF) == DerCodec.TAG_INTEGER) {
+                    return DerCodec.parseInteger(parts[i], 0);
+                }
+            }
+            return BigInteger.ZERO;
+        } catch (Exception e) {
+            return BigInteger.ZERO;
+        }
     }
 }

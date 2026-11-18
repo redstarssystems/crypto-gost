@@ -15,12 +15,15 @@ import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
+import org.rssys.gost.pkix.cert.AnchorExpiryPolicy;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
 import org.rssys.gost.pkix.cert.GostCrl;
 import org.rssys.gost.pkix.cert.GostCrlBuilder;
 import org.rssys.gost.pkix.cert.GostDnParser;
 import org.rssys.gost.pkix.cert.PkixException;
+import org.rssys.gost.pkix.cert.RawCrlTestSupport;
+import org.rssys.gost.pkix.cert.TrustAnchors;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
@@ -57,7 +60,13 @@ class CmsSignedDataTest {
         assertNotNull(signedData);
         assertTrue(signedData.length > 0);
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(selfSignedCert),
+                                SignerSelection.ANY,
+                                Revocation.none()));
 
         assertNotNull(result.data());
         assertArrayEquals(data, result.data());
@@ -78,9 +87,141 @@ class CmsSignedDataTest {
         byte[] signedData = builder.build();
         assertNotNull(signedData);
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ANY,
+                                        Revocation.none())
+                                .detached(data));
 
-        assertNull(result.data());
+        assertArrayEquals(data, result.data(), "detached-метод должен вернуть переданный документ");
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
+                "attached-режим не должен принимать detached-подпись");
+    }
+
+    @Test
+    @DisplayName("SignedData: detached-подпись не принимает подменённый документ")
+    void verifyDetachedRejectsWrongContent() {
+        byte[] data = "Detached signature test".getBytes();
+        byte[] tampered = "Tampered content".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .detached(true)
+                        .build();
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ANY,
+                                                Revocation.none())
+                                        .detached(tampered)),
+                "подмена документа должна ломать message-digest");
+    }
+
+    @Test
+    @DisplayName("SignedData: attached-подпись не принимается detached-методом")
+    void verifyDetachedRejectsAttached() {
+        byte[] data = "Attached content".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .build();
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ANY,
+                                                Revocation.none())
+                                        .detached(data)),
+                "detached-метод должен требовать отсутствие eContent");
+    }
+
+    @Test
+    @DisplayName("SignedData: detached ALL и signature-only варианты")
+    void verifyDetachedAllAndSignatureOnly() throws PkixException {
+        byte[] data = "Detached all".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .detached(true)
+                        .build();
+
+        VerifiedSignedData all =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ALL,
+                                        Revocation.none())
+                                .detached(data));
+        assertArrayEquals(data, all.data(), "detached-проверка ALL должна вернуть документ");
+        assertEquals(1, all.signers().size());
+
+        VerifiedSignedData anyOnly =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.signatureOnly(SignerSelection.ANY).detached(data));
+        assertArrayEquals(data, anyOnly.data());
+
+        VerifiedSignedData allOnly =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.signatureOnly(SignerSelection.ALL).detached(data));
+        assertArrayEquals(data, allOnly.data());
+    }
+
+    @Test
+    @DisplayName(
+            "Revocation: список внешних CRL обязателен (null отвергается), закреплённый подписант CRL не требует")
+    void verifyDetachedRevocationRequiresExternalCrls() throws PkixException {
+        byte[] data = "Detached revocation".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .detached(true)
+                        .build();
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> Revocation.required(null),
+                "null вместо externalCrls должен отклоняться");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> Revocation.ifAvailable(null),
+                "null вместо externalCrls должен отклоняться");
+
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ANY,
+                                        Revocation.required(List.of()))
+                                .detached(data));
+        assertArrayEquals(data, result.data());
     }
 
     @Test
@@ -98,7 +239,13 @@ class CmsSignedDataTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
                 "Испорченная подпись должна бросить PkixException");
     }
 
@@ -213,7 +360,13 @@ class CmsSignedDataTest {
         byte[] signedData =
                 CmsSignedDataBuilder.create().data(data).addSigner(kpA.getPrivate(), certA).build();
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, certA, certB);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(certA, certB),
+                                SignerSelection.ANY,
+                                Revocation.none()));
         assertNotNull(
                 result,
                 "Верификация должна пройти — верификатор выбрал сертификат по issuer DN, а не только по serial");
@@ -238,7 +391,13 @@ class CmsSignedDataTest {
 
         assertNotNull(signedData);
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, cert512);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(cert512),
+                                SignerSelection.ANY,
+                                Revocation.none()));
 
         assertArrayEquals(data, result.data());
     }
@@ -267,7 +426,12 @@ class CmsSignedDataTest {
         byte[] contentInfoWithCrls = CmsContentInfo.encode(GostOids.CMS_SIGNED_DATA, sdWithCrls);
 
         VerifiedSignedData result =
-                CmsSignedDataVerifier.verifyAny(contentInfoWithCrls, selfSignedCert);
+                CmsSignedDataVerifier.verify(
+                        contentInfoWithCrls,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(selfSignedCert),
+                                SignerSelection.ANY,
+                                Revocation.none()));
 
         assertArrayEquals(data, result.data());
     }
@@ -328,8 +492,16 @@ class CmsSignedDataTest {
         assertTrue(foundCrls, "crls [1] должен присутствовать в DER");
 
         // Верификация не должна упасть
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert);
-        assertNull(result.data(), "detached подпись должна вернуть data=null");
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ANY,
+                                        Revocation.none())
+                                .detached(data));
+        assertArrayEquals(data, result.data(), "detached-метод должен вернуть документ");
+        assertEquals(1, result.embeddedCrls().size(), "CRL должен быть доступен в результате");
     }
 
     @Test
@@ -362,7 +534,7 @@ class CmsSignedDataTest {
     }
 
     @Test
-    @DisplayName("addCrl round-trip: построить -> verifyAny -> получить CRL из результата")
+    @DisplayName("addCrl round-trip: построить -> verify(ANY) -> получить CRL из результата")
     void addCrl_roundTrip() throws PkixException {
         byte[] data = "round-trip with CRL".getBytes();
         GostCrl crl = createTestCrl(privateKey);
@@ -374,7 +546,13 @@ class CmsSignedDataTest {
                         .addCrl(crl)
                         .build();
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(selfSignedCert),
+                                SignerSelection.ANY,
+                                Revocation.none()));
         assertArrayEquals(data, result.data());
         assertNotNull(result.embeddedCrls());
         assertEquals(1, result.embeddedCrls().size());
@@ -385,7 +563,7 @@ class CmsSignedDataTest {
 
     @Test
     @DisplayName(
-            "addCrl(byte[]) round-trip: байты из GostCrlBuilder.sign() -> addCrl -> verifyAny -> CRL в embeddedCrls")
+            "addCrl(byte[]) round-trip: байты из GostCrlBuilder.sign() -> addCrl -> verify(ANY) -> CRL в embeddedCrls")
     void addCrl_fromBytes() throws PkixException {
         byte[] issuerDn = GostDnParser.encodeDn("CN=Test CA");
         byte[] crlDer =
@@ -399,7 +577,13 @@ class CmsSignedDataTest {
                         .addCrl(crlDer)
                         .build();
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(selfSignedCert),
+                                SignerSelection.ANY,
+                                Revocation.none()));
         assertArrayEquals(data, result.data());
         assertNotNull(result.embeddedCrls());
         assertEquals(1, result.embeddedCrls().size());
@@ -484,7 +668,7 @@ class CmsSignedDataTest {
         for (int i = 0; i < manyCrls.length; i++) {
             manyCrls[i] = crl.getEncoded();
         }
-        java.util.Arrays.sort(manyCrls, DerCodec::compareDer);
+        DerCodec.sortDer(manyCrls);
         byte[] oversizedCrlsField = DerCodec.encodeContextConstructed(1, DerCodec.concat(manyCrls));
 
         // Собираем SignedData с этим полем:
@@ -505,8 +689,12 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAny(
-                                        contentInfoWithTooManyCrls, selfSignedCert));
+                                CmsSignedDataVerifier.verify(
+                                        contentInfoWithTooManyCrls,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ANY,
+                                                Revocation.none())));
         assertTrue(e.getMessage().contains("exceed maximum"));
     }
 
@@ -545,8 +733,12 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAny(
-                                        contentInfoWithOversizedCrls, selfSignedCert));
+                                CmsSignedDataVerifier.verify(
+                                        contentInfoWithOversizedCrls,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ANY,
+                                                Revocation.none())));
         assertTrue(e.getMessage().contains("exceeds maximum size"));
     }
 
@@ -594,8 +786,12 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAny(
-                                        contentInfoWithBogusCrl, selfSignedCert));
+                                CmsSignedDataVerifier.verify(
+                                        contentInfoWithBogusCrl,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ANY,
+                                                Revocation.none())));
         assertTrue(
                 e.getMessage().contains("exceeds remaining buffer"),
                 "Должно быть сообщение о превышении буфера, а не OOM: " + e.getMessage());
@@ -612,12 +808,12 @@ class CmsSignedDataTest {
     }
 
     // ========================================================================
-    // Архитектурные тесты: verifyAny / verifyAll семантика
+    // Архитектурные тесты: семантика SignerSelection.ANY / ALL
     // ========================================================================
 
     @Test
-    @DisplayName("verifyAny возвращает первого валидного из нескольких подписантов")
-    void verifyAnyReturnsFirstValid() throws Exception {
+    @DisplayName("ANY возвращает первого валидного из нескольких подписантов")
+    void signerSelectionAnyReturnsFirstValid() throws Exception {
         byte[] data = "multi-any".getBytes();
         var kp2 = KeyGenerator.generateKeyPair(PARAMS);
         GostCertificate cert2 =
@@ -631,8 +827,14 @@ class CmsSignedDataTest {
                         .addSigner(kp2.getPrivate(), cert2)
                         .build();
 
-        // verifyAny с доверием ко второму подписанту — должен найти второго
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signed, cert2);
+        // ANY с доверием ко второму подписанту — должен найти второго
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signed,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(cert2),
+                                SignerSelection.ANY,
+                                Revocation.none()));
         assertNotNull(result);
         assertArrayEquals(data, result.data());
         assertEquals(
@@ -640,8 +842,8 @@ class CmsSignedDataTest {
     }
 
     @Test
-    @DisplayName("verifyAny бросает когда все подписанты невалидны")
-    void verifyAnyThrowsWhenAllInvalid() throws Exception {
+    @DisplayName("ANY бросает когда все подписанты невалидны")
+    void signerSelectionAnyThrowsWhenAllInvalid() throws Exception {
         byte[] data = "none-valid".getBytes();
         byte[] signed =
                 CmsSignedDataBuilder.create()
@@ -655,13 +857,19 @@ class CmsSignedDataTest {
 
         assertThrows(
                 PkixException.class,
-                () -> CmsSignedDataVerifier.verifyAny(signed, wrongCert),
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signed,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(wrongCert),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
                 "Ни один подписант не валиден — должен быть отклонён");
     }
 
     @Test
-    @DisplayName("verifyAll возвращает всех когда все валидны")
-    void verifyAllReturnsAllWhenAllValid() throws Exception {
+    @DisplayName("ALL возвращает всех когда все валидны")
+    void signerSelectionAllReturnsAllWhenAllValid() throws Exception {
         byte[] data = "all-valid".getBytes();
         var kp2 = KeyGenerator.generateKeyPair(PARAMS);
         GostCertificate cert2 =
@@ -674,16 +882,21 @@ class CmsSignedDataTest {
                         .addSigner(kp2.getPrivate(), cert2)
                         .build();
 
-        MultiSignerVerifiedData result =
-                CmsSignedDataVerifier.verifyAll(signed, selfSignedCert, cert2);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signed,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(selfSignedCert, cert2),
+                                SignerSelection.ALL,
+                                Revocation.none()));
         assertNotNull(result);
         assertEquals(2, result.signers().size());
         assertArrayEquals(data, result.data());
     }
 
     @Test
-    @DisplayName("verifyAll бросает когда один подписант невалиден")
-    void verifyAllThrowsWhenOneInvalid() throws Exception {
+    @DisplayName("ALL бросает когда один подписант невалиден")
+    void signerSelectionAllThrowsWhenOneInvalid() throws Exception {
         byte[] data = "one-bad".getBytes();
         var kp2 = KeyGenerator.generateKeyPair(PARAMS);
         GostCertificate cert2 =
@@ -699,12 +912,18 @@ class CmsSignedDataTest {
         // Доверяем только первому — второй провалит цепочку
         assertThrows(
                 PkixException.class,
-                () -> CmsSignedDataVerifier.verifyAll(signed, selfSignedCert),
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signed,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ALL,
+                                        Revocation.none())),
                 "Один подписант невалиден — AND-семантика должна отклонить");
     }
 
     @Test
-    @DisplayName("SignerResult содержит signedAttributes после verifyAll")
+    @DisplayName("SignerResult содержит signedAttributes после проверки ALL")
     void signerResultContainsSignedAttributes() throws Exception {
         byte[] data = "signed-attrs".getBytes();
         byte[] signed =
@@ -714,7 +933,13 @@ class CmsSignedDataTest {
                         .withCAdES()
                         .build();
 
-        MultiSignerVerifiedData result = CmsSignedDataVerifier.verifyAll(signed, selfSignedCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signed,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(selfSignedCert),
+                                SignerSelection.ALL,
+                                Revocation.none()));
         SignerResult sr = result.signers().get(0);
         assertNotNull(sr.signedAttributes());
         assertFalse(
@@ -736,7 +961,13 @@ class CmsSignedDataTest {
                                 DerCodec.encodeOctetString(new byte[] {1, 2, 3}))
                         .build();
 
-        MultiSignerVerifiedData result = CmsSignedDataVerifier.verifyAll(signed, selfSignedCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signed,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(selfSignedCert),
+                                SignerSelection.ALL,
+                                Revocation.none()));
         SignerResult sr = result.signers().get(0);
         assertNotNull(sr.unsignedAttributes());
         assertTrue(
@@ -757,25 +988,37 @@ class CmsSignedDataTest {
     // ========================================================================
 
     @Test
-    @DisplayName("verifyAll бросает PkixException при пустом SET OF SignerInfo")
-    void verifyAllThrowsOnEmptySignerInfos() {
+    @DisplayName("ALL бросает PkixException при пустом SET OF SignerInfo")
+    void signerSelectionAllThrowsOnEmptySignerInfos() {
         byte[] emptySignedData = buildSignedDataWithNoSigners();
 
         assertThrows(
                 PkixException.class,
-                () -> CmsSignedDataVerifier.verifyAll(emptySignedData, selfSignedCert),
-                "Пустые signerInfos должны вызывать исключение в verifyAll");
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                emptySignedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ALL,
+                                        Revocation.none())),
+                "Пустые signerInfos должны вызывать исключение при SignerSelection.ALL");
     }
 
     @Test
-    @DisplayName("verifyAny бросает PkixException при пустом SET OF SignerInfo")
-    void verifyAnyThrowsOnEmptySignerInfos() {
+    @DisplayName("ANY бросает PkixException при пустом SET OF SignerInfo")
+    void signerSelectionAnyThrowsOnEmptySignerInfos() {
         byte[] emptySignedData = buildSignedDataWithNoSigners();
 
         assertThrows(
                 PkixException.class,
-                () -> CmsSignedDataVerifier.verifyAny(emptySignedData, selfSignedCert),
-                "Пустые signerInfos должны вызывать исключение в verifyAny");
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                emptySignedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
+                "Пустые signerInfos должны вызывать исключение при SignerSelection.ANY");
     }
 
     /** SignedData с версией, дайджестами, encapContentInfo, но без подписантов. */
@@ -817,7 +1060,13 @@ class CmsSignedDataTest {
         byte[] signedData = buildSignedDataMissingAttr("message-digest");
         assertThrows(
                 PkixException.class,
-                () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
                 "Отсутствие messageDigest в signedAttrs должно вызывать PkixException");
     }
 
@@ -827,7 +1076,13 @@ class CmsSignedDataTest {
         byte[] signedData = buildSignedDataMissingAttr("content-type");
         assertThrows(
                 PkixException.class,
-                () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(selfSignedCert),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
                 "Отсутствие contentType в signedAttrs должно вызывать PkixException");
     }
 
@@ -917,7 +1172,13 @@ class CmsSignedDataTest {
         PkixException ex =
                 assertThrows(
                         PkixException.class,
-                        () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ANY,
+                                                Revocation.none())),
                         "Число встроенных сертификатов больше лимита должно отклоняться");
         assertTrue(
                 ex.getMessage().contains("embedded certificates exceed maximum"),
@@ -931,7 +1192,13 @@ class CmsSignedDataTest {
         PkixException ex =
                 assertThrows(
                         PkixException.class,
-                        () -> CmsSignedDataVerifier.verifyAny(signedData, selfSignedCert),
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ANY,
+                                                Revocation.none())),
                         "Число signerInfos больше лимита должно отклоняться");
         assertTrue(
                 ex.getMessage().contains("signerInfos exceed maximum"),
@@ -996,7 +1263,7 @@ class CmsSignedDataTest {
     }
 
     // ========================================================================
-    // Тесты: проверка отзыва (verifyAnyWithRevocationCheck / verifyAllWithRevocationCheck)
+    // Тесты: проверка отзыва (Revocation.required для SignerSelection.ANY / ALL)
     // ========================================================================
 
     private record CaLeafChain(
@@ -1085,7 +1352,7 @@ class CmsSignedDataTest {
     }
 
     @Test
-    @DisplayName("verifyAnyWithRevocationCheck: сертификат не в CRL — верификация проходит")
+    @DisplayName("ANY + Revocation.required: сертификат не в CRL — верификация проходит")
     void withRevocationCheck_validCertNotRevoked() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "valid cert".getBytes();
@@ -1100,13 +1367,18 @@ class CmsSignedDataTest {
                         .build();
 
         VerifiedSignedData result =
-                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(signedData, chain.caCert);
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(chain.caCert),
+                                SignerSelection.ANY,
+                                Revocation.required(List.of())));
         assertNotNull(result);
         assertArrayEquals(data, result.data());
     }
 
     @Test
-    @DisplayName("verifyAnyWithRevocationCheck: сертификат отозван — PkixException REVOKED")
+    @DisplayName("ANY + Revocation.required: сертификат отозван — PkixException REVOKED")
     void withRevocationCheck_certRevoked() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "revoked cert".getBytes();
@@ -1126,15 +1398,18 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(
-                                        signedData, chain.caCert),
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of()))),
                         "Отозванный сертификат должен отклониться");
         assertEquals(PkixException.Reason.REVOKED, ex.reason());
     }
 
     @Test
-    @DisplayName(
-            "verifyAnyWithRevocationCheck: внешний CRL с отозванным сертификатом — PkixException")
+    @DisplayName("ANY + Revocation.required: внешний CRL с отозванным сертификатом — PkixException")
     void withRevocationCheck_externalCrlUsed() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "external crl".getBytes();
@@ -1153,14 +1428,195 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(
-                                        signedData, List.of(crl), chain.caCert),
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of(crl)))),
                         "Внешний CRL с отозванным сертификатом должен отклонить");
         assertEquals(PkixException.Reason.REVOKED, ex.reason());
     }
 
+    /** Подписанный УЦ CRL с неизвестным critical-расширением (RFC 5280 §5.2: не использовать). */
+    private static GostCrl createCrlWithUnknownCritical(CaLeafChain chain) {
+        byte[] extension =
+                RawCrlTestSupport.extension(
+                        RawCrlTestSupport.OID_UNKNOWN, true, DerCodec.encodeNull());
+        byte[] crlDer =
+                RawCrlTestSupport.crl(
+                        chain.caPriv,
+                        PARAMS,
+                        chain.caDn,
+                        RawCrlTestSupport.crlExtensions(extension));
+        return GostCrl.fromDer(crlDer);
+    }
+
     @Test
-    @DisplayName("verifyAnyWithRevocationCheck: CRL от другого issuer — best-effort пропуск")
+    @DisplayName(
+            "Revocation.required: CRL с неизвестным critical-расширением пропускается —"
+                    + " REVOCATION_STATUS_UNKNOWN")
+    void withRevocationCheck_unknownCriticalCrlSkipped() throws PkixException {
+        CaLeafChain chain = createCaLeafChain();
+        GostCrl unusable = createCrlWithUnknownCritical(chain);
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("unknown critical".getBytes())
+                        .addSigner(chain.leafPriv, chain.leafCert)
+                        .addCertificate(chain.caCert)
+                        .addCrl(unusable)
+                        .build();
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of()))),
+                        "Единственный CRL непригоден: обязательная проверка не должна проходить");
+        assertEquals(PkixException.Reason.REVOCATION_STATUS_UNKNOWN, ex.reason());
+    }
+
+    @Test
+    @DisplayName(
+            "Встроенный CRL с неизвестным critical пропущен, внешний CRL с отзывом всё равно"
+                    + " обнаруживает отзыв")
+    void withRevocationCheck_unknownCriticalCrlDoesNotHideRevocation() throws PkixException {
+        CaLeafChain chain = createCaLeafChain();
+        GostCrl unusable = createCrlWithUnknownCritical(chain);
+        GostCrl revoking =
+                createCrlWithRevokedCert(
+                        chain.caPriv, chain.caDn, chain.leafCert.getSerialNumber());
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("unknown critical".getBytes())
+                        .addSigner(chain.leafPriv, chain.leafCert)
+                        .addCertificate(chain.caCert)
+                        .addCrl(unusable)
+                        .build();
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of(revoking)))),
+                        "Отзыв во втором CRL не должен быть скрыт непригодным первым");
+        assertEquals(PkixException.Reason.REVOKED, ex.reason());
+    }
+
+    /** Подписанный УЦ partial CRL (onlyContainsCACerts), листовой сертификат он не покрывает. */
+    private static GostCrl createCaOnlyCrl(CaLeafChain chain, byte[]... entries) {
+        byte[] idp =
+                RawCrlTestSupport.extension(
+                        RawCrlTestSupport.OID_IDP,
+                        true,
+                        DerCodec.encodeSequence(
+                                DerCodec.encodeTlv(0x82, new byte[] {(byte) 0xFF})));
+        byte[] tail = RawCrlTestSupport.crlExtensions(idp);
+        if (entries.length > 0) {
+            tail = RawCrlTestSupport.concat(RawCrlTestSupport.revokedList(entries), tail);
+        }
+        return GostCrl.fromDer(RawCrlTestSupport.crl(chain.caPriv, PARAMS, chain.caDn, tail));
+    }
+
+    @Test
+    @DisplayName(
+            "Revocation.required: встроенный partial CRL не покрывает подписанта —"
+                    + " REVOCATION_STATUS_UNKNOWN")
+    void withRevocationCheck_partialCrlNotCoveringIsSkipped() throws PkixException {
+        CaLeafChain chain = createCaLeafChain();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("partial crl".getBytes())
+                        .addSigner(chain.leafPriv, chain.leafCert)
+                        .addCertificate(chain.caCert)
+                        .addCrl(createCaOnlyCrl(chain))
+                        .build();
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of()))),
+                        "Не покрывающий CRL не должен удовлетворять обязательной проверке");
+        assertEquals(PkixException.Reason.REVOCATION_STATUS_UNKNOWN, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Встроенный partial CRL не скрывает отзыв, найденный во внешнем полном CRL")
+    void withRevocationCheck_partialCrlDoesNotHideExternalRevocation() throws PkixException {
+        CaLeafChain chain = createCaLeafChain();
+        GostCrl full =
+                createCrlWithRevokedCert(
+                        chain.caPriv, chain.caDn, chain.leafCert.getSerialNumber());
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("partial crl".getBytes())
+                        .addSigner(chain.leafPriv, chain.leafCert)
+                        .addCertificate(chain.caCert)
+                        .addCrl(createCaOnlyCrl(chain))
+                        .build();
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of(full)))),
+                        "Отзыв во внешнем полном CRL должен быть обнаружен");
+        assertEquals(PkixException.Reason.REVOKED, ex.reason());
+    }
+
+    @Test
+    @DisplayName(
+            "Встроенный partial CRL другого сегмента с номером подписанта даёт REVOKED, а не пропуск")
+    void withRevocationCheck_partialCrlWithSerialIsRevoked() throws PkixException {
+        CaLeafChain chain = createCaLeafChain();
+        byte[] entry =
+                RawCrlTestSupport.revokedEntry(
+                        new java.math.BigInteger(1, chain.leafCert.getSerialNumber()), null);
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("partial crl".getBytes())
+                        .addSigner(chain.leafPriv, chain.leafCert)
+                        .addCertificate(chain.caCert)
+                        .addCrl(createCaOnlyCrl(chain, entry))
+                        .build();
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of()))),
+                        "Запись об отзыве в подписанном CRL не должна зависеть от его области");
+        assertEquals(PkixException.Reason.REVOKED, ex.reason());
+    }
+
+    @Test
+    @DisplayName("Revocation.required: CRL от другого issuer — отказ REVOCATION_STATUS_UNKNOWN")
     void withRevocationCheck_noMatchingCrl() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "no matching crl".getBytes();
@@ -1175,14 +1631,33 @@ class CmsSignedDataTest {
                         .addCrl(crl)
                         .build();
 
-        VerifiedSignedData result =
-                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(signedData, chain.caCert);
-        assertNotNull(result);
-        assertArrayEquals(data, result.data());
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of()))),
+                        "Обязательная проверка без подходящего CRL не должна проходить молча");
+        assertEquals(PkixException.Reason.REVOCATION_STATUS_UNKNOWN, ex.reason());
+
+        // Явный режим «если доступно» сохраняет прежнее поведение: предупреждение и приём
+        VerifiedSignedData lenient =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(chain.caCert),
+                                SignerSelection.ANY,
+                                Revocation.ifAvailable(List.of())));
+        assertNotNull(lenient);
+        assertArrayEquals(data, lenient.data());
     }
 
     @Test
-    @DisplayName("verifyAnyWithRevocationCheck: CRL с битой подписью — PkixException")
+    @DisplayName("ANY + Revocation.required: CRL с битой подписью — PkixException")
     void withRevocationCheck_crlSignatureInvalid() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "bad crl sig".getBytes();
@@ -1203,14 +1678,18 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(
-                                        signedData, chain.caCert),
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of()))),
                         "CRL с невалидной подписью должен отклониться");
         assertEquals(PkixException.Reason.SIGNATURE_INVALID, ex.reason());
     }
 
     @Test
-    @DisplayName("verifyAnyWithRevocationCheck: просроченный CRL — PkixException")
+    @DisplayName("ANY + Revocation.required: просроченный CRL — PkixException")
     void withRevocationCheck_expiredCrl() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "expired crl".getBytes();
@@ -1233,15 +1712,18 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(
-                                        signedData, chain.caCert),
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of()))),
                         "Просроченный CRL должен отклониться");
         assertEquals(PkixException.Reason.EXPIRED, ex.reason());
     }
 
     @Test
-    @DisplayName(
-            "verifyAny без проверки отзыва: отозванный сертификат проходит (обратная совместимость)")
+    @DisplayName("ANY + Revocation.none(): отозванный сертификат проходит (обратная совместимость)")
     void withRevocationCheck_backwardCompat() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "backward compat".getBytes();
@@ -1257,12 +1739,18 @@ class CmsSignedDataTest {
                         .addCrl(crl)
                         .build();
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(signedData, chain.caCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(chain.caCert),
+                                SignerSelection.ANY,
+                                Revocation.none()));
         assertNotNull(result);
     }
 
     @Test
-    @DisplayName("verifyAnyWithRevocationCheck: пустой trustedCerts — IllegalArgumentException")
+    @DisplayName("ANY + Revocation.required: пустой trustedCerts — IllegalArgumentException")
     void withRevocationCheck_emptyTrustedCerts() {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "empty trusted".getBytes();
@@ -1275,12 +1763,18 @@ class CmsSignedDataTest {
 
         assertThrows(
                 IllegalArgumentException.class,
-                () -> CmsSignedDataVerifier.verifyAnyWithRevocationCheck(signedData),
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(),
+                                        SignerSelection.ANY,
+                                        Revocation.required(List.of()))),
                 "Пустой trustedCerts должен бросить IllegalArgumentException");
     }
 
     @Test
-    @DisplayName("verifyAllWithRevocationCheck: все подписанты валидны, проверка отзыва проходит")
+    @DisplayName("ALL + Revocation.required: все подписанты валидны, проверка отзыва проходит")
     void withRevocationCheckVerifyAll_allSignersCheck() throws PkixException {
         CaLeafChain chain1 = createCaLeafChain();
 
@@ -1307,14 +1801,19 @@ class CmsSignedDataTest {
                         .addCrl(crl1)
                         .build();
 
-        MultiSignerVerifiedData result =
-                CmsSignedDataVerifier.verifyAllWithRevocationCheck(signedData, chain1.caCert, ca2);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(chain1.caCert, ca2),
+                                SignerSelection.ALL,
+                                Revocation.required(List.of())));
         assertNotNull(result);
         assertEquals(2, result.signers().size());
     }
 
     @Test
-    @DisplayName("verifyAllWithRevocationCheck: один подписант отозван — PkixException REVOKED")
+    @DisplayName("ALL + Revocation.required: один подписант отозван — PkixException REVOKED")
     void withRevocationCheckVerifyAll_oneSignerRevoked() throws PkixException {
         CaLeafChain chain1 = createCaLeafChain();
 
@@ -1347,15 +1846,19 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAllWithRevocationCheck(
-                                        signedData, chain1.caCert, ca2),
-                        "Отозванный подписант в verifyAll должен отклониться");
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain1.caCert, ca2),
+                                                SignerSelection.ALL,
+                                                Revocation.required(List.of()))),
+                        "Отозванный подписант при SignerSelection.ALL должен отклониться");
         assertEquals(PkixException.Reason.REVOKED, ex.reason());
     }
 
     @Test
     @DisplayName(
-            "verifyAnyWithRevocationCheck: embedded CRL (чистый) + внешний CRL (отозван) → REVOKED")
+            "ANY + Revocation.required: embedded CRL (чистый) + внешний CRL (отозван) → REVOKED")
     void withRevocationCheck_embeddedCleanExternalRevoked() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "downgrade-attack".getBytes();
@@ -1380,15 +1883,19 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(
-                                        signedData, List.of(revokedCrl), chain.caCert),
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of(revokedCrl)))),
                         "Внешний CRL с отозванным должен перекрыть embedded с чистым");
         assertEquals(PkixException.Reason.REVOKED, ex.reason());
     }
 
     @Test
     @DisplayName(
-            "verifyAnyWithRevocationCheck: multi-signer, первый отозван, второй валиден — возвращает второго")
+            "ANY + Revocation.required: multi-signer, первый отозван, второй валиден — возвращает второго")
     void withRevocationCheck_orSemanticsFirstRevokedSecondValid() throws PkixException {
         CaLeafChain chain1 = createCaLeafChain();
 
@@ -1420,8 +1927,12 @@ class CmsSignedDataTest {
                         .build();
 
         VerifiedSignedData result =
-                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(
-                        signedData, chain1.caCert, cert2);
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(chain1.caCert, cert2),
+                                SignerSelection.ANY,
+                                Revocation.required(List.of())));
         assertNotNull(result, "OR-семантика: должен найти второго, незаблокированного подписанта");
         assertEquals(
                 cert2.getSerialNumberBigInt(),
@@ -1432,7 +1943,7 @@ class CmsSignedDataTest {
 
     @Test
     @DisplayName(
-            "verifyAnyWithRevocationCheck: base + delta CRL — delta пропускается, base используется")
+            "ANY + Revocation.required: base + delta CRL — delta пропускается, base используется")
     void withRevocationCheck_basePlusDeltaCrl() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
         byte[] data = "base+delta".getBytes();
@@ -1462,15 +1973,19 @@ class CmsSignedDataTest {
                 assertThrows(
                         PkixException.class,
                         () ->
-                                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(
-                                        signedData, chain.caCert),
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert),
+                                                SignerSelection.ANY,
+                                                Revocation.required(List.of()))),
                         "Отозванный сертификат должен отклониться (delta пропущена, base проверяет)");
         assertEquals(PkixException.Reason.REVOKED, ex.reason());
     }
 
     @Test
     @DisplayName(
-            "verifyAnyWithRevocationCheck: delta CRL среди кандидатов пропускается, "
+            "ANY + Revocation.required: delta CRL среди кандидатов пропускается, "
                     + "перебор продолжается по валидному CRL — верификация проходит")
     void withRevocationCheck_deltaCrlSkipped_continuesToValidCrl() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
@@ -1497,14 +2012,19 @@ class CmsSignedDataTest {
                         .build();
 
         VerifiedSignedData result =
-                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(signedData, chain.caCert);
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(chain.caCert),
+                                SignerSelection.ANY,
+                                Revocation.required(List.of())));
         assertNotNull(result, "delta должна быть пропущена, валидный CRL — обработан");
         assertArrayEquals(data, result.data());
     }
 
     @Test
     @DisplayName(
-            "verifyAnyWithRevocationCheck: indirect CRL среди кандидатов пропускается, "
+            "ANY + Revocation.required: indirect CRL среди кандидатов пропускается, "
                     + "перебор продолжается по валидному CRL — верификация проходит")
     void withRevocationCheck_indirectCrlSkipped_continuesToValidCrl() throws PkixException {
         CaLeafChain chain = createCaLeafChain();
@@ -1541,7 +2061,12 @@ class CmsSignedDataTest {
                         .build();
 
         VerifiedSignedData result =
-                CmsSignedDataVerifier.verifyAnyWithRevocationCheck(signedData, chain.caCert);
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(chain.caCert),
+                                SignerSelection.ANY,
+                                Revocation.required(List.of())));
         assertNotNull(result, "indirect должна быть пропущена, валидный CRL — обработан");
         assertArrayEquals(data, result.data());
     }
@@ -1565,7 +2090,13 @@ class CmsSignedDataTest {
         // подпись покрывает только signedAttrs, поэтому контейнер обязан остаться валидным.
         byte[] patched = patchSignerSignatureAlg(signedData, GostOids.SIGN_WITH_DIGEST_256);
 
-        VerifiedSignedData result = CmsSignedDataVerifier.verifyAny(patched, selfSignedCert);
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        patched,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(selfSignedCert),
+                                SignerSelection.ANY,
+                                Revocation.none()));
         assertArrayEquals(data, result.data(), "signWithDigest-OID должен приниматься");
     }
 
@@ -1582,11 +2113,17 @@ class CmsSignedDataTest {
         // sha256WithRSAEncryption — валидный, но чужой алгоритму подписи OID.
         byte[] patched = patchSignerSignatureAlg(signedData, "1.2.840.113549.1.1.11");
 
-        // verifyAll (strict) пробрасывает конкретную причину; verifyAny заворачивает её.
+        // ALL (strict) пробрасывает конкретную причину; ANY заворачивает её.
         PkixException ex =
                 assertThrows(
                         PkixException.class,
-                        () -> CmsSignedDataVerifier.verifyAll(patched, selfSignedCert),
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        patched,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ALL,
+                                                Revocation.none())),
                         "Посторонний signatureAlgorithm OID должен отклоняться");
         assertTrue(
                 ex.getMessage().contains("signatureAlgorithm"),
@@ -1609,12 +2146,685 @@ class CmsSignedDataTest {
         PkixException ex =
                 assertThrows(
                         PkixException.class,
-                        () -> CmsSignedDataVerifier.verifyAll(patched, selfSignedCert),
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        patched,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(selfSignedCert),
+                                                SignerSelection.ALL,
+                                                Revocation.none())),
                         "Рассогласование битности signatureAlgorithm и ключа должно отклоняться");
         assertTrue(
                 ex.getMessage().contains("key size"),
                 "Сообщение должно указывать на несоответствие размера ключа, было: "
                         + ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("ANY без якорей отклоняется, signature-only принимает")
+    void verifyWithoutTrustAnchorsRejected() throws PkixException {
+        byte[] data = "no trust".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .build();
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
+                "пустой список якорей должен отклоняться");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(),
+                                        SignerSelection.ALL,
+                                        Revocation.none())),
+                "пустой список якорей должен отклоняться");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(new GostCertificate[] {null}),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
+                "null-элемент якоря должен отклоняться");
+
+        VerifiedSignedData any =
+                CmsSignedDataVerifier.verify(
+                        signedData, VerifyOptions.signatureOnly(SignerSelection.ANY));
+        assertArrayEquals(data, any.data(), "signature-only сохраняет данные");
+
+        VerifiedSignedData all =
+                CmsSignedDataVerifier.verify(
+                        signedData, VerifyOptions.signatureOnly(SignerSelection.ALL));
+        assertEquals(1, all.signers().size(), "signature-only проверяет всех подписантов");
+    }
+
+    @Test
+    @DisplayName("KeyUsage keyEncipherment у подписанта отклоняется даже с доверенным CA")
+    void signerKeyUsageKeyEnciphermentRejected() throws Exception {
+        CaLeafChain chain =
+                createCaLeafChainWithKeyUsage(GostCertificateBuilder.KeyUsage.KEY_ENCIPHERMENT);
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("ku test".getBytes())
+                        .addSigner(chain.leafPriv(), chain.leafCert())
+                        .build();
+
+        PkixException ex =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert()),
+                                                SignerSelection.ALL,
+                                                Revocation.none())),
+                        "подписант без digitalSignature/nonRepudiation должен отклоняться");
+        assertEquals(
+                PkixException.Reason.POLICY_VIOLATION, ex.reason(), "причина POLICY_VIOLATION");
+
+        PkixException anyEx =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(chain.caCert()),
+                                                SignerSelection.ANY,
+                                                Revocation.none())),
+                        "ANY также должен отклонять подписанта");
+        assertEquals(
+                PkixException.Reason.POLICY_VIOLATION,
+                anyEx.reason(),
+                "ANY сохраняет причину последней ошибки");
+    }
+
+    @Test
+    @DisplayName("KeyUsage nonRepudiation у подписанта принимается")
+    void signerKeyUsageNonRepudiationAccepted() throws Exception {
+        CaLeafChain chain =
+                createCaLeafChainWithKeyUsage(GostCertificateBuilder.KeyUsage.NON_REPUDIATION);
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("ku test".getBytes())
+                        .addSigner(chain.leafPriv(), chain.leafCert())
+                        .build();
+
+        assertDoesNotThrow(
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(chain.caCert()),
+                                        SignerSelection.ALL,
+                                        Revocation.none())),
+                "nonRepudiation допустим для CMS-подписи");
+    }
+
+    @Test
+    @DisplayName("CMS: истёкший корневой якорь отклоняется, а не пропускается с WARNING")
+    void cmsExpiredRootAnchorRejected() throws PkixException {
+        KeyPair rootKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] rootDn = GostDnParser.encodeDn("CN=Expired Root");
+        GostCertificate root =
+                createTestCert(
+                        rootKp,
+                        rootDn,
+                        rootKp,
+                        rootDn,
+                        true,
+                        "200101000000Z",
+                        "210101000000Z",
+                        BigInteger.ONE);
+
+        KeyPair leafKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] leafDn = GostDnParser.encodeDn("CN=Leaf");
+        GostCertificate leaf =
+                createTestCert(
+                        leafKp,
+                        leafDn,
+                        rootKp,
+                        rootDn,
+                        false,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.TWO);
+
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("expired root".getBytes())
+                        .addSigner(leafKp.getPrivate(), leaf)
+                        .addCertificate(root)
+                        .build();
+
+        PkixException e =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(root),
+                                                SignerSelection.ANY,
+                                                Revocation.none())),
+                        "Истёкший корневой якорь CMS должен отклоняться");
+        assertEquals(PkixException.Reason.EXPIRED, e.reason());
+    }
+
+    @Test
+    @DisplayName(
+            "VerifyOptions: явный WARN в TrustAnchors сохраняется, DEFAULT превращается в REJECT")
+    void verifyOptionsExplicitWarnExpiredRootAccepted() throws PkixException {
+        KeyPair rootKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] rootDn = GostDnParser.encodeDn("CN=Expired Root Warn");
+        GostCertificate root =
+                createTestCert(
+                        rootKp,
+                        rootDn,
+                        rootKp,
+                        rootDn,
+                        true,
+                        "200101000000Z",
+                        "210101000000Z",
+                        BigInteger.ONE);
+        KeyPair leafKp = KeyGenerator.generateKeyPair(PARAMS);
+        GostCertificate leaf =
+                createTestCert(
+                        leafKp,
+                        GostDnParser.encodeDn("CN=Leaf Warn"),
+                        rootKp,
+                        rootDn,
+                        false,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.TWO);
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("warn".getBytes())
+                        .addSigner(leafKp.getPrivate(), leaf)
+                        .addCertificate(root)
+                        .build();
+
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(root)
+                                        .withExpiryPolicy(AnchorExpiryPolicy.WARN),
+                                SignerSelection.ANY,
+                                Revocation.none()));
+        assertNotNull(result, "Явный WARN должен допускать истёкший якорь в CMS");
+
+        PkixException e =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(root)
+                                                        .withExpiryPolicy(
+                                                                AnchorExpiryPolicy.DEFAULT),
+                                                SignerSelection.ANY,
+                                                Revocation.none())),
+                        "DEFAULT в CMS трактуется как REJECT");
+        assertEquals(PkixException.Reason.EXPIRED, e.reason());
+    }
+
+    @Test
+    @DisplayName(
+            "VerifyOptions: фабрики отвергают null и пустые якоря, signatureOnly не принимает кандидатов")
+    void verifyOptionsFactoriesRejectInvalidArguments() {
+        TrustAnchors anchors = TrustAnchors.ofCertificates(selfSignedCert);
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> VerifyOptions.trusting(null, SignerSelection.ANY, Revocation.none()),
+                "null вместо якорей недопустим");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        VerifyOptions.trusting(
+                                TrustAnchors.empty(), SignerSelection.ANY, Revocation.none()),
+                "Пустые якоря не должны означать «только подпись»");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> VerifyOptions.trusting(anchors, null, Revocation.none()),
+                "Выбор подписантов обязателен");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> VerifyOptions.trusting(anchors, SignerSelection.ANY, null),
+                "Политика отзыва обязательна");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> VerifyOptions.signatureOnly(null),
+                "Выбор подписантов обязателен");
+        assertThrows(
+                IllegalStateException.class,
+                () ->
+                        VerifyOptions.signatureOnly(SignerSelection.ANY)
+                                .untrustedCandidates(List.of(selfSignedCert)),
+                "В режиме «только подпись» пул кандидатов не нужен");
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        VerifyOptions.trusting(anchors, SignerSelection.ANY, Revocation.none())
+                                .detached(null),
+                "null вместо документа недопустим");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> CmsSignedDataVerifier.verify(new byte[0], null),
+                "null вместо параметров недопустим");
+    }
+
+    @Test
+    @DisplayName("VerifyOptions: attached-подпись с detached-документом и наоборот отвергаются")
+    void verifyOptionsDetachedModeMustMatchSignedData() throws PkixException {
+        byte[] data = "mode mismatch".getBytes();
+        byte[] attached =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .build();
+        byte[] detached =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(privateKey, selfSignedCert)
+                        .detached(true)
+                        .build();
+        VerifyOptions trusting =
+                VerifyOptions.trusting(
+                        TrustAnchors.ofCertificates(selfSignedCert),
+                        SignerSelection.ANY,
+                        Revocation.none());
+
+        assertThrows(
+                PkixException.class,
+                () -> CmsSignedDataVerifier.verify(attached, trusting.detached(data)),
+                "SignedData с eContent нельзя проверять как detached");
+        assertThrows(
+                PkixException.class,
+                () -> CmsSignedDataVerifier.verify(detached, trusting),
+                "Detached SignedData требует документ в VerifyOptions.detached");
+    }
+
+    @Test
+    @DisplayName("VerifiedSignedData.signer() бросает исключение, если подписантов несколько")
+    void verifiedSignedDataSignerRequiresExactlyOneSigner() {
+        VerifiedSignedData two =
+                new VerifiedSignedData(
+                        null,
+                        List.of(
+                                new SignerResult(
+                                        selfSignedCert, new byte[] {1}, List.of(), List.of()),
+                                new SignerResult(
+                                        selfSignedCert, new byte[] {2}, List.of(), List.of())),
+                        List.of());
+
+        assertEquals(2, two.signers().size());
+        assertThrows(IllegalStateException.class, two::signer, "Выбирать подписанта молча нельзя");
+        assertThrows(IllegalStateException.class, two::signerCertificate);
+        assertThrows(IllegalStateException.class, two::unsignedAttributes);
+    }
+
+    @Test
+    @DisplayName("VerifiedSignedData: пустой или null список подписантов отвергается")
+    void verifiedSignedDataRejectsEmptySigners() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new VerifiedSignedData(null, List.of(), List.of()),
+                "Результат успешной проверки без подписантов невозможен");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new VerifiedSignedData(null, null, List.of()),
+                "null вместо подписантов должен отвергаться");
+    }
+
+    @Test
+    @DisplayName("CMS: истёкший закреплённый промежуточный CA отклоняется независимо от n")
+    void cmsExpiredPinnedIntermediateRejected() throws PkixException {
+        KeyPair rootKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] rootDn = GostDnParser.encodeDn("CN=Root");
+        GostCertificate root =
+                createTestCert(
+                        rootKp,
+                        rootDn,
+                        rootKp,
+                        rootDn,
+                        true,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.ONE);
+
+        KeyPair interKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] interDn = GostDnParser.encodeDn("CN=Expired Intermediate");
+        GostCertificate intermediate =
+                createTestCert(
+                        interKp,
+                        interDn,
+                        rootKp,
+                        rootDn,
+                        true,
+                        "200101000000Z",
+                        "210101000000Z",
+                        BigInteger.TWO);
+
+        KeyPair leafKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] leafDn = GostDnParser.encodeDn("CN=Leaf");
+        GostCertificate leaf =
+                createTestCert(
+                        leafKp,
+                        leafDn,
+                        interKp,
+                        interDn,
+                        false,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.valueOf(3));
+
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("expired pinned intermediate".getBytes())
+                        .addSigner(leafKp.getPrivate(), leaf)
+                        .addCertificate(intermediate)
+                        .addCertificate(root)
+                        .build();
+
+        PkixException e =
+                assertThrows(
+                        PkixException.class,
+                        () ->
+                                CmsSignedDataVerifier.verify(
+                                        signedData,
+                                        VerifyOptions.trusting(
+                                                TrustAnchors.ofCertificates(intermediate),
+                                                SignerSelection.ANY,
+                                                Revocation.none())),
+                        "Истёкший закреплённый промежуточный CA должен отклоняться");
+        assertEquals(PkixException.Reason.EXPIRED, e.reason());
+    }
+
+    @Test
+    @DisplayName("CMS: перевыпущенный корень с тем же ключом принимается как якорь")
+    void cmsReissuedRootSameKeyAccepted() throws PkixException {
+        KeyPair rootKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] rootDn = GostDnParser.encodeDn("CN=Reissued Root");
+        GostCertificate oldRoot =
+                createTestCert(
+                        rootKp,
+                        rootDn,
+                        rootKp,
+                        rootDn,
+                        true,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.ONE);
+        GostCertificate newRoot =
+                createTestCert(
+                        rootKp,
+                        rootDn,
+                        rootKp,
+                        rootDn,
+                        true,
+                        "260101000000Z",
+                        "370101000000Z",
+                        BigInteger.TWO);
+
+        KeyPair leafKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] leafDn = GostDnParser.encodeDn("CN=Leaf");
+        GostCertificate leaf =
+                createTestCert(
+                        leafKp,
+                        leafDn,
+                        rootKp,
+                        rootDn,
+                        false,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.valueOf(3));
+
+        byte[] data = "reissued root".getBytes();
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data(data)
+                        .addSigner(leafKp.getPrivate(), leaf)
+                        .addCertificate(oldRoot)
+                        .build();
+
+        VerifiedSignedData result =
+                CmsSignedDataVerifier.verify(
+                        signedData,
+                        VerifyOptions.trusting(
+                                TrustAnchors.ofCertificates(newRoot),
+                                SignerSelection.ANY,
+                                Revocation.none()));
+        assertArrayEquals(data, result.data());
+    }
+
+    @Test
+    @DisplayName("CMS: закреплённый промежуточный CA не наследует ограничения корня")
+    void cmsPinnedIntermediateIgnoresRootConstraints() throws PkixException {
+        KeyPair rootKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] rootDn = GostDnParser.encodeDn("CN=NC Root");
+        byte[] nc =
+                GostCertificateBuilder.buildNameConstraintsExtension(
+                        new String[] {"example.com"}, null, null, null);
+        GostCertificate root =
+                createTestCert(
+                        rootKp,
+                        rootDn,
+                        rootKp,
+                        rootDn,
+                        true,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.ONE,
+                        nc);
+
+        KeyPair interKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] interDn = GostDnParser.encodeDn("CN=Pinned Intermediate");
+        GostCertificate intermediate =
+                createTestCert(
+                        interKp,
+                        interDn,
+                        rootKp,
+                        rootDn,
+                        true,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.TWO);
+
+        KeyPair leafKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] leafDn = GostDnParser.encodeDn("CN=Leaf");
+        byte[] san =
+                GostCertificateBuilder.buildSanExtension(
+                        new String[] {"evil.com"}, null, null, null, null, null);
+        GostCertificate leaf =
+                createTestCert(
+                        leafKp,
+                        leafDn,
+                        interKp,
+                        interDn,
+                        false,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.valueOf(3),
+                        san);
+
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("pinned intermediate".getBytes())
+                        .addSigner(leafKp.getPrivate(), leaf)
+                        .addCertificate(intermediate)
+                        .addCertificate(root)
+                        .build();
+
+        assertDoesNotThrow(
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(intermediate),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
+                "Закреплённый промежуточный CA — самостоятельный якорь");
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(root),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
+                "При доверии корню его NameConstraints должны применяться");
+    }
+
+    @Test
+    @DisplayName("CMS: поддельный корень с тем же DN, но чужим ключом отклоняется")
+    void cmsFakeRootRejected() throws PkixException {
+        KeyPair trustedKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] rootDn = GostDnParser.encodeDn("CN=Shared Root");
+        GostCertificate trustedRoot =
+                createTestCert(
+                        trustedKp,
+                        rootDn,
+                        trustedKp,
+                        rootDn,
+                        true,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.ONE);
+
+        KeyPair attackerKp = KeyGenerator.generateKeyPair(PARAMS);
+        GostCertificate fakeRoot =
+                createTestCert(
+                        attackerKp,
+                        rootDn,
+                        attackerKp,
+                        rootDn,
+                        true,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.TWO);
+
+        KeyPair leafKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] leafDn = GostDnParser.encodeDn("CN=Leaf");
+        GostCertificate leaf =
+                createTestCert(
+                        leafKp,
+                        leafDn,
+                        attackerKp,
+                        rootDn,
+                        false,
+                        "260101000000Z",
+                        "360101000000Z",
+                        BigInteger.valueOf(3));
+
+        byte[] signedData =
+                CmsSignedDataBuilder.create()
+                        .data("fake root".getBytes())
+                        .addSigner(leafKp.getPrivate(), leaf)
+                        .addCertificate(fakeRoot)
+                        .build();
+
+        assertThrows(
+                PkixException.class,
+                () ->
+                        CmsSignedDataVerifier.verify(
+                                signedData,
+                                VerifyOptions.trusting(
+                                        TrustAnchors.ofCertificates(trustedRoot),
+                                        SignerSelection.ANY,
+                                        Revocation.none())),
+                "Поддельный корень с тем же DN не должен приниматься");
+    }
+
+    private static GostCertificate createTestCert(
+            KeyPair subjectKp,
+            byte[] subjectDn,
+            KeyPair signerKp,
+            byte[] issuerDn,
+            boolean ca,
+            String notBefore,
+            String notAfter,
+            BigInteger serial,
+            byte[]... extraExtensions) {
+        List<byte[]> extensions = new ArrayList<>();
+        extensions.add(GostCertificateBuilder.buildBasicConstraintsExtension(ca, null));
+        if (ca) {
+            extensions.add(
+                    GostCertificateBuilder.buildKeyUsageExtension(
+                            GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                            GostCertificateBuilder.KeyUsage.CRL_SIGN));
+        } else {
+            extensions.add(
+                    GostCertificateBuilder.buildKeyUsageExtension(
+                            GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE));
+        }
+        extensions.add(GostCertificateBuilder.buildSkiExtension(subjectKp.getPublic()));
+        extensions.add(GostCertificateBuilder.buildAkiExtension(signerKp.getPublic()));
+        for (byte[] extra : extraExtensions) {
+            extensions.add(extra);
+        }
+
+        return GostCertificateBuilder.create(PARAMS, subjectDn)
+                .publicKey(subjectKp.getPublic())
+                .notBefore(notBefore)
+                .notAfter(notAfter)
+                .issuerDn(issuerDn)
+                .additionalExtensions(concatExtensions(extensions.toArray(new byte[0][])))
+                .serial(serial)
+                .sign(signerKp.getPrivate());
+    }
+
+    private static CaLeafChain createCaLeafChainWithKeyUsage(
+            GostCertificateBuilder.KeyUsage... leafKeyUsage) {
+        var caKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] caDn = GostDnParser.encodeDn("CN=Test CA KU");
+        GostCertificate caCert =
+                GostCertificateBuilder.create(PARAMS, caDn)
+                        .publicKey(caKp.getPublic())
+                        .notBefore("260101000000Z")
+                        .notAfter("360101000000Z")
+                        .issuerDn(caDn)
+                        .basicConstraints(true, null)
+                        .keyUsage(
+                                GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                                GostCertificateBuilder.KeyUsage.CRL_SIGN)
+                        .randomSerial()
+                        .sign(caKp.getPrivate());
+
+        var leafKp = KeyGenerator.generateKeyPair(PARAMS);
+        byte[] leafDn = GostDnParser.encodeDn("CN=KU Leaf");
+        GostCertificate leafCert =
+                GostCertificateBuilder.create(PARAMS, leafDn)
+                        .publicKey(leafKp.getPublic())
+                        .notBefore("260101000000Z")
+                        .notAfter("360101000000Z")
+                        .issuerDn(caDn)
+                        .basicConstraints(false, null)
+                        .keyUsage(leafKeyUsage)
+                        .randomSerial()
+                        .sign(caKp.getPrivate());
+
+        return new CaLeafChain(
+                caKp.getPrivate(), caKp.getPublic(), caCert, caDn, leafKp.getPrivate(), leafCert);
     }
 
     /**

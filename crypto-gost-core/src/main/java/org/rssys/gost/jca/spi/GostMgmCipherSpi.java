@@ -10,12 +10,12 @@ import java.security.spec.AlgorithmParameterSpec;
 import java.util.Arrays;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.BadPaddingException;
-import javax.crypto.CipherSpi;
 import javax.crypto.IllegalBlockSizeException;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.ShortBufferException;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
+import org.rssys.gost.api.MgmCipher;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
 import org.rssys.gost.cipher.SymmetricKey;
@@ -44,25 +44,64 @@ import org.rssys.gost.util.CryptoRandom;
  * cipher.updateAAD(aad);
  * byte[] plaintext = cipher.doFinal(ciphertext); // бросает AEADBadTagException при ошибке
  * }</pre>
+ *
+ * <p><b>Состояние после {@code doFinal}.</b> В обе стороны (шифрование, расшифрование, в том числе
+ * после ошибки тега) шифр требует нового {@code init}: любой следующий {@code update} или
+ * {@code doFinal} бросает {@link IllegalStateException}. Так проще и строже, чем сброс по контракту
+ * JCA: у каждого сообщения свой ICN, у {@code Mgm} нет {@code reset()}, и так же ведёт себя
+ * gost-engine (признак IV сбрасывается после тега в обе стороны). Для шифрования это ещё и
+ * защита от повтора ICN под тем же ключом (RFC 9058 §4.1, §6). Явный повтор тоже отвергается:
+ * {@code init} на шифрование с теми же ключом и ICN, на которых уже выдан шифртекст, бросает
+ * {@link InvalidAlgorithmParameterException} (сгенерированный ICN входит в пару, помнится только
+ * последняя использованная пара и отпечаток ключа). Проверка действует в пределах одного
+ * экземпляра {@code Cipher}; уникальность ICN между экземплярами обеспечивает вызывающий.
+ * Расшифрование не проверяется.
+ *
+ * <p><b>Буферизация.</b> SPI накапливает весь вход до {@code doFinal}: при расшифровании тег идёт
+ * в конце, поэтому отделить его от шифртекста раньше нельзя. {@code update} ничего не возвращает,
+ * а объём накопленного ограничен только памятью.
+ *
+ * <p><b>Пустые данные.</b> Шифрование и расшифрование с пустым открытым текстом и пустыми
+ * ассоциированными данными одновременно отвергаются (RFC 9058 §6: тег перестаёт зависеть от
+ * ICN): шифрование бросает {@link IllegalArgumentException}, расшифрование —
+ * {@link AEADBadTagException}. Поэтому {@code CipherOutputStream.close()} на потоке, в который
+ * ничего не записано и не передано AAD, бросает {@link IllegalArgumentException}: проверяемые
+ * исключения {@code close()} проглатывает молча, а это нет. Нижний поток {@code close()} в таком
+ * случае не закрывает, его вызывающий закрывает сам (например, в {@code finally}).
  */
-public final class GostMgmCipherSpi extends CipherSpi {
+public final class GostMgmCipherSpi extends AbstractGostCipherSpi {
 
     /**
      * Длина ICN для Кузнечика-MGM: 16 байт (127-битное значение, MSB=0, RFC 9058 §3).
      */
-    private static final int ICN_LEN = 16;
+    private static final int ICN_LEN = MgmCipher.ICN_LEN;
 
     /** Размер тега в байтах. */
-    private static final int TAG_LEN = 16;
+    private static final int TAG_LEN = MgmCipher.TAG_LEN;
 
     private Mgm mgm;
+
+    /**
+     * Защита от повтора пары (ключ, ICN) при шифровании: повтор ICN под тем же ключом ломает и
+     * конфиденциальность, и аутентичность (RFC 9058 §4.1, §6). Помнится отпечаток ключа и последняя
+     * использованная пара; расшифрование не проверяется. Действует в пределах экземпляра.
+     */
+    private final EncryptionReuseGuard reuseGuard =
+            new EncryptionReuseGuard("ICN", "MGM encryption");
+
     private boolean forEncryption;
     private byte[] icn;
     private boolean initialized;
-    private boolean aadUpdated;
 
-    /** Буфер накопленного ввода (для расшифрования нужно знать где тег). */
-    private byte[] inputBuffer = new byte[0];
+    /** {@code doFinal} уже выполнялся (любой исход): до нового {@code init} шифр не работает. */
+    private boolean completed;
+
+    /**
+     * Накопленный ввод: при расшифровании тег стоит в конце, а открытый текст нельзя выдавать до
+     * его проверки, поэтому сообщение целиком остаётся в памяти до {@code doFinal}.
+     */
+    private final GrowableInputBuffer inputBuffer =
+            new GrowableInputBuffer(GrowableInputBuffer.MAX_SIZE - TAG_LEN);
 
     /**
      * Режим задаётся только как часть трансформации «Kuznyechik/MGM/NoPadding».
@@ -85,7 +124,7 @@ public final class GostMgmCipherSpi extends CipherSpi {
         }
     }
 
-    /** @return 16 . */
+    /** @return размер блока Кузнечика, 16 байт. */
     @Override
     protected int engineGetBlockSize() {
         return 16;
@@ -109,12 +148,10 @@ public final class GostMgmCipherSpi extends CipherSpi {
      */
     @Override
     protected int engineGetOutputSize(int inputLen) {
-        int total = inputBuffer.length + inputLen;
-        if (forEncryption) {
-            return total + TAG_LEN;
-        } else {
-            return Math.max(0, total - TAG_LEN);
-        }
+        // long: сумма размера и длины ввода, а потом тега, не должна переполнить int
+        long total = (long) inputBuffer.size() + inputLen;
+        long needed = forEncryption ? total + TAG_LEN : Math.max(0, total - TAG_LEN);
+        return (int) Math.min(needed, Integer.MAX_VALUE);
     }
 
     /** @return {@code null} — отдельные AlgorithmParameters не используются. */
@@ -127,68 +164,81 @@ public final class GostMgmCipherSpi extends CipherSpi {
     protected void engineInit(
             int opmode, Key key, AlgorithmParameterSpec params, SecureRandom random)
             throws InvalidKeyException, InvalidAlgorithmParameterException {
-        SymmetricKey keyParam = extractSymmetricKey(key);
-        forEncryption =
-                (opmode == javax.crypto.Cipher.ENCRYPT_MODE
-                        || opmode == javax.crypto.Cipher.WRAP_MODE);
-
-        if (params instanceof IvParameterSpec) {
-            byte[] iv = ((IvParameterSpec) params).getIV();
-            validateIcn(iv);
-            icn = Arrays.copyOf(iv, iv.length);
-        } else if (params instanceof GCMParameterSpec) {
-            byte[] iv = ((GCMParameterSpec) params).getIV();
-            validateIcn(iv);
-            icn = Arrays.copyOf(iv, iv.length);
-        } else if (params == null) {
-            if (forEncryption) {
-                // Генерируем случайный ICN при шифровании; MSB должен быть 0 (RFC 9058 §3)
-                icn = new byte[ICN_LEN];
-                (random != null ? random : CryptoRandom.INSTANCE).nextBytes(icn);
-                icn[0] &= 0x7F; // обеспечиваем MSB=0
+        boolean encrypting = isEncrypting(opmode);
+        SymmetricKey keyParam = SymmetricKeyExtractor.forCipher(key);
+        byte[] token = null;
+        boolean tokenHandedOver = false;
+        try {
+            byte[] newIcn;
+            if (params instanceof IvParameterSpec ivSpec) {
+                newIcn = validatedIcnCopy(ivSpec.getIV());
+            } else if (params instanceof GCMParameterSpec gcmSpec) {
+                // Длина тега в формате пакета не переносится и всегда равна 128 битам: вызывающий,
+                // запросивший 96 бит, молча получил бы 128 и считал бы тег усечённым.
+                if (gcmSpec.getTLen() != TAG_LEN * Byte.SIZE) {
+                    throw new InvalidAlgorithmParameterException(
+                            "MGM supports only a "
+                                    + TAG_LEN * Byte.SIZE
+                                    + "-bit tag, got GCMParameterSpec tLen="
+                                    + gcmSpec.getTLen());
+                }
+                newIcn = validatedIcnCopy(gcmSpec.getIV());
+            } else if (params == null) {
+                if (encrypting) {
+                    // Генерируем случайный ICN при шифровании; MSB должен быть 0 (RFC 9058 §3)
+                    newIcn = new byte[ICN_LEN];
+                    (random != null ? random : CryptoRandom.INSTANCE).nextBytes(newIcn);
+                    newIcn[0] &= 0x7F; // обеспечиваем MSB=0
+                } else {
+                    throw new InvalidAlgorithmParameterException(
+                            "MGM decryption requires an ICN (IvParameterSpec with 16 bytes, MSB=0)");
+                }
             } else {
                 throw new InvalidAlgorithmParameterException(
-                        "MGM decryption requires an ICN (IvParameterSpec with 16 bytes, MSB=0)");
+                        "Unsupported parameter type: "
+                                + params.getClass().getName()
+                                + ". Use IvParameterSpec(16 bytes, MSB=0) or GCMParameterSpec");
             }
-        } else {
-            throw new InvalidAlgorithmParameterException(
-                    "Unsupported parameter type: "
-                            + params.getClass().getName()
-                            + ". Use IvParameterSpec(16 bytes, MSB=0) or GCMParameterSpec");
-        }
 
-        if (mgm != null) mgm.destroy();
-        mgm = new Mgm(new Kuznyechik());
-        mgm.init(forEncryption, new ParametersWithIV(keyParam, icn));
+            // Повтор пары (ключ, ICN) отвергаем до любых изменений состояния SPI (сам
+            // javax.crypto.Cipher при любом отказе init остаётся неинициализированным).
+            // Сгенерированный ICN входит в пару: иначе обход цепочкой
+            // init(ENC, key) -> getIV() -> init(ENC, key, тот же ICN).
+            if (encrypting) {
+                token = reuseGuard.prepare(keyParam, newIcn);
+            }
 
-        // Затираем прежний буфер (мог содержать plaintext/ciphertext) перед сбросом.
-        Arrays.fill(inputBuffer, (byte) 0);
-        inputBuffer = new byte[0];
-        aadUpdated = false;
-        initialized = true;
-    }
-
-    @Override
-    protected void engineInit(int opmode, Key key, AlgorithmParameters params, SecureRandom random)
-            throws InvalidKeyException, InvalidAlgorithmParameterException {
-        AlgorithmParameterSpec spec = null;
-        if (params != null) {
+            // Новый Mgm собираем до замены состояния: при ошибке init прежнее состояние не тронуто.
+            Mgm newMgm = new Mgm(new Kuznyechik());
             try {
-                spec = params.getParameterSpec(IvParameterSpec.class);
-            } catch (Exception e) {
-                throw new InvalidAlgorithmParameterException(
-                        "Cannot extract IvParameterSpec from AlgorithmParameters", e);
+                newMgm.init(encrypting, new ParametersWithIV(keyParam, newIcn));
+            } catch (RuntimeException e) {
+                newMgm.destroy();
+                throw e;
             }
-        }
-        engineInit(opmode, key, spec, random);
-    }
+            if (mgm != null) mgm.destroy();
+            mgm = newMgm;
+            forEncryption = encrypting;
+            icn = newIcn;
 
-    @Override
-    protected void engineInit(int opmode, Key key, SecureRandom random) throws InvalidKeyException {
-        try {
-            engineInit(opmode, key, (AlgorithmParameterSpec) null, random);
-        } catch (InvalidAlgorithmParameterException e) {
-            throw new InvalidKeyException("Init failed: " + e.getMessage(), e);
+            // Затираем прежний буфер (мог содержать plaintext/ciphertext) перед сбросом.
+            inputBuffer.clear();
+            if (encrypting) {
+                reuseGuard.setPending(token);
+                tokenHandedOver = true;
+            } else {
+                // Расшифрование не проверяется; использованная пара шифрования сохраняется
+                reuseGuard.discardPending();
+            }
+            completed = false;
+            initialized = true;
+        } finally {
+            // Копия ключа нужна только на время init: Mgm забрал байты в своё расписание,
+            // а копия иначе остаётся в куче до сборки мусора.
+            keyParam.destroy();
+            if (!tokenHandedOver) {
+                EncryptionReuseGuard.wipe(token);
+            }
         }
     }
 
@@ -200,7 +250,6 @@ public final class GostMgmCipherSpi extends CipherSpi {
     protected void engineUpdateAAD(byte[] src, int offset, int len) {
         checkInitialized();
         mgm.updateAAD(src, offset, len);
-        aadUpdated = true;
     }
 
     /**
@@ -212,7 +261,7 @@ public final class GostMgmCipherSpi extends CipherSpi {
     @Override
     protected byte[] engineUpdate(byte[] input, int inputOffset, int inputLen) {
         checkInitialized();
-        appendToBuffer(input, inputOffset, inputLen);
+        inputBuffer.append(input, inputOffset, inputLen);
         return new byte[0]; // накопление — вывод пуст до doFinal
     }
 
@@ -238,20 +287,28 @@ public final class GostMgmCipherSpi extends CipherSpi {
     protected byte[] engineDoFinal(byte[] input, int inputOffset, int inputLen)
             throws IllegalBlockSizeException, BadPaddingException {
         checkInitialized();
-        if (input != null && inputLen > 0) {
-            appendToBuffer(input, inputOffset, inputLen);
-        }
-
         try {
+            if (input != null && inputLen > 0) {
+                inputBuffer.append(input, inputOffset, inputLen);
+            }
             if (forEncryption) {
-                return doFinalEncrypt();
+                byte[] encrypted = doFinalEncrypt();
+                // Тег выдаётся всегда, поэтому пара использована, как только шифрование удалось;
+                // отказ раньше (пустые P и A) пару не расходует
+                reuseGuard.commit();
+                return encrypted;
             } else {
                 return doFinalDecrypt();
             }
         } finally {
-            // Сбрасываем буфер после завершения; затираем прежнее содержимое.
-            Arrays.fill(inputBuffer, (byte) 0);
-            inputBuffer = new byte[0];
+            // Любой исход завершает сообщение: затираем буфер и ключевое состояние MGM (расписание
+            // ключа и производные таблицы), а флаг completed не даёт использовать шифр до нового
+            // init.
+            inputBuffer.clear();
+            mgm.destroy();
+            // Неиспользованная ожидающая пара не нужна: новый init заведёт её заново
+            reuseGuard.discardPending();
+            completed = true;
         }
     }
 
@@ -259,21 +316,28 @@ public final class GostMgmCipherSpi extends CipherSpi {
     protected int engineDoFinal(
             byte[] input, int inputOffset, int inputLen, byte[] output, int outputOffset)
             throws ShortBufferException, IllegalBlockSizeException, BadPaddingException {
-        byte[] result = engineDoFinal(input, inputOffset, inputLen);
-        if (result.length > output.length - outputOffset) {
-            throw new ShortBufferException(
-                    "Output buffer too small: need " + result.length + " bytes");
+        checkInitialized();
+        // Размер проверяем до обработки: иначе doFinal уже завершил бы MGM (флаг finished) и
+        // очистил
+        // буфер, и повтор вызова с достаточным буфером упал бы с «Already finished» вместо
+        // результата.
+        // Оценка размера точна в обе стороны.
+        int needed = engineGetOutputSize(Math.max(inputLen, 0));
+        if (needed > output.length - outputOffset) {
+            throw new ShortBufferException("Output buffer too small: need " + needed + " bytes");
         }
+        byte[] result = engineDoFinal(input, inputOffset, inputLen);
         System.arraycopy(result, 0, output, outputOffset, result.length);
+        Arrays.fill(result, (byte) 0);
         return result.length;
     }
 
     /** Шифрует все накопленные данные и добавляет тег. */
     private byte[] doFinalEncrypt() {
-        int ptLen = inputBuffer.length;
+        int ptLen = inputBuffer.size();
         byte[] out = new byte[ptLen + TAG_LEN];
 
-        mgm.processBytes(inputBuffer, 0, ptLen, out, 0);
+        mgm.processBytes(inputBuffer.array(), 0, ptLen, out, 0);
         mgm.finishEncryption(out, ptLen);
 
         return out;
@@ -284,44 +348,37 @@ public final class GostMgmCipherSpi extends CipherSpi {
      * Тег — последние TAG_LEN байт буфера.
      */
     private byte[] doFinalDecrypt() throws BadPaddingException {
-        if (inputBuffer.length < TAG_LEN) {
+        if (inputBuffer.size() < TAG_LEN) {
             throw new AEADBadTagException(
                     "Input too short to contain MGM tag: need at least "
                             + TAG_LEN
                             + " bytes, got "
-                            + inputBuffer.length);
+                            + inputBuffer.size());
         }
 
-        int ctLen = inputBuffer.length - TAG_LEN;
-        byte[] ciphertext = Arrays.copyOf(inputBuffer, ctLen);
-
+        int ctLen = inputBuffer.size() - TAG_LEN;
         byte[] plaintext = new byte[ctLen];
         if (ctLen > 0) {
-            mgm.processBytes(ciphertext, 0, ctLen, plaintext, 0);
+            mgm.processBytes(inputBuffer.array(), 0, ctLen, plaintext, 0);
         }
 
         try {
             // Тег — последние TAG_LEN байт
-            mgm.finishDecryption(inputBuffer, ctLen);
+            mgm.finishDecryption(inputBuffer.array(), ctLen);
         } catch (AuthenticationException e) {
-            // Обнуляем открытый текст перед выбросом исключения
+            // Обнуляем непроверенный открытый текст перед выбросом исключения. Ключевое состояние
+            // Mgm (mulTab, счётчики, аккумулятор) затирает finally в engineDoFinal.
             Arrays.fill(plaintext, (byte) 0);
-            // Путь провала аутентификации обязан затирать key-derived состояние MGM
-            // (mulTab, счётчики, аккумулятор): иначе оно доживает до реинициализации/GC.
-            mgm.destroy();
             throw new AEADBadTagException("MGM authentication tag mismatch");
         }
 
         return plaintext;
     }
 
-    /** Добавляет байты в конец внутреннего буфера. */
-    private void appendToBuffer(byte[] input, int offset, int len) {
-        if (len <= 0) return;
-        byte[] newBuf = new byte[inputBuffer.length + len];
-        System.arraycopy(inputBuffer, 0, newBuf, 0, inputBuffer.length);
-        System.arraycopy(input, offset, newBuf, inputBuffer.length, len);
-        inputBuffer = newBuf;
+    /** Проверяет ICN и возвращает его копию. */
+    private static byte[] validatedIcnCopy(byte[] iv) throws InvalidAlgorithmParameterException {
+        validateIcn(iv);
+        return Arrays.copyOf(iv, iv.length);
     }
 
     /**
@@ -341,16 +398,13 @@ public final class GostMgmCipherSpi extends CipherSpi {
         }
     }
 
-    /**
-     * Извлекает {@link SymmetricKey} из JCA-ключа.
-     */
-    private static SymmetricKey extractSymmetricKey(Key key) throws InvalidKeyException {
-        return SymmetricKeyExtractor.fromKey(key);
-    }
-
     private void checkInitialized() {
         if (!initialized) {
             throw new IllegalStateException("Cipher not initialized — call init() first");
+        }
+        if (completed) {
+            throw new IllegalStateException(
+                    "MGM operation completed — call init() with a new ICN before reuse");
         }
     }
 }

@@ -6,6 +6,7 @@ import org.rssys.gost.digest.Streebog256;
 import org.rssys.gost.digest.Streebog512;
 import org.rssys.gost.mac.Hmac;
 import org.rssys.gost.tls13.TlsConstants;
+import org.rssys.gost.tls13.TlsUtils;
 
 /**
  * HKDF на основе HMAC-Streebog (RFC 5869) для TLS 1.3 (RFC 8446 §7.1).
@@ -28,29 +29,33 @@ public final class HkdfStreebog {
     // ========================================================================
     // Precomputed "tls13 " + label (RFC 8446 §7.1) — одна аллокация при
     // class loading, избегает конкатенации строк и кодирования на каждый вызов.
+    // Видимость пакетная: изменяемый массив метки нельзя отдавать наружу, а выводы по меткам
+    // живут в TlsKeySchedule и TlsKeyExporter этого же пакета.
     // ========================================================================
-    public static final byte[] PREFIXED_DERIVED =
-            "tls13 derived".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_S_HS_TRAFFIC =
-            "tls13 s hs traffic".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_C_HS_TRAFFIC =
-            "tls13 c hs traffic".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_S_AP_TRAFFIC =
-            "tls13 s ap traffic".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_C_AP_TRAFFIC =
-            "tls13 c ap traffic".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_KEY = "tls13 key".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_IV = "tls13 iv".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_FINISHED =
-            "tls13 finished".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_RES_BINDER =
-            "tls13 res binder".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_RES_MASTER =
-            "tls13 res master".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_RESUMPTION =
-            "tls13 resumption".getBytes(StandardCharsets.US_ASCII);
-    public static final byte[] PREFIXED_TRAFFIC_UPD =
-            "tls13 traffic upd".getBytes(StandardCharsets.US_ASCII);
+    static final byte[] PREFIXED_DERIVED = prefixed("derived");
+    static final byte[] PREFIXED_S_HS_TRAFFIC = prefixed("s hs traffic");
+    static final byte[] PREFIXED_C_HS_TRAFFIC = prefixed("c hs traffic");
+    static final byte[] PREFIXED_S_AP_TRAFFIC = prefixed("s ap traffic");
+    static final byte[] PREFIXED_C_AP_TRAFFIC = prefixed("c ap traffic");
+    static final byte[] PREFIXED_KEY = prefixed("key");
+    static final byte[] PREFIXED_IV = prefixed("iv");
+    static final byte[] PREFIXED_FINISHED = prefixed("finished");
+    static final byte[] PREFIXED_RES_BINDER = prefixed("res binder");
+    static final byte[] PREFIXED_EXP_MASTER = prefixed("exp master");
+    static final byte[] PREFIXED_EXPORTER = prefixed("exporter");
+
+    /** Префикс "tls13 " метки HkdfLabel (RFC 8446 §7.1). */
+    static final byte[] LABEL_PREFIX =
+            TlsConstants.HKDF_LABEL_PREFIX.getBytes(StandardCharsets.US_ASCII);
+
+    static final byte[] PREFIXED_RES_MASTER = prefixed("res master");
+    static final byte[] PREFIXED_RESUMPTION = prefixed("resumption");
+    static final byte[] PREFIXED_TRAFFIC_UPD = prefixed("traffic upd");
+
+    /** Метка HkdfLabel с префиксом "tls13 " в ASCII (RFC 8446 §7.1): префикс задаётся в одном месте. */
+    private static byte[] prefixed(String label) {
+        return (TlsConstants.HKDF_LABEL_PREFIX + label).getBytes(StandardCharsets.US_ASCII);
+    }
 
     /** Пустой контекст — заменяет new byte[0] в caller'ах. Длина 0 — System.arraycopy no-op. */
     public static final byte[] EMPTY_CONTEXT = new byte[0];
@@ -85,12 +90,17 @@ public final class HkdfStreebog {
                             hashLen);
         }
         Hmac hmac = newHmac(hashLen);
-        hmac.init(salt);
-        hmac.update(ikm, 0, ikm.length);
-        byte[] prk = new byte[hashLen];
-        hmac.doFinal(prk, 0);
-        hmac.clear();
-        return prk;
+        try {
+            hmac.init(salt);
+            hmac.update(ikm, 0, ikm.length);
+            byte[] prk = new byte[hashLen];
+            hmac.doFinal(prk, 0);
+            return prk;
+        } finally {
+            // ipad/opad выведены из salt (ключ HMAC); ikm (ECDHE shared secret) — лишь сообщение.
+            // Чистим и при исключении.
+            hmac.clear();
+        }
     }
 
     /**
@@ -122,7 +132,7 @@ public final class HkdfStreebog {
             return EMPTY_CONTEXT;
         }
         int n = (length + hashLen - 1) / hashLen;
-        if (n > 255) {
+        if (n > TlsConstants.HKDF_EXPAND_MAX_BLOCKS) {
             throw new IllegalArgumentException("Output length too large for given hashLen");
         }
         if (info == null) {
@@ -136,29 +146,33 @@ public final class HkdfStreebog {
 
         // Hmac один на весь цикл. doFinal() в конце сам сбрасывает digest и
         // подмешивает inputPad — следующий update() начинает новую HMAC-операцию
-        // без init(). hmac.clear() только после цикла: inputPad/outputPad — это
+        // без init(). hmac.clear() в finally после цикла: inputPad/outputPad — это
         // производные от prk, который сам производный от ECDHE shared secret
         // (уже затёрт). Время жизни в heap ограничено expand().
         Hmac hmac = newHmac(hashLen);
-        hmac.init(prk);
+        try {
+            hmac.init(prk);
 
-        for (int i = 1; i <= n; i++) {
-            if (i > 1) {
-                hmac.update(t, 0, hashLen); // T(i-1) для i >= 2
+            for (int i = 1; i <= n; i++) {
+                if (i > 1) {
+                    hmac.update(t, 0, hashLen); // T(i-1) для i >= 2
+                }
+                hmac.update(info, 0, info.length);
+                hmac.update((byte) i);
+
+                hmac.doFinal(t, 0); // перезаписывает t = T(i)
+
+                int copyLen = Math.min(hashLen, length - (i - 1) * hashLen);
+                System.arraycopy(t, 0, result, (i - 1) * hashLen, copyLen);
             }
-            hmac.update(info, 0, info.length);
-            hmac.update((byte) i);
-
-            hmac.doFinal(t, 0); // перезаписывает t = T(i)
-
-            int copyLen = Math.min(hashLen, length - (i - 1) * hashLen);
-            System.arraycopy(t, 0, result, (i - 1) * hashLen, copyLen);
+            return result;
+        } finally {
+            // При length <= hashLen буфер t целиком (или его начало) совпадает с результатом,
+            // а вызывающий код затирает только result: незатёртый t оставил бы в куче
+            // выработанный секрет (traffic secret, derived).
+            TlsUtils.wipeArray(t);
+            hmac.clear();
         }
-
-        hmac.clear();
-        // t не зануляем: на каждой итерации цикла doFinal перезаписывает его целиком.
-        // После выхода из метода t — локальная переменная, становится unreachable.
-        return result;
     }
 
     /**
@@ -173,7 +187,7 @@ public final class HkdfStreebog {
      * конкатенации строк и кодирования в ASCII на каждый вызов.
      *
      * @param secret         секретный ключ (PRK)
-     * @param prefixedLabel  метка с префиксом "tls13 " (напр. {@link #PREFIXED_DERIVED})
+     * @param prefixedLabel  метка с префиксом "tls13 " (байты {@code "tls13 " + label} в ASCII)
      * @param context        контекст (транскрипт-хэш для Derive-Secret, null = пусто)
      * @param length         желаемая длина выхода
      * @param hashLen        32 для Streebog-256, 64 для Streebog-512
@@ -229,7 +243,7 @@ public final class HkdfStreebog {
         if (label == null) {
             throw new IllegalArgumentException("label must not be null");
         }
-        byte[] prefixedLabel = ("tls13 " + label).getBytes(StandardCharsets.US_ASCII);
+        byte[] prefixedLabel = prefixed(label);
         return expandLabel(secret, prefixedLabel, context, length, hashLen);
     }
 
@@ -242,7 +256,7 @@ public final class HkdfStreebog {
      * Принимает готовый prefixed label (с префиксом "tls13 ").
      *
      * @param secret        секрет (Early, Handshake, Master)
-     * @param prefixedLabel метка с префиксом "tls13 " (напр. {@link #PREFIXED_DERIVED})
+     * @param prefixedLabel метка с префиксом "tls13 " (байты {@code "tls13 " + label} в ASCII)
      * @param transcriptHash Transcript-Hash рукопожатия
      * @param hashLen       32 для Streebog-256, 64 для Streebog-512
      * @return производный ключ длиной hashLen
@@ -266,11 +280,7 @@ public final class HkdfStreebog {
      */
     public static byte[] deriveSecret(
             byte[] secret, String label, byte[] transcriptHash, int hashLen) {
-        return deriveSecret(
-                secret,
-                ("tls13 " + label).getBytes(StandardCharsets.US_ASCII),
-                transcriptHash,
-                hashLen);
+        return deriveSecret(secret, prefixed(label), transcriptHash, hashLen);
     }
 
     /**

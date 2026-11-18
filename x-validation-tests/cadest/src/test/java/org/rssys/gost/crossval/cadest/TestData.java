@@ -9,7 +9,6 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
-import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.pkix.cert.GostCertificate;
 import org.rssys.gost.pkix.cert.GostCertificateBuilder;
@@ -55,25 +54,28 @@ final class TestData {
         byte[] leafDn = GostDnParser.encodeDn(LEAF_DN_STR);
 
         var caKp = KeyGenerator.generateKeyPair(params);
-        GostCertificate caCert = GostCertificateBuilder.create(params, caDn)
-                .publicKey(caKp.getPublic())
-                .notBefore(NOT_BEFORE)
-                .notAfter(NOT_AFTER_CA)
-                .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
-                        GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                .basicConstraints(true, null)
-                .serial(BigInteger.valueOf(1))
-                .sign(caKp.getPrivate());
+        GostCertificate caCert =
+                GostCertificateBuilder.create(params, caDn)
+                        .publicKey(caKp.getPublic())
+                        .notBefore(NOT_BEFORE)
+                        .notAfter(NOT_AFTER_CA)
+                        .keyUsage(
+                                GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                                GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .basicConstraints(true, null)
+                        .serial(BigInteger.valueOf(1))
+                        .sign(caKp.getPrivate());
 
         var leafKp = KeyGenerator.generateKeyPair(params);
-        GostCertificate leafCert = GostCertificateBuilder.create(params, leafDn)
-                .publicKey(leafKp.getPublic())
-                .issuerDn(caDn)
-                .notBefore(NOT_BEFORE)
-                .notAfter(NOT_AFTER_LEAF)
-                .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
-                .serial(BigInteger.valueOf(2))
-                .sign(caKp.getPrivate());
+        GostCertificate leafCert =
+                GostCertificateBuilder.create(params, leafDn)
+                        .publicKey(leafKp.getPublic())
+                        .issuerDn(caDn)
+                        .notBefore(NOT_BEFORE)
+                        .notAfter(NOT_AFTER_LEAF)
+                        .keyUsage(GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
+                        .serial(BigInteger.valueOf(2))
+                        .sign(caKp.getPrivate());
 
         return new CertPair(caCert, leafKp.getPrivate(), leafKp.getPublic(), leafCert);
     }
@@ -86,7 +88,8 @@ final class TestData {
                 .publicKey(caKp.getPublic())
                 .notBefore(NOT_BEFORE)
                 .notAfter(NOT_AFTER_EXPIRED)
-                .keyUsage(GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
+                .keyUsage(
+                        GostCertificateBuilder.KeyUsage.KEY_CERT_SIGN,
                         GostCertificateBuilder.KeyUsage.DIGITAL_SIGNATURE)
                 .basicConstraints(true, null)
                 .serial(BigInteger.valueOf(3))
@@ -98,15 +101,11 @@ final class TestData {
     // ========================================================================
 
     static byte[] buildCAdESBES(byte[] data, PrivateKeyParameters key, GostCertificate cert) {
-        return CmsSignedDataBuilder.create()
-                .data(data)
-                .addSigner(key, cert)
-                .withCAdES()
-                .build();
+        return CmsSignedDataBuilder.create().data(data).addSigner(key, cert).withCAdES().build();
     }
 
-    static byte[] buildCAdESBESdetached(byte[] data, PrivateKeyParameters key,
-                                        GostCertificate cert) {
+    static byte[] buildCAdESBESdetached(
+            byte[] data, PrivateKeyParameters key, GostCertificate cert) {
         return CmsSignedDataBuilder.create()
                 .data(data)
                 .detached(true)
@@ -116,12 +115,8 @@ final class TestData {
     }
 
     /** CAdES-BES без signingCertificateV2 (без withCAdES()). */
-    static byte[] buildCAdESBESNoAttr(byte[] data, PrivateKeyParameters key,
-                                      GostCertificate cert) {
-        return CmsSignedDataBuilder.create()
-                .data(data)
-                .addSigner(key, cert)
-                .build();
+    static byte[] buildCAdESBESNoAttr(byte[] data, PrivateKeyParameters key, GostCertificate cert) {
+        return CmsSignedDataBuilder.create().data(data).addSigner(key, cert).build();
     }
 
     /**
@@ -136,18 +131,15 @@ final class TestData {
     // ========================================================================
 
     static byte[] buildTspRequest(byte[] dataHash, String hashOid) {
-        return TspRequestBuilder.create()
-                .messageImprint(dataHash, hashOid)
-                .certReq(true)
-                .build();
+        return TspRequestBuilder.create().messageImprint(dataHash, hashOid).certReq(true).build();
     }
 
     /**
      * Строит TimeStampToken — CMS SignedData, содержащий TSTInfo.
      * Используется withCAdES() для signingCertificateV2, т.к. BC TimeStampToken требует этот атрибут.
      */
-    static byte[] buildTimeStampToken(byte[] hash, String hashOid,
-                                      PrivateKeyParameters tsaKey, GostCertificate tsaCert) {
+    static byte[] buildTimeStampToken(
+            byte[] hash, String hashOid, PrivateKeyParameters tsaKey, GostCertificate tsaCert) {
         byte[] tstInfo = buildTstInfoDer(hash, hashOid);
         return CmsSignedDataBuilder.create()
                 .data(tstInfo)
@@ -161,8 +153,9 @@ final class TestData {
      * Строит TimeStampResp DER = SEQUENCE { PKIStatusInfo, TimeStampToken }.
      */
     static byte[] buildTspResponse(byte[] timeStampTokenDer) {
-        byte[] pkiStatus = DerCodec.encodeSequence(
-                DerCodec.encodeInteger(BigInteger.valueOf(GostOids.PKI_STATUS_GRANTED)));
+        byte[] pkiStatus =
+                DerCodec.encodeSequence(
+                        DerCodec.encodeInteger(BigInteger.valueOf(GostOids.PKI_STATUS_GRANTED)));
         return DerCodec.encodeSequence(pkiStatus, timeStampTokenDer);
     }
 
@@ -170,8 +163,8 @@ final class TestData {
      * Строит TSTInfo DER для вложения в CMS SignedData.
      */
     static byte[] buildTstInfoDer(byte[] hash, String hashOid) {
-        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyyMMddHHmmss'Z'")
-                .withZone(ZoneOffset.UTC);
+        DateTimeFormatter fmt =
+                DateTimeFormatter.ofPattern("yyyyMMddHHmmss'Z'").withZone(ZoneOffset.UTC);
         String genTime = fmt.format(Instant.now());
 
         byte[] version = DerCodec.encodeInteger(1);
@@ -232,10 +225,11 @@ final class TestData {
     // Типы данных
     // ========================================================================
 
-    record CertPair(GostCertificate caCert, PrivateKeyParameters leafKey,
-                    PublicKeyParameters leafPub, GostCertificate leafCert) {
-    }
+    record CertPair(
+            GostCertificate caCert,
+            PrivateKeyParameters leafKey,
+            PublicKeyParameters leafPub,
+            GostCertificate leafCert) {}
 
-    record SignerEntry(PrivateKeyParameters key, GostCertificate cert) {
-    }
+    record SignerEntry(PrivateKeyParameters key, GostCertificate cert) {}
 }

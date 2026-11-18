@@ -43,6 +43,29 @@ class GostPkcs12LoaderTest {
     }
 
     @Test
+    @DisplayName("encryptKey пишет соль PBKDF2 длиной 32 байта (рекомендация RFC 9337)")
+    void testEncryptKeyWritesSalt32() throws Exception {
+        PkixCertTestHelper.CertBundle bundle =
+                PkixCertTestHelper.createCertWithKey(ECParameters.tc26a256());
+        byte[] encryptedDer =
+                GostPbes2.encryptKey(
+                        bundle.priv,
+                        PkixCertTestHelper.toUtf8Bytes(PASSWORD),
+                        GostOids.KUZ_CTR_ACPKM_OMAC,
+                        TEST_ITER);
+
+        GostPkcs12Parser.EncryptedPrivateKeyInfo epki =
+                GostPkcs12Parser.parseEncryptedPrivateKeyInfo(encryptedDer);
+        GostPkcs12Parser.Pbes2Params pbes2 =
+                GostPkcs12Parser.parsePbes2Params(epki.getEncryptionParams(), 50);
+
+        assertEquals(
+                GostOids.PBKDF2_SALT_LEN,
+                pbes2.getSalt().length,
+                "соль PBES2 должна иметь длину PBKDF2_SALT_LEN");
+    }
+
+    @Test
     @DisplayName("Неверный пароль бросает IllegalArgumentException")
     void testDecryptPrivateKeyWrongPassword() throws Exception {
         ECParameters params = ECParameters.tc26a256();

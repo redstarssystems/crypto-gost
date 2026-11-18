@@ -43,7 +43,7 @@ import org.rssys.gost.util.CryptoRandom;
  *
  * <h3>Безопасность:</h3>
  * <ul>
- *   <li>ICN генерируется случайно через {@link SecureRandom} — повтор ICN
+ *   <li>ICN генерируется случайно через {@link CryptoRandom} — повтор ICN
  *       при том же ключе нарушает конфиденциальность и целостность.</li>
  *   <li>При неверном теге {@link #open} бросает {@link AuthenticationException}
  *       <em>до</em> возврата каких-либо данных.</li>
@@ -58,12 +58,12 @@ public final class MgmCipher {
      * Длина ICN в байтах (= blockSize = 16 для Кузнечика).
      * ICN ∈ V_{n-1} — 127-битное значение, хранится в 16 байт со старшим битом = 0 (RFC 9058 §3).
      */
-    public static final int ICN_LEN = 16;
+    public static final int ICN_LEN = Kuznyechik.BLOCK_SIZE;
 
     /**
      * Размер тега аутентификации в байтах.
      */
-    public static final int TAG_LEN = 16;
+    public static final int TAG_LEN = Kuznyechik.BLOCK_SIZE;
 
     /**
      * Минимальный размер пакета: ICN + тег.
@@ -81,9 +81,11 @@ public final class MgmCipher {
      * <p>
      * Генерирует случайный ICN. Возвращает зашифрованный блок данных в формате {@code [ICN][ciphertext][tag]}.
      *
-     * @param plaintext открытый текст
+     * @param plaintext открытый текст (не должен быть пустым: без AAD тег пустого сообщения не
+     *                  зависит от ICN, RFC 9058 §6)
      * @param key       симметричный ключ (32 байта)
      * @return зашифрованный блок данных
+     * @throws IllegalArgumentException если открытый текст пуст
      */
     public static byte[] seal(byte[] plaintext, SymmetricKey key) {
         return seal(plaintext, key, new byte[0]);
@@ -97,8 +99,10 @@ public final class MgmCipher {
      *
      * @param plaintext открытый текст
      * @param key       симметричный ключ (32 байта)
-     * @param aad       ассоциированные данные (могут быть пустыми)
+     * @param aad       ассоциированные данные (могут быть пустыми, но не одновременно с пустым
+     *                  открытым текстом, RFC 9058 §6); {@code null} равнозначен пустому массиву
      * @return зашифрованный блок данных
+     * @throws IllegalArgumentException если открытый текст и AAD пусты одновременно
      */
     public static byte[] seal(byte[] plaintext, SymmetricKey key, byte[] aad) {
         byte[] icn = new byte[ICN_LEN];
@@ -121,10 +125,13 @@ public final class MgmCipher {
      * @param plaintext открытый текст
      * @param key       симметричный ключ
      * @param icn       Initial Counter Nonce (ровно 16 байт, старший бит должен быть 0)
-     * @param aad       ассоциированные данные
+     * @param aad       ассоциированные данные (открытый текст и AAD не могут быть пусты одновременно,
+     *                  RFC 9058 §6); {@code null} равнозначен пустому массиву
      * @return зашифрованный пакет {@code [ICN (16)][ciphertext (N)][tag (16)]}
+     * @throws IllegalArgumentException если открытый текст и AAD пусты одновременно
      */
     public static byte[] sealWithIcn(byte[] plaintext, SymmetricKey key, byte[] icn, byte[] aad) {
+        requireKey(key);
         if (icn.length != ICN_LEN) {
             throw new IllegalArgumentException(
                     "MGM ICN must be " + ICN_LEN + " bytes, got " + icn.length);
@@ -173,28 +180,36 @@ public final class MgmCipher {
      *
      * @param encryptedData пакет {@code [ICN (16)][ciphertext (N)][tag (16)]}
      * @param key           ключ расшифрования
-     * @param aad           ассоциированные данные (должны совпадать с переданными при шифровании)
+     * @param aad           ассоциированные данные (должны совпадать с переданными при шифровании);
+     *                      {@code null} равнозначен пустому массиву
      * @return открытый текст
-     * @throws AuthenticationException  если тег не прошёл проверку или пакет повреждён
-     * @throws IllegalArgumentException если пакет слишком короткий
+     * @throws AuthenticationException если пакет {@code null}, короче {@link #MIN_PACKET_LEN},
+     *                                  содержит недопустимый ICN (старший бит равен 1), тег не
+     *                                  прошёл проверку или нет ни шифртекста, ни AAD
+     *                                  (RFC 9058 §6): пакет приходит из недоверенного источника,
+     *                                  и вызывающему нужен один тип отказа для любого повреждения
      */
     public static byte[] open(byte[] encryptedData, SymmetricKey key, byte[] aad)
             throws AuthenticationException {
-        if (encryptedData.length < MIN_PACKET_LEN) {
-            throw new IllegalArgumentException(
+        if (encryptedData == null || encryptedData.length < MIN_PACKET_LEN) {
+            throw new AuthenticationException(
                     "MGM packet too short: minimum "
                             + MIN_PACKET_LEN
                             + " bytes, got "
-                            + encryptedData.length);
+                            + (encryptedData == null ? "null" : encryptedData.length));
         }
+        if ((encryptedData[0] & 0x80) != 0) {
+            throw new AuthenticationException("MGM packet has an invalid ICN (MSB must be 0)");
+        }
+        requireKey(key);
 
-        // Извлекаем ICN, шифртекст и тег
+        // ICN нужен отдельным массивом (параметр IV); шифртекст и тег читаются прямо из пакета
         byte[] icn = Arrays.copyOfRange(encryptedData, 0, ICN_LEN);
         int ctLen = encryptedData.length - ICN_LEN - TAG_LEN;
-        byte[] ciphertext = Arrays.copyOfRange(encryptedData, ICN_LEN, ICN_LEN + ctLen);
         // тег находится в конце буфера
 
         byte[] plaintext = new byte[ctLen];
+        boolean authenticated = false;
 
         Mgm mgm = new Mgm(new Kuznyechik());
         try {
@@ -204,14 +219,27 @@ public final class MgmCipher {
                 mgm.updateAAD(aad, 0, aad.length);
             }
 
-            mgm.processBytes(ciphertext, 0, ctLen, plaintext, 0);
+            mgm.processBytes(encryptedData, ICN_LEN, ctLen, plaintext, 0);
 
             // Проверяем тег — бросает AuthenticationException при несовпадении
             mgm.finishDecryption(encryptedData, ICN_LEN + ctLen);
 
+            authenticated = true;
             return plaintext;
         } finally {
+            // Непроверенный открытый текст не должен остаться в куче; на успешном пути plaintext
+            // возвращается вызывающему, его затирать нельзя.
+            if (!authenticated) {
+                Arrays.fill(plaintext, (byte) 0);
+            }
             mgm.destroy();
+        }
+    }
+
+    /** Ключ {@code null} это ошибка вызывающего, а не повреждение пакета: отдельный отказ. */
+    private static void requireKey(SymmetricKey key) {
+        if (key == null) {
+            throw new IllegalArgumentException("Key must not be null");
         }
     }
 }

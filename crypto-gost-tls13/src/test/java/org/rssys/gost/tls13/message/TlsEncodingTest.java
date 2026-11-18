@@ -3,7 +3,6 @@ package org.rssys.gost.tls13.message;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.ByteArrayOutputStream;
-import java.math.BigInteger;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.rssys.gost.api.KeyGenerator;
@@ -43,43 +42,6 @@ class TlsEncodingTest {
         assertEquals(TlsConstants.EXT_KEY_SHARE, ((encoded[0] & 0xFF) << 8) | (encoded[1] & 0xFF));
         assertEquals(0x00, encoded[2] & 0xFF);
         assertEquals(0x03, encoded[3] & 0xFF);
-    }
-
-    @Test
-    @DisplayName("toFixedLengthBytes: точное совпадение длины")
-    void testToFixedLengthBytesExact() {
-        BigInteger v = new BigInteger("1234567890abcdef1234567890abcdef", 16);
-        byte[] result = TlsEncoding.toFixedLengthBytes(v, 16);
-        assertEquals(16, result.length);
-        assertEquals(v, new BigInteger(1, result));
-    }
-
-    @Test
-    @DisplayName("toFixedLengthBytes: дополнение нулями слева")
-    void testToFixedLengthBytesPadLeft() {
-        assertArrayEquals(
-                new byte[] {0x00, 0x00, 0x00, (byte) 0xFF},
-                TlsEncoding.toFixedLengthBytes(BigInteger.valueOf(255), 4));
-    }
-
-    @Test
-    @DisplayName("toFixedLengthBytes: обрезка знакового байта BigInteger")
-    void testToFixedLengthBytesTrimLeadingZero() {
-        BigInteger v = new BigInteger("80000000000000000000000000000000", 16);
-        byte[] result = TlsEncoding.toFixedLengthBytes(v, 16);
-        assertEquals(16, result.length);
-        assertEquals(0x80, result[0] & 0xFF);
-    }
-
-    @Test
-    @DisplayName("toFixedLengthBytes: отрицательное значение — дополнение нулями")
-    void testToFixedLengthBytesNegative() {
-        byte[] result = TlsEncoding.toFixedLengthBytes(BigInteger.valueOf(-1), 4);
-        assertEquals(4, result.length);
-        assertEquals(0x00, result[0] & 0xFF);
-        assertEquals(0x00, result[1] & 0xFF);
-        assertEquals(0x00, result[2] & 0xFF);
-        assertEquals(0xFF, result[3] & 0xFF);
     }
 
     @Test

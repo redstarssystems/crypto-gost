@@ -23,7 +23,7 @@ public final class TlsRecord {
     private final byte[] startKey;
     private final byte[] startIv;
     private final Mgm mgm;
-    private final byte[] aadBuf = new byte[5];
+    private final byte[] aadBuf = new byte[TlsConstants.RECORD_HEADER_SIZE];
     private final byte[] nonceBuf = new byte[TlsConstants.MGM_IV_SIZE];
     private final byte[] tagBuf;
     // scratch-буферы: переиспользуются между вызовами protect/unprotect
@@ -46,6 +46,9 @@ public final class TlsRecord {
             new byte[TlsConstants.RECORD_HEADER_SIZE + TlsConstants.MAX_CIPHERTEXT_LENGTH];
     private long seqNum;
     private boolean sequenceUsed; // true после первого protect/unprotect — запрещает откат seqNum
+    // Уничтоженная запись непригодна. volatile: destroy() может вызвать другой поток (jsse
+    // откладывает уничтожение прежней записи под другой замок), а чтение на горячем пути дёшево
+    private volatile boolean destroyed;
     private final int tagLen;
 
     // Параметры TLSTREE
@@ -102,14 +105,17 @@ public final class TlsRecord {
      *                        0 = сброс на дефолт (16384)
      */
     public void setMaxFragmentLength(int maxFragLenCode) {
-        this.maxFragmentLength =
-                (maxFragLenCode >= 1 && maxFragLenCode <= 4)
-                        ? TlsConstants.MAX_FRAG_LEN_VALUES[maxFragLenCode]
-                        : TlsConstants.MAX_PLAINTEXT_LENGTH;
+        this.maxFragmentLength = TlsUtils.maxFragmentLength(maxFragLenCode);
     }
 
-    /** Обнуляет ключи, IV, scratch-буферы и сбрасывает seqNum. */
+    /**
+     * Обнуляет ключи, IV, scratch-буферы и сбрасывает seqNum. После вызова запись непригодна:
+     * {@link #protect} и {@code unprotect} бросают {@link IllegalStateException}, иначе данные
+     * молча шифровались бы нулевым ключом. Повторный вызов безопасен.
+     */
     public void destroy() {
+        if (destroyed) return;
+        destroyed = true;
         treeCache.destroy();
         mgm.destroy();
         TlsUtils.wipeArray(startKey);
@@ -210,9 +216,12 @@ public final class TlsRecord {
      * @param record TLS-запись: заголовок(5) || ciphertext(N) || tag(tagLen)
      * @return распарсенный тип содержимого и открытые данные
      * @throws AuthenticationException при ошибке аутентификации/подмене данных
-     * @throws IllegalArgumentException при некорректном формате записи
+     * @throws IllegalArgumentException если record == null
      * @throws IllegalStateException при переполнении порядкового номера
-     * @throws TlsException при превышении максимального размера записи
+     * @throws TlsException {@code decode_error} при некорректном формате записи,
+     *         {@code record_overflow} при превышении максимального размера записи,
+     *         {@code unexpected_message} если внешний тип записи не application_data или в
+     *         подлинной записи нет типа содержимого
      */
     public TlsParsedRecord unprotect(byte[] record) throws AuthenticationException, TlsException {
         if (record == null) {
@@ -293,6 +302,7 @@ public final class TlsRecord {
         if (src == null || dst == null) {
             throw new IllegalArgumentException("Buffers must not be null");
         }
+        checkNotDestroyed();
         int len = src.remaining();
         if (len + 1 > maxFragmentLength) {
             throw new IllegalArgumentException("Data exceeds maximum fragment size: " + len);
@@ -372,8 +382,8 @@ public final class TlsRecord {
      *       Caller выполняет flip на plaintext для чтения.</li>
      *   <li>{@code NEED_MORE_INPUT} — position record НЕ изменился.
      *       Caller добавляет данные и повторяет вызов.</li>
-     *   <li>{@code OUTPUT_TOO_SMALL} — position record восстановлен.
-     *       Caller увеличивает plaintext буфер и повторяет вызов.
+     *   <li>{@code OUTPUT_TOO_SMALL} — position record восстановлен, порядковый номер не
+     *       сдвинут. Caller увеличивает plaintext буфер (размер в {@code hint}) и повторяет вызов.
      *       Расшифровка будет выполнена заново.</li>
      * </ul>
      *
@@ -381,15 +391,47 @@ public final class TlsRecord {
      * @param plaintext буфер для открытых данных
      * @return результат дешифрования с указанием статуса
      * @throws AuthenticationException при ошибке аутентификации/подмене
-     * @throws IllegalArgumentException при некорректном формате записи
-     * @throws TlsException            при превышении максимального размера
+     * @throws IllegalArgumentException если record == null или plaintext == null
+     * @throws TlsException            {@code decode_error} при некорректном формате записи,
+     *                                 {@code record_overflow} при превышении максимального размера,
+     *                                 {@code unexpected_message} если внешний тип записи не
+     *                                 application_data или в подлинной записи нет типа
+     *                                 содержимого
      * @throws IllegalStateException   при переполнении порядкового номера
      */
     public UnprotectResult unprotect(ByteBuffer record, ByteBuffer plaintext)
             throws AuthenticationException, TlsException {
+        return unprotect(record, plaintext, Integer.MAX_VALUE);
+    }
+
+    /**
+     * То же, что {@link #unprotect(ByteBuffer, ByteBuffer)}, но с пределом на открытый текст
+     * записи приложения.
+     * <p>
+     * Тип содержимого известен только после расшифровки, а записи рукопожатия и alert обязаны
+     * быть приняты при любом объёме буферов приёмника. Поэтому предел действует лишь на
+     * {@code application_data}: если данных больше {@code applicationDataLimit}, результат
+     * {@code OUTPUT_TOO_SMALL} с {@code hint} = нужный размер, запись не потреблена, порядковый
+     * номер не сдвинут, открытый текст затёрт. Повторный вызов расшифрует ту же запись тем же
+     * ключом и нонсом: на стороне чтения это безопасно, повтора нонса при шифровании нет.
+     *
+     * @param record               буфер с TLS-записью
+     * @param plaintext            буфер для открытых данных
+     * @param applicationDataLimit наибольший допустимый объём открытого текста записи приложения
+     * @return результат дешифрования с указанием статуса
+     * @throws AuthenticationException при ошибке аутентификации
+     * @throws TlsException            при некорректном формате записи
+     */
+    public UnprotectResult unprotect(
+            ByteBuffer record, ByteBuffer plaintext, int applicationDataLimit)
+            throws AuthenticationException, TlsException {
         if (record == null || plaintext == null) {
             throw new IllegalArgumentException("Buffers must not be null");
         }
+        if (applicationDataLimit < 0) {
+            throw new IllegalArgumentException("applicationDataLimit must not be negative");
+        }
+        checkNotDestroyed();
 
         int recLen = record.remaining();
         int initialPos = record.position();
@@ -399,6 +441,10 @@ public final class TlsRecord {
             return UnprotectResult.needMoreInput(TlsConstants.RECORD_HEADER_SIZE);
         }
 
+        // Внешний тип проверяется по одному заголовку, до ожидания тела: неожиданную запись не
+        // нужно ни дочитывать, ни пытаться расшифровать
+        requireProtectedOuterType(record.get(initialPos));
+
         // Stage 2: peek заголовок — узнаём declared payload length (без consume)
         int declaredLen =
                 ((record.get(initialPos + 3) & 0xFF) << 8) | (record.get(initialPos + 4) & 0xFF);
@@ -406,7 +452,9 @@ public final class TlsRecord {
 
         // Грубая проверка: payload не может быть меньше tag
         if (declaredLen < tagLen) {
-            throw new IllegalArgumentException("Record payload too small for tag: " + declaredLen);
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR,
+                    "Record payload too small for tag: " + declaredLen);
         }
 
         // Stage 3: хватает ли байт на всю запись?
@@ -429,7 +477,10 @@ public final class TlsRecord {
         int plaintextLen = dr.dataLen;
 
         // Stage 5: проверить dst до записи
-        if (plaintext.remaining() < plaintextLen) {
+        boolean exceedsApplicationLimit =
+                dr.contentType == TlsConstants.CT_APPLICATION_DATA
+                        && plaintextLen > applicationDataLimit;
+        if (plaintext.remaining() < plaintextLen || exceedsApplicationLimit) {
             record.position(initialPos);
             // Затираем расшифрованные данные: caller повторит unprotect
             // с большим буфером, между retry данные не должны оставаться в памяти
@@ -471,6 +522,20 @@ public final class TlsRecord {
     }
 
     /**
+     * RFC 8446 §5.2: внешний тип защищённой записи всегда application_data, настоящий тип лежит
+     * внутри. Иной внешний тип - неожиданная запись, на неё {@code unexpected_message} (§5). Без
+     * проверки такая запись дала бы {@code bad_record_mac} (тип входит в AAD) или
+     * {@code decode_error} (короче метки), то есть неверный код alert.
+     */
+    private static void requireProtectedOuterType(byte outerContentType) throws TlsException {
+        if (outerContentType != TlsConstants.CT_APPLICATION_DATA) {
+            throw new TlsException(
+                    TlsConstants.ALERT_UNEXPECTED_MESSAGE,
+                    "Unexpected outer record type: " + (outerContentType & 0xFF));
+        }
+    }
+
+    /**
      * Разбирает заголовок TLS-записи, дешифрует MGM и выполняет
      * constant-time поиск inner content type.
      * <p>
@@ -485,12 +550,20 @@ public final class TlsRecord {
      * @param buf буфер с TLS-записью (заголовок || ciphertext || tag)
      * @param len точная длина записи (buf.length >= len)
      * @return результат дешифрования
-     * @throws TlsException при превышении максимального размера записи
+     * @throws TlsException {@code decode_error} при ошибке формата записи, {@code record_overflow}
+     *         при превышении максимального размера, {@code unexpected_message} если в подлинной
+     *         записи нет ни одного ненулевого байта (нет типа содержимого, RFC 8446 §5.4)
      */
     private DecryptResult doDecrypt(byte[] buf, int len)
             throws AuthenticationException, TlsException {
-        if (buf == null || len < TlsConstants.RECORD_HEADER_SIZE + tagLen) {
-            throw new IllegalArgumentException("Record too short");
+        if (buf == null) {
+            throw new IllegalArgumentException("Record must not be null");
+        }
+        checkNotDestroyed();
+        requireProtectedOuterType(len > 0 ? buf[0] : TlsConstants.CT_APPLICATION_DATA);
+        // Формат записи приходит от пира: ошибка формата это fatal alert, а не ошибка вызова
+        if (len < TlsConstants.RECORD_HEADER_SIZE + tagLen) {
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "Record too short");
         }
         if (seqNum < 0) {
             throw new IllegalStateException("Sequence number overflow");
@@ -500,8 +573,12 @@ public final class TlsRecord {
         // Парсинг заголовка
         byte outerContentType = buf[0];
         int legacyVersion = ((buf[1] & 0xFF) << 8) | (buf[2] & 0xFF);
+        // Версия не входит в защищённые данные: AAD строится из констант (0x0303), а не из
+        // принятых байтов заголовка, поэтому её подмену тег не заметит. Запись с версией не 0x0303
+        // отвергаем как ошибку формата: строже RFC 8446 §5.1 (поле велено игнорировать), но ни
+        // один нормальный пир такую не шлёт
         if (legacyVersion != TlsConstants.PROTOCOL_TLS_1_2) {
-            throw new IllegalArgumentException("Invalid legacy version");
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "Invalid legacy version");
         }
         int payloadLen = ((buf[3] & 0xFF) << 8) | (buf[4] & 0xFF);
 
@@ -512,12 +589,13 @@ public final class TlsRecord {
         }
 
         if (len != TlsConstants.RECORD_HEADER_SIZE + payloadLen) {
-            throw new IllegalArgumentException("Record length mismatch");
+            throw new TlsException(TlsConstants.ALERT_DECODE_ERROR, "Record length mismatch");
         }
 
         int ciphertextLen = payloadLen - tagLen;
         if (ciphertextLen < 0) {
-            throw new IllegalArgumentException("Record payload too small for tag");
+            throw new TlsException(
+                    TlsConstants.ALERT_DECODE_ERROR, "Record payload too small for tag");
         }
         if (ciphertextLen > maxInnerPlaintext) {
             throw new TlsException(
@@ -574,13 +652,18 @@ public final class TlsRecord {
         // протокол поиска content type именно как скан от конца до первого
         // ненулевого байта, без дополнительной верификации хвоста.
         if (lastNonZero < 0) {
-            throw new AuthenticationException("Decrypted record has no content type");
+            // Тег сошёлся, запись подлинная: нарушен формат протокола, а не целостность
+            // (RFC 8446 §5.4: unexpected_message, а не bad_record_mac)
+            throw new TlsException(
+                    TlsConstants.ALERT_UNEXPECTED_MESSAGE, "Decrypted record has no content type");
         }
-        // Проверка против явно согласованного max_fragment_length (RFC 6066 §4).
-        // При дефолтном значении (MAX_PLAINTEXT_LENGTH) проверка не применяется —
-        // защита от запредельно больших записей обеспечивается maxInnerPlaintext выше.
-        if (maxFragmentLength < TlsConstants.MAX_PLAINTEXT_LENGTH
-                && lastNonZero > maxFragmentLength) {
+        // RFC 8446 §5.1, §5.2: содержимое записи не длиннее 2^14 (а при согласованном
+        // max_fragment_length, RFC 6066 §4, не длиннее его) - иначе record_overflow. Проверка
+        // безусловна: одного предела на размер шифротекста мало, нулевой padding позволяет ему
+        // вместить содержимое больше 2^14, и такая запись не должна доходить до приложения.
+        // Заодно это гарантирует вызывающему, что содержимое помещается в буфер
+        // MAX_PLAINTEXT_LENGTH.
+        if (lastNonZero > maxFragmentLength) {
             throw new TlsException(
                     TlsConstants.ALERT_RECORD_OVERFLOW,
                     "Decrypted record exceeds negotiated max fragment length: "
@@ -622,6 +705,13 @@ public final class TlsRecord {
     /** Для тестов: возвращает nonceBuf после buildNonce(). */
     byte[] buildNoncePeekAll() {
         return nonceBuf.clone();
+    }
+
+    /** Уничтоженная запись не шифрует и не расшифровывает: ключ в ней уже обнулён. */
+    private void checkNotDestroyed() {
+        if (destroyed) {
+            throw new IllegalStateException("Record is destroyed");
+        }
     }
 
     /**

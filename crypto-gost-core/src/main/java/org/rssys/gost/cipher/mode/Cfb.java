@@ -1,17 +1,16 @@
 package org.rssys.gost.cipher.mode;
 
+import java.util.Arrays;
 import org.rssys.gost.cipher.CipherParameters;
 import org.rssys.gost.cipher.Kuznyechik;
 import org.rssys.gost.cipher.ParametersWithIV;
-import org.rssys.gost.cipher.StreamCipher;
-import org.rssys.gost.util.DataLengthException;
 
 /**
  * Режим CFB (Cipher FeedBack) по ГОСТ Р 34.13-2015.
  *
  * <p>Поддерживает настраиваемый размер сегмента s (по умолчанию s = blockSize).
  */
-public class Cfb extends AbstractStreamMode implements StreamCipher {
+public final class Cfb extends AbstractStreamCipherMode {
 
     /** Размер сегмента в байтах (bitBlockSize / 8). */
     private final int s;
@@ -35,11 +34,32 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
         this(cipher, cipher.getBlockSize() * 8);
     }
 
-    /** CFB с размером сегмента bitBlockSize бит. */
+    /**
+     * CFB с размером сегмента bitBlockSize бит.
+     *
+     * <p>Сегмент должен быть кратен байту и не длиннее блока шифра: гамма берётся как старшие
+     * {@code s} байт зашифрованного регистра, а на длинном сегменте это чтение выходит за блок.
+     * Некратное значение молча округлялось бы вниз и давало бы режим с другим размером сегмента,
+     * чем запросил вызывающий. ГОСТ Р 34.13-2015 допускает любые {@code 1 <= s <= n} бит; здесь
+     * поддерживаются только кратные байту, потому что весь поток обрабатывается по байтам.
+     *
+     * @param cipher       блочный шифр
+     * @param bitBlockSize размер сегмента в битах: кратен 8, от 8 до размера блока в битах
+     * @throws IllegalArgumentException если размер сегмента некратен 8 или вне допустимого диапазона
+     */
     public Cfb(Kuznyechik cipher, int bitBlockSize) {
         super(cipher);
+        int maxSegmentBits = blockSize * Byte.SIZE;
+        if (bitBlockSize % Byte.SIZE != 0
+                || bitBlockSize < Byte.SIZE
+                || bitBlockSize > maxSegmentBits) {
+            throw new IllegalArgumentException(
+                    "CFB segment size must be a multiple of 8 bits in range [8, "
+                            + maxSegmentBits
+                            + "]");
+        }
         this.kuz = cipher;
-        this.s = bitBlockSize / 8;
+        this.s = bitBlockSize / Byte.SIZE;
         this.gammaBuf = new byte[blockSize];
         this.inBuf = new byte[this.s];
     }
@@ -50,9 +70,6 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
         reset();
         ParametersWithIV ivParams = requireIV(params, "CFB");
         byte[] iv = ivParams.getIV();
-        if (iv.length < blockSize) {
-            throw new IllegalArgumentException("IV length must be >= block size");
-        }
         this.forEncryption = forEncryption;
         initRegister(iv);
         // CFB всегда использует базовый шифр в режиме шифрования
@@ -62,22 +79,12 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
 
     @Override
     public String getAlgorithmName() {
-        return cipher.getAlgorithmName() + "/CFB" + (blockSize * 8);
+        return cipher.getAlgorithmName() + "/CFB" + (s * Byte.SIZE);
     }
 
     /** Возвращает размер сегмента s (байт, обрабатываемых за один гамма-шаг). */
     @Override
     public int getBlockSize() {
-        return s;
-    }
-
-    @Override
-    public int processBlock(byte[] in, int inOff, byte[] out, int outOff)
-            throws DataLengthException, IllegalStateException {
-        checkInitialized();
-        checkInputBounds(in, inOff, s);
-        checkOutputBounds(out, outOff, s);
-        processBytes(in, inOff, s, out, outOff);
         return s;
     }
 
@@ -116,10 +123,6 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
         return limit;
     }
 
-    public byte returnByte(byte in) {
-        return calculateByte(in);
-    }
-
     /**
      * Основной метод обработки байта.
      * Каждые s байт генерируется новый гамма-блок через encryptToFields (zero-alloc).
@@ -145,16 +148,16 @@ public class Cfb extends AbstractStreamMode implements StreamCipher {
     @Override
     public void reset() {
         resetRegister();
-        java.util.Arrays.fill(gammaBuf, (byte) 0);
-        java.util.Arrays.fill(inBuf, (byte) 0);
+        Arrays.fill(gammaBuf, (byte) 0);
+        Arrays.fill(inBuf, (byte) 0);
         byteCount = 0;
         cipher.reset();
     }
 
     @Override
     public void destroy() {
-        java.util.Arrays.fill(gammaBuf, (byte) 0);
-        java.util.Arrays.fill(inBuf, (byte) 0);
+        Arrays.fill(gammaBuf, (byte) 0);
+        Arrays.fill(inBuf, (byte) 0);
         byteCount = 0;
         super.destroy();
     }

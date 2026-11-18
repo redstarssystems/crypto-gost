@@ -1,20 +1,5 @@
 package org.rssys.gost.crossval.jsseserver;
 
-import org.rssys.gost.crossval.util.CrossValUtils;
-import org.rssys.gost.crossval.util.OpenSslChecker;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.pkix.cert.GostCertificate;
-import org.rssys.gost.jsse.GostJsseConstants;
-
-import org.rssys.gost.util.CryptoRandom;
-
-import javax.net.ssl.SSLContext;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -27,6 +12,20 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.net.ssl.SSLContext;
+import org.rssys.gost.crossval.util.CrossValUtils;
+import org.rssys.gost.crossval.util.OpenSslChecker;
+import org.rssys.gost.jsse.GostJsseConstants;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.util.CryptoRandom;
 
 final class ServerOpenSslHelper {
 
@@ -43,19 +42,17 @@ final class ServerOpenSslHelper {
     // ========================================================================
 
     record ServerPkiBundle(GostCertificate cert, PrivateKeyParameters priv,
-                            GostCertificate caCert, PublicKeyParameters caPub) {}
+                            GostCertificate caCert) {}
 
     static ServerPkiBundle createServerPki(ECParameters params) throws Exception {
-        TlsTestHelper.CertBundle rootCa = TlsTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle rootCa = PkixCertTestHelper.createRootCA(params);
         PublicKeyParameters caPub = rootCa.cert.getPublicKey();
-        TlsTestHelper.CertBundle serverCert = TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle serverCert = PkixCertTestHelper.createCertSignedBy(
                 params, rootCa.priv, caPub, rootCa.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
-        return new ServerPkiBundle(
-                serverCert.cert, serverCert.priv,
-                rootCa.cert, caPub);
+        return new ServerPkiBundle(serverCert.cert, serverCert.priv, rootCa.cert);
     }
 
     static GostX509KeyManager createKeyManager(GostCertificate serverCert,
@@ -76,8 +73,9 @@ final class ServerOpenSslHelper {
     }
 
     static SSLContext createMtlsSslContext(GostX509KeyManager km,
-                                             PublicKeyParameters clientPub) throws Exception {
-        GostX509TrustManager tm = new GostX509TrustManager(clientPub, false);
+                                             GostCertificate clientCert) throws Exception {
+        GostX509TrustManager tm = GostX509TrustManager.fromTrustAnchors(
+                TrustAnchors.ofCertificate(clientCert));
         SSLContext ctx = SSLContext.getInstance(GostJsseConstants.PROTOCOL_TLS_1_3, GostJsseConstants.PROVIDER_NAME);
         ctx.init(new javax.net.ssl.KeyManager[]{km},
                 new javax.net.ssl.TrustManager[]{tm}, CryptoRandom.INSTANCE);
@@ -89,14 +87,14 @@ final class ServerOpenSslHelper {
         return "-----BEGIN PRIVATE KEY-----\n" + b64 + "\n-----END PRIVATE KEY-----\n";
     }
 
-    static TlsTestHelper.CertBundle createClientCert(ECParameters params,
+    static PkixCertTestHelper.CertBundle createClientCert(ECParameters params,
                                                       PrivateKeyParameters caPriv,
                                                       PublicKeyParameters caPub,
                                                       byte[] caSubjectDn,
                                                       Path outCertPem,
                                                       Path outKeyPem) throws Exception {
         byte[] cliKu = new byte[]{(byte) 0x80};
-        TlsTestHelper.CertBundle clientCert = TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle clientCert = PkixCertTestHelper.createCertSignedBy(
                 params, caPriv, caPub, caSubjectDn,
                 "20240101120000Z", "21060101120000Z",
                 null, cliKu, new String[]{"1.3.6.1.5.5.7.3.2"},
@@ -313,7 +311,9 @@ final class ServerOpenSslHelper {
 
                 @Override
                 public String[] getEnabledCiphers() {
-                    return new String[0];
+                    // Tomcat применяет список к движку; пустой список означает «наборов нет»
+                    // (как в JDK), поэтому отдаём ГОСТ-наборы провайдера
+                    return GostJsseConstants.supportedCipherSuites();
                 }
             };
         }

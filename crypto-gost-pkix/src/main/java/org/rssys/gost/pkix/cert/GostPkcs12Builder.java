@@ -8,10 +8,13 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import org.rssys.gost.api.Signature;
 import org.rssys.gost.pkix.GostOids;
 import org.rssys.gost.signature.PrivateKeyParameters;
 import org.rssys.gost.util.CryptoRandom;
 import org.rssys.gost.util.DerCodec;
+import org.rssys.gost.util.PasswordUtf8;
 
 /**
  * Создание PFX-контейнеров ГОСТ (PKCS#12, RFC 7292).
@@ -28,7 +31,7 @@ import org.rssys.gost.util.DerCodec;
  * </pre>
  * <p>
  * По умолчанию: PBES2-GOST с Кузнечиком CTR-ACPKM-OMAC, 2000 итераций PBKDF2,
- * HMAC-Streebog-512 (.macHashLen(32) — Streebog-256).
+ * MAC целостности HMAC-Streebog-512 (RFC 9548 §7), соль PBKDF2 32 байта.
  */
 public final class GostPkcs12Builder {
 
@@ -51,8 +54,10 @@ public final class GostPkcs12Builder {
         private char[] password = new char[0];
         private String encSchemeOid = GostOids.KUZ_CTR_ACPKM_OMAC;
         private int iterations = GostOids.PBE_DEFAULT_ITERATIONS;
-        private int macHashLen = GostOids.STREEBOG_512_HASH_LEN;
         private String friendlyName;
+        // build() затирает пароль, поэтому повторная сборка собрала бы PFX с пустым паролем.
+        // Билдер не потокобезопасен по замыслу (как и остальные поля), атомарность не нужна.
+        private boolean consumed;
 
         private Builder() {}
 
@@ -111,15 +116,6 @@ public final class GostPkcs12Builder {
             return this;
         }
 
-        public Builder macHashLen(int hlen) {
-            if (hlen != GostOids.STREEBOG_256_HASH_LEN && hlen != GostOids.STREEBOG_512_HASH_LEN) {
-                throw new IllegalArgumentException(
-                        "macHashLen must be 32 (Streebog-256) or 64 (Streebog-512), got: " + hlen);
-            }
-            this.macHashLen = hlen;
-            return this;
-        }
-
         public Builder friendlyName(String friendlyName) {
             if (friendlyName != null) {
                 // Измеряем в тех же байтах UTF-16BE, что и реальное кодирование в BMPString
@@ -143,17 +139,39 @@ public final class GostPkcs12Builder {
 
         /**
          * Собирает PFX-контейнер и возвращает DER-байты.
+         *
+         * <p>Метод терминальный: пароль затирается при любом исходе после проверки наличия
+         * ключа и сертификата, поэтому повторный вызов (после успеха или после ошибки внутри
+         * сборки, например несовпадения ключа и сертификата) недопустим. Отсутствие ключа или
+         * сертификата - ошибка конфигурации: билдер при этом не расходуется, её можно
+         * исправить и вызвать метод снова.</p>
+         *
+         * @return DER-кодированный PFX
+         * @throws IllegalStateException если билдер уже использован, либо не задан ключ или
+         *     сертификат
+         * @throws IllegalArgumentException если сертификат не соответствует ключу или пароль
+         *     содержит непарный суррогат (его нельзя закодировать в UTF-8)
          */
         public byte[] build() {
+            if (consumed) {
+                throw new IllegalStateException("builder is already used");
+            }
             if (key == null) {
                 throw new IllegalStateException("key is required");
             }
             if (certificate == null) {
                 throw new IllegalStateException("certificate is required");
             }
+            consumed = true;
 
-            byte[] passwordBytes = toUtf8Bytes(password);
+            // Объявлен до try, чтобы finally затирал его при любой ошибке сборки.
+            byte[] passwordBytes = null;
             try {
+                if (!Objects.equals(Signature.derivePublicKey(key), certificate.getPublicKey())) {
+                    throw new IllegalArgumentException(
+                            "PKCS12: certificate does not match private key");
+                }
+                passwordBytes = PasswordUtf8.encode(password);
                 byte[] localKeyId = new byte[LOCAL_KEY_ID_LEN];
                 CryptoRandom.INSTANCE.nextBytes(localKeyId);
 
@@ -198,23 +216,30 @@ public final class GostPkcs12Builder {
                                         0, DerCodec.encodeOctetString(authSafe)));
 
                 // 9. MAC
-                byte[] salt = new byte[16];
+                byte[] salt = new byte[GostOids.PBKDF2_SALT_LEN];
                 CryptoRandom.INSTANCE.nextBytes(salt);
                 byte[] macData =
-                        GostPkcs12Mac.compute(
-                                authSafeRawContent, passwordBytes, iterations, salt, macHashLen);
+                        GostPkcs12Mac.compute(authSafeRawContent, passwordBytes, iterations, salt);
 
                 // 10. PFX outer: SEQUENCE { INTEGER 3, outerContentInfo, macData }
                 return DerCodec.encodeSequence(
                         DerCodec.encodeInteger(3), outerContentInfo, macData);
             } finally {
                 Arrays.fill(password, '\0');
-                Arrays.fill(passwordBytes, (byte) 0);
+                if (passwordBytes != null) {
+                    Arrays.fill(passwordBytes, (byte) 0);
+                }
             }
         }
 
         /**
          * Собирает PFX и сохраняет DER-байты в файл (temp + rename для атомарности).
+         *
+         * <p>Метод терминальный, как и {@link #build()}: повторный вызов даёт
+         * {@link IllegalStateException}.</p>
+         *
+         * @param path путь результата
+         * @throws IOException при ошибке записи
          */
         public void buildAndWriteTo(Path path) throws IOException {
             byte[] pfx = build();
@@ -297,13 +322,5 @@ public final class GostPkcs12Builder {
                     DerCodec.encodeOid(GostOids.ATTR_FRIENDLY_NAME),
                     DerCodec.encodeSet(DerCodec.encodeTlv(0x1E, nameBytes)));
         }
-    }
-
-    private static byte[] toUtf8Bytes(char[] password) {
-        if (password == null || password.length == 0) return new byte[0];
-        java.nio.ByteBuffer buf = StandardCharsets.UTF_8.encode(java.nio.CharBuffer.wrap(password));
-        byte[] result = new byte[buf.remaining()];
-        buf.get(result);
-        return result;
     }
 }

@@ -7,6 +7,7 @@ import org.rssys.gost.api.Digest;
 import org.rssys.gost.api.KeyGenerator;
 import org.rssys.gost.api.KeyPair;
 import org.rssys.gost.api.Signature;
+import org.rssys.gost.pkix.util.FuzzTestUtils;
 import org.rssys.gost.signature.ECParameters;
 import org.rssys.gost.signature.PublicKeyParameters;
 import org.rssys.gost.util.DerCodec;
@@ -38,7 +39,7 @@ class GostCrlFuzzTest {
         try {
             new GostCrl(der);
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -73,15 +74,16 @@ class GostCrlFuzzTest {
             GostCrl crl =
                     new GostCrl(
                             crlDer,
-                            GostCrl.DEFAULT_MAX_CRL_SIZE,
-                            GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+                            new CrlLimits(
+                                    GostCrl.DEFAULT_MAX_CRL_SIZE,
+                                    GostCrl.DEFAULT_MAX_REVOKED_ENTRIES));
             try {
                 crl.verify(KP.getPublic());
             } catch (PkixException e) {
                 // fail-closed: фаззенный IDP может быть битым → PkixException ок
             }
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -116,15 +118,16 @@ class GostCrlFuzzTest {
             GostCrl crl =
                     new GostCrl(
                             crlDer,
-                            GostCrl.DEFAULT_MAX_CRL_SIZE,
-                            GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+                            new CrlLimits(
+                                    GostCrl.DEFAULT_MAX_CRL_SIZE,
+                                    GostCrl.DEFAULT_MAX_REVOKED_ENTRIES));
             try {
                 crl.verify(KP.getPublic());
             } catch (PkixException e) {
                 // fail-closed: фаззенный FreshestCRL может быть битым → PkixException ок
             }
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -159,15 +162,16 @@ class GostCrlFuzzTest {
             GostCrl crl =
                     new GostCrl(
                             crlDer,
-                            GostCrl.DEFAULT_MAX_CRL_SIZE,
-                            GostCrl.DEFAULT_MAX_REVOKED_ENTRIES);
+                            new CrlLimits(
+                                    GostCrl.DEFAULT_MAX_CRL_SIZE,
+                                    GostCrl.DEFAULT_MAX_REVOKED_ENTRIES));
             try {
                 crl.verify(KP.getPublic());
             } catch (PkixException e) {
                 // fail-closed: фаззенный AKI может быть битым → PkixException ок
             }
         } catch (RuntimeException e) {
-            rethrowIfBug(e);
+            FuzzTestUtils.rethrowIfBug(e);
         }
     }
 
@@ -256,15 +260,6 @@ class GostCrlFuzzTest {
             return DerCodec.encodeSequence(tbs.toByteArray());
         } catch (java.io.IOException e) {
             throw new RuntimeException(e);
-        }
-    }
-
-    private static void rethrowIfBug(RuntimeException e) {
-        if (e instanceof ArrayIndexOutOfBoundsException
-                || e instanceof IndexOutOfBoundsException
-                || e instanceof NegativeArraySizeException
-                || e instanceof NullPointerException) {
-            throw e;
         }
     }
 }

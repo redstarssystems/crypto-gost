@@ -1,26 +1,10 @@
 package org.rssys.gost.crossval.jsse;
 
-import org.rssys.gost.crossval.util.CrossValUtils;
-import org.rssys.gost.crossval.util.OpenSslChecker;
-import org.rssys.gost.jsse.bridge.CertificateBridge;
-import org.rssys.gost.jsse.engine.GostSSLEngine;
-import org.rssys.gost.jsse.manager.GostX509KeyManager;
-import org.rssys.gost.jsse.manager.GostX509TrustManager;
-import org.rssys.gost.signature.ECParameters;
-import org.rssys.gost.signature.PrivateKeyParameters;
-import org.rssys.gost.signature.PublicKeyParameters;
-import org.rssys.gost.tls13.TlsConstants;
-import org.rssys.gost.tls13.TlsTestHelper;
-import org.rssys.gost.pkix.cert.GostCertificate;
-
-import javax.net.ssl.SSLEngineResult;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
-import java.io.InputStreamReader;
 import java.io.InputStream;
-import java.util.List;
-import javax.net.ssl.SSLEngineResult;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -30,7 +14,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.cert.X509Certificate;
 import java.util.Base64;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
+import javax.net.ssl.SSLEngineResult;
+import javax.net.ssl.SSLException;
+import org.rssys.gost.crossval.util.CrossValUtils;
+import org.rssys.gost.crossval.util.OpenSslChecker;
+import org.rssys.gost.jsse.bridge.CertificateBridge;
+import org.rssys.gost.jsse.engine.GostSSLEngine;
+import org.rssys.gost.jsse.manager.GostX509KeyManager;
+import org.rssys.gost.jsse.manager.GostX509TrustManager;
+import org.rssys.gost.pkix.cert.GostCertificate;
+import org.rssys.gost.pkix.cert.PkixCertTestHelper;
+import org.rssys.gost.pkix.cert.TrustAnchors;
+import org.rssys.gost.signature.ECParameters;
+import org.rssys.gost.signature.PrivateKeyParameters;
+import org.rssys.gost.signature.PublicKeyParameters;
+import org.rssys.gost.tls13.TlsConstants;
 
 final class OpenSslJsseHelper {
 
@@ -78,6 +78,26 @@ final class OpenSslJsseHelper {
             stdin.write("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n".getBytes(StandardCharsets.UTF_8));
             stdin.flush();
             stdin.close();
+            return readOutput(client, timeoutMs);
+        } finally {
+            destroyProcess(client);
+        }
+    }
+
+    /**
+     * Запускает {@code s_client -tls1_2}: ClientHello без {@code supported_versions} (OpenSSL с
+     * максимальной версией 1.2 расширения не шлёт). Возвращает вывод процесса, в котором виден
+     * alert сервера.
+     */
+    static String runSClientTls12(int port, long timeoutMs) throws Exception {
+        String openssl = OpenSslChecker.resolveOpenSslBinary();
+        String[] cmd = CrossValUtils.concat(
+                new String[]{openssl, "s_client", "-connect", "127.0.0.1:" + port,
+                        "-tls1_2", "-servername", "example.com", "-ign_eof"},
+                resolveTls13Flags());
+        Process client = startProcess(cmd);
+        try {
+            client.getOutputStream().close();
             return readOutput(client, timeoutMs);
         } finally {
             destroyProcess(client);
@@ -162,21 +182,19 @@ final class OpenSslJsseHelper {
     }
 
     record ServerPkiBundle(GostCertificate cert, PrivateKeyParameters priv,
-                           GostCertificate caCert, PublicKeyParameters caPub) {}
+                           GostCertificate caCert) {}
 
     static ServerPkiBundle createServerPki(ECParameters params) throws Exception {
-        TlsTestHelper.CertBundle rootCa = TlsTestHelper.createRootCA(params);
+        PkixCertTestHelper.CertBundle rootCa = PkixCertTestHelper.createRootCA(params);
         PublicKeyParameters caPub = rootCa.cert.getPublicKey();
 
-        TlsTestHelper.CertBundle serverCert = TlsTestHelper.createCertSignedBy(
+        PkixCertTestHelper.CertBundle serverCert = PkixCertTestHelper.createCertSignedBy(
                 params, rootCa.priv, caPub, rootCa.subjectDn,
                 "240501120000Z", "290501120000Z",
                 new String[]{"localhost"}, new byte[]{(byte) 0x80}, null,
                 false, null);
 
-        return new ServerPkiBundle(
-                serverCert.cert, serverCert.priv,
-                rootCa.cert, caPub);
+        return new ServerPkiBundle(serverCert.cert, serverCert.priv, rootCa.cert);
     }
 
     static GostX509KeyManager createKeyManager(GostCertificate serverCert,
@@ -188,11 +206,12 @@ final class OpenSslJsseHelper {
         return km;
     }
 
-    static GostX509TrustManager createTrustManager(PublicKeyParameters caPub) {
-        if (caPub != null) {
-            return new GostX509TrustManager(caPub, false);
+    static GostX509TrustManager createTrustManager(GostCertificate caCert) {
+        if (caCert != null) {
+            return GostX509TrustManager.fromTrustAnchors(
+                    TrustAnchors.ofCertificate(caCert));
         }
-        return new GostX509TrustManager(null, false);
+        return GostX509TrustManager.insecureTrustAll();
     }
 
     /* ========================================================================
@@ -233,7 +252,14 @@ final class OpenSslJsseHelper {
             switch (hs) {
                 case NEED_WRAP: {
                     ByteBuffer net = ByteBuffer.allocate(MAX_CIPHERTEXT + TlsConstants.RECORD_BUFFER_HEADROOM);
-                    engine.wrap(ByteBuffer.allocate(0), net);
+                    try {
+                        engine.wrap(ByteBuffer.allocate(0), net);
+                    } catch (SSLException e) {
+                        // Отказ задачи проверки сертификата отдаётся первым вызовом, alert -
+                        // следующим: его надо отправить, иначе пир увидит обрыв вместо причины
+                        sendPendingAlert(engine, sockOut);
+                        throw e;
+                    }
                     net.flip();
                     byte[] data = new byte[net.remaining()];
                     net.get(data);
@@ -244,7 +270,14 @@ final class OpenSslJsseHelper {
                 case NEED_UNWRAP: {
                     ByteBuffer record = readTlsRecord(sockIn);
                     appBuf.clear();
-                    engine.unwrap(record, appBuf);
+                    try {
+                        engine.unwrap(record, appBuf);
+                    } catch (SSLException e) {
+                        // Приложение после отказа обязано забрать fatal alert из wrap (как
+                        // JDK-серверы), иначе пир увидит обрыв соединения, а не причину отказа
+                        sendPendingAlert(engine, sockOut);
+                        throw e;
+                    }
                     break;
                 }
                 case NEED_TASK: {
@@ -257,6 +290,22 @@ final class OpenSslJsseHelper {
         throw new RuntimeException("Рукопожатие engine не завершилось за "
                 + HANDSHAKE_MAX_ITERATIONS + " итераций, status="
                 + engine.getHandshakeStatus());
+    }
+
+    private static void sendPendingAlert(GostSSLEngine engine, OutputStream sockOut) {
+        try {
+            ByteBuffer net = ByteBuffer.allocate(MAX_CIPHERTEXT + TlsConstants.RECORD_BUFFER_HEADROOM);
+            engine.wrap(ByteBuffer.allocate(0), net);
+            net.flip();
+            if (net.hasRemaining()) {
+                byte[] data = new byte[net.remaining()];
+                net.get(data);
+                sockOut.write(data);
+                sockOut.flush();
+            }
+        } catch (Exception ignored) {
+            // alert отправлен по возможности: исходная ошибка рукопожатия важнее
+        }
     }
 
     static byte[] sendAppDataAndReceiveOverTcp(GostSSLEngine engine,
